@@ -89,12 +89,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
 
 		// Waiting on its question: this is the answer.
-		var questionID, prompt, priorStatus string
-		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt,
-				COALESCE((SELECT e.payload->>'taskStatus' FROM events e WHERE e.run_id = q.run_id AND e.event_type = 'question.asked'
-					AND e.payload->>'questionId' = q.id LIMIT 1), '')
+		var questionID, prompt string
+		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt
 			FROM questions q WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).
-			Scan(&questionID, &prompt, &priorStatus)
+			Scan(&questionID, &prompt)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
@@ -102,7 +100,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, priorStatus, body.Text, actor(r))
+			directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, body.Text, actor(r))
 			if err != nil {
 				return err
 			}

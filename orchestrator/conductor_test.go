@@ -487,3 +487,89 @@ func TestAConductorsQuestionIsAnsweredInChat(t *testing.T) {
 		t.Errorf("after the answer it said %q", got)
 	}
 }
+
+// conductorQuestion is the open question of the task's conductor.
+func (w *world) conductorQuestion(task string) string {
+	var id string
+	_ = w.owner.QueryRow(context.Background(), `SELECT q.id FROM questions q JOIN runs r ON r.id = q.run_id
+		WHERE q.task_id = $1 AND r.role = 'conductor' AND q.status = 'open'`, task).Scan(&id)
+	return id
+}
+
+// A conductor's question asked while the task already waits on another
+// agent's question moved nothing, so its answer moves nothing: the task
+// still waits on the implementer's.
+func TestAnsweringAConductorLeavesAnotherAgentsQuestionWaiting(t *testing.T) {
+	w := conductorWorld(t, fakeagent.AskModel)
+	w.withTools()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.role"] {
+		case "conductor":
+			return scripted(spec)
+		case "implementer":
+			return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Hang: true}
+	}
+	task := w.task()
+	w.deliver(task)
+	w.until("the implementer's question", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	implementers := w.questionID(task)
+
+	w.chat(task, "can you change it?")
+	w.until("the conductor's question", func() bool { return w.conductorQuestion(task) != "" })
+	if status, out := w.chat(task, "No"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if got := w.taskStatus(task); got != "awaiting_input" {
+		t.Errorf("after the conductor's answer the task is %s, want awaiting_input: the implementer still asks", got)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, implementers); n != 1 {
+		t.Errorf("the implementer's question is no longer open")
+	}
+}
+
+// A conductor's question put the task in awaiting_input from review; then
+// delivery moved it on and a newer wait took it back to awaiting_input.
+// That wait is not the conductor's to end: its answer leaves the task
+// waiting. Answered while its own wait still holds, the task goes back.
+func TestAnsweringAConductorRestoresOnlyTheWaitItRaised(t *testing.T) {
+	w := conductorWorld(t, fakeagent.AskModel)
+	w.withTools()
+	task, _ := w.delivered()
+	was := w.taskStatus(task)
+	w.chat(task, "can you change it?")
+	w.until("its question", func() bool { return w.conductorQuestion(task) != "" && w.taskStatus(task) == "awaiting_input" })
+
+	// Delivery moves on, and a newer wait (an escalation) is raised.
+	move := func(from, to, why string) {
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, w.project, task, from, to, why)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move("awaiting_input", "running", "delivery went on")
+	move("running", "awaiting_input", "an escalation")
+	if status, out := w.chat(task, "No"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if got := w.taskStatus(task); got != "awaiting_input" {
+		t.Errorf("the conductor's answer ended a newer wait: the task is %s", got)
+	}
+
+	// Its own wait, still current: the answer puts the task back.
+	other := w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET status = $2 WHERE id = $1`, other, was)
+	w.chat(other, "can you change it?")
+	w.until("its question", func() bool { return w.conductorQuestion(other) != "" && w.taskStatus(other) == "awaiting_input" })
+	if status, out := w.chat(other, "No"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if got := w.taskStatus(other); got != was {
+		t.Errorf("after the answer the task is %s, want %s again", got, was)
+	}
+}
