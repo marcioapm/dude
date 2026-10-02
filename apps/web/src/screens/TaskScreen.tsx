@@ -38,7 +38,7 @@ import {
   planProgress,
 } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -53,6 +53,7 @@ import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen } from "./RunScreen.tsx";
+import { ChatSection } from "./ChatSection.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
@@ -94,15 +95,16 @@ function changesRun(payload: unknown): boolean {
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: openTab, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open; the task's URL is
-  // whichever tab was picked here, Overview first. Coming back to the
-  // task's URL from a session's (the tree, Back) is the overview again.
+  // whichever tab was picked here: Chat once someone has written in it,
+  // Overview until then. Coming back to the task's URL from a session's
+  // (the tree, Back) is that again.
   // A URL that names a tab (`#/task/<id>/servers`) opens the page there.
-  const [chosenTab, setTab] = useState<string>(openTab ?? "overview");
-  const tab = runId ? "sessions" : chosenTab;
+  const [chosenTab, setTab] = useState<string | null>(openTab ?? null);
+  const asked = runId ? "sessions" : chosenTab;
   const [lastRunId, setLastRunId] = useState(runId);
   if (runId !== lastRunId) {
     setLastRunId(runId);
-    if (!runId) setTab(openTab ?? "overview");
+    if (!runId) setTab(openTab ?? null);
   }
   const [lastOpenTab, setLastOpenTab] = useState(openTab);
   if (openTab !== lastOpenTab) {
@@ -188,6 +190,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   useEffect(() => {
     void load();
   }, [load]);
+  const reload = useCallback(() => void load(), [load]);
 
   // What an agent says and does as it works changes nothing on this page
   // but the open session, which has its own stream: no re-read for those.
@@ -258,6 +261,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   }
 
   const started = phases.length > 0;
+  // The task's conductor, the latest if one ended and another followed: Chat's.
+  const conductor = [...item.runs].filter(isConductor).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+  const tab = asked ?? (conductor ? "chat" : "overview");
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
@@ -265,9 +271,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   // The aside says what serves the task when something does, or could: a
   // project with no servers defined has nothing to say there.
   const showServers = Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
-  // Newest first; the one open is the one asked for, else the one picked
-  // on first sight (what was running, else the newest).
-  const sessions = [...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Newest first, the task's conductor above them all; the one open is the
+  // one asked for, else the one picked on first sight (what was running,
+  // else the newest).
+  const sessions = [...item.runs].sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt));
   const openRun = (runId && sessions.some((r) => r.id === runId) ? runId : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
@@ -275,7 +282,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
-    <div className={tab === "sessions" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen">
+    <div className={tab === "sessions" || tab === "chat" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen">
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
@@ -335,6 +342,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
 
       <Tabs value={tab} onValueChange={pickTab} fill>
         <TabList aria-label="Task" className="tabsInset">
+          <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
           <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
@@ -342,6 +350,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
           <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
           <Tab value="activity">Activity</Tab>
         </TabList>
+
+        <TabPanel value="chat" fill>
+          <ChatSection client={client} task={item} conductorId={conductor?.id ?? null} findings={findings} pullRequests={pullRequests}
+            events={events} owner={sessionTask} version={version} onSent={reload} onBack={onBack} />
+        </TabPanel>
 
         <TabPanel value="overview" className="taskPane">
           <div className="taskOverview">

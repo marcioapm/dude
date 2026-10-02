@@ -380,6 +380,32 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   a "Show all" control, measured after layout so a short prompt gets no
   control (`maxLines` overrides).
 
+### A task's Chat (the conductor)
+
+- A task's **Chat** is its conversation with its conductor, the agent
+  people talk to about a task — any task, delivered weeks ago or not
+  started. It is a transcript like a session's (`ChatTranscript`,
+  `ChatMessage`, `ChatAside`, `QuestionCard`), with three differences.
+- **`TaskHistory`** heads it, pinned: the task's history in one line on
+  the raised shade — how it went, what ran (a fan-out folded, "reviewers
+  ×3", arrows muted between), what it came to (findings, cost). Before
+  anyone has written it is all there is, over an empty composer.
+- **The turns.** A person's message is `intent="message"`: signed, no tag
+  and no tint — talking, not intervening. dude's briefing of the conductor
+  is `role="system" intent="briefing"`: the prompt's frame, clamp and
+  face, tagged "Briefing", signed with the task's dude name; the message
+  it ends with is the person's own turn just before it, never said twice.
+  The conductor answers as `role="conductor"`: its round violet face. dude's
+  notices there name him (`ChatNotice by`): "El Duderino: Parked while
+  nobody is writing". A parked conductor is quiet: nothing about it is
+  amber, and nothing counts it as needing you; its question is the usual
+  `QuestionCard`, loud as any.
+- **The composer is `mode="chat"`**: "Ask about this task…", Send, the
+  accent's focus, no interrupt (a message starts the conductor's next
+  turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
+  where "Sent as" would be. While the conductor asks, it is the answer
+  composer, as in a session.
+
 ### Nesting
 
 - A subagent's conversation nests inside its parent's (`ChatThread`). The
@@ -1132,7 +1158,7 @@ MarkdownCheatsheet.
 - **ChatMessage** — one turn: gutter + column, not a bubble. Agent turns
   carry model, elapsed, context and output tokens, cost and the live
   activity in the foot; turns addressed to the agent are framed and tinted
-  by intent (task / answer / steer), can be queued (with where it lands),
+  by intent (task / answer / steer, and in a task's Chat briefing / message), can be queued (with where it lands),
   read (sent · read, after what), or failed, and clamp when long;
   system turns are a hairline with a label. Body is `Markdown` and grows in
   place. `avatar` puts a face of the app's own in the gutter (dude's).
@@ -1171,7 +1197,10 @@ MarkdownCheatsheet.
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (lands at the agent's next step; `landsHint` says where;
-  interrupt now is a tick) vs prompt, visibly different.
+  interrupt now is a tick) vs prompt vs chat (a task's conductor; `to`),
+  visibly different.
+- **TaskHistory** — a task's history in one line: how it went, what ran,
+  what it came to. Heads a task's Chat.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `title` renders a plain-text name as the first `h1` (blank: `untitled`,

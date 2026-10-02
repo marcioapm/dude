@@ -15,8 +15,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// A person's message in a task's Chat (EvChatMessage, on the conductor's Run).
-const evChatMessage = "chat.message"
+// A person's message in a task's Chat (EvChatMessage, on the conductor's
+// Run), and dude's briefing of a new conductor (the text of its first
+// prompt).
+const (
+	evChatMessage      = "chat.message"
+	evConductorBriefed = "conductor.briefed"
+)
 
 // liveConductor (SQL, over runs r): the task's conductor that can still
 // hear a message — at most one (runs_live_conductor_idx).
@@ -76,7 +81,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 				return err
 			}
 			out = map[string]any{"runId": runID, "taskId": taskID, "created": true}
-			return chatEvent(r.Context(), tx, org, projectID, taskID, runID, p, map[string]any{"text": body.Text})
+			return nil
 		}
 		if err != nil {
 			return err
@@ -173,6 +178,17 @@ func (s *Server) startConductor(ctx context.Context, tx pgx.Tx, org, projectID, 
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: id, ActorType: actorTypeOf(p), ActorID: p.Actor, Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: map[string]any{"role": delivery.RoleConductor, "publishes": false, "baseRefs": baseRefs}})
+	if err != nil {
+		return "", err
+	}
+	// The message, then dude's briefing of the conductor about it: what the
+	// Chat shows, whatever the agent's harness echoes back of its prompt.
+	if err := chatEvent(ctx, tx, org, projectID, taskID, id, p, map[string]any{"text": message}); err != nil {
+		return "", err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: evConductorBriefed, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"text": briefing}})
 	return id, err
 }
 

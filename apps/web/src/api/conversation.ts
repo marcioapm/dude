@@ -74,12 +74,16 @@ export interface QuestionTurn {
   answeredAt: string | null;
 }
 
-/** The task, as the agent received it. Written by the factory, not a person. */
+/**
+ * The task, as the agent received it. Written by the factory, not a
+ * person. For a task's conductor, dude's briefing (`briefing`).
+ */
 export interface PromptTurn {
   kind: "prompt";
   id: string;
   text: string;
   at: string;
+  briefing?: true;
 }
 
 /** A turn's token totals, when the turn ended on something other than a message. */
@@ -105,8 +109,11 @@ export interface ActorRef {
 export interface HumanTurn {
   kind: "human";
   id: string;
-  /** Steering interrupts; an answer unblocks. They read differently. */
-  intent: Extract<HumanIntent, "steer" | "answer">;
+  /**
+   * Steering interrupts; an answer unblocks. They read differently. A
+   * message is a person talking with a task's conductor, in its Chat.
+   */
+  intent: Extract<HumanIntent, "steer" | "answer" | "message">;
   /** Who said it. */
   by: ActorRef | null;
   text: string;
@@ -411,6 +418,8 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
+  briefed: boolean;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -436,6 +445,7 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    briefed: false,
     cursor: 0,
   };
 }
@@ -573,8 +583,31 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const lands = landsOf(payload.lands);
         if (lands) state.lands = lands;
         const text = typeof payload.text === "string" ? payload.text : "";
-        if (!text.trim()) break;
+        if (!text.trim() || state.briefed) break;
         turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt });
+        break;
+      }
+
+      case EventTypes.ConductorBriefed: {
+        // dude's note to a new conductor, which ends with the message that
+        // started it (shown just before, as its person's turn).
+        const text = typeof payload.text === "string" ? payload.text : "";
+        state.briefed = true;
+        if (!text.trim()) break;
+        turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true });
+        break;
+      }
+
+      case EventTypes.ChatMessage: {
+        // A person's message to a task's conductor: the first is in its
+        // briefing; each later one is delivered as a steer is (a directive).
+        const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const turn: HumanTurn = {
+          ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
+          directiveId,
+        };
+        if (directiveId) state.steersByDirective.set(directiveId, turn);
+        turns.push(turn);
         break;
       }
 
@@ -973,6 +1006,15 @@ function withoutQuestion(text: string): string {
   const last = blocks[blocks.length - 1];
   if (!last || last.index === undefined) return text;
   return (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trimEnd();
+}
+
+/**
+ * dude's briefing without the message it ends with ("## Ana's message"),
+ * which the transcript shows as Ana's own turn just before it.
+ */
+function withoutMessage(briefing: string): string {
+  const at = briefing.search(/\n## [^\n]*'s message\n/);
+  return at < 0 ? briefing : briefing.slice(0, at).trimEnd();
 }
 
 /**

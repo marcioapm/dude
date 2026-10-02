@@ -364,7 +364,8 @@ body {
   }
 }
 @media (max-height: 639px) {
-  .taskSessions {
+  .taskSessions,
+  .taskChat {
     min-height: 560px;
   }
 }
@@ -482,6 +483,14 @@ body {
   min-height: 0;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
+  margin-top: var(--ds-space-panel-gap);
+}
+/* Chat: the conductor's conversation, the whole width, as a session's is
+   beside its list. */
+.taskChat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
   margin-top: var(--ds-space-panel-gap);
 }
 .taskSessionList {
