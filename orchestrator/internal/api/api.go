@@ -385,6 +385,41 @@ func attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 	return attached, err
 }
 
+// checkRepeat vets a steer superseding directive superseded of the Run.
+// Repeating its words (Retry, Interrupt now) carries its images
+// (delivery.DirectiveAttachments), so the repeat may have no words of its
+// own, but only if there is something to repeat; and it cannot bring new
+// images, which would be attached and never sent.
+func checkRepeat(ctx context.Context, tx pgx.Tx, runID, superseded, text string, newImages bool) error {
+	required := fail(http.StatusBadRequest, "bad_request", "text or an image is required")
+	var words string
+	err := tx.QueryRow(ctx, `SELECT text FROM directives WHERE id = $1 AND run_id = $2`, superseded, runID).Scan(&words)
+	if err != nil && !db.IsNotFound(err) {
+		return err
+	}
+	if err != nil || words != text {
+		// New words: a message of its own.
+		if strings.TrimSpace(text) == "" && !newImages {
+			return required
+		}
+		return nil
+	}
+	if newImages {
+		return fail(http.StatusBadRequest, "invalid_attachment",
+			"a message sent again carries the images it had: send new images in a new message")
+	}
+	if strings.TrimSpace(words) == "" {
+		carried, err := delivery.DirectiveAttachments(ctx, tx, superseded)
+		if err != nil {
+			return err
+		}
+		if len(carried) == 0 {
+			return required
+		}
+	}
+	return nil
+}
+
 // ownerOnly uses the first active ordered member, independent of credentials.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) error {
 	var ownerID, ownerName *string
@@ -428,8 +463,9 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
-		return fail(http.StatusBadRequest, "bad_request", "text is required")
+	empty := strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0
+	if empty && body.Supersedes == "" {
+		return fail(http.StatusBadRequest, "bad_request", "text or an image is required")
 	}
 	if body.Scope == "" {
 		body.Scope = "run"
@@ -442,6 +478,11 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		}
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be steered", runID, ri.Status)
+		}
+		if body.Supersedes != "" {
+			if err := checkRepeat(r.Context(), tx, runID, body.Supersedes, body.Text, len(body.AttachmentIDs) > 0); err != nil {
+				return err
+			}
 		}
 		id, createdAt, err := insertDirective(r.Context(), tx, org, runID, ri, body.Text, body.Scope, body.Supersedes, body.Interrupt)
 		if err != nil {
@@ -566,7 +607,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		return err
 	}
 	if strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
-		return fail(http.StatusBadRequest, "bad_request", "text is required")
+		return fail(http.StatusBadRequest, "bad_request", "text or an image is required")
 	}
 	var out map[string]any
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
