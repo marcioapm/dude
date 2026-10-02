@@ -235,22 +235,35 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   }
 
   /**
-   * New task: the task, then its held images uploaded to it, then its text
-   * with each stand-in id replaced by the uploaded one — one request more
-   * than a task without images. A retry after a failure uploads only what
-   * did not go up.
+   * New task: the task, then its held images uploaded to it, then one PATCH
+   * with every field as the dialog has it and each stand-in id replaced by
+   * the uploaded one. Once the task exists, every Create sends that PATCH,
+   * so a retry saves whatever was edited since the POST. A retry uploads
+   * only what did not go up. A text over a message's images is refused
+   * before anything is created.
    */
   async function createWithImages(fields: Partial<TaskFields>, goalText: string, items: string[]): Promise<string> {
+    const shown = taskAttachmentIds(goalText, items);
+    if (shown.length > limits.perMessage) {
+      throw new Error(`A task shows at most ${limits.perMessage} images; this one shows ${shown.length}. Remove ${shown.length - limits.perMessage} to save.`);
+    }
+    const ids = shown.filter((i) => i.startsWith(LOCAL_PREFIX) && held.has(i));
+    const bytes = ids.reduce((n, i) => n + held.get(i)!.made.delivered.size, 0);
+    if (bytes > limits.messageBytes) {
+      throw new Error(`A task's images are at most ${limits.messageBytes >> 20} MiB together; remove one to save.`);
+    }
+    const posted = created === null;
     const id = created ?? (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
     setCreated(id);
-    const ids = taskAttachmentIds(goalText, items).filter((i) => i.startsWith(LOCAL_PREFIX) && held.has(i));
-    if (ids.length === 0) return id;
+    // Just created from this very text, with nothing to swap: the PATCH would repeat the POST.
+    if (posted && ids.length === 0) return id;
     for (const local of ids) {
       if (uploadedHeld.current.has(local)) continue;
       const uploaded = await client.uploadAttachment(id, held.get(local)!.made);
       uploadedHeld.current.set(local, uploaded.id);
     }
     await client.updateTask(id, {
+      ...fields,
       goal: withUploadedIds(goalText, uploadedHeld.current),
       acceptanceCriteria: items.map((c) => withUploadedIds(c, uploadedHeld.current)),
     });
