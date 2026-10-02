@@ -113,7 +113,7 @@ function faces(uses: readonly ModelTierUse[]) {
   }).slice(0, 4).map(faceOf);
 }
 
-/** How a tier reaches the agent, explained once, as the mockup has it. */
+/** How a tier reaches the agent, explained once. */
 function HowItWorks({ example, proxy }: { example: ModelTier | null; proxy: string | null }) {
   const name = example?.name ?? "Coder";
   const model = example?.model ?? "its model";
