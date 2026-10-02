@@ -271,16 +271,21 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 			}
 			return err
 		}
-		if len(body.AttachmentIDs) > 0 {
-			// Only before any agent has been given the prompt.
-			var started bool
-			if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent')`,
-				taskID).Scan(&started); err != nil {
-				return err
-			}
-			if started {
-				return fail(http.StatusConflict, "conflict", "task %s has started: its prompt was given already", taskID)
-			}
+		// The prompt's images are set only before any agent has been given
+		// the prompt, and each delivery asked until then names the whole
+		// set: none, after a start that failed, lets them go. Once the
+		// delivery's workflow exists a delivery naming none is the same
+		// delivery asked again (Deliver, a double submit), and keeps them.
+		var started, queued bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent'),
+			EXISTS (SELECT 1 FROM workflow_runs WHERE workflow_type = $2 AND idempotency_key = $3)`,
+			taskID, delivery.WorkflowType, deliveryKey(taskID)).Scan(&started, &queued); err != nil {
+			return err
+		}
+		if started && len(body.AttachmentIDs) > 0 {
+			return fail(http.StatusConflict, "conflict", "task %s has started: its prompt was given already", taskID)
+		}
+		if !started && (len(body.AttachmentIDs) > 0 || !queued) {
 			if _, err := attach(r.Context(), tx, taskID, "", body.AttachmentIDs); err != nil {
 				return err
 			}
@@ -309,7 +314,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return tx.QueryRow(r.Context(), `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, taskID).Scan(&attempt)
 	})
 	id, dup, err := s.Workflow.Start(r.Context(), workflow.StartOptions{
-		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: "delivery:" + taskID,
+		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: deliveryKey(taskID),
 		TaskID: taskID,
 		Input: delivery.State{TaskID: taskID, ProjectID: projectID,
 			Policy: policy, Branch: delivery.BranchFor(taskID, attempt)},
@@ -325,6 +330,9 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	write(w, status, map[string]any{"workflowRunId": id, "taskId": taskID, "alreadyRunning": dup})
 	return nil
 }
+
+// deliveryKey is the idempotency key of a task's delivery workflow.
+func deliveryKey(taskID string) string { return "delivery:" + taskID }
 
 // runInfo loads what every run-control action needs, confined to org.
 type runInfo struct {
