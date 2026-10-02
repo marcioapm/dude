@@ -231,12 +231,15 @@ describe("uploading", () => {
 
   test("bytes that are no image, or a type that is not one of the four, are refused", async () => {
     const svg = new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>");
-    expect((await upload(anaKey, taskId, form(svg, "image/png", png(1, 1), "image/png"))).status).toBe(400);
+    const named = await upload(anaKey, taskId, form(svg, "image/png", png(1, 1), "image/png"));
+    expect(named.status).toBe(400);
+    expect(((await named.json()) as Json).error.message).toBe("original: the file is not a PNG, JPEG, WebP or GIF image");
     const res = await upload(anaKey, taskId, form(svg, "image/svg+xml", png(1, 1), "image/png"));
     expect(res.status).toBe(400);
-    expect(((await res.json()) as Json).error.message).toContain("PNG, JPEG, WebP or GIF");
+    expect(((await res.json()) as Json).error.message).toBe("original: an image is PNG, JPEG, WebP or GIF, not image/svg+xml");
     const pdf = await upload(anaKey, taskId, form(new TextEncoder().encode("%PDF-1.7"), "application/pdf", png(1, 1), "image/png"));
     expect(pdf.status).toBe(400);
+    expect(((await pdf.json()) as Json).error.message).toBe("original: an image is PNG, JPEG, WebP or GIF, not application/pdf");
   });
 
   test("an original over 10 MB, a delivered variant over 4.5 MiB or 2000 px are refused", async () => {
@@ -323,9 +326,9 @@ describe("removing an unsent one", () => {
     expect((await call(boKey, "DELETE", `/v1/attachments/${a.id}`)).status).toBe(403);
     const [row] = await owner`SELECT object_key, original_key FROM attachments WHERE id = ${a.id}`;
     expect((await call(anaKey, "DELETE", `/v1/attachments/${a.id}`)).status).toBe(204);
-    const queued = (await owner`SELECT object_key FROM attachment_object_deletions`).map((r: { object_key: string }) => r.object_key);
-    expect(queued).toContain(row.object_key);
-    expect(queued).toContain(row.original_key);
+    const queued = (await owner`SELECT object_key FROM attachment_object_deletions
+      WHERE object_key IN (${row.object_key}, ${row.original_key})`).map((r: { object_key: string }) => r.object_key);
+    expect(queued.sort()).toEqual([row.object_key, row.original_key].sort());
   });
 
   test("once sent, it stays with its message", async () => {
@@ -336,6 +339,11 @@ describe("removing an unsent one", () => {
 });
 
 describe("the sweeper", () => {
+  /** Which of `keys` are still queued for deletion. */
+  const stillQueued = async (keys: string[]) =>
+    ((await owner`SELECT object_key FROM attachment_object_deletions WHERE object_key IN ${owner(keys)}`) as Array<{ object_key: string }>)
+      .map((r) => r.object_key).sort();
+
   test("removes uploads never sent after a day, keeps sent and recent ones, and deletes their objects", async () => {
     const stale: Json = await (await upload(anaKey, taskId, form(png(6, 6), "image/png", png(6, 6), "image/png"))).json();
     const fresh: Json = await (await upload(anaKey, taskId, form(png(7, 7), "image/png", png(7, 7), "image/png"))).json();
@@ -352,21 +360,39 @@ describe("the sweeper", () => {
     expect(left.sort()).toEqual([fresh.id, sent.id].sort());
     expect(objects.has(staleRow.object_key)).toBe(false);
     expect(objects.has(staleRow.original_key)).toBe(false);
-    expect((await owner`SELECT count(*)::int AS n FROM attachment_object_deletions`)[0].n).toBe(0);
+    expect(await stillQueued([staleRow.object_key, staleRow.original_key])).toEqual([]);
   });
 
   test("a delete storage refuses stays queued for the next pass", async () => {
     const a: Json = await (await upload(anaKey, taskId, form(png(9, 9), "image/png", png(9, 9), "image/png"))).json();
+    const [row] = await owner`SELECT object_key, original_key FROM attachments WHERE id = ${a.id}`;
+    const keys = [row.object_key, row.original_key].sort();
     await call(anaKey, "DELETE", `/v1/attachments/${a.id}`);
     s3Down = true;
     try {
       const result = await sweepAttachments();
       expect(result.failed).toBe(2);
-      expect((await owner`SELECT count(*)::int AS n FROM attachment_object_deletions`)[0].n).toBe(2);
+      expect(await stillQueued(keys)).toEqual(keys);
     } finally {
       s3Down = false;
     }
     expect((await sweepAttachments()).deleted).toBe(2);
+    expect(await stillQueued(keys)).toEqual([]);
+  });
+
+  test("a pass drains a queue longer than one batch, and stops when its time is spent", async () => {
+    // An organization's worth: more than two batches of 200.
+    const keys = Array.from({ length: 450 }, (_, i) => `attachments/${ORG}/bulk/${String(i).padStart(3, "0")}`);
+    for (const k of keys) objects.set(k, { bytes: new Uint8Array([1]), type: null });
+    await owner`INSERT INTO attachment_object_deletions ${owner(keys.map((object_key) => ({ object_key, organization_id: ORG })))}`;
+
+    // No time at all: nothing drained, everything still queued.
+    expect((await sweepAttachments(new Date(), 0)).deleted).toBe(0);
+    expect((await stillQueued(keys)).length).toBe(450);
+
+    expect((await sweepAttachments()).deleted).toBeGreaterThanOrEqual(450);
+    expect(await stillQueued(keys)).toEqual([]);
+    expect(keys.filter((k) => objects.has(k))).toEqual([]);
   });
 });
 
@@ -386,7 +412,9 @@ describe("deleting a task", () => {
 
     await owner`DELETE FROM tasks WHERE id = 'wi_att_gone'`;
     expect((await owner`SELECT count(*)::int AS n FROM attachments WHERE task_id = 'wi_att_gone'`)[0].n).toBe(0);
-    const queued = (await owner`SELECT object_key FROM attachment_object_deletions`).map((r: { object_key: string }) => r.object_key);
+    // Every key of the task's, and only the task's.
+    const queued = (await owner`SELECT object_key FROM attachment_object_deletions WHERE object_key LIKE ${`attachments/${ORG}/wi_att_gone/%`}`)
+      .map((r: { object_key: string }) => r.object_key);
     expect(queued.sort()).toEqual([...keys].sort());
 
     await sweepAttachments();

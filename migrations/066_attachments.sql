@@ -69,6 +69,8 @@ CREATE TABLE attachment_object_deletions (
   organization_id text NOT NULL,
   queued_at       timestamptz NOT NULL DEFAULT now()
 );
+-- The sweeper drains oldest first.
+CREATE INDEX attachment_object_deletions_queued_idx ON attachment_object_deletions (queued_at);
 GRANT SELECT, DELETE ON attachment_object_deletions TO dude_sweeper;
 
 -- Every way a row goes (the task's cascade, the sweep, a person removing
