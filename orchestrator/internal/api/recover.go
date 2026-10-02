@@ -55,6 +55,14 @@ type stoppedTask struct {
 	KeptUntil *time.Time
 }
 
+// stoppedRun is one of the Runs a task stopped on.
+type stoppedRun struct {
+	ID    string
+	Until *time.Time
+	// Still kept to resume (delivery.KeptRun).
+	Kept bool
+}
+
 func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stoppedTask, error) {
 	var t stoppedTask
 	forUpdate := ""
@@ -77,8 +85,8 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	if state != nil {
 		_ = json.Unmarshal(state, &t.State)
 	}
-	// The Runs it stopped on, kept: those the stopped step was waiting on.
-	// Aborted ones, or the failed Run the escalation named.
+	// The Runs it stopped on: those the stopped step was waiting on, or the
+	// failed Run the escalation named.
 	stoppedRuns := t.State.PendingRunIDs
 	if e := t.State.Stopped; e != nil && e.RunID() != "" {
 		stoppedRuns = []string{e.RunID()}
@@ -86,22 +94,20 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	if len(stoppedRuns) == 0 {
 		return t, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT id, kept_until FROM runs WHERE id = ANY($1) AND status IN ('aborted', 'failed')
-		AND keep AND lux_run_id IS NOT NULL AND (lux_stop_reason IS NULL OR lux_stop_reason <> 'cancel')
-		AND (kept_until IS NULL OR kept_until > now()) ORDER BY created_at`, stoppedRuns)
+	// Each one that ended stopped (aborted, failed) must be kept to resume:
+	// a step resumed with one gone would wait on it for ever. One that
+	// finished meanwhile (a reviewer done just before the abort) is not
+	// resumed: its phase.finished is waiting for the step that resumes.
+	rows, err := tx.Query(ctx, `SELECT id, kept_until, COALESCE(`+delivery.KeptRun+`, false) FROM runs
+		WHERE id = ANY($1) AND status IN ('aborted', 'failed') ORDER BY created_at`, stoppedRuns)
 	if err != nil {
 		return t, err
 	}
-	kept, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-		ID    string
-		Until *time.Time
-	}])
+	kept, err := pgx.CollectRows(rows, pgx.RowToStructByPos[stoppedRun])
 	if err != nil {
 		return t, err
 	}
-	// All of them or none: a step resumed with some of its Runs gone would
-	// wait on them for ever.
-	if len(kept) != len(stoppedRuns) {
+	if len(kept) == 0 || slices.ContainsFunc(kept, func(r stoppedRun) bool { return !r.Kept }) {
 		return t, nil
 	}
 	for _, k := range kept {
@@ -296,16 +302,30 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 
 // resumeKept takes kept Runs back up: paused, for the syncer to resume as
 // it resumes any (phases.Syncer.whilePaused), the agent's conversation and
-// workspace as they stopped; the note, if any, is their next message.
+// workspace as they stopped. Their next message is the note, if any, and —
+// what it asks for having changed since they stopped — the task as it is
+// now: an agent that goes on works to the task it has in mind.
 func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, runIDs []string, note string) error {
+	var title, goal string
+	var criteria []byte
+	var edited bool
+	if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria, EXISTS (SELECT 1 FROM events e
+			WHERE e.task_id = t.id AND e.event_type = 'task.updated'
+			  AND (e.payload ? 'title' OR e.payload ? 'goal' OR e.payload ? 'acceptanceCriteria')
+			  AND e.occurred_at > (SELECT min(ended_at) FROM runs WHERE id = ANY($2)))
+		FROM tasks t WHERE t.id = $1`, taskID, runIDs).Scan(&title, &goal, &criteria, &edited); err != nil {
+		return err
+	}
+	if edited {
+		note = strings.TrimSpace(changedTask(title, goal, criteria) + "\n\n" + note)
+	}
 	// Its push, if it had asked for one, is asked for again when its turn
 	// ends: what it pushed then is not what it will have done by then.
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'resume', control_requested_at = now(),
 			control_reason = 'picked back up', lux_stop_reason = 'pause', keep = false, kept_until = NULL,
 			ended_at = NULL, error = NULL, phase_notified_at = NULL, dude_pause = NULL, finishes = finishes + 1,
-			push_request_id = NULL, push_result = NULL, turn_done_at = NULL
-		WHERE id = ANY($1) AND status IN ('aborted', 'failed') AND keep AND lux_run_id IS NOT NULL
-		  AND lux_stop_reason IS DISTINCT FROM 'cancel' AND (kept_until IS NULL OR kept_until > now())`, runIDs)
+			push_request_id = NULL, push_result = NULL, turn_done_at = NULL, next_attempt_at = NULL
+		WHERE id = ANY($1) AND `+delivery.KeptRun, runIDs)
 	if err != nil {
 		return err
 	}
@@ -323,12 +343,28 @@ func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, r
 	return nil
 }
 
-// release lets kept Runs go — a retry or a start over took their work up
-// afresh, and nothing will resume them — so the syncer cancels them now
-// rather than when their time is up.
+// changedTask tells a resumed agent what its task asks for now.
+func changedTask(title, goal string, rawCriteria []byte) string {
+	var criteria []string
+	_ = json.Unmarshal(rawCriteria, &criteria)
+	var b strings.Builder
+	fmt.Fprintf(&b, "While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title, strings.TrimSpace(goal))
+	if len(criteria) > 0 {
+		b.WriteString("\n\nAcceptance criteria:")
+		for _, c := range criteria {
+			b.WriteString("\n- " + c)
+		}
+	}
+	return b.String()
+}
+
+// release lets a task's stopped Runs go — a retry or a start over took
+// their work up afresh, and nothing will resume them — so the syncer
+// cancels them now, kept already or not yet, rather than when their time
+// is up.
 func release(ctx context.Context, tx pgx.Tx, taskID string) error {
-	_, err := tx.Exec(ctx, `UPDATE runs SET kept_until = now()
-		WHERE task_id = $1 AND status IN ('aborted', 'failed') AND keep AND lux_stop_reason IS DISTINCT FROM 'cancel'`, taskID)
+	_, err := tx.Exec(ctx, `UPDATE runs SET keep = false, kept_until = now()
+		WHERE task_id = $1 AND status IN ('aborted', 'failed') AND keep`, taskID)
 	return err
 }
 

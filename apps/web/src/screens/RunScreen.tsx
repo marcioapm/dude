@@ -41,6 +41,7 @@ import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/de
 import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
+import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import {
   PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
@@ -773,7 +774,7 @@ function RunEnded({ run, onOpenTask, setAside, onPickUp, resumable, keptUntil }:
   keptUntil?: string | null | undefined;
 }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
-  const kept = keptUntil ? new Date(keptUntil).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) : null;
+  const kept = keptUntil ? keptUntilDay(keptUntil) : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
       tone={setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>

@@ -56,15 +56,22 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
 
 /** The first line: who stopped what, and why. */
 function stopSentence(stop: Stop): ReactNode {
-  if (!stop.run) return <><strong>Delivery stopped</strong>{stop.at ? null : "."}</>;
+  if (!stop.run) return <><strong>Delivery stopped</strong>.</>;
   const what = runLabel(stop.run).toLowerCase();
   const ago = stop.at ? <> <Duration ms={Math.max(0, Date.now() - Date.parse(stop.at))} format="age" tone="muted" /> ago</> : null;
   if (stop.failed) return <><strong>The {what} failed</strong>{ago}{stop.why ? `: ${stop.why}` : "."}</>;
   return <><strong>{stop.by ?? "Someone"} aborted the {what}</strong>{ago}{stop.why ? <>: “{stop.why}”</> : "."}</>;
 }
 
-const keptUntil = (iso: string) =>
+/** When a kept session stops being kept, as a day: "Thu 8 Oct". */
+export const keptUntil = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+
+/** What stopped, for a sentence about it: "Ana aborted its implement.", "Its implement failed.", "Its delivery stopped." */
+function stoppedWords(stop: Stop, role: string): string {
+  if (!stop.run) return "Its delivery stopped.";
+  return stop.failed ? `Its ${role} failed.` : `${stop.by ?? "Someone"} aborted its ${role}.`;
+}
 
 const ACTION_LABEL: Record<RecoverAction, string> = { resume: "Resume…", retry: "Try again…", restart: "Start over…" };
 const ACTION_ICON = { resume: "play", retry: "retry", restart: "git-branch" } as const;
@@ -204,7 +211,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   };
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} size="md" title={`Pick ${task.key ?? "this task"} back up`}
-      description={`${stop.failed ? `Its ${role} failed.` : `${stop.by ?? "Someone"} aborted its ${role}.`} The task goes back to running.`}
+      description={`${stoppedWords(stop, role)} The task goes back to running.`}
       footerProblem={problem}
       footer={
         <>

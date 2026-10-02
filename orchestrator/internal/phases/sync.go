@@ -150,6 +150,8 @@ type phaseRun struct {
 	// Aborted or failed and worth resuming (runs.keep), and whether the
 	// time it is kept for has passed.
 	Keep, KeepExpired bool
+	// Times it was taken back up after it ended (runs.finishes).
+	Finishes int
 }
 
 const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
@@ -172,7 +174,7 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
-	r.keep, COALESCE(r.kept_until <= now(), false)`
+	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -232,7 +234,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
-		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.Keep, &r.KeepExpired)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.Keep, &r.KeepExpired, &r.Finishes)
 	return r, err
 }
 
@@ -744,7 +746,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			// do meanwhile, so the loop may rest.
 			return false, nil
 		}
-		reqID := "push-" + r.ID
+		reqID := pushRequest(r)
 		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
 				return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
@@ -956,6 +958,16 @@ func judged(shown []string, verdicts map[int]bool) map[string]bool {
 		}
 	}
 	return out
+}
+
+// pushRequest names the push a Run's finish asks lux for: one per time it
+// was taken up, so a push its last turn asked for, read late, is never
+// taken for this one's.
+func pushRequest(r phaseRun) string {
+	if r.Finishes == 0 {
+		return "push-" + r.ID
+	}
+	return fmt.Sprintf("push-%s-%d", r.ID, r.Finishes)
 }
 
 // KeepFor is how long an aborted or failed Run's lux Run is kept, by

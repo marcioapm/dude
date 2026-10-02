@@ -49,8 +49,14 @@ const SESSION_SELECT = `
  * since. The workflow ends on it, so there is at most one worth showing.
  */
 export function escalationJson(alias = "tasks"): string {
+  // Resume only while the Run that failed is still kept to resume
+  // (orchestrator delivery.KeptRun): after that, the other ways are left.
   return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
-    'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb), 'at', e.occurred_at)
+    'actions', CASE WHEN EXISTS (SELECT 1 FROM runs k WHERE k.id = e.payload->'detail'->>'runId'
+        AND k.status IN ('aborted', 'failed') AND k.keep AND k.lux_run_id IS NOT NULL
+        AND k.lux_stop_reason = 'kept' AND k.kept_until > now())
+      THEN COALESCE(e.payload->'actions', '["stop"]'::jsonb)
+      ELSE COALESCE(e.payload->'actions', '["stop"]'::jsonb) - 'resume' END, 'at', e.occurred_at)
   FROM events e
   WHERE ${alias}.status = 'awaiting_input'
     AND e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'escalation'

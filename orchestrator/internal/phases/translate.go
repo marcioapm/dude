@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -213,7 +214,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		}
 		return s.event(ctx, tx, t.run, "git.checkout", ledger.ActorSystem, d)
 	case "git.push":
-		if str("requestId") != t.run.PushRequestID && t.run.PushRequestID != "" {
+		// Only the push this finish asked for — recorded or not yet (lux can
+		// answer before dude has written that it asked): one an earlier turn
+		// asked for, before the Run was aborted and taken back up, is not
+		// this work.
+		if str("requestId") != cmp.Or(t.run.PushRequestID, pushRequest(t.run)) {
 			return nil
 		}
 		raw, _ := json.Marshal(d)

@@ -223,6 +223,9 @@ func TestAbortingAReviewerStopsTheReview(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status <> 'aborted'`, wi); n != 0 {
 		t.Errorf("%d reviewers ran on after one was aborted", n)
 	}
+	w.until("every aborted reviewer to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND lux_stop_reason IS DISTINCT FROM 'kept'`, wi) == 0
+	})
 	if got, _ := w.options(wi); strings.Join(got, " ") != "resume retry restart" {
 		t.Fatalf("an aborted review offers %v", got)
 	}
@@ -361,5 +364,85 @@ func TestAnEarlierAttemptsPullRequestDoesNotWakeTheNext(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi); n != 0 {
 		t.Errorf("attempt 1's pull request woke %d fixers", n)
+	}
+}
+
+// Resume is offered, and taken, only once lux has stopped and kept the
+// Run: one taken up before would wait on a stop nobody asks for.
+func TestResumeWaitsForTheRunToBeKept(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	// Aborted, the sweep not yet round to keep it.
+	if status, body := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	if got, _ := w.options(wi); strings.Join(got, " ") != "retry restart" {
+		t.Fatalf("a run not yet kept offers %v", got)
+	}
+	if status, _ := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 409 {
+		t.Fatalf("resuming a run not yet kept: %d", status)
+	}
+	w.until("the run to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, runID) == 1
+	})
+	if got, _ := w.options(wi); got[0] != "resume" {
+		t.Fatalf("a kept run offers %v", got)
+	}
+}
+
+// A reviewer that finished just before the others were aborted does not
+// keep the rest from being resumed.
+func TestAReviewerThatFinishedDoesNotBlockResumingTheRest(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Commit: map[string]string{"auth/session.go": "package auth\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Hang: true}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("two reviewers at work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'`, wi) >= 2
+	})
+	var done, other string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY created_at LIMIT 1`, wi).Scan(&done)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND id <> $2 LIMIT 1`, wi, done).Scan(&other)
+	// One reviewer finished; its signal is not yet taken.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, done)
+	if status, body := w.call("/internal/runs/"+other+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	w.until("the aborted reviewers to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'aborted' AND lux_stop_reason <> 'kept'`, wi) == 0
+	})
+	if got, _ := w.options(wi); len(got) == 0 || got[0] != "resume" {
+		t.Fatalf("an aborted review with one reviewer done offers %v", got)
+	}
+}
+
+// A task changed while it was stopped: the resumed agent is told what it
+// asks for now.
+func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
+	w := newWorld(t)
+	wi, _ := w.aborted()
+	mustExec(t, w.owner, `UPDATE tasks SET goal = 'Say goodbye instead' WHERE id = $1`, wi)
+	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, project_id, task_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_edit', $1, $2, $3, 'task.updated', 'human', 'someone', 'control-plane', '{"goal":"Say goodbye instead"}'::jsonb)`,
+		w.org, w.project, wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the agent to be told", func() bool { r := w.lux.Runs()[0]; return len(r.Inputs) > 0 })
+	if in := w.lux.Runs()[0].Inputs[0]; !strings.Contains(in, "the task was changed") || !strings.Contains(in, "Say goodbye instead") {
+		t.Errorf("the resumed agent was told %q", in)
 	}
 }
