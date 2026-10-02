@@ -9,15 +9,16 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput,
-  taskGoalInput, taskGoalShortBy,
+  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel, resolveTier,
+  taskCriteriaInput, taskGoalInput, taskGoalShortBy,
 } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
-import { withOrg, withoutTenant } from "../../db/client.ts";
+import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { requireOrgAdmin } from "../access.ts";
+import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson } from "./people.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -28,12 +29,23 @@ const TASK_SELECT = `
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
-const RUN_SELECT = `
+// A Run's columns, as a fragment of `sql`: the builder's offline threshold
+// is a parameter.
+const runSelect = (sql: OrgScope["sql"]) => sql`
   id, organization_id AS "organizationId", project_id AS "projectId",
   task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
-  branch, harness, model, dude_pause AS "dudePause", machine,
+  branch, harness, model, model_tier AS "modelTier", dude_pause AS "dudePause", machine, image,
+  -- Waiting for its image: the job it waits on is still queued or running,
+  -- and it has no lux Run yet (a phase Run pending, a woken preview paused).
+  (SELECT json_build_object('buildId', b.id, 'state', b.state, 'kind', b.kind, 'imageName', i.name, 'version', v.number,
+      'builderOfflineSince', CASE WHEN ib.seen_at IS NULL OR ib.seen_at < now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS})
+        THEN COALESCE(ib.seen_at, runs.image_waiting_since) END)
+   FROM image_builds b JOIN image_versions v ON v.id = b.image_version_id JOIN images i ON i.id = v.image_id
+   LEFT JOIN image_builder ib ON true
+   WHERE b.id = runs.image_build_id AND b.state IN ('queued', 'running') AND runs.lux_run_id IS NULL
+           AND runs.status NOT IN ('completed', 'failed', 'aborted')) AS "preparingImage",
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
@@ -53,7 +65,7 @@ const SESSION_SELECT = `
  */
 export function escalationJson(alias = "tasks"): string {
   // Resume only while the Run that failed is still kept to resume
-  // (run_kept, migration 068): after that, the other ways are left.
+  // (run_kept, migration 070): after that, the other ways are left.
   return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
     'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
         WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
@@ -203,7 +215,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     >;
     if (!rows[0]) return null;
     const runs = await scope.sql`
-      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE task_id = ${id}
+      SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
       ORDER BY attempt DESC`;
     return { ...rows[0], runs };
   });
@@ -246,7 +258,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     const rows = (await scope.sql`
       INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status)
       VALUES (${runId}, ${organizationId}, ${task.project_id}, ${taskId}, ${attempt}, 'pending')
-      RETURNING ${scope.sql.unsafe(RUN_SELECT)}`) as Array<Record<string, unknown>>;
+      RETURNING ${runSelect(scope.sql)}`) as Array<Record<string, unknown>>;
 
     await scope.sql`UPDATE tasks SET status = 'queued' WHERE id = ${taskId}`;
 
@@ -280,7 +292,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const run = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE id = ${id}`) as Array<Record<string, unknown>>;
+      SELECT ${runSelect(scope.sql)} FROM runs WHERE id = ${id}`) as Array<Record<string, unknown>>;
     if (!rows[0]) return null;
     const sessions = await scope.sql`
       SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE run_id = ${id}
@@ -299,22 +311,23 @@ async function getRun(ctx: RequestContext): Promise<Response> {
 const createSessionInput = z.object({
   role: agentRoleSchema,
   parentSessionId: z.string().min(1).nullable().default(null),
-  /** Overrides the resolved project/org model when set. */
-  model: z.string().min(1).optional(),
+  /** Overrides the resolved project/org tier when set (an organization's tier id). */
+  tier: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
-});
+}).strict();
 
 const DEFAULT_HARNESS = "opencode";
 
 /**
- * Create a Session under a Run, resolving which model to use from the
- * project's per-role configuration, then the organization default.
+ * Create a Session under a Run, its model the one its tier requests: the
+ * role's tier from the project's per-role configuration, then the
+ * organization default.
  */
 async function createSession(ctx: RequestContext): Promise<Response> {
   const runId = ctx.params.id!;
   const input = await parseBody(ctx.request, createSessionInput);
-  // The models are what admins set: only they may pick another for one session.
-  if (input.model || input.harness) await requireOrgAdmin(ctx);
+  // The tiers are what admins set: only they may pick another for one session.
+  if (input.tier || input.harness) await requireOrgAdmin(ctx);
   const { organizationId } = ctx.principal;
 
   // organizations is not tenant-scoped, so the org defaults are read outside
@@ -338,13 +351,19 @@ async function createSession(ctx: RequestContext): Promise<Response> {
     const run = runs[0];
     if (!run) return { missing: true as const };
 
+    // Read for its harness only: the model comes from the tier below.
     const resolved = resolveAgentModel(
       input.role,
       { agentModels: run.agentModels ?? {} },
       { defaultAgentModels },
     );
-    const model = input.model ?? resolved?.model;
-    if (!model) return { unconfigured: true as const };
+    const tiers = await listTiers(scope);
+    const tierId = input.tier ?? resolveTier(input.role, { project: run.agentModels, organization: defaultAgentModels }, tiers).tierId;
+    const tier = tiers.find((t) => t.id === tierId);
+    if (input.tier && !tier) throw badRequest(`there is no model tier ${input.tier}`);
+    if (!tier) return { unconfigured: `the ${input.role} names no model tier; set one in Agents` };
+    if (!tier.model) return { unconfigured: `the ${input.role} runs on ${tier.name}, which names no model yet. An admin sets it in Models.` };
+    const model = tier.model;
 
     const harness = input.harness ?? resolved?.harness ?? DEFAULT_HARNESS;
     const sessionId = newId("session");
@@ -364,19 +383,14 @@ async function createSession(ctx: RequestContext): Promise<Response> {
       actor: { type: "agent", id: sessionId },
       source: "control-plane",
       correlationId: runId,
-      payload: { role: input.role, model, harness, parentSessionId: input.parentSessionId },
+      payload: { role: input.role, model, tier: tier.name, harness, parentSessionId: input.parentSessionId },
     });
 
     return { session: rows[0]!, event };
   });
 
   if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("unconfigured" in result) {
-    throw badRequest(
-      `no model configured for role "${input.role}"; set it on the project or organization, ` +
-        `or pass an explicit model`,
-    );
-  }
+  if ("unconfigured" in result) throw badRequest(result.unconfigured);
   return json(result.session, 201);
 }
 

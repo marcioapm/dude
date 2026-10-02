@@ -60,6 +60,19 @@ host = "ghcr.io"
 credential = "user:token"
 ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"
 
+[images]
+layer = "registry.example/dude/layer@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+[builder]
+database_url = "postgres://dude_builder:pw@db.example:5432/dude"
+repository = "registry.example/dude/custom"
+authfile = "/run/dude-image-builder/ecr-auth.json"
+platform = "linux/amd64"
+cpus = 2.5
+memory = "2g"
+timeout = "30m"
+min_free_bytes = 4294967296
+
 [tools]
 listen = "0.0.0.0:3200"
 url = "http://10.0.1.5:3200"

@@ -98,8 +98,9 @@ type wakeRun struct {
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
 const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
-		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures
+		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures, image_build_id
 	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at, r.start_failures,
+			COALESCE(r.image_build_id, '') AS image_build_id,
 			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
 			t.status IN ('done', 'failed', 'aborted') AS task_ended,
 			r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories, ps.live, ps.idle,
@@ -164,7 +165,7 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 			var r wakeRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
 				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue,
-				&r.StartFailures)
+				&r.StartFailures, &r.ImageBuildID)
 		})
 		return err
 	}); err != nil {
@@ -268,15 +269,20 @@ func (p *Previews) previewServers(ctx context.Context, org, runID string) ([]pre
 
 // createServers makes the preview's lux servers, one per project server
 // marked to start in previews, then leaves it asleep. Each is looked for
-// by its hostname first, so a create whose answer was lost is not made
-// twice; a hostname another preview holds (409 hostname_taken) is chosen
-// again once, salted with this preview's id.
+// among the preview's servers in lux first, so a create whose answer was
+// lost is not made twice; a hostname another preview holds (409
+// hostname_taken) is chosen again once, salted with this preview's id.
 func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 	var recipes []Recipe
 	var settings PreviewSettings
+	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id
+			WHERE t.id = $1`, r.TaskID).Scan(&of.TaskKey, &of.ProjectSlug); err != nil {
 			return err
 		}
 		return loadSettings(ctx, tx, r.ProjectID, &settings)
@@ -300,7 +306,7 @@ func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 			p.Log.Warn("a preview server lux would refuse was left out", "run", r.ID, "server", rc.Name, "error", err)
 			continue
 		}
-		sv, err := p.createServer(ctx, r, in, settings)
+		sv, err := p.createServer(ctx, r, of, in, settings)
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			return p.fail(ctx, r.previewRun, fmt.Sprintf("lux refused preview server %s: %s", rc.Name, le.Message))
 		}
@@ -345,9 +351,9 @@ func deref(s *string) string {
 // createServer creates (or finds) one preview server in lux: at its
 // hostname, else, when another preview holds that (409 hostname_taken), at
 // the one salted with this preview's id. Each attempt first adopts a server
-// this preview already has there: a create whose answer was lost, or one
-// another orchestrator made for it meanwhile.
-func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
+// this preview already has, at whatever hostname: a create whose answer was
+// lost, or one another orchestrator made for it meanwhile.
+func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
 	labels := map[string]string{"dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
@@ -357,36 +363,38 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 	if p.PreviewRelative {
 		domain = ""
 	}
-	plain := PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, "")
+	plain := PreviewHostname(domain, in.Name, of, "")
 	sv, err := p.adoptOrCreate(ctx, r, body, plain)
 	if le, ok := lux.AsError(err); !ok || le.Code != "hostname_taken" {
 		return sv, err
 	}
 	// Taken: by another orchestrator creating this very server (adopted
 	// now), or by another preview (salted).
-	if sv, found, err := p.adopt(ctx, r, in.Name, plain); err != nil || found {
+	if sv, found, err := p.adopt(ctx, r, in.Name); err != nil || found {
 		return sv, err
 	}
 	p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", plain)
-	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, r.ID))
+	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, of, r.ID))
 }
 
 func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.CreateServer, hostname string) (lux.TenantServer, error) {
-	if sv, found, err := p.adopt(ctx, r, body.Name, hostname); err != nil || found {
+	if sv, found, err := p.adopt(ctx, r, body.Name); err != nil || found {
 		return sv, err
 	}
 	body.Hostname = hostname
 	return p.Lux.CreateServer(ctx, body)
 }
 
-// adopt finds this preview's server of a name at a hostname.
-func (p *Previews) adopt(ctx context.Context, r wakeRun, name, hostname string) (lux.TenantServer, bool, error) {
-	found, err := p.Lux.ListServers(ctx, hostname)
+// adopt finds a server by its dude.preview label and name, regardless of
+// hostname, so id-based names and names made before key-prefix renames
+// remain adoptable.
+func (p *Previews) adopt(ctx context.Context, r wakeRun, name string) (lux.TenantServer, bool, error) {
+	found, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
 	if err != nil {
 		return lux.TenantServer{}, false, err
 	}
 	for _, sv := range found {
-		if sv.Labels["dude.preview"] == r.ID && sv.Name == name {
+		if sv.Name == name {
 			return sv, true, nil
 		}
 	}
@@ -747,9 +755,23 @@ func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 // submitWoken submits the preview's Run (a servers-only spec: its servers
 // are lux's own, attached) and attaches every server to it.
 func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
-	spec, branch, machine, err := p.spec(ctx, r.previewRun)
+	spec, branch, machine, got, err := p.spec(ctx, r.previewRun)
 	if phases.IsLoginUnavailable(err) {
 		return p.releaseWake(ctx, r, phases.LoginRetry)
+	}
+	// Its image not ready yet: the wake stays wanted, unclaimed, and is
+	// taken up again once the image is (lux answers the request that woke
+	// it "no answer" if that takes past its wake timeout; the next one
+	// finds it running).
+	if done, err := p.imageOutcome(ctx, r.previewRun, err, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET wake_claimed_at = NULL, next_attempt_at = now() + make_interval(secs => $2)
+			WHERE id = $1`, r.ID, phases.ImagePoll.Seconds())
+		return err
+	}); done {
+		if err != nil {
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+		}
+		return err
 	}
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
@@ -782,8 +804,8 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		// is a failed start; StartBefore 0 makes every event of it newer
 		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
+			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got)
 		return err
 	}); err != nil {
 		return err

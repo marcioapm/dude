@@ -100,6 +100,8 @@ export type IconName =
   | "markdown"
   | "memory"
   | "chip"
+  | "sparkle"
+  | "cube"
   | "book-open";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
@@ -227,6 +229,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   memory: { d: "M4 2.5h8a.5.5 0 0 1 .5.5v10.5L8 11l-4.5 2.5V3a.5.5 0 0 1 .5-.5ZM6 5.5h4M6 7.5h2.5" },
   /* A die with pins on each side: a machine, and its size. */
   chip: { d: "M5 4.5h6a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V5a.5.5 0 0 1 .5-.5ZM6.75 2.5v2M9.25 2.5v2M6.75 11.5v2M9.25 11.5v2M2.5 6.75h2M2.5 9.25h2M11.5 6.75h2M11.5 9.25h2" },
+  /* A four-pointed star: a model, what an agent thinks with. */
+  sparkle: { d: "M8 2.5c.4 2.9 2.1 4.6 5 5-2.9.4-4.6 2.1-5 5-.4-2.9-2.1-4.6-5-5 2.9-.4 4.6-2.1 5-5Z" },
+  /* A box seen from a corner: a container image. */
+  cube: { d: "M8 2.25l5 2.75v6L8 13.75 3 11V5l5-2.75ZM3 5l5 2.75L13 5M8 7.75v6" },
   /* Two open pages: reading the whole thing, as opposed to editing it. */
   "book-open": { d: "M8 4.5C6.8 3.6 5 3.25 2.5 3.25v9c2.5 0 4.3.35 5.5 1.25M8 4.5c1.2-.9 3-1.25 5.5-1.25v9c-2.5 0-4.3.35-5.5 1.25M8 4.5v9" },
 };

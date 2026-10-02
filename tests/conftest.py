@@ -13,7 +13,7 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, create_api_key, create_organization, wait_until, webhook_secret
+from helpers import ApiClient, create_api_key, create_organization, execute, wait_until, webhook_secret
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -41,13 +41,11 @@ def org(env: TestEnvironment) -> dict:
     Per-test rather than per-session so suites cannot leak state into each
     other through shared projects or tasks.
     """
-    organization_id = create_organization(
-        env.owner_dsn,
-        f"org{os.urandom(4).hex()}",
-        # A reviewer default, so tests can exercise the org fallback layer of
-        # per-role model resolution.
-        default_agent_models={"reviewer": {"model": "org-default-reviewer"}},
-    )
+    organization_id = create_organization(env.owner_dsn, f"org{os.urandom(4).hex()}")
+    # Its reviewer's tier, Thinker (seeded with no model), requests a model,
+    # so tests can exercise the org fallback layer of per-role resolution.
+    execute(env.owner_dsn, "UPDATE model_tiers SET model = 'org-default-reviewer' WHERE organization_id = %s AND name = 'Thinker'",
+            (organization_id,))
     api_key = create_api_key(env.owner_dsn, organization_id)
 
     return {
@@ -77,14 +75,14 @@ def second_org(env: TestEnvironment) -> dict:
 
 @pytest.fixture
 def project(client: ApiClient) -> dict:
-    """A project with per-role agent models configured."""
+    """A project with per-role agent tiers configured."""
     return client.create_project(
         name="E2E Project",
         slug=f"e2e-{os.urandom(3).hex()}",
-        agentModels={
-            "orchestrator": {"model": "llm-openai/project-orchestrator"},
-            "implementer": {"model": "llm-openai/project-implementer", "harness": "opencode"},
-        },
+        agentModels=client.on_models({
+            "orchestrator": "project-orchestrator",
+            "implementer": {"model": "project-implementer", "harness": "opencode"},
+        }),
     )
 
 
@@ -152,12 +150,7 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
-        runtimeImage="dude-runtime:test",
-        agentModels={
-            "implementer": {"model": "fake/scripted"},
-            "reviewer": {"model": "fake/scripted"},
-            "simplifier": {"model": "fake/scripted"},
-        },
+        agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")}),
         repositories=[
             {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}
         ],

@@ -110,9 +110,11 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(w.lux.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
-	models := `{"implementer":{"model":"fake/scripted"},"reviewer":{"model":"fake/scripted"},"simplifier":{"model":"fake/scripted"}}`
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models, runtime_image)
-		VALUES ($1, $2, 'P', $1, 'P', $3::jsonb, 'agent:test')`, w.project, w.org, models)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image)
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test')`, w.project, w.org)
+	for _, role := range []string{"implementer", "reviewer", "simplifier"} {
+		w.onModel(role, "fake/scripted")
+	}
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'target', 'git://127.0.0.1/acme/target.git', 'main')`, w.repoID, w.org, w.project)
 	mustExec(t, owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url)
@@ -195,6 +197,30 @@ func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	if _, err := c.Exec(context.Background(), sql, args...); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// onModel puts the project's role on a tier of the organization's that
+// requests model, made for it once (a role names a tier, never a model),
+// and returns the tier's id. The tier's name is OnModelTier(model), never
+// the model itself, so a test can tell the two apart.
+func (w *world) onModel(role, model string) string {
+	w.t.Helper()
+	id := "mtr_" + strings.NewReplacer("/", "_", ".", "_", "-", "_").Replace(model) + "_" + w.org
+	mustExec(w.t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model, position)
+		VALUES ($1, $2, $4, $3, 10) ON CONFLICT DO NOTHING`, id, w.org, model, onModelTier(model))
+	mustExec(w.t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, ARRAY[$2::text],
+		COALESCE(agent_models->$2, '{}'::jsonb) || jsonb_build_object('tier', $3::text)) WHERE id = $1`,
+		w.project, role, id)
+	return id
+}
+
+// onModelTier is the name onModel gives the tier it makes for model.
+func onModelTier(model string) string {
+	name := "T " + model
+	if len(name) > 24 {
+		name = name[:24]
+	}
+	return name
 }
 
 func (w *world) task() string {
@@ -831,8 +857,10 @@ func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 
 func TestWhatDudeSendsLux(t *testing.T) {
 	w := newWorld(t)
-	// A real model, so the spec is the one a real agent gets.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.project)
+	// A real model, so the spec is the one a real agent gets: one the image
+	// does not declare, which the spec declares itself.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("implementer", "claude-impl")
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.deliver(wi)
@@ -875,7 +903,7 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if s := secrets["DUDE_LLM_KEY"]; s.As != "env" || s.Value != "secret-key" {
 		t.Errorf("DUDE_LLM_KEY = %+v, want the LLM key as an env secret", s)
 	}
-	if !strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"model":"llm/impl"`) || spec.Env["DUDE_LLM_URL"] != "https://llm.example/v1" {
+	if !strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"model":"llm-anthropic/claude-impl"`) || spec.Env["DUDE_LLM_URL"] != "https://llm.example/v1" {
 		t.Errorf("env = %v, want the implementer's model inline and the LLM URL", spec.Env)
 	}
 	if spec.Network == nil || len(spec.Network.Egress) != 1 || spec.Network.Egress[0].Host != "llm.example" {
@@ -968,8 +996,7 @@ func TestAPullRequestFixIsHandedTheFeedbackAndNotTheFindingsLeftOpen(t *testing.
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	// The fixer is a real model, so its spec carries the prompt a real agent gets.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb
-		WHERE id = $1`, w.project)
+	w.onModel("implementer", "llm-impl")
 
 	w.gh.Comment(1, "reviewer-person", "Please rename the greeting.")
 	w.until("a fix for the comment", func() bool {
@@ -1680,7 +1707,7 @@ func TestAFindingIsResolvedOnlyWhenTheReviewerJudgesItFixed(t *testing.T) {
 		return fakelux.Behaviour{Hang: true}
 	}
 	// A real model, so the review prompt is the one a real reviewer reads.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("reviewer", "llm-review")
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a second review", func() bool {
@@ -1714,8 +1741,7 @@ func TestAReviewersFindingsAreRecorded(t *testing.T) {
 
 func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb
-		WHERE id = $1`, w.project)
+	w.onModel("reviewer", "llm-review")
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
 			return fakelux.Behaviour{Hang: true}
@@ -2411,15 +2437,16 @@ func TestAnImplementerThatChangesNothingIsEscalated(t *testing.T) {
 	}
 }
 
-func TestLuxRefusingASpecFailsThePhaseRatherThanRetryingForever(t *testing.T) {
+func TestARunWithNoModelFailsThePhaseRatherThanRetryingForever(t *testing.T) {
 	w := newWorld(t)
+	// The project's own tiers gone: the organization's Coder, seeded with no model.
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
 	wi := w.task()
 	w.deliver(wi)
 	w.until("escalation", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	var errText string
 	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1`, wi).Scan(&errText)
-	if !strings.Contains(errText, "no model is configured for the implementer role") {
+	if errText != "The Implementer runs on Coder, which names no model yet. An admin sets it in Models." {
 		t.Errorf("error = %q", errText)
 	}
 	if len(w.lux.Runs()) != 0 {
@@ -3131,7 +3158,7 @@ func (w *world) escalated() string {
 func TestAPersonSendsAStoppedDeliveryBackToTryAgain(t *testing.T) {
 	w := newWorld(t)
 	// A real model, so the reviewer's prompt is the one a real one reads.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("reviewer", "llm-review")
 	wi := w.escalated()
 	var actions string
 	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'actions' FROM events WHERE task_id = $1
@@ -3518,8 +3545,7 @@ func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:success")
 	wi := w.reviewing()
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb
-		WHERE id = $1`, w.project)
+	w.onModel("implementer", "llm-impl")
 	w.gh.SetChecks("run:failure")
 	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
 	var prompt string

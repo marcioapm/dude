@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   deliveryPolicySchema,
   effortSchema,
-  modelSelectionSchema,
+  ROLE_MODEL_REMOVED,
   TERMINAL_TASK_STATUSES,
   timeLimitMinutesSchema,
   type Effort,
@@ -22,7 +22,7 @@ import {
  * The agents a person configures, in the order they are shown. The fixer
  * is the implementer's model told something else: its own prompt, and
  * settings of its own only where it is given them. The investigator reads
- * before anything is written; like the others it has a model, effort, time
+ * before anything is written; like the others it has a tier, effort, time
  * limit and machine, and it follows no other role.
  */
 export const SETTINGS_ROLES = ["investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const;
@@ -92,7 +92,14 @@ export interface PromptState {
 export type ProjectPromptMode = "add" | "replace" | "inherit";
 
 export interface RoleSettings {
-  model: Setting<string | null>;
+  /**
+   * A model tier's id; null: no layer names one of the organization's
+   * tiers, and a Run in the role fails saying so. On a project,
+   * `organization` is what the organization's layer says (what a Reset
+   * goes back to); `followsImplementer` marks a fixer's value that is the
+   * implementer's.
+   */
+  tier: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
   effort: Setting<Effort | null>;
   timeLimitMinutes: Setting<number | null>;
   /**
@@ -102,6 +109,11 @@ export interface RoleSettings {
    * fixer's value that is the implementer's.
    */
   machineSize: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
+  /**
+   * A library image's id; null: none set for the role, so the project's
+   * image (then the organization's default base). Layered like machineSize.
+   */
+  image: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
   /** Null for a role that is always on. */
   enabled: Setting<boolean> | null;
   prompt: {
@@ -136,10 +148,12 @@ export const settingsPatchSchema = z
         z.enum(SETTINGS_ROLES),
         z
           .object({
-            model: nullable(modelSelectionSchema),
+            tier: nullable(z.string().min(1).max(100)),
+            model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
             effort: nullable(effortSchema),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),
             machineSize: nullable(z.string().min(1).max(100)),
+            image: nullable(z.string().min(1).max(100)),
             enabled: nullable(z.boolean()),
           })
           .strict(),

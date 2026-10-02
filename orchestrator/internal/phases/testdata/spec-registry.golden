@@ -2,7 +2,8 @@
   "name": "implement wi_1",
   "labels": {
     "dude.harness": "opencode",
-    "dude.model": "llm/impl",
+    "dude.model": "claude-opus-5-5",
+    "dude.model_tier": "Coder",
     "dude.org": "org_1",
     "dude.phase": "implement",
     "dude.run": "run_1",
@@ -64,7 +65,7 @@
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "color.ui",
     "GIT_CONFIG_VALUE_0": "always",
-    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm/impl\"}",
+    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-opus-5-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-opus-5-5\":{}}}}}",
     "PY_COLORS": "1",
     "TERM": "xterm-256color"
   },

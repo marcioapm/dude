@@ -11,7 +11,7 @@ import hashlib
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 import psycopg
 import requests
@@ -164,6 +164,29 @@ class ApiClient:
         assert resp.status_code == 200, f"get run failed: {resp.status_code} {resp.text}"
         return resp.json()
 
+    def tier_for(self, model: str) -> str:
+        """The id of a tier of the organization's that requests `model`, made
+        for it when none does, named `T <model>` (cut to a tier name's 24
+        characters) so that its name is never its model. Needs an admin's key."""
+        tiers = self.get("/v1/models/tiers").json()["tiers"]
+        for tier in tiers:
+            if tier["model"] == model:
+                return tier["id"]
+        resp = self.post("/v1/models/tiers", {"name": f"T {model}"[:24], "model": model})
+        assert resp.status_code == 201, f"add tier failed: {resp.status_code} {resp.text}"
+        return next(t["id"] for t in resp.json()["tiers"] if t["model"] == model)
+
+    def on_models(self, models: Mapping[str, str | dict]) -> dict:
+        """Agent models with each role on a tier requesting the model named:
+        `{"implementer": "fake/scripted"}`, or `{"implementer": {"model":
+        "fake/hang", "effort": "low"}}` to keep other fields. A role names a
+        tier, never a model; this is how a test still says which model."""
+        out = {}
+        for role, spec in models.items():
+            fields = dict(spec) if isinstance(spec, dict) else {"model": spec}
+            out[role] = {**{k: v for k, v in fields.items() if k != "model"}, "tier": self.tier_for(fields["model"])}
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Resume timing (run_resumes and run.resume.timed)
@@ -231,13 +254,18 @@ def lux_stamp(value: str | None):
 # ---------------------------------------------------------------------------
 
 
-def sign_in(page, web_url: str, api_key: str) -> None:
+def sign_in(page, web_url: str, api_key: str, at: str = "") -> None:
     """Sign the web app in with a key, from a clean slate.
 
     The key is stored before the app's first script runs, once per tab: the
     app first asks /v1/me with no key (for a Cloudflare Access session), and
     that expected 401 would count as a console error in every test. The key
     prompt's own path is covered by the sign-in tests.
+
+    `at` (a "#/..." place) opens the first document there. With nothing
+    named, the app opens the first project's board once the tree loads,
+    and that replaces any place a test navigates to before it has: a test
+    that starts on a given page names it here.
     """
     import json
     import uuid
@@ -254,7 +282,7 @@ def sign_in(page, web_url: str, api_key: str) -> None:
           localStorage.setItem("dude.apiKey", key);
         })(%s, %s)""" % (json.dumps(api_key), json.dumps(uuid.uuid4().hex)),
     )
-    page.goto(web_url)
+    page.goto(web_url + at)
     expect(page.get_by_test_id("shell")).to_be_visible()
 
 

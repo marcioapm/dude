@@ -222,7 +222,9 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "065_wakeable_previews.sql",
       "066_preview_start_failures.sql",
       "067_run_resumes.sql",
-      "068_kept_runs.sql",
+      "068_image_library.sql",
+      "069_model_tiers.sql",
+      "070_kept_runs.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.

@@ -8,8 +8,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { click, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RUN_ID } from "../src/fixtures/data.ts";
-import { RunScreen } from "../src/screens/RunScreen.tsx";
+import { PreparingImage, RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
+import { BUILDER_GIVE_UP_MINUTES } from "@dude/domain";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -79,6 +80,48 @@ describe("the session's machine", () => {
 /** The machine chip, by its role and its exact accessible name. */
 const machineChip = (page: HTMLElement, name = "Machine: Large, 8 CPUs · 16 GiB · 80 GiB") =>
   [...page.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === name) ?? null;
+
+/** A chip's tooltip, opened as a keyboard user does: focusing the chip. */
+async function tipOf(chip: HTMLButtonElement): Promise<string> {
+  const { act } = await import("react");
+  await act(async () => chip.focus());
+  const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");
+  return tip.textContent ?? "";
+}
+
+describe("the session's model", () => {
+  const modelChip = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=run-model]");
+
+  test("the header says the tier and the model it requested, as the Run recorded them", async () => {
+    const page = await session({ client: new RunClient({ model: "claude-opus-5-5", modelTier: "Coder" }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-opus-5-5");
+    expect(chip.textContent).toBe("Coder ·claude-opus-5-5");
+    expect(await tipOf(chip)).toBe("Coder" +
+      "The Implementer’s tier. When this session started, Coder asked the proxy for claude-opus-5-5; changing Coder now changes the next session, not this one." +
+      "That is what dude asked for; how the proxy served it is the proxy’s to say.");
+  });
+
+  test("a fix Run names the Fixer", async () => {
+    const page = await session({ client: new RunClient({ phase: "fix", role: "implementer", modelTier: "Coder" }) });
+    expect(await tipOf(await until(() => modelChip(page), "the model chip"))).toContain("The Fixer’s tier.");
+  });
+
+  test("a Run from before tiers shows its model alone", async () => {
+    const page = await session({ client: new RunClient({ model: "llm-anthropic/claude-sonnet-5", modelTier: null }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.getAttribute("aria-label")).toBe("Model: llm-anthropic/claude-sonnet-5");
+    expect(chip.textContent).toBe("llm-anthropic/claude-sonnet-5");
+    expect(await tipOf(chip)).toBe("llm-anthropic/claude-sonnet-5When this session started, dude asked the proxy for llm-anthropic/claude-sonnet-5." +
+      "That is what dude asked for; how the proxy served it is the proxy’s to say.");
+  });
+
+  test("a Run that has asked for nothing yet has no chip", async () => {
+    const page = await session({ client: new RunClient({ model: null, modelTier: null }) });
+    await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
+    expect(modelChip(page)).toBeNull();
+  });
+});
 
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
 async function machineTip(page: HTMLElement): Promise<string> {
@@ -270,5 +313,32 @@ describe("the terminal", () => {
     await emitForTest("run.paused");
     await until(() => (page.querySelector("[data-testid=terminal-link]") ? null : true), "the terminal gone once paused");
     expect(page.querySelector("[data-testid=terminal-icon]") !== null).toBe(false);
+  });
+});
+
+describe("a Run preparing its image", () => {
+  const callout = async (preparing: NonNullable<RunDetail["preparingImage"]>) => {
+    const { container, unmount } = await mount(<PreparingImage preparing={preparing} />);
+    mounted.push(unmount);
+    return container.querySelector("[data-testid=preparing-image]")!.textContent;
+  };
+  const waiting = { buildId: "imb_1", state: "running", imageName: "acme-base", version: 1, builderOfflineSince: null };
+
+  test("its image's first version building says so, without a finish's minute or two", async () => {
+    expect(await callout({ ...waiting, kind: "build" })).toBe(
+      "Preparing image: building acme-base v1 (its first version). The builder is on it now; the session starts once it is built and published. Nothing is spent until then.",
+    );
+  });
+
+  test("the dude layer being added to it", async () => {
+    expect(await callout({ ...waiting, kind: "finish", state: "queued" })).toBe(
+      "Preparing image: adding the dude layer to acme-base v1. It is next in the builder’s line; the session starts once it is done, usually within a minute or two. Nothing is spent until then.",
+    );
+  });
+
+  test("an offline builder names the give-up limit", async () => {
+    expect(await callout({ ...waiting, kind: "build", builderOfflineSince: "2026-10-01T08:00:00Z" })).toContain(
+      `if it stays offline for ${BUILDER_GIVE_UP_MINUTES} minutes of the wait, this Run fails before it starts`,
+    );
   });
 });

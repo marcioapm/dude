@@ -151,7 +151,7 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 }
 
 // KeptRun (SQL, over a runs row named runs) is a Run a person can take
-// back up where it stopped: migration 068's run_kept, the one definition.
+// back up where it stopped: migration 070's run_kept, the one definition.
 const KeptRun = `run_kept(runs)`
 
 // Kept says whether a failed Run is kept for a person to resume

@@ -1,4 +1,4 @@
--- 068_kept_runs.sql — an aborted or failed Run's lux Run is kept, not
+-- 070_kept_runs.sql — an aborted or failed Run's lux Run is kept, not
 -- cancelled, so a person can resume it where it stopped.
 --
 -- Until now dude cancelled the lux Run of a Run that failed or was aborted,

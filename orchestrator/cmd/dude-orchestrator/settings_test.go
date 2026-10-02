@@ -218,6 +218,20 @@ func TestBadRegistrySettingsAreRefusedBySettings(t *testing.T) {
 	}
 }
 
+func TestTheDudeLayerIsTakenOnlyByDigest(t *testing.T) {
+	digest := "r.example/dude/layer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if s := mustSettings(t, loadConfig(t, required+"[images]\nlayer = \""+digest+"\"\n", 0o600, nil)); s.Agent.Layer != digest {
+		t.Errorf("layer = %q", s.Agent.Layer)
+	}
+	for _, tagged := range []string{"r.example/dude/layer:latest", "r.example/dude/layer@sha256:0123"} {
+		_, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_LAYER_IMAGE": tagged}))
+		want := "images.layer (DUDE_LAYER_IMAGE) must name the dude layer by digest (…@sha256:<64 hex>), not \"" + tagged + "\""
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: err = %v, want %q", tagged, err, want)
+		}
+	}
+}
+
 func TestSettingsDefaults(t *testing.T) {
 	s := mustSettings(t, loadConfig(t, required, 0o600, nil))
 	if s.Listen != "127.0.0.1:3100" || s.ToolsListen != "" || s.ReconcileEvery != 15*time.Minute ||

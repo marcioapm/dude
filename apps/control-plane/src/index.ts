@@ -31,6 +31,8 @@ import { registerLiveRoutes } from "./api/routes/live.ts";
 import { registerServerRoutes } from "./api/routes/servers.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { registerMachineRoutes } from "./api/routes/machines.ts";
+import { registerModelRoutes } from "./api/routes/models.ts";
+import { registerImageRoutes } from "./api/routes/images.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
@@ -54,6 +56,8 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerPullRequestRoutes(router);
   registerMemoryRoutes(router);
   registerMachineRoutes(router);
+  registerModelRoutes(router);
+  registerImageRoutes(router);
   registerFindingRoutes(router);
   registerArtifactRoutes(router);
   registerProjectRoutes(router);
