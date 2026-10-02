@@ -220,11 +220,16 @@ const (
 // which model, what the agent is told, which commit it starts from and where
 // its work is pushed.
 func buildSpec(c AgentConfig, in specInput) lux.Spec {
+	// What it is: its phase, or for a task's conductor (no phase) its role.
+	step := in.Phase
+	if step == "" {
+		step = in.Role
+	}
 	spec := lux.Spec{
-		Name: fmt.Sprintf("%s %s", in.Phase, in.TaskID),
+		Name: fmt.Sprintf("%s %s", step, in.TaskID),
 		Labels: map[string]string{
 			"dude.org": in.OrganizationID, "dude.task": in.TaskID,
-			"dude.run": in.RunID, "dude.phase": in.Phase,
+			"dude.run": in.RunID, "dude.phase": step, "dude.role": in.Role,
 			"dude.harness": harnessOpenCode, "dude.model": in.Model,
 		},
 		Image: lux.Image{Ref: in.Image},
@@ -310,7 +315,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Labels["dude.harness"] = harnessScripted
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
-		spec.Workload.Prompt = fakeagent.Script(in.Phase, in.Model, in.RunID)
+		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
+		if in.Phase == "" && in.Role == fakeagent.Conductor {
+			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
+		}
 		if len(spec.Workload.MCPServers) > 0 {
 			// Its tools must be reachable; nothing else needs to be.
 			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, toolsOnly: true})

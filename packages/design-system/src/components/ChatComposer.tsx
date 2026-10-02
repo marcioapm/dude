@@ -7,8 +7,12 @@ import { AttachmentChip, attachmentWarning, takePastedFiles, type ComposerAttach
 import styles from "./ChatComposer.module.css";
 import trayStyles from "./ImageAttachments.module.css";
 
-/** The two ways a human intervenes, plus the initial prompt. */
-export type ComposerMode = "answer" | "steer" | "prompt";
+/**
+ * The two ways a human intervenes, plus the initial prompt, plus `chat`:
+ * talking with a task's conductor, which is a conversation, not an
+ * intervention in someone's turn.
+ */
+export type ComposerMode = "answer" | "steer" | "prompt" | "chat";
 
 export interface PendingQuestion {
   readonly id: string;
@@ -37,8 +41,13 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   readonly value?: string | undefined;
   readonly defaultValue?: string | undefined;
   readonly onValueChange?: ((value: string) => void) | undefined;
-  /** Sends the message. Rejecting means it was not sent: the words are kept. */
-  readonly onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
+  /**
+   * Sends it. The text is cleared only once the submission is confirmed:
+   * resolving `false`, or rejecting, leaves the words in the composer to
+   * send again. Showing why is the caller's (a rejection is caught here,
+   * never left unhandled).
+   */
+  readonly onSubmit: (submission: ComposerSubmission) => void | boolean | Promise<void | boolean>;
   /** Extra controls at the left of the action row (attach, templates…). */
   readonly leading?: ReactNode;
   readonly autoFocus?: boolean | undefined;
@@ -56,6 +65,11 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    * the turn ends". The app knows; the composer only says it.
    */
   readonly landsHint?: ReactNode;
+  /**
+   * Chat only: who it goes to and on what terms, where `sentAs` would be —
+   * "To **Conductor** · read-only".
+   */
+  readonly to?: ReactNode;
   /**
    * Images in the tray, in order: the app reads, scales and uploads them
    * and says how each is doing. Send waits while one uploads and refuses
@@ -79,17 +93,20 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
 export type ComposerSubmission =
   | { readonly mode: "answer"; readonly questionId: string; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
   | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean; readonly attachmentIds: ReadonlyArray<string> }
-  | { readonly mode: "prompt"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> };
+  | { readonly mode: "prompt"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
+  | { readonly mode: "chat"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> };
 
 const MODE_LABEL: Record<ComposerMode, string> = {
   answer: "Answer",
   steer: "Steer",
   prompt: "Send",
+  chat: "Send",
 };
 const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
   answer: "Type your answer…",
   steer: "Steer the agent…",
   prompt: "Describe the task…",
+  chat: "Ask about this task…",
 };
 
 /**
@@ -110,7 +127,12 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
  *           heard at once — that is the costly one, and it is a
  *           deliberate tick, not a key.
  *
- * Enter sends in both modes; Shift+Enter always inserts a newline. The
+ *   chat    a task's Chat: a message to its conductor, which answers it.
+ *           Accent-toned like a steer — it is talking to an agent — but
+ *           with Send and no interrupt: it starts the conductor's next
+ *           turn, never cuts one short. `to` names who it goes to.
+ *
+ * Enter sends in every mode; Shift+Enter always inserts a newline. The
  * action row says who it is sent as.
  */
 export function ChatComposer({
@@ -129,6 +151,7 @@ export function ChatComposer({
   sentAs,
   canInterrupt,
   landsHint,
+  to,
   attachments = [],
   onAttachFiles,
   onRemoveAttachment,
@@ -182,16 +205,21 @@ export function ChatComposer({
     const attachmentIds = ready;
     const submission: ComposerSubmission =
       mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t, attachmentIds }
-        : mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds } : { mode: "prompt", text: t, attachmentIds };
+        : mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds }
+        : mode === "chat" ? { mode: "chat", text: t, attachmentIds }
+        : { mode: "prompt", text: t, attachmentIds };
     setBusy(true);
+    let sent = false;
     try {
-      await onSubmit(submission);
-      setText("");
-      setInterrupt(false);
+      sent = (await onSubmit(submission)) !== false;
     } catch {
-      // Not sent: the app has said why; the words stay to send again.
+      // Not sent: the words stay; the caller says why.
     } finally {
       setBusy(false);
+    }
+    if (sent) {
+      setText("");
+      setInterrupt(false);
     }
   };
 
@@ -302,7 +330,9 @@ export function ChatComposer({
             ))}
           </div>
         ) : null}
-        {sentAs && !isDisabled ? (
+        {mode === "chat" && to && !isDisabled ? (
+          <span className={styles["sentAs"]} data-testid="composer-to">{to}</span>
+        ) : sentAs && !isDisabled ? (
           <span className={styles["sentAs"]}>
             Sent as <b>{sentAs}</b>
           </span>

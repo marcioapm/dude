@@ -83,7 +83,8 @@ beforeAll(async () => {
   // A project on the scripted agent, in an organization whose tiers ask for it.
   await project("prj_fake", "org_fake", { implementer: { model: "fake/scripted" } });
 
-  for (const f of files.filter((f) => f.version >= "069")) await db.unsafe(await f.contents());
+  // 069 alone: what it leaves, before 072 renames the orchestrator.
+  for (const f of files.filter((f) => f.version === "069")) await db.unsafe(await f.contents());
 }, 120_000);
 
 afterAll(async () => {

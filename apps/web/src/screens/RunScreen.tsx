@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -19,6 +19,7 @@ import {
   ChatNotice,
   ChatProgress,
   ChatTranscript,
+  CostDisplay,
   EventRow,
   EventStream,
   ChangedFiles,
@@ -44,11 +45,12 @@ import {
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
+import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
+import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -59,6 +61,7 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
+import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
 
 export interface RunScreenProps {
@@ -76,8 +79,33 @@ export interface RunScreenProps {
    * the owner alone, its key being on the page already.
    */
   task?: { owner: Person | null; key?: string | undefined } | undefined;
+  /**
+   * Shown as a task's Chat, its conductor's conversation: no session
+   * header or view switch, `head` above the turns (the task's history), and
+   * a composer that talks to the conductor through `send` — always open: a
+   * parked conductor wakes for a message, and one that ended is replaced.
+   */
+  chat?: ChatVariant | undefined;
   /** What its end strip says of a session that stopped, beyond how it ended. */
   stopped?: StoppedRun | undefined;
+}
+
+export interface ChatVariant {
+  head: ReactNode;
+  send: (text: string) => Promise<unknown>;
+  /** What the rail says of the task, beside the conductor's own facts. */
+  briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
+  /** The task's earlier conductors' conversations, above this one's turns. */
+  before?: ReactNode;
+  /** The conductor's whole cost, from the task's metrics; null until read. */
+  cost?: RunCost | null;
+}
+
+/** A Run's cost as the task's metrics split it: tokens and machine time. */
+export interface RunCost {
+  cost: CostSplit;
+  tokens: number;
+  activeMs: number;
 }
 
 /**
@@ -113,7 +141,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunLeaseAcquired,
 ]);
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, stopped }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -240,10 +268,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
    * Run an intervention. A conflict (409) means the Run moved on while
    * you were deciding — usually because someone else acted: that is a
    * calm notice naming them, not an error, and it clears when the Run's
-   * state catches up. Anything else is a problem, said plainly.
+   * state catches up. Anything else is a problem, said plainly. Resolves
+   * whether it went: a composer keeps the words of one that did not.
    */
   const intervene = useCallback(
-    async (action: () => Promise<unknown>, label: string) => {
+    async (action: () => Promise<unknown>, label: string): Promise<boolean> => {
       setBusy(true);
       setProblem(null);
       setNotice(null);
@@ -280,7 +309,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   }, [notice, run?.status]);
 
   // Awaited, so the composer stays busy until the API has answered: no
-  // second submit of the same words while the first is on its way.
+  // second submit of the same words while the first is on its way. In a
+  // task's Chat every message — an answer to its question too — goes to
+  // the task's Chat, which knows what the conductor waits on (words only:
+  // Chat's composer has no image tray).
   const limits = useAttachmentLimits(client);
   const tray = useImageTray(client, run?.taskId, limits);
   const images = useSentImages(client);
@@ -288,7 +320,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const send = useCallback(
     async (submission: ComposerSubmission) => {
-      const ok = await (submission.mode === "answer"
+      const ok = await (chat ? intervene(() => chat.send(submission.text), "send the message")
+        : submission.mode === "answer"
         ? intervene(() => client.answer(submission.questionId, submission.text, submission.attachmentIds), "answer the agent")
         : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt,
           attachmentIds: submission.attachmentIds }), "steer this run"));
@@ -296,7 +329,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       if (ok) tray.clear(submission.attachmentIds);
       else throw new Error("not sent");
     },
-    [client, runId, intervene, tray],
+    [client, runId, intervene, tray, chat],
   );
 
   // Interrupt now (a queued steer) and Retry (a failed one) send the same
@@ -378,6 +411,87 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
+
+  if (chat) {
+    // A task's Chat: the conductor's conversation under the task's history,
+    // a composer that always talks to the task's conductor, and the rail
+    // with what it was briefed with — no session header or views: the task
+    // page around it is the context.
+    const asking = conversation.openQuestion;
+    return (
+      <div className="runScreen" data-view="chat" data-testid="chat-screen">
+        <div className="runView">
+          <div className="runChat">
+            <ChatTranscript
+              fill
+              live={isLive}
+              revision={events.length}
+              turns={conversation.turns.length}
+              pinned={chat.head}
+              footer={
+                <ChatComposer
+                  mode={asking ? "answer" : "chat"}
+                  question={asking ? {
+                    id: asking.questionId, text: asking.text, askedBy: "the conductor", askedAt: asking.at,
+                    options: waitingOn ? [] : asking.options,
+                  } : undefined}
+                  disabled={asking !== null && waitingOn !== undefined}
+                  disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
+                  onSubmit={send}
+                  sentAs={youName ? firstName(youName) : undefined}
+                  to={<>To <b>Conductor</b> · read-only</>}
+                />
+              }
+              emptyMessage="Waiting for the conductor to start."
+            >
+              {chat.before}
+              {grouped.map((group) => Array.isArray(group)
+                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+                : render(group))}
+              {conversation.activity ? (
+                <ChatMessage role={role} activity={conversation.activity}
+                  activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
+              ) : null}
+            </ChatTranscript>
+            {viewing ? (
+              <ImageViewer
+                images={viewing.turn.attachments.map(images.sent)}
+                index={viewing.index}
+                onIndexChange={(index) => setViewing({ ...viewing, index })}
+                onClose={() => setViewing(null)}
+                context={viewedContext(viewing.turn, people, runLabel(run), dude)}
+                readAt={viewing.turn.kind === "human" && viewing.turn.read && viewing.turn.deliveredAt ? clock(viewing.turn.deliveredAt) : undefined}
+                onWantOriginal={(i) => images.wantOriginal(viewing.turn.attachments[i]!.id)}
+                onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
+              />
+            ) : null}
+            <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
+              <SessionRailBlock label="Briefed with">
+                <SessionFacts facts={chat.briefedWith} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Conductor">
+                <SessionFacts facts={[
+                  ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
+                  ...(run.machine ? [{ label: "Machine", value: run.machine.name }] : []),
+                  // The whole cost, tokens and machine time, as the task's metrics split it.
+                  { label: "Cost", value: chat.cost
+                    ? <CostOf cost={chat.cost.cost} tokens={chat.cost.tokens} activeMs={chat.cost.activeMs} />
+                    : <CostDisplay usd={modelCostShown(conversation.costUsd, conversation.costSource.from)} /> },
+                ]} />
+              </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                </SessionRailBlock>
+              ) : null}
+            </SessionRail>
+          </div>
+        </div>
+        {notice ? <Callout tone="neutral" data-testid="conflict-notice">{notice.text}</Callout> : null}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      </div>
+    );
+  }
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || changed.length > 0;
@@ -680,6 +794,79 @@ function pendingReason(wait: SteerWait) {
   }
 }
 
+/**
+ * A task's conductor that ended, in its Chat above the next: its whole
+ * conversation, read once for the task's page (EndedLedgers), with nothing
+ * to answer or steer; its images shown, and opened in the viewer, as the
+ * live one's are. A read that failed says so, with a retry. A line says
+ * where it ended; the latest conductor takes what is written next.
+ */
+export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status }: {
+  ledgers: EndedLedgers;
+  runId: string;
+  status: RunDetail["status"];
+}) {
+  const people = usePeople();
+  const images = useSentImages(ledgers.client);
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
+  const [events, setEvents] = useState<PersistedEvent[] | null>(() => ledgers.cached(runId));
+  const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (ledgers.cached(runId)) return;
+    let cancelled = false;
+    setFailed(null);
+    ledgers.read(runId, () => cancelled).then((read) => {
+      if (read && !cancelled) setEvents(read);
+    }, (err: unknown) => {
+      if (!cancelled) setFailed(err instanceof ApiError ? err.message : "the request failed");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgers, runId, attempt]);
+  const turns = useMemo(() => (events ? asides(project(events, status).turns) : []), [events, status]);
+  if (failed && !events) {
+    return (
+      <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
+        <Callout tone="danger" data-testid="earlier-conductor-failed">
+          <span className="noticeLine">
+            Could not read this earlier conductor’s conversation: {failed}
+            <Button size="sm" variant="quiet" onClick={() => setAttempt((n) => n + 1)} data-testid="earlier-conductor-retry">
+              Retry
+            </Button>
+          </span>
+        </Callout>
+      </div>
+    );
+  }
+  if (!events) return null;
+  const dude = dudeName(events[0]?.taskId ?? "");
+  const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
+  const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
+  return (
+    <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
+      {turns.map((group) => Array.isArray(group)
+        ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+        : render(group))}
+      <ChatNotice kind="parked" by={dude} at={events.at(-1)?.occurredAt ?? Date.now()} data-testid="earlier-conductor-ended"
+        text="This conductor has ended. The next one takes what you write, briefed afresh." />
+      {viewing ? (
+        <ImageViewer
+          images={viewing.turn.attachments.map(images.sent)}
+          index={viewing.index}
+          onIndexChange={(index) => setViewing({ ...viewing, index })}
+          onClose={() => setViewing(null)}
+          context={viewedContext(viewing.turn, people, "Conductor", dude)}
+          readAt={viewing.turn.kind === "human" && viewing.turn.read && viewing.turn.deliveredAt ? clock(viewing.turn.deliveredAt) : undefined}
+          onWantOriginal={(i) => images.wantOriginal(viewing.turn.attachments[i]!.id)}
+          onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
+        />
+      ) : null}
+    </div>
+  );
+});
+
 /** A turn whose images the viewer shows. */
 type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
 
@@ -740,7 +927,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     }
     case "notice":
-      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at}
+      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} by={dude}
         {...(turn.title ? { title: turn.title } : {})} />;
     case "ended":
       // Where the transcript stops, and why: a failure in its tone, not a
@@ -775,14 +962,16 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
+      // A conductor's is dude's briefing of it, tagged so.
       return (
-        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at}
-          {...turnImages(turn, shown)} />
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
+          content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} {...turnImages(turn, shown)} />
       );
     case "message":
       return (
         <ChatMessage
           key={turn.id}
+          data-testid={role === "conductor" ? "conductor-turn" : undefined}
           role={role}
           content={turn.text}
           startedAt={turn.at}
@@ -808,9 +997,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       // Signed: the person's face and name when known; "Someone" only when the ledger kept no one.
       const name = actorName(turn.by, people.names);
       const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
-      const wait = steer && turn.intent === "steer" && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
-      // Only where there is a turn to stop, and not twice.
-      const interruptible = (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
+      const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
+      // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
+      const interruptible = turn.intent === "steer" && (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
       return (
         <ChatMessage
           key={turn.id}

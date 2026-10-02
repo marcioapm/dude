@@ -23,7 +23,7 @@ import { modelCostShown } from "../api/client.ts";
  * is "not reported", never $0.00 — as the run's header shows it; lux's
  * zero is a price. The tooltip says who priced each half, when known.
  */
-function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
+export function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
   const origin = cost.origin;
   const luxMachine = origin?.machine === "lux";
   return (

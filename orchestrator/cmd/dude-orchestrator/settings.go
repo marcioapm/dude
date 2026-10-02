@@ -34,6 +34,7 @@ type settings struct {
 
 	ReconcileEvery       time.Duration
 	ParkAfter, IdleAfter time.Duration
+	ConductorWarm        time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume.
 	KeepStopped       time.Duration
 	DiffEvery         time.Duration
@@ -129,6 +130,7 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 
 	s.ReconcileEvery = cfg.Duration("DUDE_PR_RECONCILE")
 	s.ParkAfter, s.IdleAfter = cfg.Duration("DUDE_PARK_AFTER"), cfg.Duration("DUDE_IDLE_AFTER")
+	s.ConductorWarm = cfg.Duration("DUDE_CONDUCTOR_WARM")
 	s.DiffEvery = cfg.Duration("DUDE_DIFF_EVERY")
 	if s.KeepStopped = cfg.Duration("DUDE_KEEP_STOPPED"); s.KeepStopped <= 0 {
 		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_KEEP_STOPPED"), s.KeepStopped)

@@ -52,6 +52,10 @@ type Policy struct {
 	// tool, waiting on nobody — before it is nudged; as long again after the
 	// nudge and it is parked for a person. 0: never.
 	IdleNudgeMinutes int `json:"idleNudgeMinutes"`
+	// Minutes a task's conductor stays running after its turn ends, so a
+	// person still at their desk gets a live reply; past it, it is parked
+	// and their next message resumes it.
+	ConductorWarmMinutes int `json:"conductorWarmMinutes"`
 }
 
 func DefaultPolicy() Policy {
@@ -71,6 +75,7 @@ func DefaultPolicy() Policy {
 		MaxPRFixIterations:    3,
 		ParkAfterMinutes:      10,
 		IdleNudgeMinutes:      0, // off
+		ConductorWarmMinutes:  5,
 	}
 }
 
@@ -94,10 +99,14 @@ var RoleForPhase = map[string]string{
 	PhaseTest:        "qa_browser",
 }
 
+// RoleConductor is the role of a task's conductor: a Run of the task with
+// no phase, which people talk to in its Chat.
+const RoleConductor = "conductor"
+
 // RoleLabel is how a role is named to a person, as the app names it
 // (ROLE_LABEL, packages/design-system AgentAvatar).
 var RoleLabel = map[string]string{
-	"orchestrator": "Orchestrator",
+	RoleConductor:  "Conductor",
 	"investigator": "Investigator",
 	"implementer":  "Implementer",
 	"reviewer":     "Reviewer",
