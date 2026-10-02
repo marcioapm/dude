@@ -673,7 +673,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var tier delivery.Tier
 	var noTier string
 	settingsRole := delivery.PromptRoleFor(r.Phase, r.Role)
-	promptRole := settingsRole
 	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -700,7 +699,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, promptRole); err != nil {
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, settingsRole); err != nil {
 			return err
 		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
