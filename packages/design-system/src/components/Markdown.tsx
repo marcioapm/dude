@@ -58,6 +58,13 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly linkTarget?: "_blank" | "_self" | undefined;
   /** Render fenced ```diff / ```patch blocks with DiffView (default true). */
   readonly diffs?: boolean | undefined;
+  /**
+   * Draws `![alt](attachment:id)`, an image of the caller's own (a task's
+   * upload), in place: usually a `MarkdownImage` over bytes the caller
+   * fetched. Without it such an image is its alt text. Every other image
+   * stays a link: an <img> to an arbitrary host is a tracking pixel.
+   */
+  readonly attachmentImage?: ((id: string, alt: string) => ReactNode) | undefined;
 }
 
 /**
@@ -79,6 +86,7 @@ export function Markdown({
   untitled = "Untitled",
   linkTarget = "_blank",
   diffs = true,
+  attachmentImage,
   className,
   ...rest
 }: MarkdownProps) {
@@ -92,7 +100,7 @@ export function Markdown({
     [source, streaming, breaks],
   );
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
-  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
+  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt", attachmentImage };
 
   const body = (
     <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], className)} {...rest}>
@@ -131,6 +139,7 @@ interface RenderCtx {
   readonly streaming: boolean;
   /** Draw `{{name}}` as a variable chip (prompts). */
   readonly variables: boolean;
+  readonly attachmentImage: MarkdownProps["attachmentImage"];
 }
 
 /** The streaming caret. Base style is solid so reduced motion leaves it visible. */
@@ -270,6 +279,40 @@ function CodeBlock({ lang, value, open, ctx, tail }: { readonly lang: string; re
 }
 
 const VARIABLE = /\{\{\s*([\w.]+)\s*\}\}/g;
+const ATTACHMENT_URL = "attachment:";
+
+export interface MarkdownImageProps {
+  /** The bytes' URL (a blob: URL the caller read); none while they load. */
+  readonly src?: string | undefined;
+  readonly alt: string;
+  /** Opens it full size (`ImageViewer`). */
+  readonly onOpen?: (() => void) | undefined;
+  /** Shown in place of the image: it cannot be shown ("Image unavailable"). */
+  readonly unavailable?: boolean | undefined;
+}
+
+/**
+ * An image a person put in their Markdown, in its place in the text: its
+ * natural size up to the column's width, a button that opens it.
+ */
+export function MarkdownImage({ src, alt, onOpen, unavailable }: MarkdownImageProps) {
+  if (unavailable) {
+    return (
+      <span className={styles["imageMissing"]} data-testid="markdown-image-missing">
+        <Icon name="file" size={11} />
+        {alt || "image"} · unavailable
+      </span>
+    );
+  }
+  const img = src ? <img src={src} alt={alt} className={styles["image"]} /> : <span className={styles["imageLoading"]} aria-label={`Loading ${alt}`} />;
+  return onOpen ? (
+    <button type="button" className={styles["imageButton"]} onClick={onOpen} aria-label={`Open ${alt || "image"}`} data-testid="markdown-image">
+      {img}
+    </button>
+  ) : (
+    <span className={styles["imageButton"]} data-testid="markdown-image">{img}</span>
+  );
+}
 
 /**
  * Text with each `{{name}}` the orchestrator fills in as a chip. Anything
@@ -330,6 +373,9 @@ function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: Render
         </a>
       );
     case "image":
+      if (node.src.startsWith(ATTACHMENT_URL)) {
+        return ctx.attachmentImage ? <>{ctx.attachmentImage(node.src.slice(ATTACHMENT_URL.length), node.alt)}</> : <>{node.alt}</>;
+      }
       // Images are shown as a link, not fetched: an <img> to an arbitrary
       // host is a tracking pixel and a layout jump. The consumer can opt in
       // by rendering artifacts itself.
