@@ -603,3 +603,128 @@ func TestAnsweringAConductorRestoresOnlyTheWaitItRaised(t *testing.T) {
 		t.Errorf("after the answer the task is %s, want %s again", got, was)
 	}
 }
+
+// luxSpecOf is the lux spec of the task's Run in phase.
+func (w *world) luxSpecOf(phase string) string {
+	w.t.Helper()
+	for _, r := range w.lux.Runs() {
+		var spec lux.Spec
+		_ = json.Unmarshal(r.Spec, &spec)
+		if spec.Labels["dude.phase"] == phase {
+			return string(r.Spec)
+		}
+	}
+	w.t.Fatalf("no lux Run in phase %s", phase)
+	return ""
+}
+
+// The conductor's question raised the task's current wait, and something
+// else then came to wait on a person without moving the task. Answering
+// the conductor leaves the task waiting; settling that blocker, the last,
+// puts it back to the status before the conductor's wait.
+func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// block makes the task wait on a person for something else, and
+		// returns how a person settles it.
+		block func(w *world, task, implementer string) (settle func())
+	}{
+		{"another agent's question", func(w *world, task, implementer string) func() {
+			var qid string
+			if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+				var err error
+				qid, err = delivery.AskTx(context.Background(), tx,
+					delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: implementer}, "Which file?", nil)
+				return err
+			}); err != nil {
+				w.t.Fatal(err)
+			}
+			return func() {
+				if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "a.md"}); status != 200 {
+					w.t.Fatalf("answer the implementer: %d %v", status, body)
+				}
+			}
+		}},
+		{"a blocking repository request", func(w *world, task, implementer string) func() {
+			mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+				VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+			status, body := w.callTool(w.syncer.Agent.ToolsURL, w.luxSpecOf("implement"), "request_repository",
+				`{"repository":"web","reason":"the client","wait":true}`)
+			var req struct{ RequestID string }
+			_ = json.Unmarshal([]byte(body), &req)
+			if status != 200 || req.RequestID == "" {
+				w.t.Fatalf("request_repository: %d %s", status, body)
+			}
+			return func() {
+				if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false}); status != 200 {
+					w.t.Fatalf("deny: %d %v", status, body)
+				}
+			}
+		}},
+		{"an escalation", func(w *world, task, implementer string) func() {
+			mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{escalation}',
+				'{"reason":"stuck","step":"fix"}') WHERE task_id = $1`, task)
+			return func() {
+				if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"}); status != 200 {
+					w.t.Fatalf("decide: %d %v", status, body)
+				}
+			}
+		}},
+		{"an idle-parked phase agent", func(w *world, task, implementer string) func() {
+			w.syncer.IdleAfter = 300 * time.Millisecond
+			w.until("the implementer to be parked as idle", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle'`, implementer) == 1
+			})
+			w.syncer.IdleAfter = time.Hour
+			return func() {
+				if status, body := w.call("/internal/runs/"+implementer+"/resume", map[string]any{}); status != 200 {
+					w.t.Fatalf("resume: %d %v", status, body)
+				}
+				w.until("the implementer to run again", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, implementer) == 1
+				})
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := conductorWorld(t, fakeagent.AskModel)
+			w.withTools()
+			w.syncer.IdleAfter = time.Hour
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == "conductor" {
+					return scripted(spec)
+				}
+				return fakelux.Behaviour{Hang: true}
+			}
+			task := w.task()
+			w.deliver(task)
+			var implementer string
+			w.until("the implementer to run", func() bool {
+				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+					AND status = 'running' AND lux_state = 'running'`, task).Scan(&implementer)
+				return implementer != ""
+			})
+			was := w.taskStatus(task)
+			w.chat(task, "can you change it?")
+			w.until("the conductor's question", func() bool {
+				return w.conductorQuestion(task) != "" && w.taskStatus(task) == "awaiting_input"
+			})
+
+			settle := c.block(w, task, implementer)
+			if got := w.taskStatus(task); got != "awaiting_input" {
+				t.Fatalf("the blocker moved the task: %s", got)
+			}
+			if status, out := w.chat(task, "No"); status != 200 || out["questionId"] == nil {
+				t.Fatalf("the answer: %d %v", status, out)
+			}
+			if got := w.taskStatus(task); got != "awaiting_input" {
+				t.Fatalf("answering the conductor ended the wait while %s still waits on a person: the task is %s", c.name, got)
+			}
+			settle()
+			if got := w.taskStatus(task); got != was {
+				t.Errorf("once %s was settled the task is %s, want %s again", c.name, got, was)
+			}
+		})
+	}
+}

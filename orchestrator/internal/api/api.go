@@ -684,8 +684,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // answerQuestion settles an open question with a person's answer, queued
 // for its agent as a steer is — which starts its next turn — quoting the
 // question it settles; and takes the task off waiting on a person: back to
-// running, or for a conductor's question only the wait that question
-// raised, to the status it had (delivery.EndConductorWait).
+// running for a phase agent's question; for a conductor's, back to the
+// status before a conductor's wait, once nothing else waits on a person
+// (delivery.EndConductorWait), which any answer may be the last of.
 func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runInfo, questionID, prompt, text, by string) (string, error) {
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
@@ -696,11 +697,13 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runI
 	if err != nil {
 		return "", err
 	}
-	if ri.Role == delivery.RoleConductor {
-		return directiveID, delivery.EndConductorWait(ctx, tx, ref, questionID)
+	if ri.Role != delivery.RoleConductor {
+		if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
+			"a person answered the agent"); err != nil {
+			return "", err
+		}
 	}
-	_, err = delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running", "a person answered the agent")
-	return directiveID, err
+	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }
 
 // abort stops a Run and its task at once, and the Runs beside it. Their lux
@@ -956,6 +959,11 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 				return err
 			}
 		}
+		// A decided escalation waits on no one; the workflow then moves the
+		// task as the decision says.
+		if err := delivery.EndConductorWait(r.Context(), tx, org, projectID, taskID); err != nil {
+			return err
+		}
 		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", principalOf(r),
 			map[string]any{"reason": e.Reason, "action": body.Action, "note": e.Decided.Note})
 	})
@@ -1053,6 +1061,10 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			}
 		}
 		out = map[string]any{"id": id, "status": decision}
+		// It may have been the last thing the task waited on a person for.
+		if err := delivery.EndConductorWait(r.Context(), tx, org, ri.ProjectID, taskID); err != nil {
+			return err
+		}
 		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, principalOf(r),
 			map[string]any{"requestId": id, "repository": repoName, "access": access, "note": body.Note})
 	})
