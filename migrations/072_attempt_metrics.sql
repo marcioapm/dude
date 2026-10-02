@@ -3,9 +3,12 @@
 --
 -- An attempt runs from its first agent Run's creation until the next
 -- attempt's first Run (when it was set aside by a start over), or, for the
--- latest, until the task finished, else now. Lead time is that span; the
--- time in review is the task's review spans clipped to it; the waits on
--- people are those on the attempt's Runs' questions and requests.
+-- latest, until the task finished, else now. The finish is the first
+-- terminal status within the attempt: an earlier attempt's abort is what
+-- allowed the start over, and comes before this attempt began. Lead time
+-- is that span; the time in review is the task's review spans clipped to
+-- it; the waits on people are those on the attempt's Runs' questions and
+-- requests.
 CREATE FUNCTION attempt_metrics(p_task text, p_attempt integer)
 RETURNS TABLE (lead_seconds double precision, active_seconds double precision,
                human_wait_seconds double precision, review_seconds double precision,
@@ -18,6 +21,7 @@ LANGUAGE sql STABLE AS $$
     SELECT min(e.occurred_at) AS at FROM events e
     WHERE e.task_id = p_task AND e.event_type = 'task.status_changed'
       AND e.payload->>'status' IN ('done', 'aborted', 'failed')
+      AND e.occurred_at >= (SELECT min(created_at) FROM mine)
       AND (SELECT status FROM t) IN ('done', 'aborted', 'failed')),
   win AS (
     SELECT (SELECT min(created_at) FROM mine) AS from_at,
