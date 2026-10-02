@@ -83,7 +83,35 @@ export const EventTypes = {
    */
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
+  /**
+   * dude parked a Run itself: it waits on a person, went quiet, or its
+   * preview is unused. Payload: `{ reason, message, taskStatus?, parkedAt? }`:
+   * `parkedAt` is when the park began, as the database stored it in the
+   * park's own transaction — the boundary an answer or decision ending it
+   * is compared with, on the same clock. Absent from older parks and from
+   * a preview's.
+   */
+  RunParked: "run.parked",
+  /**
+   * A person asked for a paused Run to be resumed. Payload: `{ reason,
+   * requestedAt }`: `requestedAt` is when they asked, as the database
+   * stored it — what the resume's `run.resume.timed` counts from.
+   */
   RunResumed: "run.resumed",
+  /**
+   * How long a resume of the Run took, end to end, written once its agent
+   * said something. Payload: `{ epoch, cause, moved, hostName, totalMs,
+   * untilBusyMs, phases }`: `cause` is `answer`, `repository`, `person` or
+   * `idle`; `moved` whether lux placed it on another host (null when
+   * unknown); `totalMs` from when it became due to the agent's first
+   * message, thought or tool call, `untilBusyMs` to it taking its input.
+   * `phases`, in milliseconds, in order: `react` (dude asking lux),
+   * `schedule` (lux placing it), `image`, `restore` (its volumes),
+   * `start` (container and workload), `reload` (the agent loading its
+   * session until lux reports it running), `take` (it taking its input),
+   * `firstOutput`. A phase whose end is unknown is absent, never zero.
+   */
+  RunResumeTimed: "run.resume.timed",
 
   // Run lifecycle
   RunCreated: "run.created",
