@@ -36,7 +36,7 @@ def test_tasks_cannot_be_created_in_another_organizations_project(
     project = client.create_project(name="Private", slug="private-c")
 
     other: ApiClient = second_org["client"]
-    resp = other.post("/v1/tasks", {"projectId": project["id"], "title": "intrusion"})
+    resp = other.post("/v1/tasks", {"projectId": project["id"], "title": "intrusion", "goal": ApiClient.DEFAULT_GOAL})
     # 404 rather than 403: the project's existence is itself not disclosed.
     assert resp.status_code == 404
 

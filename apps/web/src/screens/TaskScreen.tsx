@@ -62,7 +62,7 @@ import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, howRunStopped, stopOf, stoppedSentence, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
-import type { TaskTab } from "../place.ts";
+import { formatPlace, type TaskTab } from "../place.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -446,8 +446,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        face={(login) => <PersonAvatar person={{ name: login }} size={20} ring={false} />}
-                        factActions={actions.facts} note={actions.note}
+                        factActions={actions.facts} factUnder={actions.under} note={actions.note}
+                        diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
                         actions={
                           <>
                             {actions.merge}

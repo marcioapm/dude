@@ -29,11 +29,79 @@ describe("pull request actions", () => {
     expect(h).not.toContain('data-testid="pr-rerun"');
     expect(h).toMatch(/data-testid="pr-merge"[^>]*disabled|disabled[^>]*data-testid="pr-merge"/);
     const note = h.match(/<span data-testid="pr-blocked">([^<]*)<\/span>/)?.[1]?.replaceAll("&#x27;", "'");
-    expect(note).toBe("Blocked: GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
+    expect(note).toBe("Blocked: GitHub won't show dude this repository's checks");
   });
 
   test("a real failure beside them can still be re-run", () => {
     const h = render(pr({ checkState: "failing", display: "ci_red", checks: [{ name: "lint", status: "completed", conclusion: "failure" }, denied] }));
     expect(h).toContain('data-testid="pr-rerun"');
+  });
+});
+
+describe("asking for a review", () => {
+  test("picks from GitHub's suggestions and a search, and asks for them together", async () => {
+    const { act, click, mount, settle, type } = await import("./dom.ts");
+    const { PullRequestPanel } = await import("@dude/design-system/components");
+    const asked: string[][] = [];
+    const found: string[] = [];
+    const client = {
+      reviewerCandidates: async (_id: string | null, q: string) => {
+        found.push(q);
+        return q
+          ? [{ kind: "user", login: "hanna", name: "Hanna Lindqvist" }, { kind: "team", login: "acme/platform", name: "Platform", members: 7 }]
+          : [{ kind: "user", login: "ana", name: "Ana Ribeiro", reason: "changed" }, { kind: "user", login: "tom", name: "Tom Okafor", reason: "commented" }];
+      },
+      requestReview: async (_id: string, logins: string[]) => void asked.push(logins),
+    } as unknown as ApiClient;
+    // Ana was asked already: the picker shows her, and will not pick her.
+    const p = pr({ checkState: "passing", checks: [], display: "awaiting", review: "pending", reviews: [{ login: "ana", state: "REQUESTED" }] });
+    const { container, unmount } = await mount(
+      <PullRequestActions client={client} pr={p} defaultMethod="squash" onChanged={() => {}}>
+        {(a) => <PullRequestPanel pr={p} factActions={a.facts} factUnder={a.under} />}
+      </PullRequestActions>,
+    );
+    const q = <T extends Element>(s: string) => container.querySelector<T>(s)!;
+    const options = () => [...container.querySelectorAll("[role=option]")].map((o) => o.textContent);
+    const key = (k: string, init: KeyboardEventInit = {}) =>
+      act(async () => void q("[role=combobox]").dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...init })));
+
+    await click(q('[data-testid="pr-request-review"]'));
+    await settle(250);
+    expect(found).toEqual([""]);
+    expect(options()[0]).toContain("Already asked");
+    expect(options()[1]).toContain("Commented on this pull request");
+    await key("Enter");
+    await settle();
+    expect(q('[data-testid="reviewer-picks"]').textContent).toContain("Tom Okafor");
+
+    await type(q("[role=combobox]"), "an");
+    await settle(250);
+    expect(options().map((o) => o?.slice(0, 2))).toEqual(["HL", "PL"]);
+    await key("ArrowDown");
+    await key("Enter");
+    await settle();
+    expect(q('[data-testid="pr-review-send"]').textContent).toBe("Ask 2 reviewers");
+    await key("Enter", { ctrlKey: true });
+    await settle();
+    expect(asked).toEqual([["tom", "acme/platform"]]);
+    expect(container.querySelector('[data-testid="pr-review-ask"]')).toBeNull();
+    await unmount();
+  });
+});
+
+describe("the reviewers a setting names", () => {
+  test("one saved in another case is not offered again", async () => {
+    const { mount, settle, type } = await import("./dom.ts");
+    const { ReviewerPicker } = await import("../src/screens/ReviewerPicker.tsx");
+    const client = {
+      reviewerCandidates: async () => [{ kind: "user", login: "ana", name: "Ana Ribeiro" }, { kind: "user", login: "hanna", name: "Hanna Lindqvist" }],
+    } as unknown as ApiClient;
+    const { container, unmount } = await mount(
+      <ReviewerPicker client={client} pullRequestId={null} picked={[{ kind: "user", login: "Ana" }]} onChange={() => {}} />,
+    );
+    await type(container.querySelector("[role=combobox]")!, "an");
+    await settle(250);
+    expect([...container.querySelectorAll("[role=option]")].map((o) => o.textContent?.slice(0, 2))).toEqual(["HL"]);
+    await unmount();
   });
 });

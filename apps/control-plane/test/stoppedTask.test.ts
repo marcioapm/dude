@@ -42,7 +42,7 @@ beforeAll(async () => {
   registerStructureRoutes(router);
   await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${project}, ${org}, 'P', ${project}, 'P')`;
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
-    VALUES (${task}, ${org}, ${project}, 1, 'Greet', 'Say hello', '["it greets"]'::jsonb, 'aborted')`;
+    VALUES (${task}, ${org}, ${project}, 1, 'Greet', 'Say hello to each person', '["it greets"]'::jsonb, 'aborted')`;
   await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, task_id)
     VALUES (${`${org}_wf`}, ${org}, 'task.delivery', ${`delivery:${task}`}, 'aborted', 'awaitImplement', ${task})`;
 });
@@ -57,17 +57,17 @@ const edits = async () =>
   (await owner`SELECT payload FROM events WHERE task_id = ${task} AND event_type = 'task.updated' ORDER BY cursor`) as Array<{ payload: Record<string, unknown> }>;
 
 test("a stopped task's goal can change", async () => {
-  const res = await call("PATCH", `/v1/tasks/${task}`, { title: "Greet", goal: "Say goodbye", acceptanceCriteria: ["it greets"] });
+  const res = await call("PATCH", `/v1/tasks/${task}`, { title: "Greet", goal: "Say goodbye to each person", acceptanceCriteria: ["it greets"] });
   expect(res.status).toBe(200);
   const [row] = (await owner`SELECT goal FROM tasks WHERE id = ${task}`) as Array<{ goal: string }>;
-  expect(row?.goal).toBe("Say goodbye");
+  expect(row?.goal).toBe("Say goodbye to each person");
   // Only what changed is recorded.
-  expect((await edits()).at(-1)?.payload).toEqual({ goal: "Say goodbye" });
+  expect((await edits()).at(-1)?.payload).toEqual({ goal: "Say goodbye to each person" });
 });
 
 test("a save that changes nothing it asks for records no change to it", async () => {
   const before = (await edits()).length;
-  const res = await call("PATCH", `/v1/tasks/${task}`, { title: "Greet", goal: "Say goodbye", acceptanceCriteria: ["it greets"] });
+  const res = await call("PATCH", `/v1/tasks/${task}`, { title: "Greet", goal: "Say goodbye to each person", acceptanceCriteria: ["it greets"] });
   expect(res.status).toBe(200);
   expect((await edits()).length).toBe(before);
 });
@@ -79,6 +79,6 @@ test("a stopped task's repositories cannot change", async () => {
 
 test("a running task's goal cannot change", async () => {
   await owner`UPDATE tasks SET status = 'running' WHERE id = ${task}`;
-  const res = await call("PATCH", `/v1/tasks/${task}`, { goal: "Say something else" });
+  const res = await call("PATCH", `/v1/tasks/${task}`, { goal: "Say something else to them" });
   expect(res.status).toBe(409);
 });

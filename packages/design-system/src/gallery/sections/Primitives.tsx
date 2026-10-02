@@ -777,7 +777,7 @@ function TaskDialogExample() {
     >
       <FormStack fill>
         <Input size="title" label="Title" labelNote="required" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should change?" />
-        <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill breaks minRows={4} maxLength={65_536} />
+        <MarkdownEditor label="Goal" labelNote="required" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill breaks minRows={4} maxLength={65_536} />
         <MarkdownEditor label="Acceptance criteria" hint="One list item per criterion. Reviewers check each one." value={criteria} onChange={setCriteria} breaks minRows={3}
           placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
       </FormStack>

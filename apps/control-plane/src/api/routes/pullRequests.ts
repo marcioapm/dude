@@ -383,6 +383,20 @@ function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | 
 }
 
 /**
+ * Who could be asked to review: GitHub's suggestions for a pull request
+ * (no `q`), or who matches `q` in its repository — and, without a pull
+ * request, in the organization's, for the setting that names reviewers.
+ */
+async function reviewerCandidates(ctx: RequestContext): Promise<Response> {
+  const q = ctx.url.searchParams.get("q") ?? "";
+  const query = q ? `?q=${encodeURIComponent(q)}` : "";
+  const path = ctx.params.id
+    ? `/internal/pull-requests/${encodeURIComponent(ctx.params.id)}/reviewer-candidates${query}`
+    : `/internal/reviewer-candidates${query}`;
+  return orchestrator(ctx.principal.organizationId, "GET", path, undefined, ctx.principal);
+}
+
+/**
  * How dude behaves on GitHub for the organization — who may wake a fixer,
  * how pull requests open and merge, what happens when main moves ahead,
  * the fix budget. The orchestrator owns their meaning and defaults.
@@ -419,5 +433,7 @@ export function registerPullRequestRoutes(router: Router): void {
   router.post("/v1/pull-requests/:id/update-branch", pullRequestAction("update-branch"));
   router.post("/v1/pull-requests/:id/rerun-failed", pullRequestAction("rerun-failed"));
   router.post("/v1/pull-requests/:id/reviewers", pullRequestAction("reviewers"));
+  router.get("/v1/pull-requests/:id/reviewer-candidates", reviewerCandidates);
+  router.get("/v1/forge/reviewer-candidates", reviewerCandidates);
   router.publicRoute("POST", "/v1/webhooks/github/:org", receiveWebhook);
 }

@@ -3613,8 +3613,20 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != 77 || len(w.gh.Rerequested) != 0 {
 		t.Errorf("jobs re-run %v, check runs re-requested %v", w.gh.JobsRerun, w.gh.Rerequested)
 	}
-	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/reviewers", map[string]any{"logins": []string{"cy"}}); code != 200 {
+	// Who to ask: GitHub's suggestions first, then a search.
+	if code, body := w.get("/internal/pull-requests/"+prID+"/reviewer-candidates", w.org); code != 200 ||
+		!strings.Contains(body, `"login":"ana"`) || !strings.Contains(body, `"reason":"commented"`) {
+		t.Fatalf("suggestions: %d %s", code, body)
+	}
+	if code, body := w.get("/internal/pull-requests/"+prID+"/reviewer-candidates?q=hann", w.org); code != 200 ||
+		!strings.Contains(body, `"login":"hanna"`) || strings.Contains(body, `"login":"ana"`) {
+		t.Fatalf("search: %d %s", code, body)
+	}
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/reviewers", map[string]any{"logins": []string{"cy", "ana"}}); code != 200 {
 		t.Fatalf("reviewers: %d %v", code, body)
+	}
+	if code, body := w.get("/internal/reviewer-candidates?q=tom", w.org); code != 200 || !strings.Contains(body, `"login":"tom"`) {
+		t.Errorf("organization search: %d %s", code, body)
 	}
 	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{"method": "octopus"}); code != 400 {
 		t.Errorf("an unknown merge method: %d", code)
