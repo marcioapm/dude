@@ -37,6 +37,7 @@ import {
 } from "@dude/design-system/primitives";
 import {
   TIER_DESCRIPTION_MAX,
+  TIER_MODEL_MAX,
   TIER_NAME_MAX,
   type ModelTestResult,
   type ModelTier,
@@ -90,16 +91,22 @@ function useProxyModels(client: ApiClient) {
   return models;
 }
 
+/** An agent's face; the fixer wears the implementer's. */
+const agentFace = (role: string) =>
+  <AgentAvatar key={`r-${role}`} role={(role === "fixer" ? "implementer" : role) as "implementer"} size="xs" />;
+
+const faceKey = (use: ModelTierUse) => (use.kind === "organization" ? `r-${use.role}` : `p-${use.project!.id}`);
+
 const faceOf = (use: ModelTierUse) =>
   use.kind === "organization"
-    ? <AgentAvatar key={`r-${use.role}`} role={(use.role === "fixer" ? "implementer" : use.role) as "implementer"} size="xs" />
-    : <ProjectAvatar key={`p-${use.project!.id}`} project={use.project!} size={16} />;
+    ? agentFace(use.role)
+    : <ProjectAvatar key={faceKey(use)} project={use.project!} size={16} />;
 
 /** One face per role and per project, in the order they are named. */
 function faces(uses: readonly ModelTierUse[]) {
   const seen = new Set<string>();
   return uses.filter((u) => {
-    const key = u.kind === "organization" ? `r-${u.role}` : `p-${u.project!.id}`;
+    const key = faceKey(u);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -161,35 +168,10 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
             </Tr>
           </THead>
           <TBody>
-            {tiers.tiers.map((t) => {
-              const mark = tierMark(t);
-              return (
-                <Tr key={t.id} data-tier={t.name}>
-                  <Td wrap><TierLine icon={mark.icon} tone={mark.tone} name={t.name} description={t.description || undefined} /></Td>
-                  {t.model ? (
-                    <Td fit mono data-model-cell>{t.model}</Td>
-                  ) : (
-                    <Td fit data-model-cell data-unset><span className="tierUnset">Not set</span></Td>
-                  )}
-                  <Td fit muted hideWhenNarrow>
-                    {t.updatedBy ? `${t.updatedBy.name.split(" ")[0]} · ` : ""}{formatTimestamp(t.updatedAt, "relative")}
-                  </Td>
-                  <Td wrap hideWhenNarrow><UsedBy faces={faces(t.usedBy)}>{tierUsedByWords(t.usedBy)}</UsedBy></Td>
-                  {canEdit ? (
-                    <Td align="right">
-                      <RowMenu size="sm" label={`Actions for ${t.name}`} items={[
-                        { id: "edit", label: "Change model…", icon: "edit", onSelect: () => setEditing({ tier: t, test: false }) },
-                        { id: "test", label: "Send a test message", icon: "send", onSelect: () => setEditing({ tier: t, test: true }),
-                          disabled: !t.model, disabledReason: t.model ? undefined : "It names no model yet" },
-                        { kind: "separator" },
-                        { id: "remove", label: "Remove…", tone: "danger", icon: "cross", onSelect: () => setRemoving(t),
-                          disabled: tiers.tiers.length <= 1, disabledReason: tiers.tiers.length <= 1 ? "Every agent needs a tier" : undefined },
-                      ]} />
-                    </Td>
-                  ) : null}
-                </Tr>
-              );
-            })}
+            {tiers.tiers.map((t) => (
+              <TierRow key={t.id} tier={t} canEdit={canEdit} only={tiers.tiers.length <= 1}
+                onEdit={(test) => setEditing({ tier: t, test })} onRemove={() => setRemoving(t)} />
+            ))}
           </TBody>
         </Table>
       </SettingsSection>
@@ -206,9 +188,56 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
   );
 }
 
+/** A tier's row: its mark and name, the model it requests, who changed it, who uses it, and an admin's menu. */
+function TierRow({ tier: t, canEdit, only, onEdit, onRemove }: {
+  tier: ModelTierWithUse;
+  canEdit: boolean;
+  /** The organisation's only tier, which cannot be removed. */
+  only: boolean;
+  onEdit: (test: boolean) => void;
+  onRemove: () => void;
+}) {
+  const mark = tierMark(t);
+  return (
+    <Tr data-tier={t.name}>
+      <Td wrap><TierLine icon={mark.icon} tone={mark.tone} name={t.name} description={t.description || undefined} /></Td>
+      {t.model ? (
+        <Td fit mono data-model-cell>{t.model}</Td>
+      ) : (
+        <Td fit data-model-cell data-unset><span className="tierUnset">Not set</span></Td>
+      )}
+      <Td fit muted hideWhenNarrow>
+        {t.updatedBy ? `${t.updatedBy.name.split(" ")[0]} · ` : ""}{formatTimestamp(t.updatedAt, "relative")}
+      </Td>
+      <Td wrap hideWhenNarrow><UsedBy faces={faces(t.usedBy)}>{tierUsedByWords(t.usedBy)}</UsedBy></Td>
+      {canEdit ? (
+        <Td align="right">
+          <RowMenu size="sm" label={`Actions for ${t.name}`} items={[
+            { id: "edit", label: "Change model…", icon: "edit", onSelect: () => onEdit(false) },
+            { id: "test", label: "Send a test message", icon: "send", onSelect: () => onEdit(true),
+              disabled: !t.model, disabledReason: t.model ? undefined : "It names no model yet" },
+            { kind: "separator" },
+            { id: "remove", label: "Remove…", tone: "danger", icon: "cross", onSelect: onRemove,
+              disabled: only, disabledReason: only ? "Every agent needs a tier" : undefined },
+          ]} />
+        </Td>
+      ) : null}
+    </Tr>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // After the upgrade: what became of each role's model
 // ---------------------------------------------------------------------------
+
+/** What the upgrade changed that an admin should check, after the banner's first sentence; " " when nothing. */
+function upgradeSummary(changed: number, made: number): string {
+  const roles = changed ? `${changed === 1 ? "One role now asks" : `${changed} roles now ask`} for a different model than before` : "";
+  const overrides = made ? `${made === 1 ? "one project override" : `${made} project overrides`} matched no tier and got ${made === 1 ? "its own" : "their own"}` : "";
+  if (roles && overrides) return ` ${roles}, and ${overrides} — check them.`;
+  if (roles || overrides) return ` ${roles || overrides} — check them.`;
+  return " ";
+}
 
 function UpgradeNotes({ tiers, onDone }: { tiers: ModelTiersResponse; onDone: () => void }) {
   const lines = upgradeLines(tiers.upgrade);
@@ -220,10 +249,7 @@ function UpgradeNotes({ tiers, onDone }: { tiers: ModelTiersResponse; onDone: ()
       <FormStack>
         <span>
           <b>Agents now pick a tier.</b> Each role got its starting tier, and each tier asks for the model most of its roles already ran on.
-          {changed ? ` ${changed === 1 ? "One role now asks" : `${changed} roles now ask`} for a different model than before` : ""}
-          {changed && made ? ", and " : changed ? "" : " "}
-          {made ? `${made === 1 ? "one project override" : `${made} project overrides`} matched no tier and got ${made === 1 ? "its own" : "their own"}` : ""}
-          {changed || made ? " — check them." : ""}
+          {upgradeSummary(changed, made)}
         </span>
         <Table density="compact" data-testid="tier-upgrade-notes">
           <TBody>
@@ -234,7 +260,7 @@ function UpgradeNotes({ tiers, onDone }: { tiers: ModelTiersResponse; onDone: ()
                   <Td fit>
                     <UsedBy faces={l.project
                       ? [<ProjectAvatar key="p" project={l.project} size={16} />]
-                      : l.roles.map((r) => <AgentAvatar key={r} role={(r === "fixer" ? "implementer" : r) as "implementer"} size="xs" />)}>
+                      : l.roles.map(agentFace)}>
                       <span className="ds-mono">{l.oldModel}</span>
                     </UsedBy>
                   </Td>
@@ -258,6 +284,13 @@ function UpgradeNotes({ tiers, onDone }: { tiers: ModelTiersResponse; onDone: ()
 // Adding, changing and testing a tier
 // ---------------------------------------------------------------------------
 
+type TestState = { model: string; results: ModelTestResult[] } | "sending" | { error: string } | null;
+
+function submitLabel(existing: boolean, unlisted: boolean): string {
+  if (existing) return unlisted ? "Save anyway" : "Save";
+  return unlisted ? "Add tier anyway" : "Add tier";
+}
+
 function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
   client: ApiClient;
   existing: ModelTierWithUse | null;
@@ -269,7 +302,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
 }) {
   const [draft, setDraft] = useState<TierDraft>(() => tierDraftOf(existing));
   const { busy, problem, save } = useSave();
-  const [test, setTest] = useState<{ model: string; results: ModelTestResult[] } | "sending" | { error: string } | null>(null);
+  const [test, setTest] = useState<TestState>(null);
   const set = <K extends keyof TierDraft>(k: K, v: TierDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const problems = tierDraftProblems(draft);
   const model = draft.model.trim();
@@ -287,7 +320,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (testNow) sendTest(); }, []);
 
-  const submit = existing ? (known === false ? "Save anyway" : "Save") : known === false ? "Add tier anyway" : "Add tier";
+  const submit = submitLabel(existing !== null, known === false);
   return (
     <FormDialog open onOpenChange={(open) => !open && onClose()} size="md"
       title={existing ? existing.name : "Add a tier"}
@@ -316,7 +349,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
         <Input label="What it’s for" value={draft.description} maxLength={TIER_DESCRIPTION_MAX} onChange={(e) => set("description", e.target.value)}
           data-testid="model-tier-description" error={problems.description} />
       </FormRow>
-      <Input label="Model to request" mono autoFocus={Boolean(existing)} value={draft.model} maxLength={200} placeholder="Not set"
+      <Input label="Model to request" mono autoFocus={Boolean(existing)} value={draft.model} maxLength={TIER_MODEL_MAX} placeholder="Not set"
         onChange={(e) => set("model", e.target.value)} data-testid="model-tier-model"
         hint="Exactly as the proxy names it." error={model && problems.model ? problems.model : undefined} />
       {listed && listed.length ? (
@@ -339,7 +372,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
   );
 }
 
-function TestOutcome({ test, users }: { test: { model: string; results: ModelTestResult[] } | "sending" | { error: string } | null; users: readonly ModelTierUse[] }) {
+function TestOutcome({ test, users }: { test: TestState; users: readonly ModelTierUse[] }) {
   if (!test || test === "sending") return null;
   if ("error" in test) return <Callout tone="danger" data-testid="model-tier-test-result">{test.error}</Callout>;
   return (
