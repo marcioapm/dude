@@ -10,18 +10,20 @@ import (
 // attachmentRef is an image a task's Markdown shows from its own uploads:
 // `![name](attachment:att_…)`, the URL in angle brackets or not, with a
 // title or not. packages/domain attachments.ts parses the same way, and
-// the backend attaches what it finds there on every save.
-var attachmentRef = regexp.MustCompile(`!\[((?:\\.|[^\]\\\n])*)\]\(\s*<?attachment:(att_[A-Za-z0-9]+)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)`)
+// the backend attaches what it finds there on every save. Blanks are ASCII
+// space and tab only, and the alt holds no unescaped `[`, as there.
+var attachmentRef = regexp.MustCompile(`!\[((?:\\[^\n]|[^\[\]\\\n])*)\]\([ \t]*<?attachment:(att_[A-Za-z0-9]+)>?(?:[ \t]+(?:"([^"\n]*)"|'([^'\n]*)'|\(([^)\n]*)\)))?[ \t]*\)`)
 
 var fenceOpen = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
 
-var unescape = regexp.MustCompile(`\\(.)`)
+var unescape = regexp.MustCompile(`\\([^\n])`)
 
-// ImageRef is one reference in a text: what it names, its alt text, and
-// the byte offsets of the whole `![…](…)`.
+// ImageRef is one reference in a text: what it names, its alt text, its
+// title (the dialog's layout words, never sent to an agent), and the byte
+// offsets of the whole `![…](…)`.
 type ImageRef struct {
-	ID, Alt  string
-	From, To int
+	ID, Alt, Title string
+	From, To       int
 }
 
 // ImageRefs are the attachment references in Markdown, in order. Inside a
@@ -37,7 +39,7 @@ func ImageRefs(text string) []ImageRef {
 		}
 		switch {
 		case fence != "":
-			if opener != "" && opener[0] == fence[0] && len(opener) >= len(fence) && strings.TrimSpace(line) == opener {
+			if opener != "" && opener[0] == fence[0] && len(opener) >= len(fence) && strings.Trim(line, " \t") == opener {
 				fence = ""
 			}
 		case opener != "":
@@ -45,11 +47,17 @@ func ImageRefs(text string) []ImageRef {
 		default:
 			masked := maskCodeSpans(line)
 			for _, m := range attachmentRef.FindAllStringSubmatchIndex(masked, -1) {
-				out = append(out, ImageRef{
+				ref := ImageRef{
 					ID:   masked[m[4]:m[5]],
 					Alt:  unescape.ReplaceAllString(line[m[2]:m[3]], "$1"),
 					From: offset + m[0], To: offset + m[1],
-				})
+				}
+				for g := 6; g <= 10; g += 2 {
+					if m[g] >= 0 {
+						ref.Title = line[m[g]:m[g+1]]
+					}
+				}
+				out = append(out, ref)
 			}
 		}
 		offset += len(line) + 1
