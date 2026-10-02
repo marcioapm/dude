@@ -316,13 +316,19 @@
   position: relative;
   flex: 1;
   min-height: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--ds-space-8) var(--ds-space-64);
 }
+/* A flex item of a definite height, so max-height resolves: the image
+   shrinks to the stage and the line under it stays on screen. */
 .viewerImage {
+  min-width: 0;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
+  object-fit: contain;
   border-radius: var(--ds-radius-control);
   box-shadow: var(--ds-shadow-3);
   /* Transparent images keep their edges. */

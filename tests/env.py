@@ -257,6 +257,8 @@ class TestEnvironment:
                 # A working agent's diff is read every few seconds besides
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",
+                # The images people send agents: it reads what the backend stored.
+                **self.s3_env,
                 **self._tools_env(),
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,

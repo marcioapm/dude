@@ -218,6 +218,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           {choosing ? (
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
           ) : null}
+          {existing ? null : <PromptImages tray={tray} />}
           <HelpList title="What makes a good task" items={[
             <><strong>Goal:</strong> why it matters, what exists today, and the constraints an agent can't guess.</>,
             <><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</>,
@@ -262,7 +263,6 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         notice={criteria.stray && !locked ? "Text outside a list item isn't saved as a criterion" : undefined}
         data-testid="task-criteria"
       />
-      {existing ? null : <PromptImages tray={tray} />}
     </FormDialog>
   );
 }
