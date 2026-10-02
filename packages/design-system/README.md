@@ -1268,6 +1268,15 @@ MarkdownCheatsheet.
   nobody gets hatched; the memory of one host between Linux and its runs.
 - **MachineChip / MachineTip** — the machine in a session's header, and
   its tooltip. The rules are under *Machines*.
+- **TierLine / TierMark** — a model tier in a table or a picker: its mark
+  (a glyph on its tone's tint), name, and what it is for under it.
+- **FlowSteps** — how something works, in steps side by side on the chrome
+  shade, small-caps titles; they stack when narrow. Once per page.
+- **NameChips** — suggestions under a field that takes any name, mono, the
+  chosen one on the info tint; say in words that they are suggestions.
+- **TierChip / TierTip** — the model in a session's header: the tier, then
+  the model it requested in mono. Its tooltip says that is what dude asked
+  for when the session started; never what the proxy served.
 - **UsedBy** — who uses something: small faces (agents' tiles, projects'
   squares), then the words.
 - **SettingsExplainer** (with the Settings pieces) — how something a

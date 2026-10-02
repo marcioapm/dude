@@ -41,6 +41,10 @@ import type {
   MachineSizeInput,
   MachineSizeWithUse,
   MachinePools,
+  ModelTierInput,
+  ModelTiersResponse,
+  ModelTestResult,
+  ProxyModels,
   AddServer,
   PreviewSettings,
   Recipe,
@@ -702,6 +706,38 @@ export class ApiClient {
 
   machinePools(): Promise<MachinePools> {
     return this.#request("GET", "/v1/machines/pools");
+  }
+
+  // -- models: the organization's tiers, the proxy's models -----------------
+
+  modelTiers(): Promise<ModelTiersResponse> {
+    return this.#request("GET", "/v1/models/tiers");
+  }
+
+  addModelTier(tier: ModelTierInput): Promise<ModelTiersResponse> {
+    return this.#request("POST", "/v1/models/tiers", tier);
+  }
+
+  updateModelTier(id: string, tier: ModelTierInput): Promise<ModelTiersResponse> {
+    return this.#request("PUT", `/v1/models/tiers/${encodeURIComponent(id)}`, tier);
+  }
+
+  /** Removes a tier; what names it moves to `replacement` (required while it is in use). */
+  removeModelTier(id: string, replacement: string | null): Promise<ModelTiersResponse> {
+    return this.#request("DELETE", `/v1/models/tiers/${encodeURIComponent(id)}`, { replacement });
+  }
+
+  dismissTierUpgrade(): Promise<ModelTiersResponse> {
+    return this.#request("POST", "/v1/models/upgrade/dismiss");
+  }
+
+  proxyModels(): Promise<ProxyModels> {
+    return this.#request("GET", "/v1/models/proxy");
+  }
+
+  /** One small request for `model` at each effort `tierId`'s agents use (none: a new tier). */
+  testModel(model: string, tierId: string | null): Promise<{ model: string; results: ModelTestResult[] }> {
+    return this.#request("POST", "/v1/models/test", { model, tierId });
   }
 
   /** A project's page: its epics by state, with lanes, pull requests, people and cost. */
