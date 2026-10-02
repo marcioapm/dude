@@ -8,13 +8,14 @@
 
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
-import { EventTypes, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput, taskGoalInput } from "@dude/domain";
+import { EventTypes, agentRoleSchema, newId, resolveAgentModel, resolveTier, taskCriteriaInput, taskGoalInput } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { requireOrgAdmin } from "../access.ts";
+import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson } from "./people.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -30,7 +31,7 @@ const RUN_SELECT = `
   task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
-  branch, harness, model, dude_pause AS "dudePause", machine,
+  branch, harness, model, model_tier AS "modelTier", dude_pause AS "dudePause", machine,
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
@@ -280,22 +281,23 @@ async function getRun(ctx: RequestContext): Promise<Response> {
 const createSessionInput = z.object({
   role: agentRoleSchema,
   parentSessionId: z.string().min(1).nullable().default(null),
-  /** Overrides the resolved project/org model when set. */
-  model: z.string().min(1).optional(),
+  /** Overrides the resolved project/org tier when set (an organization's tier id). */
+  tier: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
-});
+}).strict();
 
 const DEFAULT_HARNESS = "opencode";
 
 /**
- * Create a Session under a Run, resolving which model to use from the
- * project's per-role configuration, then the organization default.
+ * Create a Session under a Run, its model the one its tier requests: the
+ * role's tier from the project's per-role configuration, then the
+ * organization default.
  */
 async function createSession(ctx: RequestContext): Promise<Response> {
   const runId = ctx.params.id!;
   const input = await parseBody(ctx.request, createSessionInput);
-  // The models are what admins set: only they may pick another for one session.
-  if (input.model || input.harness) await requireOrgAdmin(ctx);
+  // The tiers are what admins set: only they may pick another for one session.
+  if (input.tier || input.harness) await requireOrgAdmin(ctx);
   const { organizationId } = ctx.principal;
 
   // organizations is not tenant-scoped, so the org defaults are read outside
@@ -324,8 +326,13 @@ async function createSession(ctx: RequestContext): Promise<Response> {
       { agentModels: run.agentModels ?? {} },
       { defaultAgentModels },
     );
-    const model = input.model ?? resolved?.model;
-    if (!model) return { unconfigured: true as const };
+    const tiers = await listTiers(scope);
+    const tierId = input.tier ?? resolveTier(input.role, { project: run.agentModels, organization: defaultAgentModels }, tiers).tierId;
+    const tier = tiers.find((t) => t.id === tierId);
+    if (input.tier && !tier) throw badRequest(`there is no model tier ${input.tier}`);
+    if (!tier) return { unconfigured: `the ${input.role} names no model tier; set one in Agents` };
+    if (!tier.model) return { unconfigured: `the ${input.role} runs on ${tier.name}, which names no model yet. An admin sets it in Models.` };
+    const model = tier.model;
 
     const harness = input.harness ?? resolved?.harness ?? DEFAULT_HARNESS;
     const sessionId = newId("session");
@@ -345,19 +352,14 @@ async function createSession(ctx: RequestContext): Promise<Response> {
       actor: { type: "agent", id: sessionId },
       source: "control-plane",
       correlationId: runId,
-      payload: { role: input.role, model, harness, parentSessionId: input.parentSessionId },
+      payload: { role: input.role, model, tier: tier.name, harness, parentSessionId: input.parentSessionId },
     });
 
     return { session: rows[0]!, event };
   });
 
   if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("unconfigured" in result) {
-    throw badRequest(
-      `no model configured for role "${input.role}"; set it on the project or organization, ` +
-        `or pass an explicit model`,
-    );
-  }
+  if ("unconfigured" in result) throw badRequest(result.unconfigured);
   return json(result.session, 201);
 }
 

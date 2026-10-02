@@ -91,11 +91,15 @@ export const removeModelTierSchema = z.object({ replacement: z.string().min(1).n
 /** `PUT /v1/models/tiers/order`: every tier's id, in the order shown. */
 export const reorderModelTiersSchema = z.object({ ids: z.array(z.string().min(1)).min(1) }).strict();
 
-/** `POST /v1/models/tiers/test`: a model to try, at each effort given (none: without effort). */
+/**
+ * `POST /v1/models/test`: a model to try, for the tier being edited (null:
+ * a new one). It is tried at each effort the tier's agents use, or once
+ * without an effort when none do.
+ */
 export const testModelSchema = z
   .object({
     model: tierModelSchema,
-    efforts: z.array(z.enum(["low", "medium", "high", "max"])).max(4).default([]),
+    tierId: z.string().min(1).nullable().default(null),
   })
   .strict();
 
@@ -147,6 +151,24 @@ export function resolveTier(
     }
   }
   return { tierId: null, from: null };
+}
+
+/**
+ * A role's reasoning effort over the same layers, field by field (the
+ * fixer then the implementer's), as the orchestrator's ResolveRole has it.
+ */
+export function resolveEffort(
+  role: string,
+  layers: { project?: AgentModels | null | undefined; organization: AgentModels | null | undefined },
+): string | null {
+  const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
+  for (const r of chain) {
+    for (const layer of [layers.project, layers.organization]) {
+      const effort = (layer as Record<string, { effort?: string }> | null | undefined)?.[r]?.effort;
+      if (effort) return effort;
+    }
+  }
+  return null;
 }
 
 /**

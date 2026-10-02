@@ -1,0 +1,337 @@
+/**
+ * Model tiers through the public API: who may change them, what is
+ * refused (a name taken, a model the proxy would not take by that name), a
+ * role naming a tier on two layers with Reset and the fixer following the
+ * implementer, removing one in use — everything that named it moved in the
+ * same transaction — the upgrade's notes, the proxy's models and a test
+ * message passed on from the orchestrator.
+ *
+ * Against a database of its own, migrated as a release is, and a stand-in
+ * for the orchestrator that answers the proxy's models and test messages as
+ * the test sets them.
+ *
+ * Requires DATABASE_URL: a role that can create databases (the owner).
+ *
+ * The tests run in order on one database and share its state: a test picked
+ * alone with -t may fail. A database per test would cost a migration each.
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { SQL } from "bun";
+import { join } from "node:path";
+import { promptRoleSchema } from "@dude/domain";
+import { closePool, setPool } from "../src/db/client.ts";
+import { buildRouter } from "../src/index.ts";
+import { Config, useConfig } from "../src/config.ts";
+import type { Router } from "../src/api/router.ts";
+import { createApiKey } from "../src/api/auth.ts";
+
+const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
+const ROOT = join(import.meta.dir, "../../..");
+const NAME = `dude_tiers_api_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
+const ORG = "org_tiers";
+const OTHER = "org_tiers_other";
+const PROJECT = "prj_tiers";
+
+function databaseUrl(appRole = false): string {
+  const url = new URL(OWNER_URL);
+  if (appRole) {
+    url.username = "dude_app";
+    url.password = "dude_app";
+  }
+  url.pathname = `/${NAME}`;
+  return url.toString();
+}
+
+let admin: SQL;
+let owner: SQL;
+let app: SQL;
+let router: Router;
+let adminKey: string;
+let memberKey: string;
+let otherKey: string;
+let orchestratorServer: ReturnType<typeof Bun.serve>;
+/** What the stand-in orchestrator was asked to test, in order. */
+const tested: unknown[] = [];
+/** How it answers GET /internal/llm/models. */
+let modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+
+type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+const body = async (res: Response): Promise<Json> => res.json();
+
+function call(key: string, method: string, path: string, payload?: unknown) {
+  return router.handle(new Request(`http://dude.test${path}`, {
+    method,
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+  }));
+}
+
+beforeAll(async () => {
+  admin = new SQL(OWNER_URL);
+  await admin.unsafe(`CREATE DATABASE "${NAME}"`);
+  const migrate = Bun.spawnSync(["bun", "run", "apps/control-plane/src/db/migrate.ts"], {
+    cwd: ROOT, env: { ...process.env, DATABASE_URL: databaseUrl() },
+  });
+  if (migrate.exitCode !== 0) throw new Error(`migrate: ${migrate.stderr.toString()}`);
+  owner = new SQL(databaseUrl());
+  for (const id of [ORG, OTHER]) await owner`INSERT INTO organizations (id, name, slug) VALUES (${id}, ${id === ORG ? "Acme" : id}, ${id})`;
+  await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${PROJECT}, ${ORG}, 'Docs site', 'docs', 'DS')`;
+  app = new SQL(databaseUrl(true));
+  setPool(app);
+  adminKey = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
+  memberKey = (await createApiKey({ organizationId: ORG, name: "Bo" })).key;
+  otherKey = (await createApiKey({ organizationId: OTHER, name: "Cy" })).key;
+  orchestratorServer = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/internal/llm/models") return modelsReply();
+      if (path === "/internal/llm/test") {
+        const asked = await req.json() as { model: string; efforts: Array<string | null> };
+        tested.push(asked);
+        if (asked.model === "nope") {
+          return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({
+            effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" })) });
+        }
+        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({ effort, ok: true, latencyMs: 800, status: 200, error: null })) });
+      }
+      if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
+      return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
+        maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0 });
+    },
+  });
+  useConfig(Config.load({ env: { ...process.env,
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
+  router = buildRouter("");
+});
+
+afterAll(async () => {
+  useConfig(null);
+  await orchestratorServer?.stop(true);
+  if (app) await closePool(app);
+  await owner?.end();
+  await admin?.unsafe(`DROP DATABASE IF EXISTS "${NAME}" WITH (FORCE)`);
+  await admin?.end();
+});
+
+const tiers = async (key = adminKey) => (await body(await call(key, "GET", "/v1/models/tiers"))).tiers as Json[];
+const byName = async (name: string) => (await tiers()).find((t) => t.name === name);
+const orgModels = async () => (await owner`SELECT default_agent_models AS m FROM organizations WHERE id = ${ORG}`)[0].m;
+const projectModels = async () => (await owner`SELECT agent_models AS m FROM projects WHERE id = ${PROJECT}`)[0].m;
+
+describe("tiers", () => {
+  test("an organization starts with Thinker, Coder and Fast, naming no model; everyone reads, only admins change", async () => {
+    const res = await body(await call(memberKey, "GET", "/v1/models/tiers"));
+    expect(res.canEdit).toBe(false);
+    expect(res.upgrade).toEqual([]);
+    expect(res.tiers.map((t: Json) => [t.name, t.model])).toEqual([["Thinker", null], ["Coder", null], ["Fast", null]]);
+    const thinker = res.tiers[0];
+    expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["investigator", "qa_browser", "reviewer", "simplifier"]);
+    expect(res.tiers[1].usedBy).toEqual([
+      { kind: "organization", role: "implementer", project: null, effort: null },
+      { kind: "organization", role: "fixer", project: null, inherited: true, effort: null },
+    ]);
+    expect((await call(memberKey, "POST", "/v1/models/tiers", { name: "Cheap" })).status).toBe(403);
+    expect((await call(memberKey, "PUT", `/v1/models/tiers/${thinker.id}`, { name: "Thinker", model: "x" })).status).toBe(403);
+    expect((await call(memberKey, "DELETE", `/v1/models/tiers/${thinker.id}`, { replacement: null })).status).toBe(403);
+    expect((await call(memberKey, "PUT", "/v1/models/tiers/order", { ids: [thinker.id] })).status).toBe(403);
+    expect((await call(memberKey, "POST", "/v1/models/test", { model: "x" })).status).toBe(403);
+    expect((await call(memberKey, "POST", "/v1/models/upgrade/dismiss")).status).toBe(403);
+    expect((await body(await call(adminKey, "GET", "/v1/models/tiers"))).canEdit).toBe(true);
+  });
+
+  test("an admin sets a tier's model, as the proxy names it", async () => {
+    const coder = await byName("Coder");
+    const res = await call(adminKey, "PUT", `/v1/models/tiers/${coder.id}`, { name: "Coder", description: coder.description, model: "claude-opus-5-5" });
+    expect(res.status).toBe(200);
+    expect((await body(res)).tiers.find((t: Json) => t.id === coder.id)).toMatchObject({ model: "claude-opus-5-5", updatedBy: { name: "Ana" } });
+  });
+
+  test("a model with its provider, a space, or too long is refused saying how the proxy names it", async () => {
+    const coder = await byName("Coder");
+    for (const model of ["llm-anthropic/claude-opus-5-5", "a b", "", "x".repeat(201)]) {
+      const res = await call(adminKey, "PUT", `/v1/models/tiers/${coder.id}`, { name: "Coder", model });
+      expect(res.status).toBe(400);
+      expect((await body(res)).error.message).toBe("request body failed validation: model: The model as the proxy names it: no spaces or slashes, at most 200 characters");
+    }
+    expect((await byName("Coder")).model).toBe("claude-opus-5-5");
+  });
+
+  test("an admin adds one, at the end; a name taken whatever its case is 409", async () => {
+    const res = await call(adminKey, "POST", "/v1/models/tiers", { name: "Cheap", description: "Bulk, low-stakes work at the lowest price.", model: "gpt-5.6-luna" });
+    expect(res.status).toBe(201);
+    expect((await body(res)).tiers.map((t: Json) => t.name)).toEqual(["Thinker", "Coder", "Fast", "Cheap"]);
+    const taken = await call(adminKey, "POST", "/v1/models/tiers", { name: "cheap" });
+    expect(taken.status).toBe(409);
+    expect((await body(taken)).error.message).toBe("there is already a tier named cheap");
+    const fast = await byName("Fast");
+    expect((await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "CODER" })).status).toBe(409);
+    expect((await byName("Fast")).name).toBe("Fast");
+  });
+
+  test("an admin reorders them; an order that leaves one out is refused", async () => {
+    const ids = (await tiers()).map((t) => t.id);
+    const reversed = [...ids].reverse();
+    expect((await body(await call(adminKey, "PUT", "/v1/models/tiers/order", { ids: reversed }))).tiers.map((t: Json) => t.id)).toEqual(reversed);
+    expect((await call(adminKey, "PUT", "/v1/models/tiers/order", { ids: ids.slice(1) })).status).toBe(400);
+    await call(adminKey, "PUT", "/v1/models/tiers/order", { ids });
+    expect((await tiers()).map((t) => t.id)).toEqual(ids);
+  });
+
+  test("one that does not exist is 404", async () => {
+    expect((await call(adminKey, "PUT", "/v1/models/tiers/mtr_nope", { name: "X" })).status).toBe(404);
+    expect((await call(adminKey, "DELETE", "/v1/models/tiers/mtr_nope", { replacement: null })).status).toBe(404);
+  });
+
+  test("another organization sees none of it, and cannot change or name it", async () => {
+    const coder = await byName("Coder");
+    expect((await tiers(otherKey)).map((t) => t.model)).toEqual([null, null, null]);
+    expect((await call(otherKey, "PUT", `/v1/models/tiers/${coder.id}`, { name: "Mine", model: "x" })).status).toBe(404);
+    expect((await call(otherKey, "DELETE", `/v1/models/tiers/${coder.id}`, { replacement: null })).status).toBe(404);
+    expect((await call(otherKey, "PATCH", "/v1/settings/organization", { roles: { reviewer: { tier: coder.id } } })).status).toBe(400);
+    expect(await byName("Coder")).toMatchObject({ name: "Coder", model: "claude-opus-5-5" });
+  });
+});
+
+describe("roles name a tier", () => {
+  test("set at the organization, overridden in a project, Reset; the fixer follows the implementer", async () => {
+    const coder = await byName("Coder");
+    const cheap = await byName("Cheap");
+    const org = await body(await call(adminKey, "GET", "/v1/settings/organization"));
+    expect(org.roles.implementer.tier).toEqual({ value: coder.id, source: "organization" });
+    expect(org.roles.fixer.tier).toEqual({ value: coder.id, source: "organization", followsImplementer: true });
+    expect(org.roles.implementer.model).toBeUndefined();
+
+    const project = await body(await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: cheap.id } } }));
+    expect(project.roles.implementer.tier).toEqual({ value: cheap.id, source: "project", organization: coder.id });
+    expect(project.roles.fixer.tier).toEqual({ value: cheap.id, source: "organization", followsImplementer: true, organization: coder.id });
+    expect(await projectModels()).toEqual({ implementer: { tier: cheap.id } });
+
+    const reset = await body(await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: null } } }));
+    expect(reset.roles.implementer.tier).toEqual({ value: coder.id, source: "organization", organization: coder.id });
+    expect(await projectModels()).toEqual({});
+  });
+
+  test("a tier the organization lacks is refused; a model is refused saying to name a tier", async () => {
+    expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: "mtr_nope" } } })).status).toBe(400);
+    for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
+      const res = await call(adminKey, "PATCH", path, { roles: { implementer: { model: "claude-opus-5-5" } } });
+      expect(res.status).toBe(400);
+      expect((await body(res)).error.message).toContain("roles.implementer.model: a role names a model tier");
+    }
+    const create = await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { orchestrator: { model: "fake/scripted" } } });
+    expect(create.status).toBe(400);
+    expect((await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { orchestrator: { tier: "mtr_nope" } } })).status).toBe(400);
+    expect((await owner`SELECT count(*)::int AS n FROM projects WHERE slug = 'bad'`)[0].n).toBe(0);
+    expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}`, { agentModels: { orchestrator: { tier: "mtr_nope" } } })).status).toBe(400);
+  });
+
+  test("the tiers say who uses them, at which effort", async () => {
+    const cheap = await byName("Cheap");
+    await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: cheap.id, effort: "low" } } });
+    await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { tier: cheap.id, effort: "high" } } });
+    expect((await byName("Cheap")).usedBy).toEqual([
+      { kind: "organization", role: "simplifier", project: null, effort: "high" },
+      { kind: "project", role: "reviewer", project: { id: PROJECT, name: "Docs site", imageUrl: null }, effort: "low" },
+    ]);
+  });
+});
+
+describe("a test message", () => {
+  test("goes to the orchestrator once per distinct effort of the tier's agents; none for a new tier", async () => {
+    const cheap = await byName("Cheap");
+    tested.length = 0;
+    const res = await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol", tierId: cheap.id });
+    expect(res.status).toBe(200);
+    expect((await body(res)).results.map((r: Json) => [r.effort, r.ok])).toEqual([["high", true], ["low", true]]);
+    expect((await body(await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" }))).results.map((r: Json) => r.effort)).toEqual([null]);
+    expect(tested).toEqual([{ model: "gpt-5.6-sol", efforts: ["high", "low"] }, { model: "gpt-5.6-sol", efforts: [null] }]);
+  });
+
+  test("the proxy's refusal is passed on as it came", async () => {
+    const res = await body(await call(adminKey, "POST", "/v1/models/test", { model: "nope" }));
+    expect(res.results).toEqual([{ effort: null, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }]);
+  });
+});
+
+describe("the proxy's models", () => {
+  test("members read them as suggestions", async () => {
+    expect(await body(await call(memberKey, "GET", "/v1/models/proxy")))
+      .toEqual({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+  });
+
+  test("unreadable: none, and why; a tier still takes any name", async () => {
+    modelsReply = () => new Response("<html>bad gateway</html>", { status: 502 });
+    try {
+      expect(await body(await call(memberKey, "GET", "/v1/models/proxy"))).toEqual({ models: [], source: null, problem: "the orchestrator answered 502" });
+      const fast = await byName("Fast");
+      expect((await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", model: "not-listed-anywhere" })).status).toBe(200);
+    } finally {
+      modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+    }
+  });
+});
+
+describe("removing a tier", () => {
+  test("in use, with no replacement, is refused and changes nothing", async () => {
+    const cheap = await byName("Cheap");
+    const res = await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: null });
+    expect(res.status).toBe(409);
+    expect((await body(res)).error.code).toBe("in_use");
+    expect(await byName("Cheap")).toBeDefined();
+  });
+
+  test("a replacement must be another of the organization's tiers", async () => {
+    const cheap = await byName("Cheap");
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: cheap.id })).status).toBe(400);
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: "mtr_nope" })).status).toBe(400);
+    const otherThinker = (await tiers(otherKey))[0];
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: otherThinker.id })).status).toBe(400);
+    expect(await byName("Cheap")).toBeDefined();
+  });
+
+  test("in use, moves every organization role and project override to the replacement, in one go", async () => {
+    const cheap = await byName("Cheap");
+    const thinker = await byName("Thinker");
+    const res = await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: thinker.id });
+    expect(res.status).toBe(200);
+    expect((await body(res)).tiers.map((t: Json) => t.name)).not.toContain("Cheap");
+    expect((await orgModels()).simplifier).toEqual({ tier: thinker.id, effort: "high" });
+    expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id, effort: "low" } });
+  });
+
+  test("one nothing uses goes with no replacement; the last one cannot go", async () => {
+    const fast = await byName("Fast");
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${fast.id}`, { replacement: null })).status).toBe(200);
+    const coder = await byName("Coder");
+    const thinker = await byName("Thinker");
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${coder.id}`, { replacement: thinker.id })).status).toBe(200);
+    expect((await orgModels()).implementer).toEqual({ tier: thinker.id });
+    const last = await call(adminKey, "DELETE", `/v1/models/tiers/${thinker.id}`, { replacement: null });
+    expect(last.status).toBe(409);
+    expect((await body(last)).error.message).toBe("the last tier cannot be removed: every agent needs one");
+    expect((await tiers()).map((t) => t.name)).toEqual(["Thinker"]);
+  });
+});
+
+describe("the upgrade's notes", () => {
+  test("shown to admins until one dismisses them; never to members", async () => {
+    const [thinker] = await tiers();
+    await owner`INSERT INTO model_tier_upgrade_notes (organization_id, project_id, role, old_model, tier_id, tier_name, model_changed)
+      VALUES (${ORG}, NULL, 'reviewer', 'llm-anthropic/claude-sonnet-5-5', ${thinker.id}, 'Thinker', true),
+             (${ORG}, ${PROJECT}, 'implementer', 'llm-openai/gpt-5.6-sol', NULL, 'gpt-5.6-sol', false),
+             (${OTHER}, NULL, 'reviewer', 'llm-anthropic/x', NULL, 'Thinker', false)`;
+    const notes = (await body(await call(adminKey, "GET", "/v1/models/tiers"))).upgrade;
+    expect(notes.map((n: Json) => ({ ...n, id: 0 }))).toEqual([
+      { id: 0, role: "reviewer", project: null, oldModel: "llm-anthropic/claude-sonnet-5-5", tierId: thinker.id, tierName: "Thinker", newTier: false, modelChanged: true },
+      { id: 0, role: "implementer", project: { id: PROJECT, name: "Docs site", imageUrl: null }, oldModel: "llm-openai/gpt-5.6-sol", tierId: null, tierName: "gpt-5.6-sol", newTier: false, modelChanged: false },
+    ]);
+    expect((await body(await call(memberKey, "GET", "/v1/models/tiers"))).upgrade).toEqual([]);
+    const done = await call(adminKey, "POST", "/v1/models/upgrade/dismiss");
+    expect(done.status).toBe(200);
+    expect((await body(done)).upgrade).toEqual([]);
+    // Another organization's notes are its own.
+    expect((await owner`SELECT count(*)::int AS n FROM model_tier_upgrade_notes WHERE organization_id = ${OTHER} AND dismissed_at IS NULL`)[0].n).toBe(1);
+  });
+});
