@@ -264,7 +264,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt,
           attachmentIds: submission.attachmentIds }), "steer this run"));
       // Sent: the images are the message's now, not the tray's.
-      if (ok) tray.clear();
+      if (ok) tray.clear(submission.attachmentIds);
       else throw new Error("not sent");
     },
     [client, runId, intervene, tray],
