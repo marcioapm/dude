@@ -44,8 +44,7 @@ Decided (2026-09-30 to 2026-10-02, Márcio):
   60 changed lines and 3 files, enforced when it publishes; past it, it
   delegates.
 - **Starting is a choice, every time.** Two equal buttons, no project
-  default: talk it through, or deliver straight through. Named after the
-  film: **Abide** and **Roll**.
+  default: **Talk it through**, or **Deliver**. Plain words, kept.
 - **The conductor has its own settings and a small machine.** Its own
   model, effort and machine size, like any role. Its machine is small: it
   reads, edits and talks, and never runs the code. Anything that builds or
@@ -56,16 +55,14 @@ Decided (2026-09-30 to 2026-10-02, Márcio):
 Where a task's "Not started" offers Deliver today, there are two, side by
 side and equal. The person picks each time; no setting picks for them.
 
-- **Abide** (talk it through) starts the conductor in Chat. It reads the
+- **Talk it through** starts the conductor in Chat. It reads the
   task and the code, then asks what it needs to (a question card, as
   `ask_person` makes today) or proposes a plan. The task waits on the
   person; the conductor is parked while it waits.
-- **Roll** (deliver straight through) is today's pipeline, unchanged. In
-  bowling, the roll is the delivery: let it go and it runs to the end on
-  its own.
+- **Deliver** is today's pipeline, unchanged: it runs to the pull request
+  on its own.
 
-The verbs are UI copy only. Internally the workflow, its events and its
-API stay "delivery" and the decider `policy` | `conductor`.
+Internally the decider is `policy` (Deliver) or `conductor`.
 
 ## Taking over a delivered task
 
@@ -247,7 +244,7 @@ mostly already true of dude:
    warm-then-parked; El Duderino's notes. No decisions yet.
 3. **Decisions:** `State.Decider`, the decision points parking on
    `SignalConductorDecision`, `start_phase`, `decide`,
-   `dismiss_finding`, coalesced wakes; Abide and Roll; take-over; the PR
+   `dismiss_finding`, coalesced wakes; Talk it through; take-over; the PR
    gate.
 4. **Steering:** `steer`, and lux delivering a steer mid-turn.
 5. **GitHub:** routing to the conductor, @dude, webhooks on project add.
@@ -255,5 +252,6 @@ mostly already true of dude:
 
 ## Open
 
-- The verbs: Abide / Roll, or another pair?
-- The Small size's numbers: enough disk for the largest checkout?
+Nothing at the moment. Decided 2026-10-02: the start buttons are Deliver
+and Talk it through; the edit limit is 60 lines and 3 files; Small is
+0.5 CPU · 1 GiB · 10 GiB.
