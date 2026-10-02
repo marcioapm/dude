@@ -7,6 +7,8 @@ import { Segmented } from "../components/ScreenHeader.tsx";
 import { IconButton } from "./Button.tsx";
 import { Tooltip } from "./Tooltip.tsx";
 import { scrollPositions } from "./Textarea.tsx";
+import { useImageEditing } from "./ImageEditing.tsx";
+import type { FieldKind } from "../util/imageLayout.ts";
 import inputStyles from "./Input.module.css";
 import styles from "./MarkdownEditor.module.css";
 
@@ -63,6 +65,12 @@ export interface MarkdownEditorProps {
   readonly onFocus?: (() => void) | undefined;
   /** Edits in place, undoable, for text the caller inserts (`MarkdownEditorHandle`). */
   readonly editorRef?: Ref<MarkdownEditorHandle> | undefined;
+  /**
+   * Its attachment images can be laid out and moved in Preview (`useImageEditing`):
+   * a goal's slots are between its blocks, criteria's under each list item.
+   * Not while `locked` or `disabled`: then a click opens the image.
+   */
+  readonly imageField?: FieldKind | undefined;
 }
 
 /** What the caller may do to the field's text, as a person typing would. */
@@ -164,6 +172,7 @@ export function MarkdownEditor({
   attachmentImage,
   onFocus,
   editorRef,
+  imageField,
 }: MarkdownEditorProps) {
   const autoId = useId();
   const fieldId = id ?? autoId;
@@ -211,6 +220,18 @@ export function MarkdownEditor({
       return true;
     },
   }), [value]);
+
+  // A Preview edit replaces the source as typing would (onChange via the
+  // textarea's input event), keeping the Write caret where it was.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const currentText = useCallback(() => area.current?.value ?? valueRef.current, []);
+  const setText = useCallback((next: string) => {
+    const el = area.current;
+    if (!el) return onChange(next);
+    setSource(el, next, Math.min(el.selectionStart, next.length), Math.min(el.selectionEnd, next.length));
+  }, [onChange]);
+  const editing = useImageEditing({ kind: imageField, enabled: !fixed && mode === "preview", text: currentText, setText, preview: previewTab });
 
   const switchTo = (next: MarkdownEditorMode) => {
     if (next === mode) return;
@@ -432,16 +453,18 @@ export function MarkdownEditor({
           id={`${tabs}-preview-panel`}
           aria-labelledby={`${tabs}-preview-tab`}
           tabIndex={0}
-          className={styles["preview"]}
+          className={cx(styles["preview"], imageField && styles["previewImages"])}
           hidden={mode !== "preview"}
           style={previewMin !== undefined ? { minHeight: previewMin } : undefined}
           data-testid={testId ? `${testId}-preview` : undefined}
+          {...editing.panel}
         >
           {mode !== "preview" ? null : value.trim() ? (
-            <Markdown source={value} variant={variant} breaks={breaks} unmeasured attachmentImage={attachmentImage} />
+            <Markdown source={value} variant={variant} breaks={breaks} unmeasured attachmentImage={attachmentImage} attachmentFrame={editing.frame} />
           ) : (
             <p className={styles["empty"]}>Nothing to preview yet.</p>
           )}
+          {mode === "preview" ? editing.slotLine : null}
         </div>
         <div className={styles["foot"]}>
           <span className={styles["md"]}>
