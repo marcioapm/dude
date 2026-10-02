@@ -38,7 +38,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", chatMessageMax)
 	}
 	p := principalOf(r)
-	writer := delivery.Writer{ActorType: actorTypeOf(p), ActorID: p.Actor, Person: p.Person}
+	writer := delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person}
+	if writer.ActorType == "" {
+		writer.ActorType = ledger.ActorHuman
+	}
 	var out map[string]any
 	created := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
@@ -55,12 +58,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 			}
 			return err
 		}
-		var runID, status string
-		var dudePause *string
+		var runID string
 		var ending bool
 		find := func() error {
-			return tx.QueryRow(r.Context(), `SELECT r.id, r.status::text, r.dude_pause, `+delivery.Ending+` FROM runs r
-				WHERE r.task_id = $1 AND `+delivery.LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &status, &dudePause, &ending)
+			return tx.QueryRow(r.Context(), `SELECT r.id, `+delivery.Ending+` FROM runs r
+				WHERE r.task_id = $1 AND `+delivery.LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &ending)
 		}
 		err := find()
 		if err == nil && ending {
@@ -85,7 +87,6 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		if err != nil {
 			return err
 		}
-		ri := runInfo{ProjectID: projectID, TaskID: taskID, Status: status, DudePaused: dudePause != nil, Role: delivery.RoleConductor}
 		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
 
 		// Waiting on its question: this is the answer.
@@ -100,7 +101,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, body.Text, actor(r))
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, body.Text, actor(r))
 			if err != nil {
 				return err
 			}
@@ -137,11 +138,4 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 	}
 	write(w, status, out)
 	return nil
-}
-
-func actorTypeOf(p principal) string {
-	if p.ActorType == "" {
-		return ledger.ActorHuman
-	}
-	return p.ActorType
 }

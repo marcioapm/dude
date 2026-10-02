@@ -125,7 +125,7 @@ const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', '
 // read. With replace, each message goes to the task's live conductor, or
 // to a new one: the first becomes its briefing's message, as a first
 // message is, and the rest are queued for it. Each keeps its writer and
-// its images (carryAttachments). A briefing carries no images, so a first
+// its images (DirectiveAttachments). A briefing carries no images, so a first
 // message with images for a new conductor is failed, saying to send it
 // again. The ended one's copies fail saying which conductor has them, so
 // its Chat shows where they went. Without replace (a person aborted it)

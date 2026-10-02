@@ -653,7 +653,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, body.Text, actor(r))
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, body.Text, actor(r))
 		if err != nil {
 			return err
 		}
@@ -688,7 +688,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // the wait; for that wait, back to the status before it, once nothing else
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
-func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runInfo, questionID, prompt, text, by string) (string, error) {
+func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt, text, by string) (string, error) {
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
 		return "", err
@@ -698,7 +698,7 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runI
 	if err != nil {
 		return "", err
 	}
-	if ri.Role != delivery.RoleConductor {
+	if role != delivery.RoleConductor {
 		// A wait a conductor's question raised is ended only by
 		// EndConductorWait, once its last blocker settles.
 		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
