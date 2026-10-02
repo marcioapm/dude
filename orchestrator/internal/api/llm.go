@@ -23,12 +23,9 @@ func (s *Server) llmRoutes(mux *http.ServeMux) {
 		write(w, http.StatusOK, out)
 		return nil
 	}))
-	// A check, never a gate: an admin's, as everything that spends the
-	// organization's tokens on its own.
+	// A check, never a gate. The backend has decided who may send one
+	// (POST /v1/models/test: admins), as for memory reindex.
 	mux.Handle("POST /internal/llm/test", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
-		if p := principalOf(r); p.Person != "" && !p.Admin {
-			return fail(http.StatusForbidden, "not_admin", "only an organization admin can send a test message")
-		}
 		var in struct {
 			Model   string    `json:"model"`
 			Efforts []*string `json:"efforts"`
