@@ -93,13 +93,15 @@ The orchestrator holds the proxy's key; the backend never does.
   proxy's `GET /models` for the Models page's suggestions. Unreadable is no
   models and why; a tier still takes any name.
 - `POST /internal/llm/test` (served as `POST /v1/models/test`, admins only)
-  sends one tiny request (16 tokens, bounded to 30 s) for a model at each
-  distinct effort the tier's agents use — once with none for a tier nobody
-  uses — in the wire format the agent would use: Anthropic Messages for a
-  Claude model (with no effort: OpenCode's Anthropic provider drops
+  sends one tiny request (16 tokens, bounded to 30 s) for a model per
+  distinct request the tier's agents would send — once with none for a tier
+  nobody uses — in the wire format the agent would use: Anthropic Messages
+  for a Claude model (with no effort: OpenCode's Anthropic provider drops
   `reasoningEffort`), Chat Completions with `reasoning_effort` (max as
-  high) otherwise. Each answer is its latency, or the proxy's status and
-  error message as it sent them. It is a check, never a gate.
+  high) otherwise. Efforts that go out alike are one request: high and max
+  for an OpenAI model, any effort for a Claude one. Each result names the
+  efforts it covers and what was sent, and is its latency, or the proxy's
+  status and error message as it sent them. It is a check, never a gate.
 
 ## Upgrade
 
@@ -125,11 +127,14 @@ them to admins until one dismisses them.
 - **Add / change a tier**: name, what it is for, the model to request with
   the proxy's names as chips, labelled as suggestions. A name the proxy
   does not list shows the attention callout and the button reads "Save
-  anyway" / "Add tier anyway". Send a test message shows each effort's
-  answer.
+  anyway" / "Add tier anyway". Send a test message shows one answer per
+  request sent, naming the efforts it covers (and what was sent, when that
+  differs) and who uses the tier at them.
 - **Remove**: who uses the tier, "Move them to", "Remove and move them".
 - **Agents › each role**: Model is a tier picker (on a project, "From Acme ·
-  Thinker" first, and "Tiers are Acme's — ask an admin to change one").
+  Thinker" first). Under its list an admin is offered "Manage tiers in
+  Models"; anyone else reads "Tiers are Acme's — ask an admin to change
+  one" on a project, "Only admins change tiers." on the organisation.
   On the organisation, "Requests <model>" under it; on a project, its
   source and Reset. Reasoning effort says the proxy drops it for models
   that do not reason.
