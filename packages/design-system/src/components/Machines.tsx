@@ -102,6 +102,8 @@ export interface MachineChipProps {
   readonly spec: string;
   /** What the tooltip says: where the size came from, that it is fixed for the session. */
   readonly tooltip?: ReactNode;
+  /** `cube`: the image a session runs in, in the same grammar ("Image: …"). */
+  readonly icon?: "chip" | "cube" | undefined;
   readonly "data-testid"?: string | undefined;
 }
 
@@ -109,12 +111,12 @@ export interface MachineChipProps {
  * The machine a session runs on, in its header beside the model: the chip
  * glyph, the size's name and its spec, with where it came from in a
  * tooltip. A button only so the tooltip opens on focus; it does nothing on
- * a press.
+ * a press. With the cube glyph it is the image the session runs in.
  */
-export function MachineChip({ name, spec, tooltip, "data-testid": testId }: MachineChipProps) {
+export function MachineChip({ name, spec, tooltip, icon = "chip", "data-testid": testId }: MachineChipProps) {
   const chip = (
-    <button type="button" className={styles["chip"]} data-testid={testId} aria-label={`Machine: ${name}, ${spec}`}>
-      <Icon name="chip" size={12} className={styles["chipIcon"]} />
+    <button type="button" className={styles["chip"]} data-testid={testId} aria-label={`${icon === "cube" ? "Image" : "Machine"}: ${name}, ${spec}`}>
+      <Icon name={icon} size={12} className={styles["chipIcon"]} />
       <span className={cx(styles["chipName"], "ds-cap")}>{name}</span>
       <span className={cx(styles["chipSpec"], "ds-cap", "ds-tnum")}>{spec}</span>
     </button>

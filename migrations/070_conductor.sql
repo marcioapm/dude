@@ -77,3 +77,36 @@ BEGIN
 END $$;
 
 SELECT seed_conductor_size(id) FROM organizations;
+
+-- The conductor reads and judges: it runs on the Thinker tier, in a new
+-- organization (the seed below) and in every one there now that gave it none.
+CREATE OR REPLACE FUNCTION seed_model_tiers_for(org text, thinker_model text, coder_model text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  ids jsonb := jsonb_build_object(
+    'Thinker', 'mtr_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 24),
+    'Coder', 'mtr_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 24),
+    'Fast', 'mtr_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 24));
+  models jsonb;
+  role text;
+BEGIN
+  INSERT INTO model_tiers (id, organization_id, name, description, model, position) VALUES
+    (ids->>'Thinker', org, 'Thinker', 'Reads, plans, judges and tidies. Slow and thorough.', thinker_model, 0),
+    (ids->>'Coder', org, 'Coder', 'Writes and fixes code for hours at a time.', coder_model, 1),
+    (ids->>'Fast', org, 'Fast', 'Small, mechanical jobs where speed beats depth.', NULL, 2);
+  SELECT default_agent_models INTO models FROM organizations WHERE id = org;
+  FOREACH role IN ARRAY ARRAY['conductor', 'investigator', 'reviewer', 'simplifier', 'qa_browser', 'implementer'] LOOP
+    models := jsonb_set(models, ARRAY[role], COALESCE(models->role, '{}'::jsonb)
+      || jsonb_build_object('tier', ids->>(CASE role WHEN 'implementer' THEN 'Coder' ELSE 'Thinker' END)));
+  END LOOP;
+  UPDATE organizations SET default_agent_models = models WHERE id = org;
+  RETURN ids;
+END $$;
+REVOKE ALL ON FUNCTION seed_model_tiers_for(text, text, text) FROM PUBLIC;
+
+UPDATE organizations o
+SET default_agent_models = jsonb_set(o.default_agent_models, '{conductor}',
+  COALESCE(o.default_agent_models->'conductor', '{}'::jsonb) || jsonb_build_object('tier', t.id))
+FROM (SELECT DISTINCT ON (organization_id) organization_id, id FROM model_tiers
+      WHERE name = 'Thinker' ORDER BY organization_id, position, id) t
+WHERE t.organization_id = o.id AND NOT COALESCE(o.default_agent_models->'conductor' ? 'tier', false);

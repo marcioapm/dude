@@ -83,8 +83,10 @@ region = "us-east-1"                                     # DUDE_S3_REGION
 reap_after = "168h"                                      # DUDE_PREVIEW_REAP_AFTER
 
 [llm]
-# The LLM API agents use, before the API path; http(s). Unset, only fake/
-# models run.
+# The LLM proxy agents use, before the API path; http(s). Unset, only fake/
+# models run. Each tier (Organisation › Models) names the model requested
+# here, as the proxy names it; the orchestrator alone holds the key, and
+# reads the proxy's GET /models for the Models page's suggestions.
 # url = "https://llm.example/v1"                         # DUDE_LLM_URL
 # key = "…"                                              # DUDE_LLM_KEY (secret)
 
@@ -117,6 +119,26 @@ auth = "none"                                            # DUDE_REGISTRY_AUTH
 # credential = "user:token"                              # DUDE_REGISTRY_CREDENTIAL (secret)
 # ecr: a pull-only role to mint tokens as; unset, the host's credentials.
 # ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"   # DUDE_ECR_ROLE_ARN
+
+[images]
+# The dude layer every library image is finished with (the dude CLI,
+# OpenCode, its config), by digest. Unset, the image library is off: no
+# builds, and a Run whose image is a library image fails before lux.
+# layer = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/layer@sha256:…"   # DUDE_LAYER_IMAGE
+
+[builder]
+# dude-image-builder only. Its database login (role dude_builder).
+# database_url = "postgres://dude_builder:…@127.0.0.1:5432/dude"   # DUDE_BUILDER_DATABASE_URL (secret)
+# Where built images are pushed, and podman's auth file for it.
+# repository = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/custom"   # DUDE_BUILDER_REPOSITORY
+# authfile = "/run/dude-image-builder/ecr-auth.json"     # DUDE_BUILDER_AUTHFILE
+platform = "linux/arm64"                                 # DUDE_BUILDER_PLATFORM
+# Each build's limits (the settings page shows the CPUs and memory too).
+cpus = 1.5                                               # DUDE_BUILDER_CPUS
+memory = "1536m"                                         # DUDE_BUILDER_MEMORY
+timeout = "60m"                                          # DUDE_BUILDER_TIMEOUT
+# Below this much free space in podman's storage it prunes, then refuses.
+min_free_bytes = 8589934592                              # DUDE_BUILDER_MIN_FREE_BYTES
 
 [tools]
 # Where dude's tools for agents listen, and where agents reach them. Unset,

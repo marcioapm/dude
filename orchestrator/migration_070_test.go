@@ -10,7 +10,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// sizeRow is one of an organisation's machine sizes, as migration 069
+// sizeRow is one of an organisation's machine sizes, as migration 070
 // leaves it.
 type sizeRow struct {
 	ID, Name        string
@@ -50,13 +50,13 @@ func conductorSize(t *testing.T, owner *pgx.Conn, org string) string {
 	return *id
 }
 
-// Migration 069 renames the orchestrator role to conductor in what is
+// Migration 070 renames the orchestrator role to conductor in what is
 // stored — the enum's rows, the role keys of settings, the ledger's role —
-// and gives every organisation the Small size as the conductor's, reusing
-// one already named Small, while Standard stays the default.
+// and gives every organisation the Small size and the Thinker tier as the
+// conductor's, reusing a size already named Small, while Standard stays the default.
 func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	ctx := context.Background()
-	owner, apply := dbtest.Upgrade(t, "069")
+	owner, apply := dbtest.Upgrade(t, "070")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug, default_agent_models) VALUES
 		('org_plain', 'Plain', 'plain', '{"orchestrator":{"model":"llm-openai/o","effort":"high"},"reviewer":{"model":"llm-openai/r"}}'),
 		('org_small', 'HasSmall', 'has-small', '{}'),
@@ -122,5 +122,19 @@ func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	fresh := sizesOf(t, owner, "org_new")
 	if len(fresh) != 2 || !fresh["Standard"].Default || fresh["Small"].Default || conductorSize(t, owner, "org_new") != fresh["Small"].ID {
 		t.Fatalf("a new organisation: %+v, conductor %q", fresh, conductorSize(t, owner, "org_new"))
+	}
+
+	// Every organisation's conductor runs on its Thinker tier: one seeded
+	// before 070 without an orchestrator key, and one created after.
+	for _, org := range []string{"org_plain", "org_small", "org_named", "org_new"} {
+		var tier, thinker *string
+		if err := owner.QueryRow(ctx, `SELECT o.default_agent_models->'conductor'->>'tier', t.id
+			FROM organizations o JOIN model_tiers t ON t.organization_id = o.id AND t.name = 'Thinker'
+			WHERE o.id = $1`, org).Scan(&tier, &thinker); err != nil {
+			t.Fatal(err)
+		}
+		if tier == nil || thinker == nil || *tier != *thinker {
+			t.Fatalf("%s's conductor tier = %v, want Thinker %v", org, tier, thinker)
+		}
 	}
 }

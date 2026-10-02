@@ -35,12 +35,15 @@ type Process string
 const (
 	Backend      Process = "backend"
 	Orchestrator Process = "orchestrator"
+	// Builder is dude-image-builder, which reads only its own keys and the
+	// dude layer.
+	Builder Process = "builder"
 )
 
 // schema is every key of the file. Each leaf is `any` so that a key another
 // process uses decodes whatever its type; tags say its variable, its kind,
-// who uses it ("backend", "orchestrator" or "both"), its default, and
-// whether it is a secret.
+// who uses it ("backend", "orchestrator", "builder", "both" for the first
+// two, or "all"), its default, and whether it is a secret.
 type schema struct {
 	Database struct {
 		URL any `toml:"url" env:"DATABASE_URL" kind:"string" use:"both" secret:"true"`
@@ -100,6 +103,21 @@ type schema struct {
 		Credential any `toml:"credential" env:"DUDE_REGISTRY_CREDENTIAL" kind:"string" use:"orchestrator" secret:"true"`
 		ECRRoleARN any `toml:"ecr_role_arn" env:"DUDE_ECR_ROLE_ARN" kind:"string" use:"orchestrator"`
 	} `toml:"registry"`
+	Images struct {
+		// The dude layer every library image is finished with, by digest;
+		// unset, the image library builds nothing and Runs cannot use it.
+		Layer any `toml:"layer" env:"DUDE_LAYER_IMAGE" kind:"string" use:"all"`
+	} `toml:"images"`
+	Builder struct {
+		DatabaseURL  any `toml:"database_url" env:"DUDE_BUILDER_DATABASE_URL" kind:"string" use:"builder" secret:"true"`
+		Repository   any `toml:"repository" env:"DUDE_BUILDER_REPOSITORY" kind:"string" use:"builder"`
+		Authfile     any `toml:"authfile" env:"DUDE_BUILDER_AUTHFILE" kind:"string" use:"builder"`
+		Platform     any `toml:"platform" env:"DUDE_BUILDER_PLATFORM" kind:"string" use:"builder" default:"linux/arm64"`
+		CPUs         any `toml:"cpus" env:"DUDE_BUILDER_CPUS" kind:"float" use:"all" default:"1.5"`
+		Memory       any `toml:"memory" env:"DUDE_BUILDER_MEMORY" kind:"string" use:"all" default:"1536m"`
+		Timeout      any `toml:"timeout" env:"DUDE_BUILDER_TIMEOUT" kind:"duration" use:"builder" default:"60m"`
+		MinFreeBytes any `toml:"min_free_bytes" env:"DUDE_BUILDER_MIN_FREE_BYTES" kind:"int" use:"builder" default:"8589934592"`
+	} `toml:"builder"`
 	Tools struct {
 		Listen  any `toml:"listen" env:"DUDE_TOOLS_LISTEN" kind:"string" use:"orchestrator"`
 		URL     any `toml:"url" env:"DUDE_TOOLS_URL" kind:"string" use:"orchestrator"`
@@ -131,12 +149,14 @@ type Key struct {
 	Name    string // the file key, dotted: "llm.url"
 	Env     string // its variable: "DUDE_LLM_URL"
 	Kind    string // string, int, float, bool, list or duration
-	Use     string // backend, orchestrator or both
+	Use     string // backend, orchestrator, builder, both (backend and orchestrator) or all
 	Default string // "" for none
 	Secret  bool
 }
 
-func (k Key) usedBy(p Process) bool { return k.Use == "both" || k.Use == string(p) }
+func (k Key) usedBy(p Process) bool {
+	return k.Use == "all" || k.Use == "both" && p != Builder || k.Use == string(p)
+}
 
 // Label names a setting in errors and logs: its file key and its variable.
 func (k Key) Label() string { return k.Name + " (" + k.Env + ")" }

@@ -18,6 +18,7 @@ import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
 import { ServersSection } from "./sections/Servers.tsx";
+import { ImagesGallerySection } from "./sections/Images.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -135,6 +136,15 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["s-markdown", "MarkdownDocument"],
       ["s-history", "PromptHistory"],
       ["s-epics", "EpicCard / EpicRow"],
+    ],
+  ],
+  [
+    "Image library",
+    [
+      ["i-editor", "CodeEditor"],
+      ["i-picker", "ImagePicker"],
+      ["i-build", "Queue, stages, state"],
+      ["i-history", "ImageHistory"],
     ],
   ],
   [
@@ -259,6 +269,7 @@ function Shell() {
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
           <SettingsGallerySection mode={panes} />
+          <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
           <ServersSection mode={panes} />
         </PaneDensityContext.Provider>

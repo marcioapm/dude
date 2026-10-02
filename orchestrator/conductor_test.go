@@ -18,16 +18,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// conductorWorld is a world whose project configures the conductor with
-// the scripted agent (model is "fake/scripted" unless given).
+// conductorWorld is a world whose project puts the conductor on a tier
+// requesting the scripted agent (model is "fake/scripted" unless given).
 func conductorWorld(t *testing.T, model ...string) *world {
 	w := newWorld(t)
 	m := "fake/scripted"
 	if len(model) > 0 {
 		m = model[0]
 	}
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || jsonb_build_object('conductor', jsonb_build_object('model', $2::text))
-		WHERE id = $1`, w.project, m)
+	w.onModel("conductor", m)
 	return w
 }
 

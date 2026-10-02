@@ -1071,6 +1071,53 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   removed through a `Dialog tone="danger"` that says who uses it and where
   they move.
 
+### Images
+
+- **Every field that takes a container image is an `ImagePicker`**, never
+  an `Input`: a combobox over the organisation's images (SearchPicker's
+  keys — ↑ ↓, Enter, Escape) whose list floats under the field. A row is
+  the image's cube mark (on the accent tint for the default base), its
+  name in mono, its description muted, a `default` badge, a newer
+  version's state as a badge ("v3 waiting", "v5 building" with a dot,
+  "v4 failed" in danger), and the published version on the right. It
+  stores the id; there is no version to choose: whoever names an image
+  runs its latest published version. Closed, it shows the chosen name and
+  "v7 now". `allowNone` and `noneLabel` say what choosing none means
+  there ("Use Acme's · acme-base"). Words that match nothing offer "Make
+  an image FROM <words>". An archived image is listed only while it is the
+  one chosen, with an Archived badge.
+- **A Containerfile is edited in a `CodeEditor`**: CodeMirror 6 in a chunk
+  of its own, loaded the first time one renders (a skeleton of its lines
+  meanwhile), so a page without one pays nothing. Tokens colour it — no
+  CodeMirror theme — so light, dark and compact follow the page. Lint marks
+  are a wavy underline in the tone and a gutter dot, the reason on hover;
+  completions float in the overlay's grammar, matched letters in the
+  accent. The frame is a field: a header and a footer on the chrome shade
+  (its name and version; its line count and what won't build), and what is
+  added after the text — the dude layer — read-only on the sunken shade
+  under it, told apart by shade.
+- **The builder's queue is a `BuildQueueStrip`** over the images list, on
+  the chrome shade: what builds now with the live dot, how many wait and
+  which, Open, and the limits every build has on the right ("Rootless ·
+  1.5 CPU · 1.5 GB · One at a time"). With builds off it says why in their
+  place.
+- **A build's progress is `BuildStages`**: square cells, waiting →
+  building → pushed and published, each with its glyph and words; the
+  current one on the info tint with the live dot, a failed one on
+  danger's with its sentence ("ran out of memory (1.5 GB) at step 3").
+  CPU and memory figures appear only when something measured them; never
+  a made-up bar. The log under it is a `LogStream`.
+- **An image's state in a row is `ImageState`**: words in the tone with a
+  dot — "Published · 2h ago" (success), "Building v5 · 2m" (live dot),
+  "Waiting · 2nd" (hollow), "v4 failed · v3 still live" (danger), "Draft
+  not built" (attention).
+- **History is `ImageHistory`**, PromptHistory's anatomy: every version
+  newest first on the chrome shade — the draft, failed ones, rebuilds by
+  dude — with who, why, when and what it was built on; the selected one's
+  Containerfile in a `DiffFile` against the one before it or against the
+  published one; "Publish vN again" only on a built version that is not the
+  published one, and only through a confirming `Dialog`.
+
 ### Do / Don't
 
 | Do | Don't |
@@ -1113,6 +1160,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<NumberInput step={0.5} min={0.5} unit="CPUs" error="Whole or half CPUs: 0.5, 1, 1.5…" />` | `<input type="number" step="0.5">`, rounding what was typed without saying |
 | `<Select options={[{ value, label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB" }]} />` | a label string with the spec glued on in the same ink |
 | `<ProportionBar segments={[{ kind: "reserved", … }, …]} legend={…} />` | a chart library, or an app-local bar in its own CSS |
+| `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
+| `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
+| `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
 
 ## Components
 
@@ -1298,11 +1348,32 @@ MarkdownCheatsheet.
   nobody gets hatched; the memory of one host between Linux and its runs.
 - **MachineChip / MachineTip** — the machine in a session's header, and
   its tooltip. The rules are under *Machines*.
+- **TierLine / TierMark** — a model tier in a table or a picker: its mark
+  (a glyph on its tone's tint), name, and what it is for under it.
+- **FlowSteps** — how something works, in steps side by side on the chrome
+  shade, small-caps titles; they stack when narrow. Once per page.
+- **NameChips** — suggestions under a field that takes any name, mono, the
+  chosen one on the info tint; say in words that they are suggestions.
+- **TierChip / TierTip** — the model in a session's header: the tier, then
+  the model it requested in mono. Its tooltip says that is what dude asked
+  for when the session started; never what the proxy served.
 - **UsedBy** — who uses something: small faces (agents' tiles, projects'
   squares), then the words.
 - **SettingsExplainer** (with the Settings pieces) — how something a
   settings page depends on works, explained once: a titled box on the
   chrome shade at the prose measure, a figure after the words.
+
+`src/components/` — images (what an agent runs in):
+
+- **CodeEditor** — CodeMirror 6, lazy: `language`, `diagnostics`,
+  `complete`, `header`, `after` (read-only, under the text) and `footer`.
+  `CodeEditorCore` is the chunk it loads; nothing imports it directly.
+- **ImagePicker / ImageMark / ImageStatusBadge** — the image combobox, an
+  image's cube mark, and a newer version's state as a badge.
+- **BuildQueueStrip / BuildStages / ImageState** — the builder's queue in a
+  line, a build's stages, an image's state in a row.
+- **ImageHistory** — versions and their Containerfile diffs, with Publish
+  again. The rules are under *Images*.
 
 `src/components/` — live work:
 
@@ -1339,7 +1410,9 @@ MarkdownCheatsheet.
   consumer needs more, it should still emit an AST, not HTML.
 - Syntax highlighting in code blocks. It would need a grammar dependency and
   a second colour system; the mono type and the fence language label carry
-  enough for a transcript. Revisit for the document variant.
+  enough for a transcript. Revisit for the document variant. (`CodeEditor`
+  highlights what it edits with CodeMirror's grammar in the tones, in its
+  own lazy chunk; it is not used to render code that is only read.)
 - Charts. When they arrive, series colours must come from a validated
   categorical palette, not the tones or role colours. The tokens module
   exports the raw OKLCH helpers for that.

@@ -13,7 +13,8 @@ export type Place =
   // A task's page may name the tab it opens on: its Servers, where a Run's servers live.
   | { view: "tree"; ref: NavRef; tab?: TaskTab }
   | { view: "projectSettings"; projectId: string; page?: string }
-  | { view: "orgSettings"; page?: string }
+  // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
+  | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
   | { view: "inbox" };
 
@@ -24,12 +25,16 @@ const TASK_TABS: readonly string[] = ["servers", "chat"];
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
 export function parsePlace(hash: string): Place | null {
-  const [given, id, view, page] = hash.replace(/^#\/?/, "").split("/");
+  const [given, id, view, page, ...rest] = hash.replace(/^#\/?/, "").split("/");
   // Links from before "work item" became "task": bookmarks, and
   // notifications already delivered.
   const kind = given === "workItem" ? "task" : given;
   // A settings page (a role under Agents, Delivery) is part of the place.
-  if (kind === "org" && id === "settings") return view ? { view: "orgSettings", page: view } : { view: "orgSettings" };
+  if (kind === "org" && id === "settings") {
+    if (!view) return { view: "orgSettings" };
+    const sub = [page, ...rest].filter((p): p is string => Boolean(p)).map((p) => decodeURIComponent(p)).join("/");
+    return sub ? { view: "orgSettings", page: view, sub } : { view: "orgSettings", page: view };
+  }
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return { view: "inbox" };
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
@@ -45,7 +50,9 @@ export function formatPlace(place: Place | null): string {
   if (!place) return "";
   switch (place.view) {
     case "orgSettings":
-      return place.page ? `#/org/settings/${place.page}` : "#/org/settings";
+      return place.page
+        ? `#/org/settings/${place.page}${place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`
+        : "#/org/settings";
     case "mySettings":
       return "#/me/settings";
     case "inbox":

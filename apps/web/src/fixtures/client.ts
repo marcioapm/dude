@@ -17,7 +17,7 @@ import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, R
 import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type ReviewerCandidate, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -94,7 +94,7 @@ export class FixtureClient extends ApiClient {
     this.#servers = serversFor(scenario);
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
-    this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
+    this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
     this.#task = taskFor(scenario);
     this.#events = eventsFor(scenario);
     const as = localStorage.getItem("dude.fixtures.run");
@@ -201,8 +201,22 @@ export class FixtureClient extends ApiClient {
   override machineSizes() {
     return Promise.resolve({ sizes: MACHINE_SIZES, canEdit: true });
   }
+  // The image library is empty in the fixtures: the real backend's browser
+  // tests show it full. Builds are off (no dude layer), as on a dude without one.
+  override imageChoices() {
+    return Promise.resolve({ images: [], defaultImageId: null });
+  }
+  override images() {
+    return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536, lastSeenAt: null, offline: false }, canEdit: true });
+  }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
+  }
+  override modelTiers() {
+    return Promise.resolve({ tiers: MODEL_TIERS, canEdit: true, upgrade: [] });
+  }
+  override proxyModels() {
+    return Promise.resolve({ models: ["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"], source: "llm.example/v1", problem: null });
   }
 
   // -- servers --------------------------------------------------------------

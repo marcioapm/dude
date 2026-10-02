@@ -37,9 +37,11 @@ import {
   summarizeToolArgs,
   MachineChip,
   MachineTip,
+  TierChip,
+  TierTip,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
@@ -49,7 +51,7 @@ import {
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
-import { firstName, Icon } from "@dude/design-system";
+import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
@@ -103,6 +105,9 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunAborted,
   EventTypes.RunPaused,
   EventTypes.RunResumed,
+  // Waiting for its image, then handed to lux: "Preparing image" comes and goes.
+  EventTypes.RunImagePreparing,
+  EventTypes.RunLeaseAcquired,
 ]);
 
 export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat }: RunScreenProps) {
@@ -157,6 +162,15 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       cancelled = true;
     };
   }, [client, runId, statusEventCount, reconnects]);
+
+  // Preparing its image: the builder's progress is not on the Run's
+  // stream, so its state is read again every few seconds until it goes.
+  const preparing = Boolean(run?.preparingImage);
+  useEffect(() => {
+    if (!preparing) return;
+    const t = setInterval(() => void client.getRun(runId).then(setRun, () => undefined), 4000);
+    return () => clearInterval(t);
+  }, [client, runId, preparing]);
 
   // Who drives the task is read once per task, not on every status change,
   // and apart from the Run: failing to learn it only leaves the asks
@@ -311,8 +325,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     subtitle: (
       <>
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
-        {run.model ? <code>{run.model}</code> : null}
+        {run.model ? <RunTierChip tier={run.modelTier} model={run.model} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
+        {run.image ? <RunImageChip image={run.image} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
@@ -500,7 +515,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               revision={events.length}
               turns={conversation.turns.length}
               pinned={
-                conversation.plan.length > 0 ? (
+                run.preparingImage ? (
+                  <PreparingImage preparing={run.preparingImage} />
+                ) : conversation.plan.length > 0 ? (
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null
               }
@@ -941,6 +958,26 @@ class TerminalReader {
 }
 
 /**
+ * What the session asked the proxy for: its tier and the model the tier
+ * requested when the session started. What the proxy served is the
+ * proxy's to say. A Run from before tiers shows its model alone.
+ */
+function RunTierChip({ tier, model, role, phase }: { tier: string | null; model: string; role: AgentRole; phase: string | null }) {
+  const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
+  return (
+    <TierChip tier={tier} model={model} data-testid="run-model"
+      tooltip={
+        <TierTip title={tier ?? model}
+          aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">
+          {tier
+            ? <>The {agent}’s tier. When this session started, {tier} asked the proxy for <code>{model}</code>; changing {tier} now changes the next session, not this one.</>
+            : <>When this session started, dude asked the proxy for <code>{model}</code>.</>}
+        </TierTip>
+      } />
+  );
+}
+
+/**
  * The machine the Run ran on, as it was when it started: its size's name
  * and spec, where the size came from, and — when lux reports it — the
  * memory its container actually got.
@@ -962,6 +999,56 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
           {machine.pool ? ` Pool ${machine.pool}.` : null}
         </MachineTip>
       } />
+  );
+}
+
+/**
+ * The library image the Run got, as it was when it started: its name and
+ * version, and its digest in the tooltip. A newer version published since
+ * reaches the next Run, never this one (nor its resume).
+ */
+function RunImageChip({ image }: { image: NonNullable<RunDetail["image"]> }) {
+  return (
+    <MachineChip icon="cube" name={image.name} spec={`v${image.version}`} data-testid="run-image"
+      tooltip={
+        <MachineTip name={`${image.name} v${image.version}`}>
+          Fixed when the session started: a version published since reaches the next session, not this one. {shortDigest(image.ref)}, with
+          the dude layer {shortDigest(image.layer)}.
+        </MachineTip>
+      } />
+  );
+}
+
+/**
+ * While a Run waits for its image — the dude layer being added to it, or
+ * its first version building — before it goes to lux: what it waits on, and
+ * that no model time is spent meanwhile.
+ */
+export function PreparingImage({ preparing }: { preparing: NonNullable<RunDetail["preparingImage"]> }) {
+  const label = `${preparing.imageName}${preparing.version ? ` v${preparing.version}` : ""}`;
+  if (preparing.builderOfflineSince) {
+    const offline = builderOffline(preparing.builderOfflineSince, (iso) => formatTimestamp(iso, "datetime"));
+    return (
+      <Callout tone="attention" data-testid="preparing-image">
+        <b>Preparing image: waiting for {label}</b>, but the {offline}. The session starts once the builder is back and done;
+        if it stays offline for {BUILDER_GIVE_UP_MINUTES} minutes of the wait, this Run fails before it starts. Nothing is spent meanwhile.
+      </Callout>
+    );
+  }
+  const now = preparing.state === "running" ? "The builder is on it now" : "It is next in the builder’s line";
+  if (preparing.kind === "build") {
+    return (
+      <Callout tone="info" data-testid="preparing-image">
+        <b>Preparing image: building {label}</b> (its first version). {now}; the session starts once it is built and published.
+        Nothing is spent until then.
+      </Callout>
+    );
+  }
+  return (
+    <Callout tone="info" data-testid="preparing-image">
+      <b>Preparing image: adding the dude layer</b> to {label}. {now};
+      the session starts once it is done, usually within a minute or two. Nothing is spent until then.
+    </Callout>
   );
 }
 
