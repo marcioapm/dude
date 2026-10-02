@@ -1,6 +1,6 @@
 package delivery
 
-// Model tiers: the organization's (model_tiers, migration 068), named by
+// Model tiers: the organization's (model_tiers, migration 069), named by
 // each role's settings (tier, over the same layers as its effort). A tier
 // names the one model dude requests from the LLM proxy for it; what the
 // proxy then serves is the proxy's to say.

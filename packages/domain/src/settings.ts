@@ -109,6 +109,11 @@ export interface RoleSettings {
    * fixer's value that is the implementer's.
    */
   machineSize: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
+  /**
+   * A library image's id; null: none set for the role, so the project's
+   * image (then the organization's default base). Layered like machineSize.
+   */
+  image: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
   /** Null for a role that is always on. */
   enabled: Setting<boolean> | null;
   prompt: {
@@ -148,6 +153,7 @@ export const settingsPatchSchema = z
             effort: nullable(effortSchema),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),
             machineSize: nullable(z.string().min(1).max(100)),
+            image: nullable(z.string().min(1).max(100)),
             enabled: nullable(z.boolean()),
           })
           .strict(),

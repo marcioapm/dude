@@ -640,3 +640,181 @@ body {
   display: flex;
   gap: var(--ds-space-8);
 }
+
+/* An image field: the picker, and under it an image typed before the library. */
+.imageField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  width: min(100%, 520px);
+}
+.imageLegacy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.imageLegacy code {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+}
+
+/* Organisation › Images: layout only; the pieces are the design system's. */
+.imagesNavCount {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.imageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.imageRowText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.imageRowName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-md);
+}
+.imageRowDesc,
+.imageRowSub {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.imageRowFrom {
+  font-size: var(--ds-text-xs);
+  font-family: var(--ds-font-mono);
+  color: var(--ds-color-text-muted);
+}
+.imageHeadActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+}
+.imageEdit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--ds-space-24);
+  align-items: start;
+  margin-top: var(--ds-space-16);
+}
+.imageEditMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.imageEditSpacer {
+  flex: 1;
+}
+.layerLabel {
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--ds-color-accent-text);
+}
+.layerNote {
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.lintBad {
+  color: var(--ds-tone-danger-fg);
+}
+.lintOk {
+  color: var(--ds-tone-success-fg);
+}
+.imageSaveBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.imageNote {
+  flex: 1;
+  min-width: 220px;
+}
+.draftMark {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-attention-fg);
+}
+.imageSaveHint {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  max-width: var(--ds-measure-message);
+}
+.imageEditAside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.imageEditAside h3 {
+  margin: var(--ds-space-8) 0 0;
+}
+.imageAsideText {
+  margin: 0;
+}
+.imageAsideList {
+  margin: 0;
+  padding-left: var(--ds-space-16);
+}
+.imageFacts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin: 0;
+}
+.imageFacts dt {
+  color: var(--ds-color-text-muted);
+}
+.imageFacts dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.republishList {
+  margin: 0;
+  padding-left: var(--ds-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.buildFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-24);
+  margin: var(--ds-space-16) 0;
+}
+.buildFacts dt {
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-primary);
+}
+.buildFacts dd {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+@media (max-width: 900px) {
+  .imageEdit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .hideNarrow {
+    display: none;
+  }
+}

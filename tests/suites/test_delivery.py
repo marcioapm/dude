@@ -27,7 +27,7 @@ def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: A
     import os
 
     project = client.create_project(
-        name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
+        name="Notes", slug=f"notes-{os.urandom(3).hex()}",
         agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
     )
     task = client.create_task(project["id"], "Write up the options")

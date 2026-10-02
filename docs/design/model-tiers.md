@@ -8,7 +8,7 @@ kept, chosen, sent to the agent and shown.
 
 - **Tiers are the organisation's.** Each is `{id, name, description,
   model, position}` with who changed it and when (`model_tiers`, migration
-  068). Everyone in the organisation reads them; only its admins add,
+  069). Everyone in the organisation reads them; only its admins add,
   change, reorder and remove them. There is no tier of a project's own,
   and no project or role names a model instead.
 - **Bounds.** A name is unique in its organisation whatever its case, at
@@ -105,7 +105,7 @@ The orchestrator holds the proxy's key; the backend never does.
 
 ## Upgrade
 
-Migration 068 gave the organisations there before it the three tiers. Each
+Migration 069 gave the organisations there before it the three tiers. Each
 tier asks for the model most of its roles already named, the image
 provider's prefix taken off (a tie goes to the first role in its order;
 none, no model). Every organisation role names its tier and no model. A

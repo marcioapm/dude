@@ -254,13 +254,18 @@ def lux_stamp(value: str | None):
 # ---------------------------------------------------------------------------
 
 
-def sign_in(page, web_url: str, api_key: str) -> None:
+def sign_in(page, web_url: str, api_key: str, at: str = "") -> None:
     """Sign the web app in with a key, from a clean slate.
 
     The key is stored before the app's first script runs, once per tab: the
     app first asks /v1/me with no key (for a Cloudflare Access session), and
     that expected 401 would count as a console error in every test. The key
     prompt's own path is covered by the sign-in tests.
+
+    `at` (a "#/..." place) opens the first document there. With nothing
+    named, the app opens the first project's board once the tree loads,
+    and that replaces any place a test navigates to before it has: a test
+    that starts on a given page names it here.
     """
     import json
     import uuid
@@ -277,7 +282,7 @@ def sign_in(page, web_url: str, api_key: str) -> None:
           localStorage.setItem("dude.apiKey", key);
         })(%s, %s)""" % (json.dumps(api_key), json.dumps(uuid.uuid4().hex)),
     )
-    page.goto(web_url)
+    page.goto(web_url + at)
     expect(page.get_by_test_id("shell")).to_be_visible()
 
 
