@@ -10,6 +10,10 @@
 -- is that span; the time in review is the task's review spans clipped to
 -- it; the waits on people are those on the attempt's Runs' questions and
 -- requests.
+--
+-- A task's conductor (role conductor, no phase) is the task's, not an
+-- attempt's: it is counted in the attempt its Run names, but neither its
+-- creation nor the next attempt's is where an attempt begins.
 CREATE FUNCTION attempt_metrics(p_task text, p_attempt integer)
 RETURNS TABLE (lead_seconds double precision, active_seconds double precision,
                human_wait_seconds double precision, review_seconds double precision,
@@ -18,7 +22,7 @@ RETURNS TABLE (lead_seconds double precision, active_seconds double precision,
 LANGUAGE sql STABLE AS $$
   WITH t AS (SELECT * FROM tasks WHERE id = p_task),
   mine AS (SELECT * FROM runs WHERE task_id = p_task AND kind = 'agent' AND attempt = p_attempt),
-  began AS (SELECT min(created_at) AS at FROM mine),
+  began AS (SELECT min(created_at) AS at FROM mine WHERE role IS DISTINCT FROM 'conductor' OR phase IS NOT NULL),
   done_at AS (
     SELECT max(e.occurred_at) AS at FROM events e
     WHERE e.task_id = p_task AND e.event_type = 'task.status_changed'
@@ -27,7 +31,8 @@ LANGUAGE sql STABLE AS $$
       AND (SELECT status FROM t) IN ('done', 'aborted', 'failed')),
   win AS (
     SELECT (SELECT at FROM began) AS from_at,
-           COALESCE((SELECT min(created_at) FROM runs WHERE task_id = p_task AND kind = 'agent' AND attempt > p_attempt),
+           COALESCE((SELECT min(created_at) FROM runs WHERE task_id = p_task AND kind = 'agent' AND attempt > p_attempt
+                       AND (role IS DISTINCT FROM 'conductor' OR phase IS NOT NULL)),
                     (SELECT at FROM done_at), now()) AS to_at),
   rm AS (SELECT m.* FROM mine r CROSS JOIN LATERAL run_metrics(r.id) m),
   waits AS (
