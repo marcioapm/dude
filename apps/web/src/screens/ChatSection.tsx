@@ -61,10 +61,10 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   }, [client, task.id, version]);
   const conductorCost = conductorId ? runCosts.get(conductorId) ?? null : null;
 
-  const line = taskHistory(task, findings, pullRequests, costUsd, (usd) => formatUsd(usd));
+  const line = taskHistory(task, findings, pullRequests, costUsd, formatUsd);
   const lineKey = [line.lead, ...line.steps, "|", ...line.facts].join("\u0000");
   const head = useMemo(() => (
-    <TaskHistory data-testid="chat-history" lead={line.lead} steps={line.steps} facts={line.facts} icon="zap" />
+    <TaskHistory data-testid="chat-history" lead={line.lead} steps={line.steps} facts={line.facts} />
   ), [lineKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the line, by its words
 
   const send = useMemo(() => async (text: string) => {

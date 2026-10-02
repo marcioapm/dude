@@ -66,7 +66,6 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    */
   readonly landsHint?: ReactNode;
   /**
-  /**
    * Chat only: who it goes to and on what terms, where `sentAs` would be —
    * "To **Conductor** · read-only".
    */

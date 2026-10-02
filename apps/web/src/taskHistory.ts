@@ -4,7 +4,7 @@
  * (its Runs, findings and pull requests, and its cost), nothing new.
  */
 
-import { TERMINAL_RUN_STATUSES, isConductor, type Finding, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
+import { TERMINAL_RUN_STATUSES, type Finding, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
 
 export interface TaskHistoryLine {
   lead: string;
@@ -22,9 +22,6 @@ const DOER: Record<string, string> = {
   test: "tester",
 };
 
-/** A finding is settled once it is not open. */
-const SETTLED: ReadonlySet<Finding["status"]> = new Set(["resolved", "accepted", "superseded"]);
-
 /**
  * The line: the latest attempt's phases in order, a fan-out of one phase
  * (reviewers in parallel) folded into "reviewers ×3", each pull request,
@@ -32,7 +29,7 @@ const SETTLED: ReadonlySet<Finding["status"]> = new Set(["resolved", "accepted",
  */
 export function taskHistory(task: { status: TaskStatus; runs: readonly Run[] }, findings: readonly Finding[],
   pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string): TaskHistoryLine {
-  const phases = task.runs.filter((r) => r.phase && !isConductor(r));
+  const phases = task.runs.filter((r) => r.phase);
   const attempt = Math.max(0, ...phases.map((r) => r.attempt));
   const ran = phases.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
@@ -53,7 +50,7 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[] }, 
 
   const facts: string[] = [];
   if (findings.length > 0) {
-    const open = findings.filter((f) => !SETTLED.has(f.status)).length;
+    const open = findings.filter((f) => f.status === "open").length;
     const n = `${findings.length} finding${findings.length === 1 ? "" : "s"}`;
     facts.push(open === 0 ? `${n}, all settled` : `${n}, ${open} open`);
   }
