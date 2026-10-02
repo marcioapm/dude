@@ -84,7 +84,8 @@ def test_a_steers_image_reaches_lux_as_uploaded(env, client: ApiClient, forge_pr
     image = res.json()
     assert image["width"] == 1200 and image["original"]["width"] == 2400
 
-    # Another organisation cannot read it, nor send it.
+    # Another organisation cannot read it (sending it is refused in
+    # orchestrator/images_test.go, TestASteerRefusesImagesThatAreNotItsTasksToSend).
     other = ApiClient(env.control_plane_url, second_org["api_key"])
     assert other.get(f"/v1/attachments/{image['id']}").status_code == 404
     assert client.get(f"/v1/attachments/{image['id']}").content == delivered
@@ -98,7 +99,7 @@ def test_a_steers_image_reaches_lux_as_uploaded(env, client: ApiClient, forge_pr
 
     # Sent once: it is the steer's now.
     again = client.post(f"/v1/runs/{run['id']}/steer", {"text": "again", "attachmentIds": [image["id"]]})
-    assert again.status_code == 400 and "already sent" in again.json()["error"]["message"]
+    assert again.status_code == 400 and again.json()["error"]["message"] == f"image {image['id']} was already sent"
     assert client.delete(f"/v1/attachments/{image['id']}").status_code == 409
 
 
@@ -297,6 +298,13 @@ def test_a_failed_image_steer_keeps_its_image_with_retry(
     expect(turn.get_by_role("button", name="Retry")).to_be_visible()
     expect(turn.get_by_test_id("message-image").locator("img")).to_be_visible(timeout=20_000)
     _shoot(page, "6-failed")
+    # Retry sends the same words again, and the image with them.
+    turn.get_by_role("button", name="Retry").click()
+    retried = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.steered"
+                                  and e["payload"].get("supersedes")], timeout=15, message="Retry sent nothing")
+    luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get(retried[0]["payload"]["directiveId"]),
+                       timeout=30, message="lux never got the image with the retry")
+    assert [a["name"] for a in luxed] == ["console.png"]
     # The 404 of the object read before it was put back is the only error.
     assert all("404" in e for e in console_errors), console_errors
 
