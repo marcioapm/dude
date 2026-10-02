@@ -171,3 +171,95 @@ func TestAnAnswerCarriesItsImagesToTheAgent(t *testing.T) {
 		t.Errorf("question.answered does not carry the image")
 	}
 }
+
+// hangingRun delivers a task whose implementer runs until stopped, and
+// returns the task and its Run.
+func (w *world) hangingRun() (task, run string) {
+	w.t.Helper()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	task = w.task()
+	w.deliver(task)
+	w.until("the implementer to run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, task) == 1
+	})
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, task).Scan(&run)
+	return task, run
+}
+
+// errorMessage is the message of an API refusal.
+func errorMessage(body map[string]any) string {
+	e, _ := body["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	return msg
+}
+
+// Retry on a steer that was an image and no words sends the image again:
+// the retry has no words of its own, and needs none.
+func TestRetryingAnImageOnlySteerSendsItsImage(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi, runID := w.hangingRun()
+	w.upload(b, "att_only", wi, "only.png", screenshot)
+	// Gone from storage the first time: the steer fails.
+	delete(b, "attachments/att_only")
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "attachmentIds": []string{"att_only"}})
+	if status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	first, _ := body["id"].(string)
+	w.until("the steer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, first) == 1
+	})
+	b["attachments/att_only"] = screenshot
+
+	status, body = w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "supersedes": first})
+	if status != 201 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	retry, _ := body["id"].(string)
+	w.until("lux to have the image", func() bool { return len(w.lux.Attachments(w.lux.Runs()[0].ID)[retry]) == 1 })
+	if got := w.lux.Attachments(w.lux.Runs()[0].ID)[retry]; got[0].Name != "only.png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Errorf("the retry carried %+v", got)
+	}
+
+	// Nothing to repeat and nothing new: refused.
+	for _, c := range []map[string]any{{"text": ""}, {"text": " ", "supersedes": "dir_nowhere"}} {
+		if status, body := w.call("/internal/runs/"+runID+"/steer", c); status != 400 || errorMessage(body) != "text or an image is required" {
+			t.Errorf("%v: %d %v", c, status, body)
+		}
+	}
+}
+
+// A message sent again (the same words, superseding it) carries the
+// images it had; new images with it would be attached and never sent, so
+// the request is refused before anything is queued.
+func TestASteerSentAgainCannotBringNewImages(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi, runID := w.hangingRun()
+	w.upload(b, "att_new", wi, "new.png", screenshot)
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at the header"})
+	if status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	first, _ := body["id"].(string)
+	w.until("the steer to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, first) == 1
+	})
+	status, body = w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at the header", "supersedes": first,
+		"interrupt": true, "attachmentIds": []string{"att_new"}})
+	if want := "a message sent again carries the images it had: send new images in a new message"; status != 400 || errorMessage(body) != want {
+		t.Fatalf("%d %v, want 400 %q", status, body, want)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 1 {
+		t.Errorf("the refused request queued a directive: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_new' AND attached_at IS NULL`); n != 1 {
+		t.Error("the refused request attached the image")
+	}
+	// New words with new images are a new message, and go.
+	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "and this", "supersedes": first,
+		"attachmentIds": []string{"att_new"}}); status != 201 {
+		t.Fatalf("new words: %d %v", status, body)
+	}
+}
