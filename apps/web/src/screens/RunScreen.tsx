@@ -235,15 +235,17 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
    * Run an intervention. A conflict (409) means the Run moved on while
    * you were deciding — usually because someone else acted: that is a
    * calm notice naming them, not an error, and it clears when the Run's
-   * state catches up. Anything else is a problem, said plainly.
+   * state catches up. Anything else is a problem, said plainly. Resolves
+   * whether it went: a composer keeps the words of one that did not.
    */
   const intervene = useCallback(
-    async (action: () => Promise<unknown>, label: string) => {
+    async (action: () => Promise<unknown>, label: string): Promise<boolean> => {
       setBusy(true);
       setProblem(null);
       setNotice(null);
       try {
         await action();
+        return true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           // The Run moved on: read where it is now, and who moved it —
@@ -260,6 +262,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         } else {
           setProblem(err instanceof ApiError ? `Could not ${label}: ${err.message}` : `Could not ${label}.`);
         }
+        return false;
       } finally {
         setBusy(false);
       }

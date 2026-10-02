@@ -38,7 +38,13 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   readonly value?: string | undefined;
   readonly defaultValue?: string | undefined;
   readonly onValueChange?: ((value: string) => void) | undefined;
-  readonly onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
+  /**
+   * Sends it. The text is cleared only once the submission is confirmed:
+   * resolving `false`, or rejecting, leaves the words in the composer to
+   * send again. Showing why is the caller's (a rejection is caught here,
+   * never left unhandled).
+   */
+  readonly onSubmit: (submission: ComposerSubmission) => void | boolean | Promise<void | boolean>;
   /** Extra controls at the left of the action row (attach, templates…). */
   readonly leading?: ReactNode;
   readonly autoFocus?: boolean | undefined;
@@ -164,12 +170,17 @@ export function ChatComposer({
         : mode === "chat" ? { mode: "chat", text: t }
         : { mode: "prompt", text: t };
     setBusy(true);
+    let sent = false;
     try {
-      await onSubmit(submission);
-      setText("");
-      setInterrupt(false);
+      sent = (await onSubmit(submission)) !== false;
+    } catch {
+      // Not sent: the words stay; the caller says why.
     } finally {
       setBusy(false);
+    }
+    if (sent) {
+      setText("");
+      setInterrupt(false);
     }
   };
 

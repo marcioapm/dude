@@ -511,7 +511,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-composer"
         title="ChatComposer"
-        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick."
+        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick. The text is cleared only once onSubmit confirms it: one that resolves false or rejects keeps the words."
       >
         <Panes mode={mode} surface>
           <Col>
@@ -530,6 +530,11 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>disabled — terminal session</Label>
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
               <ChatComposer disabled disabledReason="This session completed. Start a new run to continue." onSubmit={() => undefined} />
+            </div>
+            <Label>a send that fails — the words stay to send again</Label>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
+              <ChatComposer mode="chat" to={<>To <b>Conductor</b> · read-only</>} defaultValue="and does it retry POSTs?"
+                onSubmit={() => new Promise<boolean>((done) => setTimeout(() => done(false), 600))} />
             </div>
           </Col>
         </Panes>

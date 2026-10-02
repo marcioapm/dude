@@ -97,8 +97,10 @@ export function ChatSection({ client, task, conductorId, findings, pullRequests,
                 setProblem(null);
                 try {
                   await send(text);
+                  return true;
                 } catch (err) {
                   setProblem(err instanceof ApiError ? `Could not send the message: ${err.message}` : "Could not send the message.");
+                  return false;
                 }
               }}
               sentAs={you ? firstName(you) : undefined}
