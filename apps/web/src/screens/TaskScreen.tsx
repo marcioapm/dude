@@ -55,6 +55,7 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
 import { ChatSection } from "./ChatSection.tsx";
+import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
@@ -138,6 +139,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const ledger = useRef<PersistedEvent[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
+  // The task's ended conductors' ledgers, read once while its page is open.
+  const endedLedgers = useMemo(() => new EndedLedgers(client), [client, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- one per task
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
   const people = usePeople();
@@ -402,7 +405,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
 
         <TabPanel value="chat" fill>
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
-            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} findings={findings} pullRequests={pullRequests}
+            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
+            findings={findings} pullRequests={pullRequests}
             events={events} owner={sessionTask} version={version} onSent={reload} onBack={onBack} />
         </TabPanel>
 

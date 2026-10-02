@@ -611,6 +611,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const turn: HumanTurn = {
           ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
           directiveId,
+          // A message handed on from an earlier conductor keeps its images.
+          attachments: attachmentsOf(payload.attachments),
         };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
