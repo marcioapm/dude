@@ -684,9 +684,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // answerQuestion settles an open question with a person's answer, queued
 // for its agent as a steer is — which starts its next turn — quoting the
 // question it settles; and takes the task off waiting on a person: back to
-// running for a phase agent's question; for a conductor's, back to the
-// status before a conductor's wait, once nothing else waits on a person
-// (delivery.EndConductorWait), which any answer may be the last of.
+// running for a phase agent's question, unless a conductor's question raised
+// the wait; for that wait, back to the status before it, once nothing else
+// waits on a person (delivery.EndConductorWait), which any answer may be the
+// last of.
 func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runInfo, questionID, prompt, text, by string) (string, error) {
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
@@ -698,9 +699,17 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runI
 		return "", err
 	}
 	if ri.Role != delivery.RoleConductor {
-		if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
-			"a person answered the agent"); err != nil {
+		// A wait a conductor's question raised is ended only by
+		// EndConductorWait, once its last blocker settles.
+		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
+		if err != nil {
 			return "", err
+		}
+		if !owned {
+			if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
+				"a person answered the agent"); err != nil {
+				return "", err
+			}
 		}
 	}
 	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
