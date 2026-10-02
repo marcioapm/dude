@@ -613,3 +613,113 @@ body {
   display: flex;
   gap: var(--ds-space-8);
 }
+
+/* A stopped session's end strip: its actions together at the end. */
+.runEndedActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.runEndedKept {
+  color: var(--ds-color-text-muted);
+}
+
+/* Picking a stopped task back up: the choice, then what it keeps and throws away. */
+.pickUp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.pickUpEffects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  gap: var(--ds-space-6) var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+.pickUpEffects li {
+  display: contents;
+}
+.pickUpWhat {
+  color: var(--ds-color-text-secondary);
+}
+.pickUpHow {
+  color: var(--ds-color-text-muted);
+}
+.pickUpEffects li[data-how="kept"] .pickUpHow {
+  color: var(--ds-tone-success-fg);
+}
+.pickUpEffects li[data-how="gone"] .pickUpHow {
+  color: var(--ds-tone-attention-fg);
+}
+
+/* An earlier attempt under the pipeline: a muted line, or folded open. */
+.earlierAttempt {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.attemptOpen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-sunken);
+}
+.attemptHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.attemptTitle {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.attemptSpacer {
+  flex: 1;
+}
+.attemptFacts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--ds-space-6) var(--ds-space-16);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+}
+.attemptFacts dt {
+  color: var(--ds-color-text-muted);
+}
+.attemptFacts dd {
+  margin: 0;
+}
+.attemptPrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+
+/* The Sessions list, once a task has had more than one attempt: each under its head. */
+.sessionGroupHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  margin: var(--ds-space-12) var(--ds-space-12) var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ds-color-text-muted);
+}
+.sessionGroupHead span {
+  font-weight: var(--ds-weight-regular);
+  text-transform: none;
+  letter-spacing: 0;
+}

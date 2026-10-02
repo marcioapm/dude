@@ -1,5 +1,6 @@
 /**
- * Delivery stopped for a person: why, and what they may do about it — go
+ * Delivery stopped for a person: why, and what they may do about it —
+ * resume the agent that failed where it stopped (while lux keeps it), go
  * back and try the step again, accept the findings a review got stuck on,
  * take what was merged, wait on the rest, or stop. The orchestrator says
  * which fit the reason (escalation.actions); only the task's owner decides,
@@ -14,6 +15,7 @@ import { escalationWords } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
 const ACTION_LABEL: Record<EscalationAction, string> = {
+  resume: "Resume it",
   retry: "Try again",
   accept: "Accept the findings and go on",
   done: "Take what was merged",

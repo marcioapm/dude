@@ -6,7 +6,8 @@
  * `data.ts`; writes to servers change what the next read returns, so
  * Start, Stop and Preview branch move things as a backend would, if a
  * little faster. `dude.fixtures.run` in localStorage turns the task's run
- * paused, or into a branch preview (no agent), for the screens' other states.
+ * paused, or into a branch preview (no agent), or stopped — aborted, failed
+ * or started over — for the screens' other states.
  */
 
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
@@ -16,8 +17,8 @@ import { canStart, canStop } from "@dude/design-system";
 import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
 import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { ApiClient, ApiError, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 
@@ -104,8 +105,55 @@ export class FixtureClient extends ApiClient {
       // A preview has no agent: nothing of the implementer's conversation.
       if (as === "preview") this.#events = this.#events.filter((e) => e.runId !== RUN_ID || e.eventType === "run.created" || e.eventType === "run.started");
     }
+    if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
     this.#nav = navigationFor(scenario);
     ledger = (params) => this.#ledger(params);
+  }
+
+  /**
+   * `dude.fixtures.run` = aborted | failed: the implementer stopped (by Ana,
+   * or its host lost) and the task with it, kept to resume. `restarted`: and
+   * then started over — attempt 2's implementer at work, attempt 1 set aside.
+   */
+  #stop(as: "aborted" | "failed" | "restarted") {
+    const at = new Date(Date.now() - 95 * 60_000).toISOString();
+    const stopped = { ...RUN_IMPLEMENT, status: as === "failed" ? "failed" : "aborted", endedAt: at, branch: "dude/task_wc214/attempt-1",
+      error: as === "failed" ? "the agent's run ended before finishing its task: host lost" : null } as Run;
+    this.#runPatch = { status: stopped.status, endedAt: at, error: stopped.error };
+    if (as === "restarted") {
+      const next = { ...RUN_IMPLEMENT, id: "run_attempt2", attempt: 2, createdAt: new Date(Date.now() - 60_000).toISOString(),
+        startedAt: new Date(Date.now() - 60_000).toISOString(), heads: {}, branch: "dude/task_wc214/attempt-2" } as Run;
+      this.#task = { ...this.#task, status: "running", runs: [next, stopped] };
+    } else {
+      this.#task = { ...this.#task, status: as === "failed" ? "failed" : "aborted", runs: [stopped] };
+      this.#recovery = { taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1, runIds: [RUN_ID],
+        keptUntil: new Date(Date.now() + 6 * 24 * 3600_000).toISOString() };
+    }
+    const ana = { type: "human" as const, id: "u_ana", name: "Ana Ribeiro" };
+    const extra: PersistedEvent[] = [];
+    const push = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"], runId: string | null) =>
+      extra.push({ ...this.#events[0]!, cursor: 10_000 + extra.length, eventId: `evt_stop_${extra.length}`, eventType,
+        occurredAt: at, runId, actor, payload });
+    if (as === "failed") push("run.failed", { status: "failed", error: stopped.error }, { type: "system", id: "dude" }, RUN_ID);
+    else push("run.aborted", { reason: "It's rewriting the checkout's routing — that's not what we asked for." }, ana, RUN_ID);
+    if (as === "restarted") {
+      push("task.recovered", { action: "restart", attempt: 2, note: "Keep the routing as it is; split the form only." },
+        { type: "human", id: YOU, name: "Márcio Martins" }, null);
+    }
+    this.#events = [...this.#events, ...extra];
+  }
+
+  #recovery: RecoveryOptions | null = null;
+
+  override recoveryOptions(): Promise<RecoveryOptions> {
+    return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, runIds: [], keptUntil: null });
+  }
+
+  override async recover(_taskId: string, action: RecoverAction): Promise<{ action: RecoverAction }> {
+    await wait(150);
+    this.#recovery = null;
+    this.#task = { ...this.#task, status: "running" };
+    return { action };
   }
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. */

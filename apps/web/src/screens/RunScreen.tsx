@@ -40,7 +40,7 @@ import {
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
+import type { ApiClient, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import {
   PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
@@ -69,6 +69,16 @@ export interface RunScreenProps {
    * the owner alone, its key being on the page already.
    */
   task?: { owner: Person | null; key?: string | undefined } | undefined;
+  /**
+   * The work went on elsewhere: a start over set this session's attempt
+   * aside, or a new session took its step up again. Its end strip says so.
+   */
+  setAside?: "restart" | "retry" | undefined;
+  /** This session stopped and its task can be picked back up here: opens the dialog on a way. */
+  onPickUp?: ((action: RecoverAction) => void) | undefined;
+  /** It can still be resumed, and until when it is kept. */
+  resumable?: boolean | undefined;
+  keptUntil?: string | null | undefined;
 }
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
@@ -90,7 +100,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, setAside, onPickUp, resumable, keptUntil }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -421,7 +431,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null
               }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : isPreviewRun ? (
+              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
+                setAside={setAside} onPickUp={onPickUp} resumable={resumable} keptUntil={keptUntil} /> : isPreviewRun ? (
                 // A preview run has no agent to steer: its servers are the whole of it,
                 // and they are on the task's Servers tab. A task this page could not
                 // read is no place to send anyone: the way there is said in words.
@@ -749,20 +760,46 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * In place of the composer once a Run has ended — nobody would hear a
  * steer: how it ended, and the way back to its task, where what happens
  * next is decided. Why it failed is the transcript's last line, just above.
+ * One that stopped (aborted, failed) offers its task's ways back — Resume…
+ * while it is kept, and Other ways… — or, set aside, says where the work
+ * went on.
  */
-function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask?: (() => void) | undefined }) {
+function RunEnded({ run, onOpenTask, setAside, onPickUp, resumable, keptUntil }: {
+  run: RunDetail;
+  onOpenTask?: (() => void) | undefined;
+  setAside?: "restart" | "retry" | undefined;
+  onPickUp?: ((action: RecoverAction) => void) | undefined;
+  resumable?: boolean | undefined;
+  keptUntil?: string | null | undefined;
+}) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
+  const kept = keptUntil ? new Date(keptUntil).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
-      tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
+      tone={setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
-        <span>{ENDED_WORDS[outcome]}</span>
-        {/* On its task's page, the task is already here. */}
-        {!onOpenTask ? null : (
-          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
-            Back to the task
-          </Button>
-        )}
+        <span>
+          {setAside === "restart" ? "Set aside when its task was started over." : setAside === "retry" ? "Set aside: a new session took its step up again." : ENDED_WORDS[outcome]}
+          {!setAside && onPickUp ? <span className="runEndedKept"> {resumable && kept ? `Kept until ${kept}.` : "Its workspace is no longer kept."}</span> : null}
+        </span>
+        <span className="runEndedActions">
+          {!setAside && onPickUp ? (
+            <>
+              {resumable ? (
+                <Button size="sm" variant="primary" leadingIcon="play" onClick={() => onPickUp("resume")} data-testid="run-ended-resume">Resume…</Button>
+              ) : null}
+              <Button size="sm" variant="quiet" onClick={() => onPickUp("retry")} data-testid="run-ended-other">
+                {resumable ? "Other ways…" : "Pick it back up…"}
+              </Button>
+            </>
+          ) : null}
+          {/* On its task's page, the task is already here. */}
+          {!onOpenTask ? null : (
+            <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+              Back to the task
+            </Button>
+          )}
+        </span>
       </span>
     </Callout>
   );

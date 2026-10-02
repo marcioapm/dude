@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import styles from "./ChoiceList.module.css";
@@ -17,13 +17,12 @@ export interface ChoiceOption<T extends string> {
   readonly disabledReason?: ReactNode;
 }
 
-export interface ChoiceListProps<T extends string> {
+export interface ChoiceListProps<T extends string> extends Omit<HTMLAttributes<HTMLDivElement>, "onChange" | "role"> {
   readonly options: ReadonlyArray<ChoiceOption<T>>;
   readonly value: T;
   readonly onChange: (value: T) => void;
   /** Names the group for a screen reader: "How to pick it back up". */
   readonly label: string;
-  readonly className?: string | undefined;
 }
 
 /**
@@ -34,7 +33,7 @@ export interface ChoiceListProps<T extends string> {
  * why. For two or three views of one thing use `Segmented`; for a value
  * from a list, `Select`.
  */
-export function ChoiceList<T extends string>({ options, value, onChange, label, className }: ChoiceListProps<T>) {
+export function ChoiceList<T extends string>({ options, value, onChange, label, className, ...rest }: ChoiceListProps<T>) {
   const refs = useRef(new Map<T, HTMLButtonElement>());
   const enabled = options.filter((o) => !o.disabledReason);
   function move(e: KeyboardEvent<HTMLButtonElement>, from: T): void {
@@ -50,7 +49,7 @@ export function ChoiceList<T extends string>({ options, value, onChange, label, 
   // The chosen option is the tab stop; with none chosen that can be, the first that can.
   const stop = enabled.some((o) => o.value === value) ? value : enabled[0]?.value;
   return (
-    <div role="radiogroup" aria-label={label} className={cx(styles["list"], className)}>
+    <div role="radiogroup" aria-label={label} className={cx(styles["list"], className)} {...rest}>
       {options.map((o) => {
         const chosen = o.value === value;
         const disabled = Boolean(o.disabledReason);
