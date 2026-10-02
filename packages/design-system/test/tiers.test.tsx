@@ -26,6 +26,16 @@ async function mount(node: React.ReactNode) {
   await act(async () => root!.render(node));
 }
 
+// Waits until `find` returns something, as the web app's screen tests do (apps/web/test/dom.ts).
+async function until<T>(find: () => T | null | undefined, what: string, tries = 40): Promise<T> {
+  for (let i = 0; i < tries; i++) {
+    await act(async () => void (await new Promise((r) => setTimeout(r, 25))));
+    const found = find();
+    if (found) return found;
+  }
+  throw new Error(`never found: ${what}`);
+}
+
 describe("NameChips", () => {
   function Picker() {
     const [value, setValue] = useState("b");
@@ -48,8 +58,8 @@ describe("TierChip", () => {
     const chip = host!.querySelector<HTMLButtonElement>('[data-testid="chip"]')!;
     expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-opus-5-5");
     await act(async () => chip.focus());
-    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
-    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("What dude asked for");
+    const tip = await until(() => document.querySelector("[role=tooltip]"), "the tooltip");
+    expect(tip.textContent).toContain("What dude asked for");
   });
 
   test("with no tier, the model alone", async () => {

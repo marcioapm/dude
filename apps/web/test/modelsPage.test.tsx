@@ -51,10 +51,22 @@ async function page(client = new TestingClient("a"), tiers = TIERS) {
 }
 
 async function menuItem(container: HTMLElement, tier: string, label: string) {
-  await press(container.querySelector<HTMLButtonElement>(`[aria-label="Actions for ${tier}"]`)!);
+  await press(button(container, `Actions for ${tier}`)!);
   const item = await until(() => [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((i) => i.textContent?.includes(label)), label);
   await click(item);
   return until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+}
+
+/** A button by its accessible name: its aria-label, else its text. */
+function button(within: ParentNode, name: string): HTMLButtonElement | undefined {
+  return [...within.querySelectorAll<HTMLButtonElement>("button, [role=button]")]
+    .find((b) => (b.getAttribute("aria-label") ?? b.textContent?.trim()) === name);
+}
+
+/** A form control by the text of the <label> that names it. */
+function byLabel<T extends HTMLElement>(within: ParentNode, text: string): T | null {
+  const label = [...within.querySelectorAll<HTMLLabelElement>("label")].find((l) => l.textContent?.trim() === text);
+  return label?.htmlFor ? (document.getElementById(label.htmlFor) as T | null) : null;
 }
 
 describe("the Models page", () => {
@@ -72,7 +84,7 @@ describe("the Models page", () => {
   test("a member sees no Add tier and no row menu", async () => {
     const container = await page(new TestingClient("a"), { ...TIERS, canEdit: false });
     expect(container.querySelector("[data-testid=add-model-tier]")).toBeNull();
-    expect(container.querySelector('[aria-label="Actions for Coder"]')).toBeNull();
+    expect(button(container, "Actions for Coder")).toBeUndefined();
   });
 
   test("the edit dialog offers the proxy's names; one it does not list warns, and Save reads Save anyway", async () => {
@@ -82,19 +94,21 @@ describe("the Models page", () => {
     const chips = [...dialog.querySelectorAll<HTMLButtonElement>("[aria-label='Names the proxy knows'] button")];
     expect(chips.map((c) => c.textContent)).toEqual(["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"]);
     expect(chips[0]!.getAttribute("aria-pressed")).toBe("true");
-    const save = dialog.querySelector<HTMLButtonElement>("[data-testid=model-tier-save]")!;
-    expect(save.textContent).toBe("Save");
-    const input = dialog.querySelector<HTMLInputElement>("[data-testid=model-tier-model]")!;
+    expect(button(dialog, "Save")).toBeDefined();
+    expect(button(dialog, "Save anyway")).toBeUndefined();
+    const input = byLabel<HTMLInputElement>(dialog, "Model to request")!;
+    expect(input.value).toBe("claude-opus-5-5");
     await act(async () => {
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       set.call(input, "gemini-3.8-pro");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(dialog.querySelector("[data-testid=model-tier-unlisted]")?.textContent).toContain("The proxy doesn’t list gemini-3.8-pro.");
-    expect(save.textContent).toBe("Save anyway");
+    expect(button(dialog, "Save anyway")).toBeDefined();
+    expect(button(dialog, "Save")).toBeUndefined();
     await click(chips[2]!);
     expect(dialog.querySelector("[data-testid=model-tier-unlisted]")).toBeNull();
-    expect(save.textContent).toBe("Save");
+    expect(button(dialog, "Save")).toBeDefined();
   });
 
   test("Send a test message tries the tier's model and shows each effort's answer", async () => {
