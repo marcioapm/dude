@@ -236,13 +236,18 @@ describe("the Chat tab", () => {
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")?.disabled).toBe(false);
   });
 
-  test("a parked conductor still takes a message: the composer is open, and it goes to the task's Chat", async () => {
-    const client = new ChatClient({ status: "paused", dudePause: "conductor" }, conductorEvents());
+  test("a parked conductor still takes a message: the composer is open, and Enter sends it to the task's Chat", async () => {
+    // Its ledger ends at the park: nothing has woken it.
+    const parkedAt = conductorEvents().findIndex((e) => e.eventType === "run.parked");
+    const client = new ChatClient({ status: "paused", dudePause: "conductor" }, conductorEvents().slice(0, parkedAt + 1));
     const page = await chatPage(client);
     await until(() => page.querySelector("[data-testid=chat-briefing]"), "the briefing");
     const composer = page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")!;
     expect(composer.disabled).toBe(false);
     expect(composer.placeholder).toBe("Ask about this task…");
+    await write(page, "and the tests?");
+    expect(client.sent).toEqual([`${TASK_ID}:and the tests?`]);
+    expect(composer.value).toBe("");
   });
 
   test("a conductor asking: its question card, and the composer answers it", async () => {
