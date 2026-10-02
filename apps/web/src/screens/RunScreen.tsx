@@ -255,7 +255,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const tray = useImageTray(client, run?.taskId, limits);
   const images = useSentImages(client);
   // The images of one message, open in the viewer.
-  const [viewing, setViewing] = useState<{ turn: HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string }; index: number } | null>(null);
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const send = useCallback(
     async (submission: ComposerSubmission) => {
       const ok = await (submission.mode === "answer"
@@ -660,8 +660,13 @@ function clock(at: string): string {
 /** The lands hint as the drop overlay says it: "It reads them after the current tool." */
 function dropWhen(hint: string | null): string {
   if (!hint) return "It reads them at its next step.";
-  const rest = hint.replace(/^Lands /, "");
-  return `It reads them ${rest}.`;
+  return `It reads them ${hint.replace(/^Lands /, "")}.`;
+}
+
+/** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
+function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
+  if (turn.attachments.length === 0 || !shown) return {};
+  return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
 }
 
 /** "Márcio · steer to Implement · 15:52": who sent a message's images, to whom, when. */
@@ -734,9 +739,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       // Written by the factory, not a person: the avatar and name say so.
       return (
         <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at}
-          {...(turn.attachments.length > 0 && shown
-            ? { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> }
-            : {})} />
+          {...turnImages(turn, shown)} />
       );
     case "message":
       return (
@@ -787,9 +790,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
           person={person}
           name={name ?? "Someone"}
-          {...(turn.attachments.length > 0 && shown
-            ? { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> }
-            : {})}
+          {...turnImages(turn, shown)}
         />
       );
     }
