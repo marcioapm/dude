@@ -14,11 +14,48 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 GALLERY_DIST = REPO_ROOT / "packages" / "design-system" / "dist" / "gallery"
+# What the gallery is built from: the design system, the domain package it
+# imports, and what resolves and compiles them. A build older than any of
+# these is stale.
+GALLERY_SOURCES = (
+    REPO_ROOT / "packages" / "design-system" / "src",
+    REPO_ROOT / "packages" / "design-system" / "vite.config.ts",
+    REPO_ROOT / "packages" / "design-system" / "package.json",
+    REPO_ROOT / "packages" / "design-system" / "tsconfig.json",
+    REPO_ROOT / "packages" / "domain" / "src",
+    REPO_ROOT / "packages" / "domain" / "package.json",
+    REPO_ROOT / "package.json",
+    REPO_ROOT / "tsconfig.json",
+    REPO_ROOT / "bun.lock",
+)
+
+
+def _newest(path: Path) -> float:
+    """The latest change under path. Directories count: deleting or renaming
+    a file changes its directory and nothing else."""
+    newest = path.stat().st_mtime
+    if path.is_dir():
+        for entry in path.rglob("*"):
+            newest = max(newest, entry.stat().st_mtime)
+    return newest
+
+
+def gallery_is_stale(dist: Path = GALLERY_DIST, sources: tuple[Path, ...] = GALLERY_SOURCES) -> bool:
+    """No build yet, or a source changed since it was made."""
+    built = dist / "index.html"
+    if not built.exists():
+        return True
+    return max((_newest(s) for s in sources if s.exists()), default=0.0) > built.stat().st_mtime
 
 
 def build_gallery(force: bool = False) -> Path:
-    """Build the design-system gallery that the UI tests drive."""
-    if GALLERY_DIST.exists() and not force:
+    """Build the design-system gallery that the UI tests drive.
+
+    Reused only while it is newer than everything it is built from: a gallery
+    built before a section was added fails that section's tests for no reason
+    in the code.
+    """
+    if not force and not gallery_is_stale():
         return GALLERY_DIST
 
     print("building design-system gallery...")
