@@ -63,6 +63,8 @@ CREATE TABLE run_resumes (
 );
 
 CREATE INDEX run_resumes_org_idx ON run_resumes (organization_id, created_at DESC);
+-- The orchestrator's startup pass over resumes never timed, of any Run.
+CREATE INDEX run_resumes_untimed_idx ON run_resumes (created_at) WHERE timed_at IS NULL;
 
 ALTER TABLE run_resumes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_resumes FORCE ROW LEVEL SECURITY;
@@ -70,3 +72,4 @@ CREATE POLICY tenant_isolation ON run_resumes
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON run_resumes TO dude_app;
+GRANT SELECT ON run_resumes TO dude_sweeper;

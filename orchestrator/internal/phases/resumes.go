@@ -305,6 +305,50 @@ func (s *Syncer) timeResumesLater(r phaseRun) {
 	}()
 }
 
+// The startup pass's bounds: resumes this recent, this many at most.
+const (
+	untimedWithin = 7 * 24 * time.Hour
+	untimedLimit  = 500
+)
+
+// TimeUntimedResumes writes run.resume.timed for every recent resume whose
+// first output is in and that was never timed, whatever its Run's status:
+// a Run that ended while its follow-up was pending, and whose process then
+// stopped, has nothing else left to time it. Once, at startup; best
+// effort, a failure is logged. Each goes through timeResumes, which
+// publishes each resume once. Returns how many it went through.
+func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
+	type untimed struct {
+		run   phaseRun
+		epoch int
+	}
+	var due []untimed
+	if err := s.DB.InSystem(ctx, "resume-timing", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, rr.epoch
+			FROM run_resumes rr JOIN runs r ON r.id = rr.run_id
+			WHERE rr.timed_at IS NULL AND rr.first_output_at IS NOT NULL
+			  AND rr.created_at > now() - make_interval(secs => $1)
+			ORDER BY rr.created_at LIMIT $2`, untimedWithin.Seconds(), untimedLimit)
+		if err != nil {
+			return err
+		}
+		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (u untimed, err error) {
+			err = row.Scan(&u.run.ID, &u.run.Org, &u.run.ProjectID, &u.run.TaskID, &u.epoch)
+			return u, err
+		})
+		return err
+	}); err != nil {
+		s.logger().Warn("finding resumes never timed failed", "error", err)
+		return 0
+	}
+	for _, u := range due {
+		if err := s.timeResumes(ctx, u.run, u.epoch); err != nil {
+			s.logger().Warn("recording a resume's timing failed", "run", u.run.ID, "epoch", u.epoch, "error", err)
+		}
+	}
+	return len(due)
+}
+
 // readPlacements reads the Run from lux and records the placements of the
 // resume into epoch.
 func (s *Syncer) readPlacements(ctx context.Context, r phaseRun, epoch int) error {

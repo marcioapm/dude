@@ -150,6 +150,15 @@ func run(log *slog.Logger) error {
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
+	// Resumes whose timing an earlier process committed but never
+	// published; in the background, so startup does not wait on it.
+	go func() {
+		pass, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		if n := syncer.TimeUntimedResumes(pass); n > 0 {
+			log.Info("timed resumes an earlier process left untimed", "resumes", n)
+		}
+	}()
 	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL, PreviewDomain: previewDomain}
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
 		Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
