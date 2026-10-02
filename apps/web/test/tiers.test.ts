@@ -44,10 +44,10 @@ describe("who uses a tier", () => {
 
 describe("a tier's mark", () => {
   test("the seeded tiers have their own; any other the sparkle", () => {
-    expect(tierMark({ name: "Thinker", position: 0 })).toEqual({ icon: "brain", tone: "info" });
-    expect(tierMark({ name: "coder", position: 1 })).toEqual({ icon: "agent", tone: "success" });
-    expect(tierMark({ name: "Fast", position: 2 })).toEqual({ icon: "zap", tone: "attention" });
-    expect(tierMark({ name: "gpt-5.6-sol", position: 3 })).toEqual({ icon: "sparkle", tone: "neutral" });
+    expect(tierMark({ name: "Thinker" })).toEqual({ icon: "brain", tone: "info" });
+    expect(tierMark({ name: "coder" })).toEqual({ icon: "agent", tone: "success" });
+    expect(tierMark({ name: "Fast" })).toEqual({ icon: "zap", tone: "attention" });
+    expect(tierMark({ name: "gpt-5.6-sol" })).toEqual({ icon: "sparkle", tone: "neutral" });
   });
 });
 
