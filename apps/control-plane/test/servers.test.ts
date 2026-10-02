@@ -129,7 +129,7 @@ describe("a project's servers", () => {
   test("start empty, with the default preview settings", async () => {
     const res = await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`);
     expect(res.status).toBe(200);
-    expect(await body(res)).toEqual({ servers: [], previews: { image: null, egress: [], idleTimeoutMinutes: 15, machineSize: null } });
+    expect(await body(res)).toEqual({ servers: [], previews: { image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, machineSize: null } });
   });
 
   test("a maintainer saves one, and everyone reads it with who changed it", async () => {
@@ -198,6 +198,8 @@ describe("a project's servers", () => {
   });
 
   test("preview settings are replaced whole, unset ones taking their defaults", async () => {
+    // A typed image from before the image library: kept as it is, never set anew.
+    await owner`UPDATE projects SET preview_settings = '{"image": "ghcr.io/acme/runner:node22"}' WHERE id = ${PROJECT}`;
     const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {
       image: "ghcr.io/acme/runner:node22",
       egress: ["registry.npmjs.org", "registry.npmjs.org", "proxy.golang.org"],
@@ -206,13 +208,15 @@ describe("a project's servers", () => {
     expect(res.status).toBe(200);
     expect(await body(res)).toEqual({
       image: "ghcr.io/acme/runner:node22",
+      imageId: null,
       egress: ["registry.npmjs.org", "proxy.golang.org"],
       idleTimeoutMinutes: 15,
       machineSize: null,
     });
     const reset = await body(await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {}));
-    expect(reset).toEqual({ image: null, egress: [], idleTimeoutMinutes: 15, machineSize: null });
+    expect(reset).toEqual({ image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, machineSize: null });
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { idleTimeoutMinutes: 0 })).status).toBe(400);
+    expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { image: "ghcr.io/acme/new:1" })).status).toBe(400);
   });
 
   test("egress lux would refuse is refused, saying why", async () => {

@@ -1,122 +1,168 @@
-import { useState } from "react";
-import { Block, Col, Label, Panes, type PaneMode } from "../Frame.tsx";
-import { ChatComposer } from "../../components/ChatComposer.tsx";
-import { ChatMessage } from "../../components/ChatMessage.tsx";
-import { AttachDropZone, ImageViewer, MessageImages, type ComposerAttachment, type SentImage } from "../../components/ImageAttachments.tsx";
-import { at } from "../fixtures.tsx";
+import { useMemo, useState } from "react";
+import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
+import { CodeEditor, type CodeCompletion, type CodeDiagnostic } from "../../components/CodeEditor.tsx";
+import { ImagePicker, ImageMark, type ImageChoiceView } from "../../components/ImagePicker.tsx";
+import { BuildQueueStrip, BuildStages, ImageHistory, ImageState, type ImageHistoryVersion } from "../../components/Images.tsx";
+import { LogStream } from "../../components/LogStream.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
 
-/** A screenshot stand-in, drawn: the gallery loads nothing. */
-function shot(w: number, h: number, label: string, ink: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="Helvetica,Arial">
-<rect width="${w}" height="${h}" fill="#f6f7f9"/><rect width="${w}" height="${Math.round(h / 14)}" fill="#ffffff"/>
-<rect x="${w * 0.05}" y="${h * 0.16}" width="${w * 0.5}" height="${h * 0.72}" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
-<rect x="${w * 0.6}" y="${h * 0.16}" width="${w * 0.35}" height="${h * 0.45}" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
-<rect x="${w * 0.09}" y="${h * 0.76}" width="${w * 0.42}" height="${h * 0.07}" rx="8" fill="#2563eb"/>
-<text x="${w * 0.05}" y="${h * 0.12}" font-size="${Math.round(h / 22)}" font-weight="700" fill="${ink}">${label}</text></svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+/*
+ * The image library's pieces with made-up images; the app's Containerfile
+ * lint and completions live in @dude/domain, so the editor here marks a
+ * fixed problem and completes from a fixed list.
+ */
+
+const IMAGES: ImageChoiceView[] = [
+  { id: "base", name: "acme-base", description: "Debian, Node 26, Java 25, Python 3.14, Playwright", version: 7, isDefault: true },
+  { id: "pnpm", name: "node-pnpm", description: "pnpm and turbo, for the dashboard", version: 4, status: { kind: "building", version: 5 } },
+  { id: "uv", name: "python-uv", description: "uv and the Postgres client", version: 2, status: { kind: "waiting", version: 3 } },
+  { id: "rails", name: "rails-legacy", description: "Ruby 3.1 and Node 18, for the old billing app", version: 3, status: { kind: "failed", version: 4 } },
+  { id: "old", name: "old-runner", description: "Before the library", version: 1, archived: true },
+];
+
+const SOURCE = `# pnpm and turbo for the dashboard's agents and previews.
+FROM image:acme-base
+ARG PNPM_VERSION=9.15.0
+RUN npm install -g pnpm@\${PNPM_VERSION} turbo@2 \\
+ && pnpm config set store-dir /var/cache/pnpm --global
+ENV PNPM_HOME=/usr/local/share/pnpm CI=1
+WORKDIR /workspace
+COPY package.json /workspace/
+`;
+
+const COMPLETIONS: CodeCompletion[] = [
+  { label: "image:acme-base", detail: "Acme's default base · v7", type: "image", boost: 2 },
+  { label: "image:node-pnpm", detail: "Acme · v4", type: "image" },
+  { label: "image:python-uv", detail: "Acme · v2", type: "image" },
+  { label: "debian:bookworm-slim", detail: "registry", type: "image" },
+  { label: "FROM", detail: "the image this one is built on", type: "keyword" },
+  { label: "RUN", detail: "run a command while building", type: "keyword" },
+];
+
+function EditorDemo() {
+  const [text, setText] = useState(SOURCE);
+  const diagnostics = useMemo<CodeDiagnostic[]>(() => {
+    const lines = text.split("\n");
+    const at = lines.findIndex((l) => /^\s*COPY\s+(?!--from)/i.test(l));
+    return at < 0 ? [] : [{ severity: "error", line: at + 1, from: 0, to: lines[at]!.length, message: "An image has no build files: COPY only --from a stage or another image" }];
+  }, [text]);
+  return (
+    <CodeEditor
+      aria-label="Containerfile"
+      language="dockerfile"
+      value={text}
+      onChange={setText}
+      diagnostics={diagnostics}
+      complete={({ word }) => COMPLETIONS.filter((c) => c.label.toLowerCase().startsWith(word.toLowerCase()))}
+      minLines={10}
+      header={
+        <>
+          <span className="ds-mono">Containerfile</span>
+          <Badge size="sm" tone="attention">draft v5</Badge>
+          <span>from v4</span>
+          <span style={{ flex: 1 }} />
+          <span>⌘F search · ⌘Z undo · Ctrl-Space complete</span>
+        </>
+      }
+      after={
+        <>
+          <b style={{ fontFamily: "var(--ds-font-sans)", fontSize: "var(--ds-text-2xs)", letterSpacing: "0.06em" }}>DUDE LAYER</b>
+          <span style={{ fontFamily: "var(--ds-font-sans)", fontSize: "var(--ds-text-xs)" }}> · added last, from the running release · read-only</span>
+          {"\nCOPY --from=dude-layer@sha256:51b9… /rootfs/ /   # dude CLI, OpenCode, its config\nUSER agent"}
+        </>
+      }
+      footer={
+        <>
+          <span>{text.split("\n").length} lines</span>
+          <span style={{ flex: 1 }} />
+          {diagnostics.length ? <span style={{ color: "var(--ds-tone-danger-fg)" }}>✕ {diagnostics.length} won't build</span> : <span>Builds</span>}
+        </>
+      }
+    />
+  );
 }
 
-const CHECKOUT = shot(1200, 760, "Payment", "#111111");
-const SUMMARY = shot(900, 900, "Summary v3", "#4c1d95");
-const CONSOLE = shot(1000, 560, "Console", "#b91c1c");
-const PHONE = shot(390, 844, "9:41", "#111111");
-
-const SENT: SentImage[] = [
-  { id: "att_1", name: "checkout-yearly.png", src: CHECKOUT,
-    delivered: { width: 1200, height: 760, contentType: "image/png", bytes: 412 * 1024 },
-    original: { width: 2400, height: 1520, contentType: "image/png", bytes: 1.9 * 1024 * 1024 } },
-  { id: "att_2", name: "Summary v3.png", src: SUMMARY,
-    delivered: { width: 900, height: 900, contentType: "image/png", bytes: 188 * 1024 },
-    original: { width: 900, height: 900, contentType: "image/png", bytes: 188 * 1024 } },
-];
-
-const TRAY: ComposerAttachment[] = [
-  { id: "c1", name: "checkout-yearly.png", previewUrl: CHECKOUT, state: "ready", badge: "412 KB", attachmentId: "att_1" },
-  { id: "c2", name: "Summary v3.png", previewUrl: SUMMARY, state: "uploading", progress: 0.62 },
-];
-
-const LIMITS = (
-  <span style={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 260 }}>
-    <b>Attach images</b>
-    <span>Or paste a screenshot, or drop files on the conversation.</span>
-    <span>PNG, JPEG, WebP, GIF · up to 6 · up to 10 MB each</span>
-    <span>Large images are scaled down to 2000 px before the agent gets them. The original is kept.</span>
-  </span>
-);
-
-const frame = { border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" } as const;
-
-/** Images a person sends an agent: every state of the tray, the drop target, the transcript and the viewer. */
-export function ImagesBlock({ mode }: { readonly mode: PaneMode }) {
-  const [viewer, setViewer] = useState<number | null>(null);
-  const [tray, setTray] = useState<ComposerAttachment[]>(TRAY);
+function PickerDemo() {
+  const [value, setValue] = useState<string | null>("pnpm");
+  const [none, setNone] = useState<string | null>(null);
   return (
-    <Block
-      id="ch-images"
-      title="Images (composer, transcript, viewer)"
-      note="A person can send an agent images with a steer, an answer or a task's prompt: same tray, same rules. The paperclip sits first in the action row with the limits in its tooltip; paste and drop work too, and the drop target is the whole conversation, saying who gets them and when in the steer's own words. Chips upload in the background with a ring; Send waits for them, and Enter during an upload sends once they are up. A chip that cannot go says why in place, the warning line under the field says how many and why, and Send stays off until they are removed. Sent, a turn shows its images under its words — one large, several in a row, name · size on hover — and its receipt covers them. The viewer shows what the agent got, and from what when it was scaled. Nothing here reads, scales or uploads a file: the app does."
-    >
-      <Panes mode={mode} surface>
-        <Col>
-          <Label>tray — one uploaded, one uploading; Send waits</Label>
-          <div style={frame}>
-            <ChatComposer running canInterrupt landsHint="Lands after the current tool" defaultValue="VAT stays at €0 when I switch to yearly — see the first one."
-              attachments={tray} onAttachFiles={() => undefined} attachHint={LIMITS} onRemoveAttachment={(id) => setTray((t) => t.filter((a) => a.id !== id))}
-              onSubmit={() => undefined} />
-          </div>
-          <Label>uploaded — Send is on; a message may be images alone</Label>
-          <div style={frame}>
-            <ChatComposer running canInterrupt landsHint="Lands after the current tool" attachments={[TRAY[0]!]} onAttachFiles={() => undefined}
-              onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
-          </div>
-          <Label>cannot be sent — in place on the chip, a warning line, Send off</Label>
-          <div style={frame}>
-            <ChatComposer running canInterrupt landsHint="Lands after the current tool" defaultValue="Same thing on Safari:"
-              attachments={[
-                { id: "e0", name: "console.png", previewUrl: CONSOLE, state: "ready", badge: "74 KB", attachmentId: "att_3" },
-                { id: "e1", name: "huge.png", previewUrl: CHECKOUT, state: "error", error: "38 MB · max 10", errorDetail: "one is over 10 MB" },
-                { id: "e2", name: "spec.pdf", state: "error", error: "Not an image", errorDetail: "only PNG, JPEG, WebP and GIF can be sent" },
-              ]}
-              onAttachFiles={() => undefined} onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
-          </div>
-          <Label>answer with a screenshot</Label>
-          <div style={frame}>
-            <ChatComposer question={{ id: "q1", askedBy: "Orchestrator", text: "Does the summary card overflow on a phone?" }}
-              defaultValue="It overflows — VAT amount is cut off on the right."
-              attachments={[{ id: "p1", name: "phone.png", previewUrl: PHONE, state: "ready", badge: "96 KB", attachmentId: "att_4" }]}
-              onAttachFiles={() => undefined} onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
-          </div>
-          <Label>no storage — the paperclip is off and says why</Label>
-          <div style={frame}>
-            <ChatComposer running onAttachFiles={() => undefined} attachDisabledReason="Image storage isn't set up" onSubmit={() => undefined} />
-          </div>
-          <Label>drop target — the whole conversation; drag a file over it</Label>
-          <AttachDropZone onFiles={() => undefined}
-            detail={<>They go with your next steer to <b>Implement</b>. It reads them after the current tool.</>}>
-            <div style={{ height: 140, display: "grid", placeItems: "center", color: "var(--ds-color-text-muted)", background: "var(--ds-color-surface)" }}>
-              Drag an image from your desktop over here
-            </div>
-          </AttachDropZone>
-          <Label>in the transcript — several in a row, read; one large</Label>
-          <ChatMessage role="human" name="Márcio Martins" intent="steer" content="VAT stays at €0 when I switch to yearly — see the first one. It should match the design in the second."
-            startedAt={at(1_000_000)} deliveredAt={at(1_040_000)} read readAfter="Bash"
-            attachments={<MessageImages images={SENT} onOpen={setViewer} />} />
-          <ChatMessage role="human" name="Márcio Martins" intent="answer" inReplyTo="Does the summary card overflow on a phone?" content="It overflows."
-            startedAt={at(1_100_000)} deliveredAt={at(1_101_000)}
-            attachments={<MessageImages images={[{ id: "att_4", name: "phone.png", src: PHONE,
-              delivered: { width: 390, height: 844, contentType: "image/png", bytes: 96 * 1024 },
-              original: { width: 390, height: 844, contentType: "image/png", bytes: 96 * 1024 } }]} />} />
-          <Label>not delivered — the images stay with it, with Retry</Label>
-          <ChatMessage role="human" name="Márcio Martins" intent="steer" content="And here's the console error from Spain." startedAt={at(1_200_000)}
-            deliveredAt={null} failed="this agent cannot take images" onRetry={() => undefined}
-            attachments={<MessageImages images={[{ id: "att_3", name: "console.png", src: CONSOLE,
-              delivered: { width: 1000, height: 560, contentType: "image/png", bytes: 74 * 1024 },
-              original: { width: 1000, height: 560, contentType: "image/png", bytes: 74 * 1024 } }]} />} />
-        </Col>
-      </Panes>
-      {/* Once, outside the panes: it covers the page, whichever pane opened it. */}
-      <ImageViewer images={SENT.map((s) => ({ ...s, originalSrc: s.src }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)}
-        context="Márcio · steer to Implement · 15:52" readAt="15:52:40" onDownload={() => undefined} />
-    </Block>
+    <Col>
+      <Label>A project's runtime image</Label>
+      <ImagePicker images={IMAGES} value={value} onChange={setValue} label="Runtime image" heading="Acme's images"
+        onCreateFrom={() => {}} manage={{ label: "Manage images", onClick: () => {} }} />
+      <Label>None chosen: what that means here</Label>
+      <ImagePicker images={IMAGES} value={none} onChange={setNone} label="Tester's image" allowNone="Use Acme's"
+        noneLabel="From Acme · playwright" heading="Acme's images" />
+      <Label>Archived and still chosen</Label>
+      <ImagePicker images={IMAGES} value="old" onChange={() => {}} label="Preview image" />
+    </Col>
+  );
+}
+
+const HISTORY: ImageHistoryVersion[] = [
+  { id: "v5", number: 5, state: "building", containerfile: SOURCE.replace("COPY package.json /workspace/\n", ""), note: "Node 26 from the base; pnpm 9.15 via a build argument", author: { id: "mm", name: "Márcio Martins" }, when: "3 min ago" },
+  { id: "v4", number: 4, state: "published", containerfile: "# pnpm and turbo for the dashboard's agents and previews.\nFROM image:acme-base\nRUN npm install -g pnpm@9 turbo@2 \\\n && pnpm config set store-dir /var/cache/pnpm --global\nENV PNPM_HOME=/usr/local/share/pnpm \\\n    CI=1\nWORKDIR /workspace\n", note: "pnpm 9; PNPM_HOME for the global bin", author: { id: "ep", name: "Eli Park" }, when: "yesterday, 16:44", builtOn: "acme-base v6" },
+  { id: "v3", number: 3, state: "failed", containerfile: "FROM image:acme-base\nRUN npm install -g pnpm turbo@3\n", note: "Try turbo 3", author: { id: "bo", name: "Bo Lindqvist" }, when: "17 Sep", builtOn: "acme-base v5", error: "step 2 failed: npm ERR! notarget turbo@3" },
+  { id: "v2", number: 2, state: "superseded", containerfile: "# pnpm and turbo for the dashboard's agents and previews.\nFROM image:acme-base\nRUN npm install -g pnpm turbo@2\nENV CI=1\nWORKDIR /workspace\n", note: "Add turbo; CI=1", author: { id: "bo", name: "Bo Lindqvist" }, when: "10 Sep", builtOn: "acme-base v4" },
+  { id: "v1", number: 1, state: "superseded", containerfile: "FROM image:acme-base\nRUN npm install -g pnpm\n", note: "Rebuild on acme-base v3", author: null, when: "3 Sep", builtOn: "acme-base v3" },
+];
+
+const LOG = [
+  "build of node-pnpm v5 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64",
+  "resolve image:acme-base → v7 = 895757147740.dkr.ecr.eu-north-1.amazonaws.com/dude/custom@sha256:c41d…",
+  "STEP 1/5: FROM 895757147740.dkr.ecr.eu-north-1.amazonaws.com/dude/custom@sha256:c41d…",
+  "STEP 2/5: ARG PNPM_VERSION=9.15.0",
+  "STEP 3/5: RUN npm install -g pnpm@9.15.0 turbo@2 && pnpm config set store-dir /var/cache/pnpm --global",
+  "added 2 packages in 4s",
+].map((text, seq) => ({ seq, text }));
+
+export function ImagesGallerySection({ mode }: { readonly mode: PaneMode }) {
+  return (
+    <Section id="images" title="Image library" intro="An organisation's container images: a Containerfile editor that loads only where it is used, the picker every image field is, and a build's queue, stages and history.">
+      <Block id="i-editor" title="CodeEditor" note="CodeMirror 6, lazy: its own chunk, loaded the first time an editor renders, a skeleton of the text's lines meanwhile. Tokens colour it, so light, dark and compact follow the page. Lint marks in place and in the gutter (hover for the reason); Ctrl-Space completes; ⌘F searches. The header, the read-only part under the text (here, the dude layer) and the footer are the app's.">
+        <Panes mode={mode}>
+          <EditorDemo />
+        </Panes>
+      </Block>
+      <Block id="i-picker" title="ImagePicker" note="Every field that takes an image: a combobox over the organisation's images (name in mono, its description, the default base marked, a newer version building, waiting or failed as a badge, the published version on the right). It stores the id; there is no version to choose. ↑ ↓ Enter Esc. No match offers making an image FROM the words. An archived image is listed only while it is the one chosen.">
+        <Panes mode={mode} style={{ minHeight: 420 }}>
+          <PickerDemo />
+        </Panes>
+      </Block>
+      <Block id="i-build" title="BuildQueueStrip / BuildStages / ImageState" note="The builder's queue in a line over the list: what builds, what waits, and the limits every build has. A build's stages as cells: done, current (info tint, breathing dot), to come, failed. An image's state in a row in its tone, with a dot, a breathing one while it builds.">
+        <Panes mode={mode}>
+          <Col>
+            <BuildQueueStrip building={{ label: "node-pnpm v5", elapsed: "2m 10s" }} waiting={["python-uv v3", "playwright v8"]} onOpen={() => {}}
+              limits={["Rootless", "1.5 CPU", "1.5 GB", "One at a time"]} />
+            <BuildQueueStrip building={null} waiting={[]} limits={["Rootless", "1.5 CPU", "1.5 GB"]} />
+            <BuildQueueStrip building={null} waiting={[]} unavailable="Builds are off: this dude has no dude layer configured (DUDE_LAYER_IMAGE)." />
+            <Label>Building, then failed</Label>
+            <BuildStages stages={[
+              { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+              { id: "build", label: "Building", detail: "rootless · 1.5 CPU · 1.5 GB", state: "current" },
+              { id: "publish", label: "Pushed and published", detail: "dude/custom in ECR", state: "todo" },
+            ]} />
+            <BuildStages stages={[
+              { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+              { id: "build", label: "Building", detail: "ran out of memory (1.5 GB) at step 3", state: "failed" },
+              { id: "publish", label: "Not published", detail: "v4 is still live", state: "todo" },
+            ]} />
+            <Label>States</Label>
+            <ImageState kind="published">Published · 2h ago</ImageState>
+            <ImageState kind="building">Building v5 · 2m</ImageState>
+            <ImageState kind="waiting">Waiting · 2nd</ImageState>
+            <ImageState kind="failed">v4 failed · v3 still live</ImageState>
+            <ImageState kind="draft">Draft not built</ImageState>
+            <span style={{ display: "inline-flex", gap: 8 }}><ImageMark isDefault /><ImageMark /></span>
+            <LogStream lines={LOG} title="Build log" live maxHeight={200} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="i-history" title="ImageHistory" note="Every version, newest first, failed ones too, with who saved it, why, and what it was built on. The selected one against the one before it or against the published one, in DiffView's file. A built version that is not published can be published again at once.">
+        <Panes mode={mode}>
+          <ImageHistory versions={HISTORY} publishedId="v4" onRepublish={() => {}} onOpenBuild={() => {}} initialId="v2" />
+        </Panes>
+      </Block>
+    </Section>
   );
 }

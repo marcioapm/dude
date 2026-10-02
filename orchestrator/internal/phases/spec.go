@@ -29,6 +29,9 @@ type AgentConfig struct {
 	LLMKey string
 	// Image used when a project names none.
 	DefaultImage string
+	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
+	// "" turns the library off: a Run whose image is a library image fails.
+	Layer string
 	// Hosts every agent may reach besides its model provider. "*" turns
 	// egress filtering off.
 	Egress []string
@@ -61,6 +64,7 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 		LLMURL:       cfg.String("DUDE_LLM_URL"),
 		LLMKey:       cfg.String("DUDE_LLM_KEY"),
 		DefaultImage: cfg.String("DUDE_AGENT_IMAGE"),
+		Layer:        cfg.String("DUDE_LAYER_IMAGE"),
 		Timeout:      cfg.String("DUDE_AGENT_TIMEOUT"),
 		ToolsURL:     cfg.String("DUDE_TOOLS_URL"),
 		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),

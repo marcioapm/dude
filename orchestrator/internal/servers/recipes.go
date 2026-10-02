@@ -130,8 +130,10 @@ func recipesJSON(ctx context.Context, tx pgx.Tx, projectID string) (json.RawMess
 // PreviewSettings is how a project's branch previews run (preview_settings,
 // migration 055, fills in the defaults).
 type PreviewSettings struct {
-	// nil: the project's runtime image.
-	Image              *string  `json:"image"`
+	// A typed image from before the library; nil: none.
+	Image *string `json:"image"`
+	// A library image's id (projects.preview_image_id); nil: none.
+	ImageID            *string  `json:"imageId"`
 	Egress             []string `json:"egress"`
 	IdleTimeoutMinutes float64  `json:"idleTimeoutMinutes"`
 	// A machine size's id; nil: the organization's default (migration 064).

@@ -26,6 +26,7 @@ import { requireProjectEditor } from "../access.ts";
 import { badRequest, conflict, intParam, json, noContent, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { requireSize } from "./machines.ts";
+import { requireImage } from "./images.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055). */
@@ -101,24 +102,37 @@ async function deleteProjectServer(ctx: RequestContext): Promise<Response> {
   return noContent();
 }
 
-/** Replace how the project's branch previews run; unset fields take their defaults. */
+/**
+ * Replace how the project's branch previews run; unset fields take their
+ * defaults. A typed image from before the library is kept as it is, or
+ * cleared (null); a new one is refused — previews pick from the library.
+ */
 async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
   await requireProjectEditor(ctx, projectId);
   const input = await parseBody(ctx.request, previewSettingsSchema);
-  const stored = {
-    ...(input.image ? { image: input.image } : {}),
-    egress: [...new Set(input.egress)],
-    idleTimeoutMinutes: input.idleTimeoutMinutes,
-    ...(input.machineSize ? { machineSize: input.machineSize } : {}),
-  };
   const previews = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [current] = (await scope.sql`
+      SELECT preview_settings->>'image' AS image, preview_image_id AS "imageId" FROM projects WHERE id = ${projectId} FOR UPDATE`) as Array<{
+      image: string | null;
+      imageId: string | null;
+    }>;
+    if (!current) throw notFound(`project ${projectId} not found`);
+    if (input.image !== null && input.image !== current.image) {
+      throw badRequest("a preview's image is picked from the image library: send imageId");
+    }
+    const stored = {
+      ...(input.image ? { image: input.image } : {}),
+      egress: [...new Set(input.egress)],
+      idleTimeoutMinutes: input.idleTimeoutMinutes,
+      ...(input.machineSize ? { machineSize: input.machineSize } : {}),
+    };
     if (input.machineSize) await requireSize(scope, input.machineSize);
-    const rows = await scope.sql`
-      UPDATE projects SET preview_settings = ${stored}::jsonb, updated_at = now()
-      WHERE id = ${projectId} RETURNING id`;
-    if (rows.length === 0) throw notFound(`project ${projectId} not found`);
-    await recordChange(scope, ctx, projectId, { previews: stored });
+    if (input.imageId) await requireImage(scope, input.imageId, current.imageId);
+    await scope.sql`
+      UPDATE projects SET preview_settings = ${stored}::jsonb, preview_image_id = ${input.imageId}, updated_at = now()
+      WHERE id = ${projectId}`;
+    await recordChange(scope, ctx, projectId, { previews: { ...stored, imageId: input.imageId } });
     return (await projectServers(scope, projectId)).previews;
   });
   return json(previews);

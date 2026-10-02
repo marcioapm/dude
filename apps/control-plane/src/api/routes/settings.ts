@@ -20,6 +20,7 @@ import {
   newId,
   promptRoleSchema,
   resolveMachineSize,
+  resolveRoleImage,
   ROLE_ENABLED_BY,
   savePromptSchema,
   SETTINGS_ROLES,
@@ -46,6 +47,7 @@ import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { listSizes, requireSize } from "./machines.ts";
+import { imageIds, requireImage } from "./images.ts";
 
 type Json = Record<string, unknown>;
 
@@ -201,6 +203,18 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
      * whether the fixer's is the implementer's.
      */
     const sizes = await listSizes(scope);
+    const images = await imageIds(scope);
+    /** A role's image, by the one rule (resolveRoleImage), shaped as machineSize is. */
+    const image = (role: SettingsRole): RoleSettings["image"] => {
+      const { imageId, from } = resolveRoleImage(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, images);
+      const orgOnly = resolveRoleImage(role, { organization: layers.org.agentModels }, images);
+      return {
+        value: imageId,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: orgOnly.imageId } : {}),
+      };
+    };
     const machine = (role: SettingsRole): RoleSettings["machineSize"] => {
       const { sizeId, from } = resolveMachineSize(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, sizes);
       const orgOnly = resolveMachineSize(role, { organization: layers.org.agentModels }, sizes);
@@ -223,6 +237,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
             effort: field(role, "effort"),
             timeLimitMinutes: field(role, "timeLimitMinutes"),
             machineSize: machine(role),
+            image: image(role),
             enabled: enabledBy ? delivery[enabledBy] : null,
             prompt: {
               organization: promptState(orgCurrent, builtin[role]),
@@ -281,10 +296,11 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
   return { models: nextModels as AgentModels, policy: applyKeys(policy, policyChanges) };
 }
 
-/** Every machine size a patch names must be the organization's. */
+/** Every machine size and image a patch names must be the organization's. */
 async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
   for (const change of Object.values(patch.roles ?? {})) {
     if (change?.machineSize) await requireSize(scope, change.machineSize);
+    if (change?.image) await requireImage(scope, change.image);
   }
 }
 

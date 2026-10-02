@@ -1,542 +1,518 @@
 package orchestrator_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"slices"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
-	"github.com/marciomartins/dude/orchestrator/internal/objects"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/images"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
-// bucket is a photo bucket in memory.
-type bucket map[string][]byte
+const (
+	imageLayer = "registry.test/dude/layer@sha256:aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000"
+	nextLayer  = "registry.test/dude/layer@sha256:bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000"
+	userRef    = "registry.test/dude/custom@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	finalRef   = "registry.test/dude/custom@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+)
 
-func (b bucket) Get(_ context.Context, key string, _ int64) ([]byte, error) {
-	if v, ok := b[key]; ok {
-		return v, nil
-	}
-	return nil, objects.ErrNotFound
-}
-
-var screenshot = append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{7}, 64)...)
-
-// withImages gives the world a bucket and returns it.
-func (w *world) withImages() bucket {
-	b := bucket{}
-	w.syncer.Objects = b
-	return b
-}
-
-// upload records an image uploaded to a task, as the backend does.
-func (w *world) upload(b bucket, id, task, name string, data []byte) {
-	key := "attachments/" + id
-	b[key] = data
-	mustExec(w.t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
-		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
-		VALUES ($1, $2, $3, $4, 'image/png', 10, 10, $5, 'x', $6, 'image/png', 20, 20, $5, $6||'.o')`,
-		id, w.org, task, name, len(data), key)
-}
-
-// The task's first prompt carries its images as workload.attachments, to
-// its first agent only.
-func TestATaskStartedWithAnImageGivesItToItsFirstAgent(t *testing.T) {
-	w := newWorld(t)
-	b := w.withImages()
-	wi := w.task()
-	w.upload(b, "att_design", wi, "design.png", screenshot)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	var spec struct {
-		Workload struct {
-			Attachments []struct {
-				Name, ContentType string
-				Data              []byte
-			} `json:"attachments"`
-		} `json:"workload"`
-	}
-	if err := json.Unmarshal(w.lux.Runs()[0].Spec, &spec); err != nil {
-		t.Fatal(err)
-	}
-	got := spec.Workload.Attachments
-	if len(got) != 1 || got[0].Name != "design.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
-		t.Fatalf("the first agent's spec carried %+v", got)
-	}
-	// The transcript's prompt turn names it.
-	w.until("the prompt to reach the ledger", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
-			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
-	})
-	// The reviewer after it is asked about the work, and not shown them.
-	w.until("a second phase", func() bool { return len(w.lux.Runs()) >= 2 })
-	if !strings.Contains(string(w.lux.Runs()[1].Spec), `"dude.phase":"review"`) {
-		t.Fatalf("the second Run is not the reviewer: %s", w.lux.Runs()[1].Spec)
-	}
-	if got := promptImages(t, w.lux.Runs()[1].Spec); len(got) != 0 {
-		t.Errorf("the reviewer was given the prompt's images: %v", got)
-	}
-	// Once given, the prompt takes no more.
-	w.upload(b, "att_late", wi, "late.png", screenshot)
-	if status, _ := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_late"}}); status != 409 {
-		t.Errorf("images were added to a prompt already given: %d", status)
-	}
-}
-
-// A steer names only its own task's unsent images; anything else is
-// refused before anything is queued.
-func TestASteerRefusesImagesThatAreNotItsTasksToSend(t *testing.T) {
-	w := newWorld(t)
-	b := w.withImages()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi, other := w.task(), w.task()
-	w.deliver(wi)
-	w.until("the implementer to run", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
-	})
-	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
-	w.upload(b, "att_mine", wi, "mine.png", screenshot)
-	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
-	// Two that are 5 MiB together and one more byte (the row's size is
-	// what counts, so the bucket holds a small stand-in).
-	w.uploadSized(b, "att_big1", wi, 3<<20)
-	w.uploadSized(b, "att_big2", wi, 2<<20+1)
-	// Another organization's, on its own task: not visible here at all.
-	foreign := dbtest.Org(t, w.owner)
-	mustExec(t, w.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'F', 'prj_'||$1, 'F')`, foreign)
-	mustExec(t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_'||$1, $1, 'prj_'||$1, 1, 'F', 'F')`, foreign)
-	mustExec(t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
-		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
-		VALUES ('att_foreign', $1, 'wi_'||$1, 'f.png', 'image/png', 1, 1, 1, 'x', 'k', 'image/png', 1, 1, 1, 'k.o')`, foreign)
-
-	for _, c := range []struct {
-		ids  []string
-		want string
-	}{
-		{[]string{"att_theirs"}, "image att_theirs is not one of this task's"},
-		{[]string{"att_foreign"}, "image att_foreign is not one of this task's"},
-		{[]string{"att_nowhere"}, "image att_nowhere is not one of this task's"},
-		{[]string{"att_mine", "att_mine"}, "image att_mine is named twice"},
-		{[]string{"a", "b", "c", "d", "e", "f", "g"}, "a message carries at most 6 images"},
-		{[]string{"att_big1", "att_big2"}, "a message's images are at most 5 MiB together"},
-	} {
-		status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "see", "attachmentIds": c.ids})
-		if msg := errorMessage(body); status != 400 || msg != c.want {
-			t.Errorf("%v: %d %q, want 400 %q", c.ids, status, msg, c.want)
-		}
-	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 0 {
-		t.Fatalf("a refused steer queued %d directives", n)
-	}
-
-	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "attachmentIds": []string{"att_mine"}})
-	if status != 201 {
-		t.Fatalf("an image alone: %d %v", status, body)
-	}
-	if atts, _ := body["attachments"].([]any); len(atts) != 1 {
-		t.Errorf("the steer answered %v", body["attachments"])
-	}
-	// Sent once: a second message cannot take it.
-	if status, _ := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "again", "attachmentIds": []string{"att_mine"}}); status != 400 {
-		t.Errorf("an image already sent was sent again: %d", status)
-	}
-	w.until("lux to have the image", func() bool { return len(w.lux.Attachments(w.lux.Runs()[0].ID)) == 1 })
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.steered'
-		AND payload->'attachments'->0->>'name' = 'mine.png'`, runID); n != 1 {
-		t.Errorf("run.steered does not carry the image: %d", n)
-	}
-	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_foreign' AND attached_at IS NULL`); n != 1 {
-		t.Error("another organization's image was attached")
-	}
-
-	// Six that are exactly 5 MiB together are a message.
-	var six []string
-	for i := range 6 {
-		size := (5 << 20) / 6
-		if i == 0 {
-			size += (5 << 20) % 6
-		}
-		id := fmt.Sprintf("att_six%d", i)
-		w.uploadSized(b, id, wi, size)
-		six = append(six, id)
-	}
-	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "all six", "attachmentIds": six}); status != 201 {
-		t.Fatalf("six images at 5 MiB together: %d %v", status, body)
-	}
-}
-
-// uploadSized records an upload whose row says it is size bytes; the bucket
-// holds a small PNG for it.
-func (w *world) uploadSized(b bucket, id, task string, size int) {
+// libraryImage adds an image to w's organization with version 1 published
+// and, when final is set, finished with imageLayer.
+func (w *world) libraryImage(id, name string, final bool) string {
 	w.t.Helper()
-	w.upload(b, id, task, id+".png", screenshot)
-	mustExec(w.t, w.owner, `UPDATE attachments SET bytes = $2, original_bytes = $2 WHERE id = $1`, id, size)
+	version := "imv_" + id
+	mustExec(w.t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ($1, $2, $3)`, id, w.org, name)
+	mustExec(w.t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state, user_ref)
+		VALUES ($1, $2, $3, 1, 'FROM debian', 'published', $4)`, version, w.org, id, userRef)
+	mustExec(w.t, w.owner, `UPDATE images SET published_version_id = $2 WHERE id = $1`, id, version)
+	if final {
+		mustExec(w.t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref)
+			VALUES ($1, $2, $3, $4)`, w.org, version, imageLayer, finalRef)
+	}
+	return version
 }
 
-// An answer may be an image alone: it reaches the agent with the question
-// it answers.
-func TestAnAnswerMayBeAnImageAlone(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	b := w.withImages()
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{Ask: `{"question":"Which layout?"}`, Reply: "Done.",
-			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
-	}
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the question", func() bool { return w.taskStatus(wi) == "awaiting_input" })
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE task_id = $1`, wi).Scan(&qid)
-	w.upload(b, "att_layout", wi, "layout.png", screenshot)
-	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": " "}); status != 400 || errorMessage(body) != "text or an image is required" {
-		t.Errorf("an empty answer: %d %v", status, body)
-	}
-	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "", "attachmentIds": []string{"att_layout"}}); status != 200 {
-		t.Fatalf("answer: %d %v", status, body)
-	}
-	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
-	})
-	var directive string
-	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_layout'`).Scan(&directive)
-	if got := w.lux.Attachments(w.lux.Runs()[0].ID)[directive]; len(got) != 1 || got[0].Name != "layout.png" {
-		t.Fatalf("the agent got %+v with the answer", got)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.answered'
-		AND payload->'attachments'->0->>'id' = 'att_layout'`, wi); n != 1 {
-		t.Errorf("question.answered does not carry the image")
-	}
+func (w *world) useLayer(layer string) {
+	w.syncer.Agent.Layer = layer
+	w.previews.Layer = layer
 }
 
-// An answer is a directive like a steer: its images reach the agent with it.
-func TestAnAnswerCarriesItsImagesToTheAgent(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	b := w.withImages()
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{Ask: `{"question":"Does it overflow on a phone?"}`, Reply: "Fixed it.",
-			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+// finishJobs are the organization's finish jobs, as "state layer".
+func (w *world) finishJobs() []string {
+	rows, err := w.owner.Query(context.Background(), `SELECT state || ' ' || layer_ref FROM image_builds
+		WHERE organization_id = $1 AND kind = 'finish' ORDER BY requested_at`, w.org)
+	if err != nil {
+		w.t.Fatal(err)
 	}
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the question", func() bool { return w.taskStatus(wi) == "awaiting_input" })
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE task_id = $1`, wi).Scan(&qid)
-	w.upload(b, "att_phone", wi, "phone.png", screenshot)
-	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "It overflows", "attachmentIds": []string{"att_phone"}}); status != 200 {
-		t.Fatalf("answer: %d %v", status, body)
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
 	}
-	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
-	})
-	var directive string
-	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_phone'`).Scan(&directive)
-	got := w.lux.Attachments(w.lux.Runs()[0].ID)[directive]
-	if len(got) != 1 || got[0].Name != "phone.png" || !bytes.Equal(got[0].Data, screenshot) {
-		t.Fatalf("the agent got %+v with the answer", got)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.answered'
-		AND payload->'attachments'->0->>'id' = 'att_phone'`, wi); n != 1 {
-		t.Errorf("question.answered does not carry the image")
-	}
+	return out
 }
 
-// promptImages are the images a lux Run's spec carried with its prompt.
-func promptImages(t *testing.T, spec []byte) []string {
-	t.Helper()
-	var s struct {
-		Workload struct {
-			Attachments []struct {
-				Name string
-				Data []byte
-			} `json:"attachments"`
-		} `json:"workload"`
-	}
-	if err := json.Unmarshal(spec, &s); err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, a := range s.Workload.Attachments {
-		names = append(names, a.Name)
-	}
-	return names
-}
-
-// The task's images go with every Run given the task as its prompt: an
-// implementer that failed before its agent saw them is retried with them.
-func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
-	w := newWorld(t)
-	b := w.withImages()
-	wi := w.task()
-	w.upload(b, "att_design", wi, "design.png", screenshot)
-	// Missing the first time: the first implementer fails at submit.
-	delete(b, "attachments/att_design")
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
-	w.until("delivery to stop for a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+// runError is the error of the task's Run of phase.
+func (w *world) runError(wi, phase string) string {
+	w.t.Helper()
 	var reason string
-	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&reason)
-	if reason != "the task's image design.png is gone from storage" {
-		t.Fatalf("the first implementer failed with %q", reason)
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE task_id = $1 AND phase::text = $2`,
+		wi, phase).Scan(&reason); err != nil {
+		w.t.Fatal(err)
+	}
+	return reason
+}
+
+// firstVersionQueued adds an image with nothing published and v1 queued to
+// build; returns the build's id.
+func (w *world) firstVersionQueued(id, name string) string {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ($1, $2, $3)`, id, w.org, name)
+	mustExec(w.t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state)
+		VALUES ($1, $2, $3, 1, 'FROM debian', 'queued')`, "imv_"+id, w.org, id)
+	mustExec(w.t, w.owner, `INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES ($1, $2, $3, 'build')`,
+		"imb_"+id, w.org, "imv_"+id)
+	return "imb_" + id
+}
+
+// look sends the task's waiting Runs back to the syncer at once.
+func (w *world) look(wi string) {
+	mustExec(w.t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
+}
+
+func (w *world) runImage(wi, phase string) images.RunImage {
+	w.t.Helper()
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT image FROM runs WHERE task_id = $1 AND phase::text = $2`, wi, phase).Scan(&raw); err != nil {
+		w.t.Fatal(err)
+	}
+	var got images.RunImage
+	_ = json.Unmarshal(raw, &got)
+	return got
+}
+
+// The organization's default base, published and finished with the
+// current layer: every Run gets its final image by digest and records it.
+func TestARunGetsItsLibraryImagesFinalAndRecordsIt(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	version := w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE organizations SET default_image_id = 'img_base' WHERE id = $1`, w.org)
+	// The project's typed image (the world's agent:test) loses to the
+	// default base: the implementer ran on the final, not on agent:test.
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != finalRef {
+		t.Errorf("image = %s, want the final %s", got, finalRef)
+	}
+	want := images.RunImage{ImageID: "img_base", Name: "acme-base", VersionID: version, Version: 1, Ref: finalRef, Layer: imageLayer}
+	if got := w.runImage(wi, "implement"); got != want {
+		t.Errorf("runs.image = %+v, want %+v", got, want)
+	}
+}
+
+// A role's image wins over the project's; the fixer follows the
+// implementer's; a role naming an image that is gone gets the project's.
+func TestARolesImageWinsOverTheProjects(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	w.libraryImage("img_base", "acme-base", true)
+	w.libraryImage("img_qa", "playwright", true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base',
+		agent_models = jsonb_set(jsonb_set(agent_models, '{reviewer,image}', '"img_gone"'), '{implementer,image}', '"img_qa"')
+		WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	// The scripted reviewer raises a finding the fixer then takes.
+	w.until("the fixer to reach lux", func() bool { return w.specOf("fix") != nil })
+	if got := w.runImage(wi, "implement").ImageID; got != "img_qa" {
+		t.Errorf("implementer ran in %s, want its role's img_qa", got)
+	}
+	if got := w.runImage(wi, "review").ImageID; got != "img_base" {
+		t.Errorf("reviewer ran in %s, want the project's img_base (its own is gone)", got)
+	}
+	if got := w.runImage(wi, "fix").ImageID; got != "img_qa" {
+		t.Errorf("fixer ran in %s, want the implementer's img_qa", got)
+	}
+}
+
+// An image with nothing published yet and its first version queued: the
+// Run waits on that build (no finish of its own), and runs once it
+// published and was finished.
+func TestARunWaitsForItsImagesFirstVersion(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	build := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait on v1's build", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2 AND lux_run_id IS NULL`, wi, build) == 1
+	})
+	if got := w.finishJobs(); len(got) != 0 {
+		t.Errorf("finish jobs = %v, want none: the build finishes its own", got)
+	}
+	// The builder publishes v1, finished with the layer.
+	mustExec(t, w.owner, `UPDATE image_versions SET state = 'published', user_ref = $1 WHERE id = 'imv_img_new'`, userRef)
+	mustExec(t, w.owner, `UPDATE images SET published_version_id = 'imv_img_new' WHERE id = 'img_new'`)
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, 'imv_img_new', $2, $3)`,
+		w.org, imageLayer, finalRef)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'succeeded' WHERE id = $1`, build)
+	w.look(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != finalRef {
+		t.Errorf("ran %s", got)
+	}
+}
+
+// Nothing published and nothing building: the Run fails before lux.
+func TestARunOnAnImageNeverBuiltFails(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	mustExec(t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_new', $1, 'fresh')`, w.org)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: its image fresh has no published version: build and publish one first" {
+		t.Errorf("error = %q", got)
 	}
 	if n := len(w.lux.Runs()); n != 0 {
-		t.Fatalf("lux was given %d Runs", n)
+		t.Errorf("%d lux Runs", n)
 	}
-
-	b["attachments/att_design"] = screenshot
-	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
-		t.Fatalf("retry: %d %v", status, body)
-	}
-	w.until("the second implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
-		t.Fatalf("the retried implementer was given %v", got)
-	}
-	w.until("its prompt turn to name the image", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
-			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
-	})
 }
 
-// A delivery whose workflow could not start is asked again: its images are
-// the last set named, in its order — already the prompt's ones go again,
-// and those no longer named are let go, as if never sent.
-func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
+// The first version a Run waits on fails to build: the Run fails before
+// lux with the build's sentence.
+func TestARunWhoseImagesFirstBuildFailsFails(t *testing.T) {
 	w := newWorld(t)
-	b := w.withImages()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.useLayer(imageLayer)
+	build := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
 	wi := w.task()
-	w.upload(b, "att_design", wi, "design.png", screenshot)
-	w.upload(b, "att_a", wi, "a.png", screenshot)
-	w.upload(b, "att_b", wi, "b.png", screenshot)
-	// The workflow cannot start, for this organization only.
-	mustExec(t, w.owner, fmt.Sprintf(`CREATE FUNCTION refuse_%[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'workflow store down'; END $$;
-		CREATE TRIGGER refuse_%[1]s BEFORE INSERT ON workflow_runs FOR EACH ROW
-		WHEN (NEW.organization_id = '%[1]s') EXECUTE FUNCTION refuse_%[1]s()`, w.org))
-	failing := func(ids ...string) {
-		t.Helper()
-		if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": ids}); status != 500 {
-			t.Fatalf("deliver %v with the workflow store down: %d %v", ids, status, body)
+	w.deliver(wi)
+	w.until("the implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2`, wi, build) == 1
+	})
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'failed', error = 'ran out of memory (1.5 GB) at step 2' WHERE id = $1`, build)
+	w.look(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: its image fresh has no published version: v1 failed to build: ran out of memory (1.5 GB) at step 2" {
+		t.Errorf("error = %q", got)
+	}
+}
+
+// An admin queues v2 while a Run waits on v1's build: v1's build is
+// cancelled, and the Run waits on v2's instead of failing.
+func TestARunWaitingOnACancelledBuildWaitsOnTheNewerOne(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	first := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait on v1", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2`, wi, first) == 1
+	})
+	// What Build & publish does to the version still waiting (images.ts buildImage).
+	mustExec(t, w.owner, `UPDATE image_versions SET state = 'cancelled' WHERE id = 'imv_img_new'`)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'cancelled', error = 'a newer version was queued' WHERE id = $1`, first)
+	mustExec(t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state)
+		VALUES ('imv_new2', $1, 'img_new', 2, 'FROM debian', 'queued')`, w.org)
+	mustExec(t, w.owner, `INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES ('imb_new2', $1, 'imv_new2', 'build')`, w.org)
+	w.look(wi)
+	w.until("the implementer to wait on v2", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = 'imb_new2' AND status = 'pending'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "" {
+		t.Errorf("error = %q", got)
+	}
+}
+
+// The builder has been offline the whole time a Run waited 30 minutes for
+// its image: the Run fails before lux saying so; a shorter wait, or a
+// builder heard from lately, keeps waiting.
+func TestARunWaitingOnAnOfflineBuilderGivesUp(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(nextLayer)
+	w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `INSERT INTO image_builder (seen_at) VALUES ('2026-10-01 08:00+00')`)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL AND image_waiting_since IS NOT NULL`, wi) == 1
+	})
+	// Waited 10 minutes: still waiting.
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '10 minutes' WHERE task_id = $1`, wi)
+	w.look(wi)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, wi); n != 1 {
+		t.Fatalf("gave up after 10 minutes")
+	}
+	// The builder was heard from 20 minutes ago, the Run has waited an hour:
+	// it has been offline for only 20 of them.
+	mustExec(t, w.owner, `UPDATE image_builder SET seen_at = now() - interval '20 minutes'`)
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '1 hour' WHERE task_id = $1`, wi)
+	w.look(wi)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, wi); n != 1 {
+		t.Fatalf("gave up after 20 offline minutes")
+	}
+	mustExec(t, w.owner, `UPDATE image_builder SET seen_at = '2026-10-01 08:00+00'`)
+	w.look(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: image builder offline since 2026-10-01 08:00 UTC" {
+		t.Errorf("error = %q", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
+	}
+
+	// A builder that never reported in (no image_builder row): offline for
+	// the whole wait.
+	mustExec(t, w.owner, `DELETE FROM image_builder`)
+	never := w.task()
+	w.deliver(never)
+	w.until("the second implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL AND image_waiting_since IS NOT NULL`, never) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '29 minutes' WHERE task_id = $1`, never)
+	w.look(never)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, never); n != 1 {
+		t.Fatalf("gave up on a never-seen builder after 29 minutes")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '31 minutes' WHERE task_id = $1`, never)
+	w.look(never)
+	w.until("the second implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, never) == 1
+	})
+	if got := w.runError(never, "implement"); got != "cannot start: image builder offline: it has never reported in" {
+		t.Errorf("error = %q", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
+	}
+}
+
+// With no final for the current layer, the Run waits — pending, no lux Run —
+// on a finish job two Runs share, then submits once the builder made it.
+func TestARunWaitsForItsDudeLayerThenStarts(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(nextLayer)
+	version := w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	a, b := w.task(), w.task()
+	w.deliver(a)
+	w.deliver(b)
+	w.until("both implementers to wait on a finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'implement' AND image_build_id IS NOT NULL
+			AND status = 'pending' AND lux_run_id IS NULL`, w.org) == 2
+	})
+	if got := w.finishJobs(); len(got) != 1 || got[0] != "queued "+nextLayer {
+		t.Fatalf("finish jobs = %v, want one for the new layer", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Fatalf("%d Runs reached lux before their image", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE organization_id = $1 AND event_type = $2`, w.org, phases.EvImagePreparing); n != 2 {
+		t.Errorf("%d preparing events, want one per Run", n)
+	}
+	// The builder finishes it.
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, $2, $3, $4)`,
+		w.org, version, nextLayer, "registry.test/dude/custom@sha256:3333333333333333333333333333333333333333333333333333333333333333")
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'succeeded' WHERE organization_id = $1`, w.org)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE organization_id = $1`, w.org)
+	w.until("both to reach lux", func() bool { return len(w.lux.Runs()) >= 2 })
+	for _, r := range w.lux.Runs() {
+		if got := submitted(t, r).Image.Ref; !strings.HasSuffix(got, "@sha256:3333333333333333333333333333333333333333333333333333333333333333") {
+			t.Errorf("submitted on %s", got)
 		}
 	}
-	// What the chip's ✕ (DELETE /v1/attachments/{id}) needs: not sent.
-	unsent := func(id string) bool {
-		return w.count(`SELECT count(*) FROM attachments WHERE id = $1 AND NOT for_prompt AND attached_at IS NULL`, id) == 1
-	}
-	// A different set: a.png goes back to the tray's.
-	failing("att_a")
-	failing("att_b")
-	if !unsent("att_a") {
-		t.Error("an image no longer named is still the prompt's")
-	}
-	// A smaller set: a.png goes back again.
-	failing("att_a", "att_b")
-	failing("att_b")
-	if !unsent("att_a") {
-		t.Error("an image left out of a smaller set is still the prompt's")
-	}
-	failing("att_design")
-	// Every image removed: a delivery asked again with none sends none —
-	// whether it names an empty list or, as the web app does, none at all.
-	bare := w.task()
-	w.upload(b, "att_removed", bare, "removed.png", screenshot)
-	deliverBare := func(body map[string]any, want int) {
-		t.Helper()
-		if status, out := w.call("/internal/tasks/"+bare+"/deliver", body); status != want {
-			t.Fatalf("deliver %v: %d %v, want %d", body, status, out, want)
-		}
-	}
-	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
-	deliverBare(map[string]any{}, 500)
-	if !unsent("att_removed") {
-		t.Error("an image removed from a delivery asked again naming none is still the prompt's")
-	}
-	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
-	mustExec(t, w.owner, fmt.Sprintf(`DROP TRIGGER refuse_%[1]s ON workflow_runs; DROP FUNCTION refuse_%[1]s()`, w.org))
-	deliverBare(map[string]any{"attachmentIds": []string{}}, 201)
-	if !unsent("att_removed") {
-		t.Error("an image removed from a delivery asked again with none is still the prompt's")
-	}
-	w.until("the bare task's implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); len(got) != 0 {
-		t.Fatalf("a delivery asked again with no images gave the implementer %v", got)
-	}
-
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_b", "att_design"}}); status != 201 {
-		t.Fatalf("deliver again: %d %v", status, body)
-	}
-	// Deliver pressed again at once (no images: the task's own button)
-	// is the same delivery, and does not take its images away.
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 200 {
-		t.Fatalf("deliver a delivery already started: %d %v", status, body)
-	}
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 2 })
-	if got := promptImages(t, w.lux.Runs()[1].Spec); !slices.Equal(got, []string{"b.png", "design.png"}) {
-		t.Fatalf("the implementer was given %v", got)
-	}
-	// It was sent, with the prompt: a steer cannot take it.
-	var runID string
-	w.until("the implementer to run", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-		return runID != ""
-	})
-	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "x", "attachmentIds": []string{"att_design"}})
-	if want := "image att_design was already sent"; status != 400 || errorMessage(body) != want {
-		t.Errorf("a steer naming the prompt's image: %d %q, want 400 %q", status, errorMessage(body), want)
-	}
-	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_design' AND for_prompt AND attached_at IS NOT NULL`); n != 1 {
-		t.Errorf("the image is not the prompt's")
-	}
 }
 
-// hangingRun delivers a task whose implementer runs until stopped, and
-// returns the task and its Run.
-func (w *world) hangingRun() (task, run string) {
-	w.t.Helper()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	task = w.task()
-	w.deliver(task)
-	w.until("the implementer to run", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, task) == 1
-	})
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, task).Scan(&run)
-	return task, run
-}
-
-// errorMessage is the message of an API refusal.
-func errorMessage(body map[string]any) string {
-	e, _ := body["error"].(map[string]any)
-	msg, _ := e["message"].(string)
-	return msg
-}
-
-// Retry on a steer that was an image and no words sends the image again:
-// the retry has no words of its own, and needs none.
-func TestRetryingAnImageOnlySteerSendsItsImage(t *testing.T) {
+// A failed finish fails the Run before lux, with the build's sentence.
+func TestAFailedFinishFailsTheRunBeforeLux(t *testing.T) {
 	w := newWorld(t)
-	b := w.withImages()
-	wi, runID := w.hangingRun()
-	w.upload(b, "att_only", wi, "only.png", screenshot)
-	// Gone from storage the first time: the steer fails.
-	delete(b, "attachments/att_only")
-	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "attachmentIds": []string{"att_only"}})
-	if status != 201 {
-		t.Fatalf("steer: %d %v", status, body)
-	}
-	first, _ := body["id"].(string)
-	w.until("the steer to fail", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, first) == 1
+	w.useLayer(nextLayer)
+	w.libraryImage("img_base", "acme-base", false)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL`, wi) == 1
 	})
-	b["attachments/att_only"] = screenshot
-
-	status, body = w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "supersedes": first})
-	if status != 201 {
-		t.Fatalf("retry: %d %v", status, body)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'failed', error = 'the image needs git: agents commit with it' WHERE organization_id = $1`, w.org)
+	w.look(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, wi) == 1
+	})
+	if reason := w.runError(wi, "implement"); reason != "cannot start: its image acme-base v1 could not get the dude layer: the image needs git: agents commit with it" {
+		t.Errorf("error = %q", reason)
 	}
-	retry, _ := body["id"].(string)
-	w.until("lux to have the image", func() bool { return len(w.lux.Attachments(w.lux.Runs()[0].ID)[retry]) == 1 })
-	if got := w.lux.Attachments(w.lux.Runs()[0].ID)[retry]; got[0].Name != "only.png" || !bytes.Equal(got[0].Data, screenshot) {
-		t.Errorf("the retry carried %+v", got)
-	}
-
-	// Nothing to repeat and nothing new: refused.
-	for _, c := range []map[string]any{{"text": ""}, {"text": " ", "supersedes": "dir_nowhere"}} {
-		if status, body := w.call("/internal/runs/"+runID+"/steer", c); status != 400 || errorMessage(body) != "text or an image is required" {
-			t.Errorf("%v: %d %v", c, status, body)
-		}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
 	}
 }
 
-// A message sent again (the same words, superseding it) carries the
-// images it had; new images with it would be attached and never sent, so
-// the request is refused before anything is queued.
-func TestASteerSentAgainCannotBringNewImages(t *testing.T) {
+// Without DUDE_LAYER_IMAGE the library is off: a Run on a library image
+// fails before lux saying so, and one on a typed image runs as before.
+func TestWithNoLayerALibraryImageFailsAndATypedOneRuns(t *testing.T) {
 	w := newWorld(t)
-	b := w.withImages()
-	wi, runID := w.hangingRun()
-	w.upload(b, "att_new", wi, "new.png", screenshot)
-	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at the header"})
-	if status != 201 {
-		t.Fatalf("steer: %d %v", status, body)
+	w.libraryImage("img_base", "acme-base", true)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != "agent:test" {
+		t.Errorf("typed image: ran %s", got)
 	}
-	first, _ := body["id"].(string)
-	w.until("the steer to be sent", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, first) == 1
+	if got := w.runImage(wi, "implement"); got != (images.RunImage{}) {
+		t.Errorf("a typed image recorded %+v", got)
+	}
+
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	other := w.task()
+	w.deliver(other)
+	w.until("its implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, other) == 1
 	})
-	status, body = w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at the header", "supersedes": first,
-		"interrupt": true, "attachmentIds": []string{"att_new"}})
-	if want := "a message sent again carries the images it had: send new images in a new message"; status != 400 || errorMessage(body) != want {
-		t.Fatalf("%d %v, want 400 %q", status, body, want)
-	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 1 {
-		t.Errorf("the refused request queued a directive: %d", n)
-	}
-	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_new' AND attached_at IS NULL`); n != 1 {
-		t.Error("the refused request attached the image")
-	}
-	// New words with new images are a new message, and go.
-	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "and this", "supersedes": first,
-		"attachmentIds": []string{"att_new"}}); status != 201 {
-		t.Fatalf("new words: %d %v", status, body)
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1`, other).Scan(&reason)
+	if reason != "cannot start: "+images.ErrNotConfigured {
+		t.Errorf("error = %q", reason)
 	}
 }
 
-// An image steer sent to a paused Run waits for it: the resume carries
-// neither its words nor a nudge (a resume has no images), and once the
-// Run runs again the steer goes through /input with its image.
-func TestAnImageSteerToAPausedRunGoesAfterTheResume(t *testing.T) {
+// Nothing set anywhere: DUDE_AGENT_IMAGE, unchanged.
+func TestNothingNamedRunsTheAgentImage(t *testing.T) {
 	w := newWorld(t)
-	b := w.withImages()
-	wi, runID := w.hangingRun()
-	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
-		t.Fatalf("pause: %d %v", status, body)
+	w.useLayer(imageLayer)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != "default:img" {
+		t.Errorf("ran %s", got)
 	}
-	w.until("the pause", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
-	})
-	w.upload(b, "att_paused", wi, "paused.png", screenshot)
-	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at this", "attachmentIds": []string{"att_paused"}})
-	if status != 201 {
-		t.Fatalf("steer: %d %v", status, body)
+}
+
+// A resumed Run keeps the image it started with, whatever was published since.
+func TestAResumedRunKeepsItsImage(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	w.lux.Decide = hang
+	wi := w.task()
+	w.deliver(wi)
+	runID := w.parked(wi)
+	// v2 published and finished: a new Run would get it; this one does not.
+	mustExec(t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state, user_ref)
+		VALUES ('imv_v2', $1, 'img_base', 2, 'FROM debian', 'published', $2)`, w.org, userRef)
+	mustExec(t, w.owner, `UPDATE image_versions SET state = 'superseded' WHERE id = 'imv_img_base'`)
+	mustExec(t, w.owner, `UPDATE images SET published_version_id = 'imv_v2' WHERE id = 'img_base'`)
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, 'imv_v2', $2, 'x@sha256:9')`,
+		w.org, imageLayer)
+	r := w.lux.Runs()[0]
+	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, out)
 	}
-	dir, _ := body["id"].(string)
-	for range 5 {
+	for i := 0; r.Resumed == 0 && i < 200; i++ {
 		w.pump()
+		time.Sleep(10 * time.Millisecond)
 	}
-	lr := w.lux.Runs()[0]
-	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NULL`, dir); n != 1 || len(w.lux.Attachments(lr.ID)[dir]) != 0 {
-		t.Fatal("a steer was sent to a paused Run")
+	if r.Resumed != 1 {
+		t.Fatalf("not resumed\n%s", w.describeRuns())
 	}
+	if got := submitted(t, r).Image.Ref; got != finalRef {
+		t.Errorf("lux's spec = %s", got)
+	}
+	if got := w.runImage(wi, "implement"); got.Version != 1 || got.Ref != finalRef {
+		t.Errorf("runs.image = %+v", got)
+	}
+}
 
-	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
-		t.Fatalf("resume: %d %v", status, body)
+// A branch preview resolves its image the same way: its own library
+// image, waiting for the layer and then running on its final.
+func TestABranchPreviewWaitsForItsImageThenRuns(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(nextLayer)
+	version := w.libraryImage("img_web", "web", true)
+	mustExec(t, w.owner, `UPDATE projects SET preview_image_id = 'img_web', preview_settings = '{"image":"typed:old"}' WHERE id = $1`, w.project)
+	wi := w.task()
+	code, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+	if code != 201 {
+		t.Fatalf("start = %d %v", code, out)
 	}
-	w.until("the image to reach lux", func() bool { return len(w.lux.Attachments(lr.ID)[dir]) == 1 })
-	if !slices.Contains(w.lux.CallsOf(lr.ID), "resume") {
-		t.Errorf("lux was asked %v, no resume", w.lux.CallsOf(lr.ID))
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("the preview to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND image_build_id IS NOT NULL AND lux_run_id IS NULL`, runID) == 1
+	})
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, $2, $3, $4)`,
+		w.org, version, nextLayer, finalRef)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'succeeded' WHERE organization_id = $1`, w.org)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("the preview to reach lux", func() bool { return len(w.lux.Runs()) == 1 })
+	if got := submitted(t, w.lux.Runs()[0]).Image.Ref; got != finalRef {
+		t.Errorf("preview image = %s", got)
 	}
-	if got := w.lux.ResumeInputs(lr.ID); !slices.Equal(got, []string{""}) {
-		t.Errorf("the resume carried input %q", got)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND image->>'name' = 'web'`, runID); n != 1 {
+		t.Error("the preview did not record its image")
 	}
-	if got := w.lux.Attachments(lr.ID)[dir]; got[0].Name != "paused.png" || !bytes.Equal(got[0].Data, screenshot) {
-		t.Errorf("the steer carried %+v", got)
+}
+
+// Another organization's image is no image here: the database refuses
+// the reference, and an id that names none fails the Run.
+func TestAnotherOrganizationsImageCannotBeUsed(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	other := "org_other_" + w.org
+	mustExec(t, w.owner, `INSERT INTO organizations (id, name, slug) VALUES ($1, $1, $1)`, other)
+	mustExec(t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_theirs', $1, 'theirs')`, other)
+	if _, err := w.owner.Exec(context.Background(), `UPDATE projects SET runtime_image_id = 'img_theirs' WHERE id = $1`, w.project); err == nil {
+		t.Fatal("a project named another organization's image")
 	}
-	if bodies := w.lux.InputBodies(lr.ID, dir); len(bodies) != 1 || !strings.Contains(bodies[0], "look at this") {
-		t.Errorf("/input for the steer got %q", bodies)
+	// A role's image is JSON, unchecked by the database: RLS hides theirs.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,image}', '"img_theirs"') WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != "agent:test" {
+		t.Errorf("ran %s, want the project's own typed image", got)
+	}
+}
+
+// A library image lives in the same ECR registry as DUDE_AGENT_IMAGE
+// (dude/custom beside dude/agents): the Run's pull carries the same
+// login, so the pull-only role covers it with no other setting.
+func TestALibraryImageInTheAgentImagesRegistryIsPulledWithItsLogin(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	w.useLayer(imageLayer)
+	version := w.libraryImage("img_base", "acme-base", false)
+	custom := ecrRegistry + "/dude/custom@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, $2, $3, $4)`,
+		w.org, version, imageLayer, custom)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	spec := submitted(t, w.lux.Runs()[0])
+	if spec.Image.Ref != custom || len(spec.Image.RegistryAuth) != 1 || spec.Image.RegistryAuth[0].Registry != ecrRegistry {
+		t.Fatalf("image = %+v", spec.Image)
+	}
+	if v, _ := loginIn(spec.Secrets); v != "AWS:"+api.tokens()[0] {
+		t.Errorf("login = %q", v)
 	}
 }
