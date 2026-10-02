@@ -192,6 +192,22 @@ test("a change from outside clears the selection, steals no focus, and Backspace
   expect(f.value("crit")).toBe(`- [ ] One ${B}\n- [ ] Two ${A}`);
 });
 
+test("focus: after Move up it is on Move up again; after Remove, on the preview panel", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\nTwo.\n\nThree.\n\n${A}` }]);
+  await f.select("goal");
+  f.button("Move up")!.focus();
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`One.\n\nTwo.\n\n${A}\n\nThree.`);
+  expect(document.activeElement).toBe(f.button("Move up"));
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`One.\n\n${A}\n\nTwo.\n\nThree.`);
+  expect(document.activeElement).toBe(f.button("Move up"));
+  f.button("Remove")!.focus();
+  await f.press("Remove");
+  expect(f.value("goal")).toBe("One.\n\nTwo.\n\nThree.");
+  expect(document.activeElement).toBe(f.panel("goal"));
+});
+
 test("twenty dragovers at one height render the preview at most once", async () => {
   // Spied before mounting, so the preview's component is the spy throughout and is never remounted.
   const renders = spyOn(markdownModule, "Markdown");
