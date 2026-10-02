@@ -58,7 +58,7 @@ export interface MarkdownEditorProps {
   /** On the textarea, as `Textarea` passes it. */
   readonly "data-testid"?: string | undefined;
   /** Preview draws `![alt](attachment:id)` with this (`Markdown`'s `attachmentImage`). */
-  readonly attachmentImage?: ((id: string, alt: string) => ReactNode) | undefined;
+  readonly attachmentImage?: ((id: string, alt: string, title?: string) => ReactNode) | undefined;
   /** The field took focus (a dialog remembers which field an Attach button inserts into). */
   readonly onFocus?: (() => void) | undefined;
   /** Edits in place, undoable, for text the caller inserts (`MarkdownEditorHandle`). */

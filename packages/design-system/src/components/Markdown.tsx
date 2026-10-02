@@ -62,9 +62,10 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
    * Draws `![alt](attachment:id)`, an image of the caller's own (a task's
    * upload), in place: usually a `MarkdownImage` over bytes the caller
    * fetched. Without it such an image is its alt text. Every other image
-   * stays a link: an <img> to an arbitrary host is a tracking pixel.
+   * stays a link: an <img> to an arbitrary host is a tracking pixel. `title`
+   * is the reference's title, where a task keeps the image's layout.
    */
-  readonly attachmentImage?: ((id: string, alt: string) => ReactNode) | undefined;
+  readonly attachmentImage?: ((id: string, alt: string, title?: string) => ReactNode) | undefined;
 }
 
 /**
@@ -374,7 +375,7 @@ function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: Render
       );
     case "image":
       if (node.src.startsWith(ATTACHMENT_URL)) {
-        return ctx.attachmentImage ? <>{ctx.attachmentImage(node.src.slice(ATTACHMENT_URL.length), node.alt)}</> : <>{node.alt}</>;
+        return ctx.attachmentImage ? <>{ctx.attachmentImage(node.src.slice(ATTACHMENT_URL.length), node.alt, node.title)}</> : <>{node.alt}</>;
       }
       // Images are shown as a link, not fetched: an <img> to an arbitrary
       // host is a tracking pixel and a layout jump. The consumer can opt in

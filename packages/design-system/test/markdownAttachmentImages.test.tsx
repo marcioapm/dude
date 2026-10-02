@@ -38,6 +38,20 @@ test("an attachment: URL is not a link target", () => {
   expect(h).not.toContain("href=");
 });
 
+test("only what the parsers attach is drawn; any other spelling stays text", () => {
+  const asked: Array<[string, string, string | undefined]> = [];
+  const h = renderToStaticMarkup(<Markdown
+    source={'![ok](attachment:att_ok "small right") ![a [b] c](attachment:att_n) ![nb](attachment:att_nb\u00a0"small") ![dash](attachment:att-x)'}
+    attachmentImage={(id, alt, title) => {
+      asked.push([id, alt, title]);
+      return <MarkdownImage src={`blob:${id}`} alt={alt} />;
+    }} />);
+  expect(asked).toEqual([["att_ok", "ok", "small right"]]);
+  expect(h).toContain("![a [b] c](attachment:att_n)");
+  expect(h).toContain("![dash](attachment:att-x)");
+  expect(h.match(/<img /g)?.length).toBe(1);
+});
+
 test("an unavailable image says so", () => {
   const h = renderToStaticMarkup(<MarkdownImage alt="gone.png" unavailable />);
   expect(h).toContain("gone.png · unavailable");
