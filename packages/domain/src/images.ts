@@ -118,8 +118,8 @@ export interface ImageBuild {
 export interface ImageBuildWithLog extends ImageBuild {
   /**
    * The log from byte logStart of everything the build ever wrote to
-   * logTotal: the whole kept tail (its last 1 MiB), or with `?after=<n>`
-   * only what came after byte n when the tail still holds it.
+   * logTotal: the whole kept log (its last 1 MiB), or with `?after=<n>`
+   * only what came after byte n when the kept log still holds it.
    */
   log: string;
   logStart: number;

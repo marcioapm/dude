@@ -266,7 +266,11 @@ async function readBuild(scope: OrgScope, id: string, after: number | null): Pro
       (SELECT COALESCE(json_agg(json_build_object('start', l.start_offset::float8, 'chunk', l.chunk) ORDER BY l.start_offset), '[]')
        FROM image_build_log l
        WHERE l.build_id = b.id AND l.start_offset + octet_length(l.chunk) >
-         CASE WHEN ${after}::bigint BETWEEN (SELECT start FROM kept) AND b.log_total THEN ${after}::bigint ELSE 0 END) AS chunks,
+         CASE WHEN ${after}::bigint BETWEEN (SELECT start FROM kept) AND b.log_total THEN ${after}::bigint ELSE 0 END
+         -- The same bound as an index range: no chunk before the one holding byte after.
+         AND l.start_offset >= COALESCE((SELECT max(start_offset) FROM image_build_log
+           WHERE build_id = b.id AND start_offset <= ${after}::bigint
+             AND ${after}::bigint BETWEEN (SELECT start FROM kept) AND b.log_total), 0)) AS chunks,
       (SELECT json_build_object('versionId', pv.id, 'number', pv.number) FROM image_versions pv WHERE pv.id = i.published_version_id) AS published
     FROM ${scope.sql.unsafe(BUILD_FROM)} WHERE b.id = ${id}`) as BuildRow[];
   return row;
