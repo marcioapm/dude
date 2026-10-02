@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,37 +49,83 @@ func TestTheFakeValidatesAttachmentsAsLuxDoes(t *testing.T) {
 	}
 }
 
-// What lux records of an input's images is their metadata, never the bytes.
-func TestAcceptedInputRecordsItsImagesMetadata(t *testing.T) {
+// inputRecord is the run's record of type typ for request id, or nil.
+func inputRecord(fake *Server, runID, typ, requestID string) map[string]any {
+	for _, rec := range fake.Records(runID) {
+		data, _ := rec["data"].(map[string]any)
+		if rec["type"] == typ && data["requestId"] == requestID {
+			return data
+		}
+	}
+	return nil
+}
+
+// pngMeta is what lux records of the png attachment named name.
+func pngMeta(name string) []any {
+	sum := sha256.Sum256(png)
+	return []any{map[string]any{"name": name, "contentType": "image/png", "size": len(png), "sha256": hex.EncodeToString(sum[:])}}
+}
+
+// What lux records of an input's images is their metadata, never the bytes:
+// on the accepted answer, on a failure, and on the prompt.
+func TestLuxRecordsTheMetadataOfImagesNeverTheBytes(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
-	c, run := submitRun(t, fake)
-	awaitRun(t, fake, run.ID, "never ran", func(r *Run) bool { return r.busy })
-	if err := c.InputWith(context.Background(), run.ID, lux.InputRequest{RequestID: "dir_1",
-		Attachments: []lux.Attachment{{Name: "a.png", ContentType: "image/png", Data: png}}}); err != nil {
+	c := c0(t, fake)
+	run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go",
+		Attachments: []lux.Attachment{{Name: "design.png", ContentType: "image/png", Data: png}}}}, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	sum := sha256.Sum256(png)
-	for _, rec := range fake.runs[run.ID].records {
-		data, _ := rec.Event["data"].(map[string]any)
-		if rec.Event["type"] != lux.RecordInput || data["requestId"] != "dir_1" {
-			continue
+	awaitRun(t, fake, run.ID, "never ran", func(r *Run) bool { return r.busy })
+	for _, id := range []string{"dir_1", "dir_2"} {
+		if err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "see", RequestID: id,
+			Attachments: []lux.Attachment{{Name: id + ".png", ContentType: "image/png", Data: png}}}); err != nil {
+			t.Fatal(err)
 		}
-		atts, _ := data["attachments"].([]any)
-		if len(atts) != 1 {
-			t.Fatalf("lux.input carried %v", data["attachments"])
-		}
-		a := atts[0].(map[string]any)
-		if a["name"] != "a.png" || a["contentType"] != "image/png" || a["size"] != len(png) || a["sha256"] != hex.EncodeToString(sum[:]) {
-			t.Errorf("metadata %v", a)
-		}
-		if _, ok := a["data"]; ok {
-			t.Error("lux.input recorded the bytes")
-		}
-		return
 	}
-	t.Fatal("no accepted lux.input for dir_1")
+	fake.FailInput(run.ID, "dir_2", "the agent errored")
+
+	for _, c := range []struct {
+		typ, id string
+		want    map[string]any
+	}{
+		{lux.RecordInput, "prompt", map[string]any{"requestId": "prompt", "phase": lux.InputAccepted, "receipt": true,
+			"lands": "next_step", "text": "go", "attachments": pngMeta("design.png")}},
+		{lux.RecordInput, "dir_1", map[string]any{"requestId": "dir_1", "phase": lux.InputAccepted, "receipt": true,
+			"lands": "next_step", "text": "see", "attachments": pngMeta("dir_1.png")}},
+		{lux.RecordInputFailed, "dir_2", map[string]any{"requestId": "dir_2", "error": "the agent errored",
+			"attachments": pngMeta("dir_2.png")}},
+	} {
+		if got := inputRecord(fake, run.ID, c.typ, c.id); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s %s:\n got %#v\nwant %#v", c.typ, c.id, got, c.want)
+		}
+	}
+}
+
+// luxd refuses a body over 8 MiB, an input's or a submit's, before reading
+// it; dude's 5 MiB a message keeps six images under it.
+func TestTheFakeRefusesABodyOverLuxsLimit(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	c, run := submitRun(t, fake)
+	awaitRun(t, fake, run.ID, "never ran", func(r *Run) bool { return r.State == "running" })
+	sixAtTheLimit := make([]lux.Attachment, 6)
+	for i := range sixAtTheLimit {
+		sixAtTheLimit[i] = lux.Attachment{Name: fmt.Sprintf("%d.png", i), ContentType: "image/png",
+			Data: append(append([]byte{}, png...), make([]byte, (5<<20)/6-len(png))...)}
+	}
+	if err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "six", RequestID: "six", Attachments: sixAtTheLimit}); err != nil {
+		t.Fatalf("six images at 5 MiB together: %v", err)
+	}
+	big := lux.Attachment{Name: "big.png", ContentType: "image/png", Data: append(append([]byte{}, png...), make([]byte, 4<<20)...)}
+	err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "two", RequestID: "two", Attachments: []lux.Attachment{big, big}})
+	if le, ok := lux.AsError(err); !ok || le.Status != 400 || le.Code != "bad_request" {
+		t.Errorf("an input of 8 MiB of images: %v, want 400", err)
+	}
+	_, err = c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go",
+		Attachments: []lux.Attachment{big, big}}}, "")
+	if le, ok := lux.AsError(err); !ok || le.Status != 400 || le.Code != "bad_request" {
+		t.Errorf("a submit of 8 MiB of images: %v, want 400", err)
+	}
 }
 
 // A generic workload has nowhere to put an image, at submit or on input.

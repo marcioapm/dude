@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 )
@@ -103,19 +104,31 @@ func TestASteerRefusesImagesThatAreNotItsTasksToSend(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	w.upload(b, "att_mine", wi, "mine.png", screenshot)
 	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
+	// Two that are 5 MiB together and one more byte (the row's size is
+	// what counts, so the bucket holds a small stand-in).
+	w.uploadSized(b, "att_big1", wi, 3<<20)
+	w.uploadSized(b, "att_big2", wi, 2<<20+1)
+	// Another organization's, on its own task: not visible here at all.
+	foreign := dbtest.Org(t, w.owner)
+	mustExec(t, w.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'F', 'prj_'||$1, 'F')`, foreign)
+	mustExec(t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_'||$1, $1, 'prj_'||$1, 1, 'F', 'F')`, foreign)
+	mustExec(t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
+		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
+		VALUES ('att_foreign', $1, 'wi_'||$1, 'f.png', 'image/png', 1, 1, 1, 'x', 'k', 'image/png', 1, 1, 1, 'k.o')`, foreign)
 
 	for _, c := range []struct {
 		ids  []string
 		want string
 	}{
 		{[]string{"att_theirs"}, "image att_theirs is not one of this task's"},
+		{[]string{"att_foreign"}, "image att_foreign is not one of this task's"},
 		{[]string{"att_nowhere"}, "image att_nowhere is not one of this task's"},
 		{[]string{"att_mine", "att_mine"}, "image att_mine is named twice"},
 		{[]string{"a", "b", "c", "d", "e", "f", "g"}, "a message carries at most 6 images"},
+		{[]string{"att_big1", "att_big2"}, "a message's images are at most 5 MiB together"},
 	} {
 		status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "see", "attachmentIds": c.ids})
-		msg, _ := body["error"].(map[string]any)["message"].(string)
-		if status != 400 || msg != c.want {
+		if msg := errorMessage(body); status != 400 || msg != c.want {
 			t.Errorf("%v: %d %q, want 400 %q", c.ids, status, msg, c.want)
 		}
 	}
@@ -138,6 +151,75 @@ func TestASteerRefusesImagesThatAreNotItsTasksToSend(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.steered'
 		AND payload->'attachments'->0->>'name' = 'mine.png'`, runID); n != 1 {
 		t.Errorf("run.steered does not carry the image: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_foreign' AND attached_at IS NULL`); n != 1 {
+		t.Error("another organization's image was attached")
+	}
+
+	// Six that are exactly 5 MiB together are a message.
+	var six []string
+	for i := range 6 {
+		size := (5 << 20) / 6
+		if i == 0 {
+			size += (5 << 20) % 6
+		}
+		id := fmt.Sprintf("att_six%d", i)
+		w.uploadSized(b, id, wi, size)
+		six = append(six, id)
+	}
+	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "all six", "attachmentIds": six}); status != 201 {
+		t.Fatalf("six images at 5 MiB together: %d %v", status, body)
+	}
+}
+
+// uploadSized records an upload whose row says it is size bytes; the bucket
+// holds a small PNG for it.
+func (w *world) uploadSized(b bucket, id, task string, size int) {
+	w.t.Helper()
+	key := "attachments/" + id
+	b[key] = screenshot
+	mustExec(w.t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
+		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
+		VALUES ($1, $2, $3, $1||'.png', 'image/png', 10, 10, $4, 'x', $5, 'image/png', 20, 20, $4, $5||'.o')`,
+		id, w.org, task, size, key)
+}
+
+// An answer may be an image alone: it reaches the agent with the question
+// it answers.
+func TestAnAnswerMayBeAnImageAlone(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	b := w.withImages()
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: `{"question":"Which layout?"}`, Reply: "Done.",
+			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the question", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE task_id = $1`, wi).Scan(&qid)
+	w.upload(b, "att_layout", wi, "layout.png", screenshot)
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": " "}); status != 400 || errorMessage(body) != "text or an image is required" {
+		t.Errorf("an empty answer: %d %v", status, body)
+	}
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "", "attachmentIds": []string{"att_layout"}}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	var directive string
+	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_layout'`).Scan(&directive)
+	if got := w.lux.Attachments(w.lux.Runs()[0].ID)[directive]; len(got) != 1 || got[0].Name != "layout.png" {
+		t.Fatalf("the agent got %+v with the answer", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.answered'
+		AND payload->'attachments'->0->>'id' = 'att_layout'`, wi); n != 1 {
+		t.Errorf("question.answered does not carry the image")
 	}
 }
 
