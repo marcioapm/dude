@@ -653,11 +653,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 	}); err != nil {
 		return err
 	}
-	// A resume whose first output committed with no timing after it (the
-	// orchestrator stopped in between) is timed now.
-	if err := s.timeResumes(ctx, r, 0); err != nil && ctx.Err() == nil {
-		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "error", err)
-	}
+	s.timeResumesLater(r)
 
 	frames := make(chan lux.Frame, 256)
 	read := make(chan error, 1)

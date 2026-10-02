@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -102,7 +103,7 @@ const woken = `CASE $3
 func (s *Syncer) recordResume(ctx context.Context, tx pgx.Tx, r phaseRun, before lux.Run) {
 	epoch := nextEpoch(before)
 	_, prev := placementsAround(before.Placements, epoch)
-	s.bestEffort(ctx, tx, r, "resume", func(tx pgx.Tx) error {
+	s.bestEffort(ctx, tx, r, "resume", func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at)
 			SELECT r.id, r.organization_id, $2, $3, `+woken+`, clock_timestamp() FROM runs r WHERE r.id = $1 AND r.status = 'paused'
 			ON CONFLICT (run_id, epoch) DO NOTHING`, r.ID, epoch, resumeCause(r)); err != nil {
@@ -138,7 +139,7 @@ const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_
 // resumeRunning records lux reporting the Run running again, and has its
 // placements read once the batch commits.
 func (t *translator) resumeRunning(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
-	s.bestEffort(ctx, tx, t.run, "running", func(tx pgx.Tx) error {
+	s.bestEffort(ctx, tx, t.run, "running", func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET running_at = clock_timestamp()
 			WHERE run_id = $1 AND running_at IS NULL AND `+latestResume+` RETURNING epoch`, t.run.ID, epoch)
 		if err != nil {
@@ -159,7 +160,7 @@ func (t *translator) resumeBusy(ctx context.Context, tx pgx.Tx, s *Syncer, epoch
 		return
 	}
 	t.busyEpoch = epoch
-	s.bestEffort(ctx, tx, t.run, "busy", func(tx pgx.Tx) error {
+	s.bestEffort(ctx, tx, t.run, "busy", func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE run_resumes SET busy_at = clock_timestamp()
 			WHERE run_id = $1 AND busy_at IS NULL AND `+latestResume, t.run.ID, epoch)
 		return err
@@ -174,7 +175,7 @@ func (t *translator) resumeOutput(ctx context.Context, tx pgx.Tx, s *Syncer, epo
 		return
 	}
 	t.outputEpoch = epoch
-	s.bestEffort(ctx, tx, t.run, "first output", func(tx pgx.Tx) error {
+	s.bestEffort(ctx, tx, t.run, "first output", func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET first_output_at = clock_timestamp()
 			WHERE run_id = $1 AND first_output_at IS NULL AND `+latestResume+`
 			RETURNING epoch, assigned_at IS NULL OR image_ready_at IS NULL OR volumes_restored_at IS NULL
@@ -221,6 +222,20 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 	}
 }
 
+// timeResumesLater writes, in the background, run.resume.timed for every
+// resume of r whose first output is in and that is not timed yet: one a
+// batch committed whose follow-up never ran (the orchestrator stopped in
+// between).
+func (s *Syncer) timeResumesLater(r phaseRun) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.timeResumes(ctx, r, 0); err != nil {
+			s.logger().Warn("recording a resume's timing failed", "run", r.ID, "error", err)
+		}
+	}()
+}
+
 // readPlacements reads the Run from lux and records the placements of the
 // resume into epoch.
 func (s *Syncer) readPlacements(ctx context.Context, r phaseRun, epoch int) error {
@@ -234,16 +249,63 @@ func (s *Syncer) readPlacements(ctx context.Context, r phaseRun, epoch int) erro
 	})
 }
 
-// bestEffort runs fn in a savepoint of tx: a failure is undone and
-// logged, and the transaction carries on as if fn had not run.
-func (s *Syncer) bestEffort(ctx context.Context, tx pgx.Tx, r phaseRun, what string, fn func(pgx.Tx) error) {
+// The Postgres-side budget of each timing statement in a Run's
+// transaction: a row lock held elsewhere, or a slow statement, fails it
+// as a statement error the savepoint undoes, instead of holding up the
+// Run's batch.
+const (
+	timingLockTimeout      = 100 * time.Millisecond
+	timingStatementTimeout = 250 * time.Millisecond
+)
+
+// timingBudget is the lock and statement timeouts for timing work under
+// ctx: the defaults, or less when the Run's own deadline is closer, so
+// timing always leaves the Run at least half of what remains. false when
+// too little remains to try.
+func timingBudget(ctx context.Context) (lock, statement time.Duration, ok bool) {
+	lock, statement = timingLockTimeout, timingStatementTimeout
+	if deadline, has := ctx.Deadline(); has {
+		half := time.Until(deadline) / 2
+		if half < 5*time.Millisecond {
+			return 0, 0, false
+		}
+		lock, statement = min(lock, half), min(statement, half)
+	}
+	return lock, statement, true
+}
+
+// bestEffort runs fn in a savepoint of tx, under the timing budget: a
+// failure is undone and logged, and the transaction carries on as if fn
+// had not run, with its own lock_timeout and statement_timeout.
+//
+// fn's context is never cancelled: the Run's context ending while a
+// timing statement waits would make pgx close the connection under the
+// Run's transaction. Postgres's timeouts bound it instead.
+func (s *Syncer) bestEffort(ctx context.Context, tx pgx.Tx, r phaseRun, what string, fn func(context.Context, pgx.Tx) error) {
+	lock, statement, ok := timingBudget(ctx)
+	if !ok || ctx.Err() != nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	var lockWas, statementWas string
 	sp, err := tx.Begin(ctx)
 	if err == nil {
-		if err = fn(sp); err == nil {
-			err = sp.Commit(ctx)
+		// SET LOCAL, in its function form, so the values are parameters.
+		err = sp.QueryRow(ctx, `SELECT current_setting('lock_timeout'), current_setting('statement_timeout'),
+			set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
+			strconv.FormatInt(lock.Milliseconds(), 10), strconv.FormatInt(statement.Milliseconds(), 10)).
+			Scan(&lockWas, &statementWas, nil, nil)
+		if err == nil {
+			if err = fn(ctx, sp); err == nil {
+				err = sp.Commit(ctx)
+			}
 		}
 		if err != nil {
+			// Back to the savepoint, which puts the settings back too.
 			_ = sp.Rollback(ctx)
+		} else {
+			_, err = tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
+				lockWas, statementWas)
 		}
 	}
 	if err != nil {
