@@ -52,3 +52,8 @@ def test_stop_workflows_aborts_its_tasks_live_workflows_and_nothing_else(env, or
     assert after[unrelated] == before[unrelated]
     # The leases are the claimed steps cleanup waits on, its own tasks' only.
     assert sorted(cycler.claimed_steps()) == sorted([running, waiting])
+    # A step that returned after its workflow was stopped leaves its lease to
+    # lapse: once lapsed it is no longer claimed.
+    execute(env.owner_dsn, "UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE id = %s",
+            (running,))
+    assert cycler.claimed_steps() == [waiting]
