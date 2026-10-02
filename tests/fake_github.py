@@ -48,6 +48,26 @@ REVIEWERS = [
 ]
 
 @dataclass
+class TokenProfile:
+    """What GitHub lets one token do, as GitHub answers it.
+
+    The default can do everything and is neither classic nor fine-grained by
+    its headers. `scopes` makes it classic: every answer carries them in
+    X-OAuth-Scopes. `checks=False` is a fine-grained token, which GitHub
+    offers no Checks permission: 403 on the check runs of a commit that has
+    some, and 200 with none on a commit that has none, as GitHub answers.
+    """
+
+    scopes: str | None = None
+    checks: bool = True
+    pulls_write: bool = True
+    push: bool = True
+    hooks_write: bool = True
+    # Endpoints answered with a rate-limit 403 ("check-runs").
+    rate_limited: set[str] = field(default_factory=set)
+
+
+@dataclass
 class PullRequest:
     number: int
     head: str
@@ -96,6 +116,10 @@ class FakeGitHub:
         # team. And the owner organization's members.
         self.permissions: dict[str, str] = {}
         self.members: set[str] = set()
+        # The tokens GitHub knows, by value; shared with sibling repositories.
+        self.tokens: dict[str, TokenProfile] = {"fake-token": TokenProfile()}
+        # Who owns the repositories, as GitHub's repository answer says.
+        self.owner_type = "User"
         self._init_repository()
 
     def _init_repository(self) -> None:
@@ -325,6 +349,25 @@ class FakeGitHub:
             if status == "completed":
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
+    def open_pull(self, head: str) -> str:
+        """A person's pull request from a new branch off main, opened before
+        dude was watching (no webhook); its head commit."""
+        self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha("main"))
+        sha = self.commit(head, f"work on {head}")
+        with self._lock:
+            number = len(self.pulls) + 1
+            self.pulls[number] = PullRequest(number=number, head=head, base="main", title=head, body="", draft=False)
+        return sha
+
+    def add_check_run(self, sha: str, name: str = "ci") -> None:
+        """A completed check run on a commit, with no webhook: CI that ran
+        before dude was looking."""
+        with self._lock:
+            self._next_id += 1
+            self.checks.setdefault(sha, {})[name] = {
+                "id": self._next_id, "name": name, "kind": "check_run", "status": "completed",
+                "conclusion": "success", "started_at": _now(), "completed_at": _now()}
+
     def send_webhook(self, event: str, payload: dict, secret: str | None = None) -> int:
         """Deliver a signed webhook to dude, as GitHub would. Returns the status."""
         import requests
@@ -359,13 +402,42 @@ class FakeGitHub:
             def log_message(self, *args):  # quiet
                 pass
 
-            def _send(self, status: int, body) -> None:
+            def _token(self) -> str:
+                auth = self.headers.get("authorization") or ""
+                scheme, _, value = auth.partition(" ")
+                if scheme == "Basic":
+                    return base64.b64decode(value).decode(errors="replace").partition(":")[2]
+                return value if scheme in ("Bearer", "token") else ""
+
+            def _profile(self) -> TokenProfile | None:
+                return root.tokens.get(self._token())
+
+            def _send(self, status: int, body, headers: dict[str, str] | None = None) -> None:
                 data = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(data)))
+                # A classic token's scopes come back on every answer.
+                profile = self._profile()
+                if profile and profile.scopes is not None:
+                    self.send_header("x-oauth-scopes", profile.scopes)
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
+
+            def _refuse(self, permission: str) -> None:
+                """A fine-grained token without the permission, as GitHub refuses it."""
+                self._send(403, {"message": "Resource not accessible by personal access token"},
+                           {"x-accepted-github-permissions": permission})
+
+            def _rate_limited(self, endpoint: str) -> bool:
+                profile = self._profile()
+                if profile and endpoint in profile.rate_limited:
+                    self._send(403, {"message": "API rate limit exceeded for user ID 1."},
+                               {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(time.time()) + 600)})
+                    return True
+                return False
 
             def _pull_json(self, pr: PullRequest) -> dict:
                 return {
@@ -484,11 +556,21 @@ class FakeGitHub:
                         return self._send(422, {"message": "Reference already exists"})
                     return self._send(201, {"ref": body["ref"]})
                 if self.path == f"/repos/{self.github.owner}/{self.github.repo}/hooks":
+                    if not (self._profile() or TokenProfile()).hooks_write:
+                        return self._refuse("repository_hooks=write")
+                    if not (body.get("config") or {}).get("url"):
+                        return self._send(422, {"message": "Validation Failed",
+                                                "errors": [{"resource": "Hook", "code": "custom", "message": "Config must contain URL."}]})
                     with self.github._lock:
                         hook = {**body, "id": len(self.github.hooks) + 1}
                         self.github.hooks.append(hook)
                     return self._send(201, hook)
                 if re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/pulls", self.path):
+                    if not (self._profile() or TokenProfile()).pulls_write:
+                        return self._refuse("pull_requests=write")
+                    if not body.get("head") or not body.get("base"):
+                        return self._send(422, {"message": "Validation Failed", "errors": [
+                            {"resource": "PullRequest", "code": "missing_field", "field": "base, head"}]})
                     if not self.github.branch_sha(body["head"]):
                         return self._send(422, {"message": f"No commits on {body['head']}"})
                     with self.github._lock:
@@ -540,11 +622,13 @@ class FakeGitHub:
                         return self._send(404, {"message": "Not Found"})
                     with root._lock:
                         root.receive_requests.append(self.path)
-                    expected = "Basic " + base64.b64encode(b"x-access-token:fake-token").decode()
-                    if self.headers.get("authorization") != expected:
+                    profile = self._profile() if (self.headers.get("authorization") or "").startswith("Basic ") else None
+                    if profile is None:
                         return self._send(401, {"message": "Bad credentials"})
                     if query != "service=git-receive-pack":
                         return self._send(400, {"message": "Expected receive-pack discovery"})
+                    if not profile.push:
+                        return self._send(403, {"message": "Write access to repository not granted."})
                     data = b"001f# service=git-receive-pack\n0000"
                     self.send_response(200)
                     self.send_header("content-type", "application/x-git-receive-pack-advertisement")
@@ -564,10 +648,29 @@ class FakeGitHub:
 
                 prefix = f"/repos/{self.github.owner}/{self.github.repo}"
                 if path == "/user":
-                    # Who the token is. The fixture accepts only its own token.
-                    if self.headers.get("authorization") != "Bearer fake-token":
+                    # Who the token is. The fixture accepts only the tokens it knows.
+                    if self._profile() is None or not (self.headers.get("authorization") or "").startswith("Bearer "):
                         return self._send(401, {"message": "Bad credentials"})
                     return self._send(200, {"login": "dude-bot"})
+                if path == prefix:
+                    return self._send(200, {"full_name": f"{self.github.owner}/{self.github.repo}", "private": True,
+                                            "default_branch": "main", "owner": {"login": self.github.owner, "type": root.owner_type}})
+                if path == f"{prefix}/pulls":
+                    from urllib.parse import parse_qs
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    head = q.get("head", "").partition(":")[2]
+                    with self.github._lock:
+                        pulls = [p for p in sorted(self.github.pulls.values(), key=lambda p: -p.number)
+                                 if q.get("state", "open") in ("all", p.state) and (not head or p.head == head)
+                                 and (not q.get("base") or p.base == q["base"])]
+                    return self._send(200, [self._pull_json(pr) for pr in pulls])
+                if path == f"{prefix}/actions/runs":
+                    # A workflow run per commit with check runs: what Actions reported on.
+                    with self.github._lock:
+                        shas = [sha for sha, checks in self.github.checks.items()
+                                if any(c["kind"] == "check_run" for c in checks.values())]
+                    runs = [{"id": i + 1, "head_sha": sha} for i, sha in enumerate(reversed(shas))]
+                    return self._send(200, {"total_count": len(runs), "workflow_runs": runs})
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
@@ -597,10 +700,16 @@ class FakeGitHub:
                     return self._send(200, {"sha": m[1], "author": None,
                                             "commit": {"author": {"name": author.stdout.strip()}}})
                 if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/check-runs", path):
+                    if self._rate_limited("check-runs"):
+                        return None
                     runs = [{"id": c["id"], "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
                              "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/runs/{c['id']}",
                              "started_at": c["started_at"], "completed_at": c["completed_at"], "app": {"slug": "github-actions"}}
                             for c in self._checks(m[1], "check_run")]
+                    # GitHub refuses a token without check-run access only
+                    # when there are runs to show; with none it answers 0.
+                    if runs and not (self._profile() or TokenProfile()).checks:
+                        return self._refuse("checks=read")
                     return self._send(200, {"total_count": len(runs), "check_runs": runs})
                 if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/status", path):
                     statuses = [{"context": c["name"], "state": c["conclusion"] or "pending",
