@@ -284,8 +284,8 @@ def test_a_task_has_people_the_owner_first(client: ApiClient, env, project: dict
 def test_an_owner_answers_with_any_of_their_keys(client: ApiClient, env, forge_project: dict):
     """The orchestrator's owner check is by person: a second key of the
     owner's answers; someone else's is refused, naming the owner."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     task = client.create_task(forge_project["id"], "Ask me")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     question = wait_until(lambda: next(iter(client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"]), None),
@@ -324,8 +324,8 @@ def test_waiting_on_you_is_split_by_whose_it_is(
 ):
     """Bo's agent asks Bo. Bo sees it as his, loud; the first person sees it
     under Waiting on others, quietly, and takes it over — then it is theirs."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     bo, bo_client = _invite(client, env, "Bo")
     task = bo_client.create_task(forge_project["id"], "Bo's question")
     assert bo_client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
@@ -446,10 +446,11 @@ def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, pro
     _, bo = _invite(client, env, "Bo")
     pid = project["id"]
     task = bo.create_task(pid, "Bo's own task")
+    tier = client.tier_for("fake/scripted")
     refused = [
-        bo.patch("/v1/settings/organization", {"roles": {"implementer": {"model": "fake/scripted"}}}),
+        bo.patch("/v1/settings/organization", {"roles": {"implementer": {"tier": tier}}}),
         bo.post("/v1/prompts/implementer", {"body": "# Mine now"}),
-        bo.patch(f"/v1/projects/{pid}/settings", {"roles": {"reviewer": {"model": "fake/scripted"}}}),
+        bo.patch(f"/v1/projects/{pid}/settings", {"roles": {"reviewer": {"tier": tier}}}),
         bo.post("/v1/prompts/implementer", {"projectId": pid, "mode": "add", "body": "More"}),
         bo.get("/v1/forge/webhook-secret"),
         bo.post("/v1/forge/webhook-secret/rotate", {}),
@@ -457,12 +458,17 @@ def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, pro
         bo.patch("/v1/forge/settings", {"whoCanWake": "anyone"}),
         bo.post("/v1/forge/credential", {"auth": "pat", "secret": "a-token-of-my-own"}),
         # The same settings by the project's own route, and its repositories.
-        bo.patch(f"/v1/projects/{pid}", {"agentModels": {"implementer": {"model": "fake/scripted"}}}),
+        bo.patch(f"/v1/projects/{pid}", {"agentModels": {"implementer": {"tier": tier}}}),
         bo.post(f"/v1/projects/{pid}/repositories", {"name": "extra", "url": "https://github.com/acme/extra.git"}),
         # Or a project of their own, or looser rules and other models for one task.
-        bo.post("/v1/projects", {"name": "Mine", "slug": "mine", "agentModels": {"implementer": {"model": "fake/scripted"}}}),
+        bo.post("/v1/projects", {"name": "Mine", "slug": "mine", "agentModels": {"implementer": {"tier": tier}}}),
         bo.post(f"/v1/tasks/{task['id']}/deliver", {"policy": {"requiredReviewers": []}}),
-        bo.post("/v1/runs/run_any/sessions", {"role": "implementer", "model": "fake/scripted"}),
+        bo.post("/v1/runs/run_any/sessions", {"role": "implementer", "tier": tier}),
+        # The tiers themselves, and a test message on the organisation's tokens.
+        bo.post("/v1/models/tiers", {"name": "Mine", "model": "claude-x"}),
+        bo.put(f"/v1/models/tiers/{tier}", {"name": "Mine", "model": "claude-x"}),
+        bo.request("DELETE", f"/v1/models/tiers/{tier}", json={"replacement": None}),
+        bo.post("/v1/models/test", {"model": "claude-x"}),
     ]
     assert [r.status_code for r in refused] == [403] * len(refused), [(r.request.url, r.status_code, r.text[:80]) for r in refused]
     assert all(r.json()["error"]["code"] == "not_admin" for r in refused), [r.text[:80] for r in refused]

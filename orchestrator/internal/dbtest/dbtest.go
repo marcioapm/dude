@@ -123,7 +123,7 @@ func setup() {
 }
 
 // Upgrade gives a migration test a database of its own, migrated by the
-// files before version (e.g. "069") and nothing else, as a deploy meets
+// files before version (e.g. "070") and nothing else, as a deploy meets
 // one; apply runs the rest. owner is its owner-role connection.
 func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 	t.Helper()
@@ -190,6 +190,22 @@ func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 		defer lock()()
 		run(false)
 	}
+}
+
+// Builder connects to owner's database as dude-image-builder's role
+// (migration 068), which aiverse gives a password in production.
+func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := owner.Exec(ctx, `ALTER ROLE dude_builder PASSWORD 'dude_builder'`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.Open(ctx, fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	return b
 }
 
 // Org inserts an organization and returns its id.

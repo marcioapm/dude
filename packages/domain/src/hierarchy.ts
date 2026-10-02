@@ -42,23 +42,19 @@ export type Effort = z.infer<typeof effortSchema>;
 /** Running time allowed per session, in minutes: up to a week. */
 export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
 
-export const MODEL_PROVIDERS = ["llm-anthropic", "llm-openai"] as const;
-// Explicit exceptions for orchestrator/internal/fakeagent's test harness, not image providers.
+// The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
 export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"] as const;
-export const MODEL_ACCEPTED_FORM = `model must be ${MODEL_PROVIDERS.map((provider) => `${provider}/<model>`).join(" or ")} (non-empty model, no whitespace or extra slash, at most 200 characters); test harness exceptions: ${TEST_HARNESS_MODELS.join(", ")}`;
-export const modelSelectionSchema = z.string().refine((value) => {
-  if (value.length > 200) return false;
-  if ((TEST_HARNESS_MODELS as readonly string[]).includes(value)) return true;
-  const [provider, model, extra] = value.split("/");
-  return (MODEL_PROVIDERS as readonly string[]).includes(provider ?? "") && Boolean(model) && extra === undefined && !/\s/u.test(value);
-}, MODEL_ACCEPTED_FORM);
+/** What a role that still names a model is told. */
+export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 
 export const agentModelConfigSchema = z.object({
   /**
+   * The model tier its sessions run on (an organization's tier id).
    * Optional at each layer: a project that changes only a role's effort
-   * keeps its organization's model (resolveAgentModel, field by field).
+   * keeps its organization's tier (resolveTier, field by field).
    */
-  model: modelSelectionSchema.optional(),
+  tier: z.string().min(1).max(100).optional(),
+  model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
@@ -80,6 +76,8 @@ export const agentModelConfigSchema = z.object({
   timeLimitMinutes: timeLimitMinutesSchema.optional(),
   /** The machine size its sessions run on (an organization's size id); unset is the default size. */
   machineSize: z.string().min(1).optional(),
+  /** The image its sessions run in (an image library id); unset falls through to the project's image. */
+  image: z.string().min(1).optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -184,8 +182,13 @@ export const projectSchema = z.object({
   repositories: z.array(repositorySchema).default([]),
   /** Per-role model selection for this project. */
   agentModels: agentModelsSchema,
-  /** Container image for Run runtimes; null uses the system default. */
+  /**
+   * A container image typed by hand, from before the image library: used
+   * only when runtimeImageId is null. The API takes it only as null (clear).
+   */
   runtimeImage: z.string().nullable().default(null),
+  /** The library image its agents run in; null: the organization's default base. */
+  runtimeImageId: z.string().nullable().default(null),
   /** How its work is delivered, over the factory's defaults. */
   deliveryPolicy: deliveryPolicySchema.default({}),
   createdAt: z.string().datetime({ offset: true }),
@@ -413,7 +416,10 @@ export const runSchema = z.object({
    * already been translated into dude's own events.
    */
   harness: z.string().nullable().default(null),
+  /** The model dude requested when it was submitted; what the proxy served is the proxy's to say. */
   model: z.string().nullable().default(null),
+  /** The tier's name then; null for a Run from before tiers. */
+  modelTier: z.string().nullable().default(null),
   /**
    * Why dude paused it itself, and so what takes it up again: "person" —
    * parked while it waits for an answer or a decision, which resumes it;
@@ -454,6 +460,40 @@ export const runSchema = z.object({
       from: z.string().optional(),
       /** The memory limit lux gave its container, in bytes, when lux reports one. */
       memoryLimit: z.number().nullable().optional(),
+    })
+    .nullable()
+    .default(null),
+  /**
+   * The library image it got ({imageId, name, versionId, version, ref,
+   * layer}), fixed when it was resolved; null for a Run on a typed image or
+   * dude's fallback.
+   */
+  image: z
+    .object({
+      imageId: z.string(),
+      name: z.string(),
+      versionId: z.string(),
+      version: z.number(),
+      ref: z.string(),
+      layer: z.string(),
+    })
+    .nullable()
+    .default(null),
+  /**
+   * While it waits for its image (its dude layer, or its first version): the
+   * job, and where it is; builderOfflineSince when the builder has not been
+   * heard from for 2 minutes, from its last heartbeat (or, never seen, from
+   * when the Run began to wait).
+   */
+  preparingImage: z
+    .object({
+      buildId: z.string(),
+      state: z.string(),
+      // build: its image's first version; finish: the dude layer added to it.
+      kind: z.enum(["build", "finish"]).default("finish"),
+      imageName: z.string(),
+      version: z.number().nullable(),
+      builderOfflineSince: z.string().datetime({ offset: true }).nullable().default(null),
     })
     .nullable()
     .default(null),

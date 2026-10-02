@@ -35,6 +35,7 @@ without the file, or without the word, does not support the feature.
 | Feature | What it promises |
 | --- | --- |
 | `validate` | `dude-orchestrator validate` and `dude-backend validate` exist ([Validating a configuration](#validating-a-configuration)). Check it first: an older `dude-orchestrator` ignores the argument and **starts the service**. |
+| `image-builder` | `bin/dude-image-builder` exists, migration 068 creates the `dude_builder` role it connects as, and the `[images]` and `[builder]` settings are known ([design](design/images.md)). Run the builder only for a release that declares it. It exits non-zero at start unless `podman info` reports the `cpu` and `memory` cgroup controllers for its user, and writes a heartbeat every 30 s that the Images page reads. |
 
 A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
 any registry lux's runners can pull from, pinned by digest
@@ -514,16 +515,21 @@ dude gives every real agent Run these, and nothing else about its model:
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
   orchestrator's variables of the same names;
 - `OPENCODE_CONFIG_CONTENT`, the Run's model and effort as inline OpenCode
-  config, e.g. `{"model":"llm-anthropic/claude-sonnet-5","agent":{"build":{"reasoningEffort":"high"}}}`
-  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode merges
-  it over its file config.
+  config. The model is the one the role's tier requests, declared under the
+  provider its name goes through (`claude-*`: `llm-anthropic`; anything else:
+  `llm-openai`), e.g.
+  `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{}}}},"agent":{"build":{"reasoningEffort":"high"}}}`
+  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode
+  deep-merges it over its file config, so a model the file declares keeps its
+  `limit` and `reasoning`.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
 the URL and key from the environment. The dev image
 (`images/runtime/opencode.json`) and the production image define the same
 two providers, `llm-anthropic` (`@ai-sdk/anthropic`) and `llm-openai`
-(`@ai-sdk/openai-compatible`), so model names in settings work in both:
+(`@ai-sdk/openai-compatible`); dude writes every Run's model under one of
+them:
 
 ```json
 {
@@ -549,23 +555,21 @@ managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
 it sets would override each Run's model and effort. Both images use
 `/usr/local/share/dude/opencode.json`.
 
-A role's model in dude's settings must be `llm-anthropic/<model>` or
-`llm-openai/<model>`, with a non-empty model name, no whitespace or extra
-slash, and at most 200 characters. Model names are not a fixed catalog:
-the agent image must define the selected model. Check the selected image's
-OpenCode `provider.models` catalog, not only the LLM endpoint: an endpoint
-serving a model does not register it with OpenCode. The dev catalog is
-`images/runtime/opencode.json`; custom images can define other model names
-under the same providers. There is no shared runtime catalog API, so settings
-validate provider/form rather than pinning custom images to the dev catalog.
-Settings writes and project
-creation/updates reject other providers with a 400; legacy stored strings
-remain readable so they can be corrected or reset.
+A role names a model tier, and a tier the model dude requests, as the proxy
+names it (no provider prefix, whitespace or slash; at most 200 characters):
+see [`design/model-tiers.md`](design/model-tiers.md). The model need not be in
+the image's file: dude declares it in each Run's inline config, so any name
+the proxy serves works without an image change. One the file does declare
+keeps the `limit` and `reasoning` it gives it; one it does not gets
+OpenCode's defaults — no context limit (so no automatic compaction) and
+32000 output tokens a request (OpenCode 1.18.34). Declare a model in the
+file when it needs a known context window.
 
-The only exceptions are the test harness models `fake/scripted`, `fake/hang`,
-`fake/tools`, `fake/request`, `fake/wait`, `fake/live`, and `fake/ask`, implemented
-by `orchestrator/internal/fakeagent`. These are deterministic test/demo agents,
-not production image providers; arbitrary `fake/<model>` values are not accepted.
+The only names that are not the proxy's are the test harness models
+`fake/scripted`, `fake/hang`, `fake/tools`, `fake/request`, `fake/wait`,
+`fake/live`, and `fake/ask`, implemented by `orchestrator/internal/fakeagent`.
+These are deterministic test/demo agents, not production image providers;
+arbitrary `fake/<model>` values are not accepted.
 
 ### Upgrading from DUDE_OPENCODE_*
 
@@ -577,9 +581,9 @@ Run as the secrets `opencode_auth` and `opencode_config`
   refs to `opencode_auth` and `opencode_config`, answers 422
   `secrets_required` when they are not supplied, and the Run fails. Finish or
   cancel parked real-model Runs before upgrading, or accept that they fail.
-- Role models in project and organization settings must name a provider the
-  image defines (`llm-anthropic/…`, `llm-openai/…`); a provider from a
-  person's own OpenCode config no longer exists in the Run.
+- Role models are tiers since migration 069, which made each organization's
+  tiers from the models its roles named (see
+  [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
 - A Run keeps the URL, model and effort it started with; only the key is
   supplied again on each resume.
 

@@ -44,23 +44,28 @@ def test_agent_models_round_trip_as_an_object(client: ApiClient):
     When that happens every per-role lookup silently misses and roles fall
     back to defaults, which is hard to notice and easy to reintroduce.
     """
-    models = {"conductor": {"model": "llm-anthropic/claude-opus-5", "costLimitUsd": 5}}
+    models = {"conductor": {"tier": client.tier_for("claude-opus-5"), "costLimitUsd": 5}}
     created = client.create_project(name="Models", slug="models", agentModels=models)
 
     assert isinstance(created["agentModels"], dict)
-    assert created["agentModels"]["conductor"]["model"] == "llm-anthropic/claude-opus-5"
+    assert created["agentModels"]["conductor"] == models["conductor"]
 
 
 def test_agent_models_can_be_replaced(client: ApiClient):
     project = client.create_project(
-        name="Models", slug="models-update", agentModels={"conductor": {"model": "llm-openai/old"}}
+        name="Models", slug="models-update", agentModels=client.on_models({"conductor": "old"})
     )
 
-    resp = client.patch(
-        f"/v1/projects/{project['id']}", {"agentModels": {"conductor": {"model": "llm-openai/new"}}}
-    )
+    new = client.on_models({"conductor": "new"})
+    resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": new})
     assert resp.status_code == 200
-    assert resp.json()["agentModels"]["conductor"]["model"] == "llm-openai/new"
+    assert resp.json()["agentModels"] == new
+
+
+def test_a_role_names_a_tier_never_a_model(client: ApiClient):
+    resp = client.post("/v1/projects", {"name": "M", "slug": "m-model", "agentModels": {"conductor": {"model": "claude-opus-5"}}})
+    assert resp.status_code == 400
+    assert "a role names a model tier" in resp.json()["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +130,7 @@ def test_session_uses_the_project_model_for_the_role(client: ApiClient, project:
 
     resp = client.create_session(run["id"], "conductor")
     assert resp.status_code == 201
-    assert resp.json()["model"] == "llm-openai/project-conductor"
+    assert resp.json()["model"] == "project-conductor"
 
 
 def test_session_falls_back_to_the_organization_default(client: ApiClient, project: dict):
@@ -138,21 +143,25 @@ def test_session_falls_back_to_the_organization_default(client: ApiClient, proje
     assert resp.json()["model"] == "org-default-reviewer"
 
 
-def test_unconfigured_role_is_rejected_with_a_useful_message(client: ApiClient, project: dict):
+def test_a_role_on_a_tier_with_no_model_is_refused_saying_so(client: ApiClient, project: dict):
     """Better to refuse than to silently pick an arbitrary model."""
     task = client.create_task(project["id"], "Unconfigured")
     run = client.create_run(task["id"])
+    # The project's implementer is on its own tier; the organization's Coder
+    # names no model, so moving it there leaves it with none.
+    coder = next(t for t in client.get("/v1/models/tiers").json()["tiers"] if t["name"] == "Coder")
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"tier": coder["id"]}}})
 
-    resp = client.create_session(run["id"], "qa_browser")
+    resp = client.create_session(run["id"], "implementer")
     assert resp.status_code == 400
-    assert "qa_browser" in resp.json()["error"]["message"]
+    assert resp.json()["error"]["message"] == "the implementer runs on Coder, which names no model yet. An admin sets it in Models."
 
 
-def test_explicit_model_overrides_configuration(client: ApiClient, project: dict):
+def test_explicit_tier_overrides_configuration(client: ApiClient, project: dict):
     task = client.create_task(project["id"], "Override")
     run = client.create_run(task["id"])
 
-    resp = client.create_session(run["id"], "conductor", model="explicit-model")
+    resp = client.create_session(run["id"], "conductor", tier=client.tier_for("explicit-model"))
     assert resp.json()["model"] == "explicit-model"
 
 

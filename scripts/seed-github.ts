@@ -46,8 +46,12 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 // The model is deliberately the scripted fake: this script exists to prove
 // the *publishing* path, and a real model would make the test slow, costly
-// and non-deterministic for no added coverage.
+// and non-deterministic for no added coverage. A role names a tier, so the
+// model goes on a tier of its own.
 const model = process.env.DUDE_MODEL ?? "fake/scripted";
+const tiers = await call<{ tiers: Array<{ id: string; model: string | null }> }>("POST", "/v1/models/tiers",
+  { name: `GitHub ${Date.now().toString(36)}`, model });
+const tier = tiers.tiers.find((t) => t.model === model)!.id;
 
 const project = await call<{ id: string; repositories: Array<{ id: string; name: string }> }>(
   "POST",
@@ -55,7 +59,7 @@ const project = await call<{ id: string; repositories: Array<{ id: string; name:
   {
     name: `GitHub (${slug})`,
     slug: `gh-${slug.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${Date.now().toString(36)}`,
-    agentModels: { conductor: { model } },
+    agentModels: { conductor: { tier } },
     repositories: [
       {
         name: "target",

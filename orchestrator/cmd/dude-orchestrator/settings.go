@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
@@ -115,6 +116,10 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	}
 	if err := registry.Check(s.Registry.getenv, agent.DefaultImage); err != nil {
 		return settings{}, fmt.Errorf("registry login: %w", err)
+	}
+	// A layer by tag would change under the Runs finished with it.
+	if agent.Layer != "" && !images.IsDigestRef(agent.Layer) {
+		return settings{}, fmt.Errorf("%s must name the dude layer by digest (…@sha256:<64 hex>), not %q", cfg.Label("DUDE_LAYER_IMAGE"), agent.Layer)
 	}
 
 	s.ReconcileEvery = cfg.Duration("DUDE_PR_RECONCILE")

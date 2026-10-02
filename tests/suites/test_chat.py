@@ -16,7 +16,7 @@ from helpers import ApiClient, query, wait_until
 
 
 def _conductor_project(client: ApiClient, forge_project: dict) -> dict:
-    models = {**forge_project["agentModels"], "conductor": {"model": "fake/scripted"}}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models})
     assert resp.status_code == 200, resp.text
     return resp.json()

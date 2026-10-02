@@ -17,6 +17,8 @@
 //	LUX_URL, LUX_API_KEY         the lux control plane and a `run`-scoped key
 //	LUX_CONSOLE_URL              lux's console, for terminal links (default: LUX_URL)
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
+//	DUDE_LAYER_IMAGE             the dude layer the image library's images are finished with; unset,
+//	                             a Run whose image is a library image fails before lux
 //	DUDE_REGISTRY_AUTH           how lux logs in to pull agent and preview images: none (default), static, or ecr
 //	                             (DUDE_AGENT_IMAGE's ECR registry, a token from the AWS default
 //	                             credential chain, e.g. the instance role, minted fresh for each start)
@@ -57,6 +59,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
@@ -166,7 +169,7 @@ func run(log *slog.Logger) error {
 	}()
 	serverService := preview.service(database, luxClient, log, set.ConsoleURL)
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
-		Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
+		Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
@@ -236,7 +239,8 @@ func run(log *slog.Logger) error {
 		Addr: set.Listen,
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
-			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick}).Handler(),
+			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick,
+			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it

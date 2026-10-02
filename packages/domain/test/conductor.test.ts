@@ -16,12 +16,12 @@ describe("the conductor's settings", () => {
     expect(SETTINGS_ROLE_DESCRIPTION.conductor.length).toBeGreaterThan(10);
   });
 
-  test("its model, effort, time limit and machine can be set, and its warm minutes", () => {
-    const patch = { roles: { conductor: { model: "llm-anthropic/claude-opus-5", effort: "low", timeLimitMinutes: 30, machineSize: "msz_s" } },
+  test("its tier, effort, time limit and machine can be set, and its warm minutes", () => {
+    const patch = { roles: { conductor: { tier: "mtr_thinker", effort: "low", timeLimitMinutes: 30, machineSize: "msz_s" } },
       delivery: { conductorWarmMinutes: 3 } };
     expect(settingsPatchSchema.safeParse(patch).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ delivery: { conductorWarmMinutes: 0 } }).success).toBe(false);
-    expect(settingsPatchSchema.safeParse({ roles: { orchestrator: { model: "llm-openai/x" } } }).success).toBe(false);
+    expect(settingsPatchSchema.safeParse({ roles: { orchestrator: { tier: "mtr_thinker" } } }).success).toBe(false);
   });
 
   test("its machine follows no other role", () => {

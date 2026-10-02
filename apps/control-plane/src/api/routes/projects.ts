@@ -1,8 +1,8 @@
 /**
  * Project and repository routes.
  *
- * Projects own the per-role agent model configuration, which is the knob that
- * decides which model runs as orchestrator, implementer, reviewer and so on.
+ * Projects own the per-role agent configuration: which model tier runs as
+ * orchestrator, implementer, reviewer and so on.
  */
 
 import { z } from "zod";
@@ -18,6 +18,18 @@ import { deleteObject } from "../../storage.ts";
 import { repositoryFields } from "./structure.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { checkTiers } from "./models.ts";
+import { requireImage } from "./images.ts";
+import type { OrgScope } from "../../db/client.ts";
+
+/**
+ * Every image a project's role settings name must be the organization's.
+ * Archived ones pass: agentModels is replaced whole, and a role may still
+ * name one it named before it was archived.
+ */
+async function checkRoleImages(scope: OrgScope, models: Record<string, { image?: string | undefined } | undefined> | undefined) {
+  for (const role of Object.values(models ?? {})) if (role?.image) await requireImage(scope, role.image, role.image);
+}
 
 const slugPattern = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -33,7 +45,9 @@ const createProjectInput = z.object({
   slug: z.string().min(1).max(100).regex(slugPattern, "slug must be lowercase alphanumeric with dashes"),
   description: z.string().max(2000).default(""),
   agentModels: agentModelsSchema,
-  runtimeImage: z.string().nullable().default(null),
+  // A typed image is from before the library: it can only be cleared now.
+  runtimeImage: z.null({ invalid_type_error: "a project's image is picked from the image library: send runtimeImageId" }).default(null),
+  runtimeImageId: z.string().min(1).max(100).nullable().default(null),
   deliveryPolicy: deliveryPolicySchema.default({}),
   repositories: z.array(repositoryInput).default([]),
 });
@@ -50,6 +64,7 @@ interface ProjectRow {
   description: string;
   agentModels: Record<string, unknown>;
   runtimeImage: string | null;
+  runtimeImageId: string | null;
   deliveryPolicy: Record<string, unknown>;
   createdAt: string;
   imageUrl: string | null;
@@ -60,7 +75,7 @@ export const PROJECT_IMAGE_URL = `CASE WHEN image_key IS NOT NULL THEN '/v1/proj
 
 const PROJECT_SELECT = `
   id, organization_id AS "organizationId", name, slug, description,
-  agent_models AS "agentModels", runtime_image AS "runtimeImage",
+  agent_models AS "agentModels", runtime_image AS "runtimeImage", runtime_image_id AS "runtimeImageId",
   delivery_policy AS "deliveryPolicy", created_at AS "createdAt",
   ${PROJECT_IMAGE_URL} AS "imageUrl"`;
 
@@ -77,12 +92,15 @@ async function createProject(ctx: RequestContext): Promise<Response> {
     const existing = await scope.sql`
       SELECT id FROM projects WHERE slug = ${input.slug} LIMIT 1`;
     if (existing.length > 0) return { conflict: true as const };
+    await checkTiers(scope, input.agentModels ?? {});
 
     const projectId = newId("project");
+    if (input.runtimeImageId) await requireImage(scope, input.runtimeImageId);
+    await checkRoleImages(scope, input.agentModels);
     const rows = (await scope.sql`
-      INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, runtime_image, delivery_policy)
+      INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, runtime_image_id, delivery_policy)
       VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${keyPrefix(input.slug)}, ${input.description},
-              ${input.agentModels ?? {}}::jsonb, ${input.runtimeImage}, ${input.deliveryPolicy ?? {}}::jsonb)
+              ${input.agentModels ?? {}}::jsonb, ${input.runtimeImageId}, ${input.deliveryPolicy ?? {}}::jsonb)
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
 
     const repositories = [];
@@ -148,6 +166,12 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
 
   const project = await withOrg(ctx.principal.organizationId, async (scope) => {
+    await checkTiers(scope, input.agentModels ?? {});
+    if (input.runtimeImageId) {
+      const [current] = (await scope.sql`SELECT runtime_image_id AS id FROM projects WHERE id = ${projectId}`) as Array<{ id: string | null }>;
+      await requireImage(scope, input.runtimeImageId, current?.id);
+    }
+    await checkRoleImages(scope, input.agentModels);
     const rows = (await scope.sql`
       UPDATE projects SET
         name          = COALESCE(${input.name ?? null}, name),
@@ -155,8 +179,9 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
         agent_models  = COALESCE(${input.agentModels ?? null}::jsonb,
                                  agent_models),
         delivery_policy = COALESCE(${input.deliveryPolicy ?? null}::jsonb, delivery_policy),
-        runtime_image = CASE WHEN ${input.runtimeImage !== undefined} THEN ${input.runtimeImage ?? null}
-                             ELSE runtime_image END
+        runtime_image = CASE WHEN ${input.runtimeImage !== undefined} THEN NULL ELSE runtime_image END,
+        runtime_image_id = CASE WHEN ${input.runtimeImageId !== undefined} THEN ${input.runtimeImageId ?? null}
+                                ELSE runtime_image_id END
       WHERE id = ${projectId}
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
     return rows[0] ?? null;

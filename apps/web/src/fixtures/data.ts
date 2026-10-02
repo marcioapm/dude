@@ -9,7 +9,7 @@ import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
 import { SETTINGS_ROLES } from "@dude/domain";
-import type { Finding, MachineSizeWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -40,6 +40,7 @@ export const PROJECT: ProjectDetail = {
   ],
   agentModels: {},
   runtimeImage: "ghcr.io/example/runner:node22-go1.23",
+  runtimeImageId: null,
   deliveryPolicy: {},
   createdAt: iso(60 * 24 * 60 * MIN),
   imageUrl: null,
@@ -54,9 +55,10 @@ function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run[
   return {
     organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, attempt: 1, workerId: null, workspacePath: null, error: null, kind: "agent",
     category: null, parentRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
-    branch: BRANCH, harness: "opencode", model: "claude-sonnet-4.5", dudePause: null,
+    branch: BRANCH, harness: "opencode", model: "claude-opus-5-5", modelTier: "Coder", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
+    image: null, preparingImage: null,
     createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null,
     ...patch,
   };
@@ -196,10 +198,11 @@ export const SETTINGS: SettingsResponse = {
   organization: ORG,
   project: { id: PROJECT.id, name: PROJECT.name },
   roles: Object.fromEntries(SETTINGS_ROLES.map((role) => [role, {
-    model: { value: "anthropic/claude-sonnet-4.5", source: "organization" },
+    tier: { value: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", source: "organization", organization: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", ...(role === "fixer" ? { followsImplementer: true } : {}) },
     effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
     machineSize: { value: null, source: "organization", organization: null },
+    image: { value: null, source: "organization", organization: null },
     enabled: role === "simplifier" || role === "qa_browser" ? { value: role === "simplifier", source: "organization" } : null,
     prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 }, project: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0, mode: "inherit" } },
   }])) as SettingsResponse["roles"],
@@ -223,6 +226,21 @@ export const MACHINE_SIZES: MachineSizeWithUse[] = [
   { id: "msz_standard", name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, poolName: null, isDefault: true, updatedAt: iso(60 * MIN), updatedBy: null, usedBy: [] },
   { id: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, poolName: null, isDefault: false, updatedAt: iso(60 * MIN), updatedBy: null,
     usedBy: [{ kind: "organization", role: "implementer", project: null }] },
+];
+
+const orgUse = (role: string, effort: string | null = "high", inherited = false): ModelTierUse =>
+  ({ kind: "organization", role, project: null, effort, ...(inherited ? { inherited } : {}) });
+
+/** The organisation's model tiers, as an organisation seeded and then set them. */
+export const MODEL_TIERS: ModelTierWithUse[] = [
+  { id: "mtr_thinker", name: "Thinker", description: "Reads, plans, judges and tidies. Slow and thorough.", model: "claude-fable-5-1", position: 0,
+    updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: { id: "per_marcio", name: "Márcio" },
+    usedBy: ["investigator", "reviewer", "simplifier", "qa_browser"].map((r) => orgUse(r)) },
+  { id: "mtr_coder", name: "Coder", description: "Writes and fixes code for hours at a time.", model: "claude-opus-5-5", position: 1,
+    updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: { id: "per_marcio", name: "Márcio" },
+    usedBy: [orgUse("implementer"), orgUse("fixer", "high", true)] },
+  { id: "mtr_fast", name: "Fast", description: "Small, mechanical jobs where speed beats depth.", model: null, position: 2,
+    updatedAt: iso(7 * 24 * 60 * MIN), updatedBy: null, usedBy: [] },
 ];
 
 export function runDetailFor(scenario: ServerScenario): RunDetail {
