@@ -183,7 +183,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   - `person`: waiting past the project's `parkAfterMinutes` (default 10). An
     answer or a decision resumes it.
   - `idle`: quiet mid-turn for `idleNudgeMinutes` (off by default), nudged
-    once, then quiet as long again. The task goes to awaiting input,
+    once, then quiet as long again. The task goes to awaiting input
+    (not for a conductor, which changes nothing about its task),
     and only a person's Resume takes it up.
   - `repository`: stopped a moment so the resume can bring in a repository
     a person approved.

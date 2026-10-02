@@ -488,6 +488,36 @@ func TestAConductorsQuestionIsAnsweredInChat(t *testing.T) {
 	}
 }
 
+// A conductor quiet mid-turn is nudged and then parked as any agent is,
+// but its task stays as it was, parked and resumed: a conductor changes
+// nothing about the task.
+func TestAnIdleConductorsParkLeavesTheTaskAlone(t *testing.T) {
+	w := conductorWorld(t)
+	w.syncer.IdleAfter = 300 * time.Millisecond
+	task, _ := w.delivered()
+	// Silent even after the nudge: its turn is taken and it says nothing.
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	was := w.taskStatus(task)
+	_, out := w.chat(task, "what changed?")
+	runID, _ := out["runId"].(string)
+	w.until("the conductor to be parked as idle", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.idle_nudged'`, runID); n != 1 {
+		t.Errorf("%d nudges before the park, want 1", n)
+	}
+	if got := w.taskStatus(task); got != was {
+		t.Errorf("parking an idle conductor moved the task: %s, then %s", was, got)
+	}
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the resume", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+	})
+	if got := w.taskStatus(task); got != was {
+		t.Errorf("resuming the conductor moved the task: %s, then %s", was, got)
+	}
+}
+
 // conductorQuestion is the open question of the task's conductor.
 func (w *world) conductorQuestion(task string) string {
 	var id string
