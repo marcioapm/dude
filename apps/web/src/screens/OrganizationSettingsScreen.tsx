@@ -118,7 +118,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
             <DeliveryPage scope={scope} />
           ) : scope && isRole(page) ? (
             <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={machines.sizes?.sizes ?? null}
-              tiers={models.tiers?.tiers ?? null}
+              tiers={models.tiers?.tiers ?? null} tiersProblem={models.problem}
               onManageTiers={me?.role === "admin" ? () => onPage("models") : undefined}
               onManageSizes={me?.role === "admin" ? () => onPage("machines") : undefined} />
           ) : null}

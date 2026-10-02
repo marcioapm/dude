@@ -129,9 +129,6 @@ export interface ProxyModels {
   problem: string | null;
 }
 
-/** The roles that start on Thinker; the implementer starts on Coder, the fixer following it. */
-export const THINKER_ROLES = ["investigator", "reviewer", "simplifier", "qa_browser", "orchestrator"] as const;
-
 // ---------------------------------------------------------------------------
 // Resolving and moving
 // ---------------------------------------------------------------------------

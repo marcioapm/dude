@@ -85,13 +85,15 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 
 const NONE = "__none__";
 
-export function RolePage({ scope, role, sizes, tiers, onOpenRun, onManageSizes, onManageTiers }: {
+export function RolePage({ scope, role, sizes, tiers, tiersProblem, onOpenRun, onManageSizes, onManageTiers }: {
   scope: SettingsScope;
   role: SettingsRole;
   /** The organisation's sizes, as the settings screen loaded them; null while loading. */
   sizes: readonly MachineSizeWithUse[] | null;
   /** The organisation's model tiers, as the settings screen loaded them; null while loading. */
   tiers: readonly ModelTier[] | null;
+  /** Why the tiers could not be loaded. */
+  tiersProblem?: string | null | undefined;
   onOpenRun?: ((runId: string) => void) | undefined;
   /** Open the organisation's Machines page (its admins). */
   onManageSizes?: (() => void) | undefined;
@@ -133,7 +135,7 @@ export function RolePage({ scope, role, sizes, tiers, onOpenRun, onManageSizes, 
         <Source scope={scope} setting={r.enabled} reset={() => void set({ enabled: null }, "Back to " + orgName + "’s")} />
       ) : null}
       <SettingFields>
-        <TierField scope={scope} role={role} tiers={tiers} onManageTiers={onManageTiers} />
+        <TierField scope={scope} role={role} tiers={tiers} tiersProblem={tiersProblem ?? null} onManageTiers={onManageTiers} />
         <SettingField
           label="Reasoning effort"
           source={<Source scope={scope} setting={r.effort} reset={() => void set({ effort: null }, "Effort reset")} />}
@@ -178,7 +180,13 @@ export function RolePage({ scope, role, sizes, tiers, onOpenRun, onManageSizes, 
  * the implementer's). Under it, on the organisation, the model the tier
  * requests; on a project, where the value comes from and Reset.
  */
-function TierField({ scope, role, tiers, onManageTiers }: { scope: SettingsScope; role: SettingsRole; tiers: readonly ModelTier[] | null; onManageTiers?: (() => void) | undefined }) {
+function TierField({ scope, role, tiers, tiersProblem, onManageTiers }: {
+  scope: SettingsScope;
+  role: SettingsRole;
+  tiers: readonly ModelTier[] | null;
+  tiersProblem: string | null;
+  onManageTiers?: (() => void) | undefined;
+}) {
   const { settings } = scope;
   const t = settings.roles[role].tier;
   const project = isProject(settings);
@@ -199,10 +207,10 @@ function TierField({ scope, role, tiers, onManageTiers }: { scope: SettingsScope
       : own === null ? [{ value: INHERIT_TIER, label: "No tier", disabled: true }] : []),
     ...(tiers ?? []).map(tierOption),
   ];
-  const footer = project
-    ? `Tiers are ${orgName}’s — ask an admin to change one`
-    : onManageTiers
-      ? <TextButton onClick={onManageTiers} data-testid="manage-tiers">Manage tiers in Models</TextButton>
+  const footer = onManageTiers
+    ? <TextButton onClick={onManageTiers} data-testid="manage-tiers">Manage tiers in Models</TextButton>
+    : project
+      ? `Tiers are ${orgName}’s — ask an admin to change one`
       : "Only admins change tiers.";
   return (
     <SettingField
@@ -221,6 +229,9 @@ function TierField({ scope, role, tiers, onManageTiers }: { scope: SettingsScope
       ) : (
         <Select aria-label="Model" disabled options={[{ value: "loading", label: "Loading…" }]} value="loading" />
       )}
+      {tiersProblem ? (
+        <Callout tone="danger" data-testid="role-tier-problem">{`${orgName}’s tiers could not be loaded: ${tiersProblem}`}</Callout>
+      ) : null}
     </SettingField>
   );
 }

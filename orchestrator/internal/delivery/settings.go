@@ -16,8 +16,8 @@ import (
 
 // RoleSettings is how one agent role runs, resolved.
 type RoleSettings struct {
-	// The model tier's id, as the first layer names it; resolved to a tier
-	// by Tiers.ForRole, which passes over ids that are gone.
+	// The model tier's id, as the first layer names it; resolved by
+	// TierFor, which fails the Run when the tier is gone or names no model.
 	Tier string
 	// How hard the model thinks (low, medium, high, max); "" leaves it to
 	// the model.

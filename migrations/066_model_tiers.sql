@@ -64,6 +64,9 @@ CREATE POLICY tenant_isolation ON model_tier_upgrade_notes
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, UPDATE ON model_tier_upgrade_notes TO dude_app;
+-- The default privileges (002) grant every table's INSERT and DELETE; only
+-- the upgrade writes notes, and admins only dismiss them.
+REVOKE INSERT, DELETE ON model_tier_upgrade_notes FROM dude_app;
 
 -- Every organization starts with three tiers, none naming a model yet, and
 -- its roles on them: Thinker for those that read and judge, Coder for the

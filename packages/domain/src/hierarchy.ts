@@ -48,7 +48,7 @@ export const agentModelConfigSchema = z.object({
   /**
    * The model tier its sessions run on (an organization's tier id).
    * Optional at each layer: a project that changes only a role's effort
-   * keeps its organization's tier (resolveAgentModel, field by field).
+   * keeps its organization's tier (resolveTier, field by field).
    */
   tier: z.string().min(1).max(100).optional(),
   model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
