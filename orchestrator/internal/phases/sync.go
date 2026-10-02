@@ -1104,17 +1104,14 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			}
 		}
 		// The epoch it resumed into, its timing's (resumeAccepted).
-		epoch := foreseen
-		if lr.Epoch != 0 {
-			epoch = lr.Epoch
-		}
-		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason, "epoch": epoch})
+		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem,
+			map[string]any{"reason": reason, "epoch": resumedEpoch(foreseen, lr)})
 	}); err != nil {
 		return true, err
 	}
 	if missed {
 		// No frame of its epoch is left to stamp it: timed as it stands.
-		go s.resumeFollowUp(r, map[int]bool{lr.Epoch: true})
+		go s.resumeFollowUp(r, map[int]bool{resumedEpoch(foreseen, lr): true})
 	}
 	// Directives given while it was paused are sent by the usual path once
 	// lux reports the resumed Run running, each on its own so each is
