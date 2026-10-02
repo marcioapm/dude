@@ -70,7 +70,7 @@ import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recov
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptEnd, attemptOfPr, attemptOfRun, attemptOfWork, attemptsOf, closedAtStartOver, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptStatus, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -111,6 +111,9 @@ function changesRun(payload: unknown): boolean {
 
 const urlTab = (tab: string): TaskTab | undefined => (tab === "overview" ? undefined : (tab as TaskTab));
 const ago = (at: string) => <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" />;
+const phasesOf = (runs: readonly Run[], attempt: number) =>
+  runs.filter((r) => r.phase && r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open, on its attempt; the
@@ -134,11 +137,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   }
   const openedRun = runId && runId !== leftRun ? runId : undefined;
   const tab = openedRun ? "sessions" : chosenTab;
-  // For the open session, which is memoised: one function for the page's life.
-  const pickLatest = useRef<(tab: string) => void>(() => {});
-  const openServers = useCallback(() => pickLatest.current("servers"), []);
-  const toCurrentLatest = useRef<() => void>(() => {});
-  const toCurrent = useCallback(() => toCurrentLatest.current(), []);
+  // For the open session, which is memoised: one function each for the page's life.
+  const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {} });
+  const openServers = useCallback(() => latest.current.pickTab("servers"), []);
+  const toCurrent = useCallback(() => latest.current.toCurrent(), []);
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
@@ -249,9 +251,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Every attempt, newest first; the current is the highest. The one shown:
   // the open session's, else the one picked, else the current.
   const attempts = useMemo(() => attemptsOf(item?.runs ?? []), [item]);
+  const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
   const current = attempts[0] ?? 1;
   const many = attempts.length > 1;
-  const openedRow = openedRun ? item?.runs.find((r) => r.id === openedRun) : undefined;
+  const openedRow = openedRun ? byId.get(openedRun) : undefined;
   const shown = openedRow ? attemptOfRun(openedRow, current)
     : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
   const earlier = shown !== current;
@@ -264,17 +267,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   }, [item, urlAttempt, runId, current, attempts, openTab, onNavigate]);
 
   // Phases of the attempt shown, and of the current one, in the order they ran.
-  const byCreated = (runs: readonly Run[]) => [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const phases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === shown)), [item, shown]);
-  const currentPhases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === current)), [item, current]);
+  const phases = useMemo(() => phasesOf(item?.runs ?? [], shown), [item, shown]);
+  const currentPhases = useMemo(() => phasesOf(item?.runs ?? [], current), [item, current]);
 
   // The page re-renders on every frame of its stream, agent chatter
   // included: what is worked out from the reads is kept until they change,
   // so the sections memoised on it (Activity, Files) are not redone per frame.
-  const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
   // One per repository the work changed, in the order they were opened.
   const allPrs = useMemo(() => [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [pullRequests]);
-  // What each attempt made: its pull requests, findings, files and sessions; the one shown's, and the others'.
+  // What each attempt made: its pull requests, findings, files and sessions; the one shown's, and the others' counts.
   const parts = useMemo(() => {
     const ofAttempt = (n: number) => ({
       findings: findings.filter((f) => attemptOfWork(f.runId, byId, current) === n),
@@ -283,7 +284,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return {
       prs: allPrs.filter((pr) => attemptOfPr(pr, byId, current) === shown),
       mine: ofAttempt(shown),
-      others: attempts.filter((n) => n !== shown).map((n) => ({ n, ...ofAttempt(n) })),
+      others: attempts.filter((n) => n !== shown).map((n) => {
+        const theirs = ofAttempt(n);
+        return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
+      }),
       // Newest first.
       sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     };
@@ -309,7 +313,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const canPickUp = Boolean(recovery?.actions.length) && (!item?.owner || item.owner.id === people.you);
   const stoppedOn = stopOfTask?.run?.id ?? null;
   const shownRun = openedRun ?? picked;
-  const retried = item && shownRun ? retriedRun(item.runs.find((r) => r.id === shownRun), item.runs) : false;
+  const retried = shownRun ? retriedRun(byId.get(shownRun), item?.runs ?? []) : false;
   // Only ever the current attempt's: what stopped the task is a Run of it.
   const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
   const openStopped = useMemo<StoppedRun | undefined>(
@@ -340,24 +344,20 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
   }
 
-  /** Show attempt `n`: picked in the header, from an empty tab, or the way back to the current one. */
-  const pickAttempt = (n: number, onTab: string = tab) => {
+  // Leaves any open session; the URL is replaced only for a tab change with none open.
+  const show = (onTab: string, n: number, replace: boolean) => {
     const next = n === current ? null : n;
     setChosenAttempt(next);
     setTab(onTab);
     if (openedRun) setLeftRun(openedRun);
-    onNavigate?.(urlTab(onTab), next !== null && attemptScoped(urlTab(onTab)) ? next : undefined, false);
+    onNavigate?.(urlTab(onTab), next !== null && attemptScoped(urlTab(onTab)) ? next : undefined, replace);
   };
+  /** Show attempt `n`: picked in the header, from an empty tab, or the way back to the current one. */
+  const pickAttempt = (n: number, onTab: string = tab) => show(onTab, n, false);
   const pickTab = (next: string) => {
-    if (next === tab) return;
-    setTab(next);
-    setChosenAttempt(earlier ? shown : null);
-    const leaving = openedRun !== undefined;
-    if (leaving) setLeftRun(openedRun);
-    onNavigate?.(urlTab(next), earlier && attemptScoped(urlTab(next)) ? shown : undefined, !leaving);
+    if (next !== tab) show(next, shown, openedRun === undefined);
   };
-  pickLatest.current = pickTab;
-  toCurrentLatest.current = () => pickAttempt(current);
+  latest.current = { pickTab, toCurrent: () => pickAttempt(current) };
 
   const started = currentPhases.length > 0;
   const stopped = item.status === "aborted" || item.status === "failed";
@@ -372,7 +372,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // project with no servers defined has nothing to say there. Servers are
   // the current attempt's: an earlier one has none to show.
   const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
-  const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
   // The one open is the one asked for, else the one picked on first sight
   // (what was running, else the newest).
   const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
@@ -380,7 +379,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
-  const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${what === "findings" ? o.findings.length : fileCount(o.artifacts)}`).join(", ");
+  const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -411,7 +410,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <h1 className="taskTitle">{item.title}</h1>
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
-            <StatusMark status={earlier ? attemptEnd(item.runs, shown) : item.status} size="sm" data-testid="header-status" />
+            <StatusMark status={attemptStatus(item, shown, current)} size="sm" data-testid="header-status" />
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -522,14 +521,14 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
               <TaskMetricsSection client={client} taskId={taskId} attempt={many ? shown : undefined} setAside={earlier}
                 live={!earlier && item.status === "running"}
-                done={earlier || ["done", "failed", "aborted"].includes(item.status)} version={version} />
+                done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
             {prs.length > 0 || showServers ? (
               <aside className="taskAside" aria-label="Pull requests and servers">
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} aside={{ ...aside, at: aside.at }} attempt={shown} taskId={taskId} /> : undefined}
+                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
@@ -566,7 +565,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ) : many ? (
             <Elsewhere icon="check" title={`No findings in attempt ${shown}${reviewing ? " yet" : ""}`}
               description={reviewing ? "Its reviewers are still at work." : phases.some((r) => r.phase === "review") ? "Its reviewers raised nothing." : "Reviewers report here once its review starts."}
-              others={others.map((o) => ({ n: o.n, count: o.findings.length }))} what="finding" onAttempt={(n) => pickAttempt(n)} />
+              others={others.map((o) => ({ n: o.n, count: o.findings }))} what="finding" onAttempt={(n) => pickAttempt(n)} />
           ) : (
             <EmptyState compact icon="check" title="No findings" description={started ? "The reviewers raised nothing, yet." : "Reviewers report here once delivery starts."} />
           )}
@@ -604,7 +603,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ) : many ? (
             <Elsewhere icon="file" title={`No files in attempt ${shown}${earlier ? "" : " yet"}`}
               description="What its agents save — notes, screenshots, reports, recordings — shows here."
-              others={others.map((o) => ({ n: o.n, count: fileCount(o.artifacts) }))} what="file" onAttempt={(n) => pickAttempt(n)} />
+              others={others.map((o) => ({ n: o.n, count: o.files }))} what="file" onAttempt={(n) => pickAttempt(n)} />
           ) : (
             <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
           )}
@@ -643,29 +642,31 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
     void client.taskMetrics(taskId).then((m) => seq === reads.current && setCosts(new Map(m.runs.map((r) => [r.id, r.cost.totalUsd]))), () => {});
   };
   const current = attempts[0]!;
-  const options = useMemo(() => attempts.map((n) => {
-    const runs = item.runs.filter((r) => r.kind !== "preview" && r.attempt === n);
-    const first = [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-    const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
-    const branch = runs.find((r) => r.branch)?.branch;
-    const mine = prs.filter((pr) => attemptOfPr(pr, byId, current) === n);
-    const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
-    const status = n === current ? item.status : attemptEnd(item.runs, n);
-    return {
-      value: String(n),
-      label: <span className="attemptPickLabel"><StatusMark status={status} size="sm" iconOnly />Attempt {n}</span>,
-      meta: n === current ? "current" : "set aside",
-      description: (
-        <>
-          {aside ? <>{aside.at ? <>Set aside {ago(aside.at)} ago</> : "Set aside"}{aside.how ? ` · ${aside.how}` : ""}</>
-            : first ? <>Started {ago(first.createdAt)} ago</> : "Not started"}
-          {branch ? <> · <span className="ds-mono">{branch}</span></> : null}
-          {mine.length > 0 ? <> · {mine.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}</> : null}
-          {costs.size > 0 ? <> · {formatUsd(cost)}</> : null}
-        </>
-      ),
-    };
-  }), [attempts, item, byId, prs, events, people, costs, current]);
+  const options = useMemo(() => {
+    const starts = attemptStarts(item.runs);
+    return attempts.map((n) => {
+      const runs = item.runs.filter((r) => r.kind !== "preview" && r.attempt === n);
+      const started = starts.get(n);
+      const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
+      const branch = runs.find((r) => r.branch)?.branch;
+      const mine = prs.filter((pr) => attemptOfPr(pr, byId, current) === n);
+      const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
+      return {
+        value: String(n),
+        label: <span className="attemptPickLabel"><StatusMark status={attemptStatus(item, n, current)} size="sm" iconOnly />Attempt {n}</span>,
+        meta: n === current ? "current" : "set aside",
+        description: (
+          <>
+            {aside ? <>{aside.at ? <>Set aside {ago(aside.at)} ago</> : "Set aside"}{aside.how ? ` · ${aside.how}` : ""}</>
+              : started ? <>Started {ago(started)} ago</> : "Not started"}
+            {branch ? <> · <span className="ds-mono">{branch}</span></> : null}
+            {mine.length > 0 ? <> · {mine.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}</> : null}
+            {costs.size > 0 ? <> · {formatUsd(cost)}</> : null}
+          </>
+        ),
+      };
+    });
+  }, [attempts, item, byId, prs, events, people, costs, current]);
   return (
     <Select<string> size="sm" aria-label="Attempt" value={String(value)} onValueChange={(v) => onChange(Number(v))} onOpenChange={readCosts}
       options={options} className="attemptPicker" data-testid="attempt-picker"
@@ -704,10 +705,12 @@ function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; c
  * task was started over, or, closed before that (by someone on GitHub),
  * only that it is closed and when the attempt was set aside.
  */
-function ClosedNote({ pr, events, aside, attempt, taskId }: { pr: PullRequest; events: readonly PersistedEvent[]; aside: SetAside & { at: string }; attempt: number; taskId: string }) {
-  const at = closedAtStartOver(pr, events, aside.at);
-  if (at) return <>Closed by {dudeName(taskId)} {ago(at)} ago, when {aside.by ? firstName(aside.by) : "someone"} started over.</>;
-  return <>Closed. Attempt {attempt} was set aside {ago(aside.at)} ago.</>;
+function ClosedNote({ pr, events, at, by, attempt, taskId }: {
+  pr: PullRequest; events: readonly PersistedEvent[]; at: string; by: string | null; attempt: number; taskId: string;
+}) {
+  const closedAt = closedAtStartOver(pr, events, at);
+  if (closedAt) return <>Closed by {dudeName(taskId)} {ago(closedAt)} ago, when {by ? firstName(by) : "someone"} started over.</>;
+  return <>Closed. Attempt {attempt} was set aside {ago(at)} ago.</>;
 }
 
 /** An empty tab of one attempt, and every other attempt that had some, each a way there. */
@@ -912,35 +915,8 @@ interface ActivityLine {
   attemptOnly?: boolean;
 }
 
-/**
- * The attempt an event happened in: the one a start over began, its Run's,
- * its pull request's, else the attempt under way when it happened. Built
- * once per pass over the ledger; asked only of the events that make a line.
- */
-function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number {
-  const byId = runsById(runs);
-  // Each attempt's first agent Run's creation, latest first, for an event on no known Run.
-  const starts = new Map<number, string>();
-  for (const r of runs) {
-    if (r.kind === "preview") continue;
-    const at = starts.get(r.attempt);
-    if (at === undefined || r.createdAt < at) starts.set(r.attempt, r.createdAt);
-  }
-  const begun = [...starts].sort((a, b) => b[0] - a[0]);
-  return (e) => {
-    if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
-    const run = e.runId ? byId.get(e.runId) : undefined;
-    if (run) return attemptOfRun(run, current);
-    if (e.eventType.startsWith("pull_request.")) {
-      const pr = prOfEvent(e, prs);
-      if (pr) return attemptOfPr(pr, byId, current);
-    }
-    return begun.find(([, at]) => at <= e.occurredAt)?.[0] ?? 1;
-  };
-}
-
 /** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
-export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[] = [], current = 1): ActivityLine[] {
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number): ActivityLine[] {
   const out: ActivityLine[] = [];
   const attemptOf = eventAttempts(runs, prs, current);
   // A task with pull requests in several repositories names each by its repository.

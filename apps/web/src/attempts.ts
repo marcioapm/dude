@@ -8,7 +8,7 @@
 
 import { firstName } from "@dude/design-system";
 import { runLabel, type PersistedEvent } from "@dude/domain";
-import type { PullRequest, Run } from "./api/client.ts";
+import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
@@ -69,16 +69,52 @@ export function closedAtStartOver(pr: PullRequest, events: readonly PersistedEve
   return closed && !humanActor(closed) && closed.occurredAt >= restartAt ? closed.occurredAt : null;
 }
 
+/** When each attempt began: its first agent Run's creation. */
+export function attemptStarts(runs: readonly Run[]): Map<number, string> {
+  const starts = new Map<number, string>();
+  for (const r of runs) {
+    if (r.kind === "preview") continue;
+    const at = starts.get(r.attempt);
+    if (at === undefined || r.createdAt < at) starts.set(r.attempt, r.createdAt);
+  }
+  return starts;
+}
+
+/**
+ * The attempt an event happened in: the one a start over began, its Run's,
+ * its pull request's, else the attempt under way when it happened. Built
+ * once per pass over the ledger; asked only of the events that make a line.
+ */
+export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number {
+  const byId = runsById(runs);
+  // Latest first, for an event on no known Run.
+  const begun = [...attemptStarts(runs)].sort((a, b) => b[0] - a[0]);
+  return (e) => {
+    if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
+    const run = e.runId ? byId.get(e.runId) : undefined;
+    if (run) return attemptOfRun(run, current);
+    if (e.eventType.startsWith("pull_request.")) {
+      const pr = prOfEvent(e, prs);
+      if (pr) return attemptOfPr(pr, byId, current);
+    }
+    return begun.find(([, at]) => at <= e.occurredAt)?.[0] ?? 1;
+  };
+}
+
 /** An earlier attempt's last aborted or failed Run: where it stopped. */
-export function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
+function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
   return runs.filter((r) => r.attempt === attempt && r.kind !== "preview" && (r.status === "aborted" || r.status === "failed"))
     .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
 }
 
 /** How an earlier attempt ended, for its status mark: the status of the Run it stopped at. */
-export function attemptEnd(runs: readonly Run[], attempt: number): "aborted" | "failed" {
+function attemptEnd(runs: readonly Run[], attempt: number): "aborted" | "failed" {
   return stoppedRunOf(runs, attempt)?.status === "failed" ? "failed" : "aborted";
 }
+
+/** An attempt's status mark: the task's for the current one, how it ended for an earlier one. */
+export const attemptStatus = (task: TaskDetail, attempt: number, current: number) =>
+  attempt === current ? task.status : attemptEnd(task.runs, attempt);
 
 export interface SetAside {
   /** Who started over, by name; null when the ledger does not say. */
