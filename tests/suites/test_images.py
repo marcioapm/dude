@@ -237,10 +237,8 @@ def _library(client: ApiClient, dsn: str) -> dict:
 def test_the_library_its_image_page_history_and_builds(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list):
     lib = _library(client, owner_dsn)
     execute(owner_dsn, BUILDER_ALIVE)
-    sign_in(page, web_url, org["api_key"])
-
     # The list: the queue, the tree, each image's state.
-    page.goto(f"{web_url}#/org/settings/images")
+    sign_in(page, web_url, org["api_key"], at="#/org/settings/images")
     expect(page.get_by_test_id("builder-offline")).to_have_count(0)
     expect(page.get_by_test_id("build-queue")).to_contain_text("Building node-pnpm v3")
     expect(page.get_by_test_id("build-queue")).to_contain_text("1 waiting: python-uv v2")
@@ -331,8 +329,7 @@ def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page,
         run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
                          timeout=60, message="the implementer never waited on its image")
         assert client.get_run(run["id"])["preparingImage"]["builderOfflineSince"] is not None
-        sign_in(page, web_url, org["api_key"])
-        page.goto(f"{web_url}#/org/settings/images")
+        sign_in(page, web_url, org["api_key"], at="#/org/settings/images")
         expect(page.get_by_test_id("builder-offline")).to_contain_text("Image builder offline since")
         _shoot(page, "images-builder-offline")
         page.goto(f"{web_url}#/session/{run['id']}")
@@ -347,8 +344,7 @@ def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page,
 def test_a_member_reads_the_library_and_changes_nothing(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, env, console_errors: list):
     _publish_first(client, owner_dsn, "acme-base")
     member = client.post("/v1/people", {"name": "Bo", "email": f"bo-{os.urandom(2).hex()}@acme.dev", "role": "member"}).json()["key"]
-    sign_in(page, web_url, member)
-    page.goto(f"{web_url}#/org/settings/images")
+    sign_in(page, web_url, member, at="#/org/settings/images")
     rows = page.get_by_role("table").get_by_role("row", name=re.compile(r"^acme-base"))
     expect(rows).to_have_count(1)
     expect(page.get_by_test_id("new-image")).to_have_count(0)
@@ -367,8 +363,7 @@ def test_the_picker_on_a_project_and_a_role_stores_the_image_and_a_typed_one_is_
     project = client.create_project(name="Dashboard", slug=f"dash-{os.urandom(3).hex()}", agentModels=SCRIPTED)
     # A typed image from before the library.
     execute(owner_dsn, "UPDATE projects SET runtime_image = 'ghcr.io/acme/runner:node22' WHERE id = %s", (project["id"],))
-    sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/project/{project['id']}/settings/general")
+    sign_in(page, web_url, org["api_key"], at=f"#/project/{project['id']}/settings/general")
     field = page.get_by_test_id("runtime-image")
     expect(page.get_by_test_id("runtime-image-legacy")).to_contain_text("ghcr.io/acme/runner:node22")
     expect(page.get_by_test_id("runtime-image-legacy")).to_contain_text("acme-base v1 wins over it")
@@ -418,8 +413,7 @@ def test_a_run_preparing_its_image_says_so(page: Page, web_url: str, client: Api
                      timeout=60, message="the implementer never waited on its image")
     refused: list[str] = []
     page.on("response", lambda r: refused.append(f"{r.status} {r.url}") if r.status >= 400 else None)
-    sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/session/{run['id']}")
+    sign_in(page, web_url, org["api_key"], at=f"#/session/{run['id']}")
     expect(page.get_by_test_id("preparing-image")).to_contain_text("Preparing image: adding the dude layer")
     expect(page.get_by_test_id("preparing-image")).to_contain_text("acme-base v1")
     _shoot(page, "run-preparing-image")
