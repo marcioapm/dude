@@ -234,21 +234,30 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
       }>
       <div className="pickUp">
         <ChoiceList label="How to pick it back up" value={action} onChange={setAction} options={choices} data-testid="recover-choice" />
-        <ul className="pickUpEffects" aria-label="What it does">
-          {effects(action, role, branch, head, options.attempt).map((e) => (
-            <li key={e.what} data-how={e.how}>
-              <span className="pickUpWhat">{e.what}</span>
-              <span className="pickUpHow">{e.how}</span>
-              <span>{e.text}</span>
-            </li>
+        {/* Every way's account in the same place, only the chosen one shown:
+            the place is as tall as the longest, so choosing never moves the
+            dialog's edges or the note under it. */}
+        <div className="pickUpWhatItDoes">
+          {(["resume", "retry", "restart"] as const).map((a) => (
+            <div key={a} className="pickUpWay" hidden={a !== action} aria-hidden={a !== action}>
+              <ul className="pickUpEffects" aria-label="What it does">
+                {effects(a, role, branch, head, options.attempt).map((e) => (
+                  <li key={e.what} data-how={e.how}>
+                    <span className="pickUpWhat">{e.what}</span>
+                    <span className="pickUpHow">{e.how}</span>
+                    <span>{e.text}</span>
+                  </li>
+                ))}
+              </ul>
+              {a === "restart" ? (
+                <Callout tone="info">
+                  What the task asks for can change before attempt {options.attempt + 1} starts.{" "}
+                  <Button size="sm" variant="quiet" leadingIcon="edit" onClick={onEdit} tabIndex={a === action ? undefined : -1}>Edit the task first</Button>
+                </Callout>
+              ) : null}
+            </div>
           ))}
-        </ul>
-        {action === "restart" ? (
-          <Callout tone="info">
-            What the task asks for can change before attempt {options.attempt + 1} starts.{" "}
-            <Button size="sm" variant="quiet" leadingIcon="edit" onClick={onEdit}>Edit the task first</Button>
-          </Callout>
-        ) : null}
+        </div>
         <Textarea label={action === "resume" ? `Tell the ${role} (optional)` : "A note for the agents (optional)"} rows={3}
           value={note} onChange={(e) => setNote(e.target.value)} data-testid="recover-note"
           hint={action === "resume" ? "Its next message, from you. Empty, it is told to go on where it left off." : "Kept with the task: every agent from here on is told it."} />
