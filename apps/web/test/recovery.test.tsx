@@ -580,23 +580,24 @@ describe("a task started over", () => {
     const page = await taskPage(client);
     await until(() => page.querySelector("[data-testid=task-metrics]"), "attempt 2's figures");
     await settle(100);
-    expect(reads).toEqual([2]);
+    expect(reads).toStrictEqual([2]);
     // A reload the stream causes reads attempt 2's again, and not the whole task's.
     await act(async () => emit({ eventType: "task.status_changed", occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id,
       taskId: TASK_ID, runId: null, sessionId: null, workflowRunId: null, actor: { type: "system", id: "dude" }, source: "control-plane",
       correlationId: null, causationId: null, payload: { status: "running" } } as never));
     await until(() => (reads.length === 2 ? true : null), "the reload's read");
     await settle(400);
-    expect(reads).toEqual([2, 2]);
+    expect(reads).toStrictEqual([2, 2]);
     await press(picker(page)!);
     const option = await until(() => document.querySelector<HTMLElement>('[role=option][data-value="1"]'), "attempt 1 in the picker");
     await until(() => (option.textContent?.includes("$13.40") ? true : null), "attempt 1's cost");
-    expect(reads).toEqual([2, 2, undefined]);
+    // Strict: `toEqual` takes a trailing undefined as absent, so it would not see a fourth read.
+    expect(reads).toStrictEqual([2, 2, undefined]);
     // Closing the list reads nothing.
     await click(document.querySelector<HTMLElement>('[role=option][data-value="2"]')!);
     await until(() => (document.querySelector("[role=option]") ? null : true), "the list closed");
     await settle(100);
-    expect(reads).toEqual([2, 2, undefined]);
+    expect(reads).toStrictEqual([2, 2, undefined]);
   });
 
   test("a cost read that answers late does not replace the one that answered after it", async () => {
