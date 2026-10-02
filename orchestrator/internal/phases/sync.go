@@ -1341,7 +1341,9 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 
 // readAttachments reads what an input carries from storage. A reason, and
 // no error, when they cannot be sent at all: the bucket is gone from the
-// configuration, or an object is missing; an error is worth retrying.
+// configuration, an object is missing, or storage refuses the read. An
+// error may pass, and is retried as retryOrFail retries lux: storage
+// unreachable or failing (5xx, 429).
 func (s *Syncer) readAttachments(ctx context.Context, sent []delivery.SentAttachment) ([]lux.Attachment, string, error) {
 	if len(sent) == 0 {
 		return nil, "", nil
@@ -1354,6 +1356,10 @@ func (s *Syncer) readAttachments(ctx context.Context, sent []delivery.SentAttach
 		data, err := s.Objects.Get(ctx, a.ObjectKey, lux.MaxAttachmentBytes)
 		if errors.Is(err, objects.ErrNotFound) {
 			return nil, fmt.Sprintf("its image %s is gone from storage", a.Name), nil
+		}
+		var refused *objects.RefusedError
+		if errors.As(err, &refused) || errors.Is(err, objects.ErrTooLarge) {
+			return nil, fmt.Sprintf("its image %s could not be read: %s", a.Name, err.Error()), nil
 		}
 		if err != nil {
 			return nil, "", err

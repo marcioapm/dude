@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -20,17 +21,22 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 )
 
-// memStore is a bucket in memory; gets counts its reads.
+// memStore is a bucket in memory; gets counts its reads, and fail, when
+// set, is what every read answers.
 type memStore struct {
 	mu   sync.Mutex
 	objs map[string][]byte
 	gets int
+	fail error
 }
 
 func (m *memStore) Get(_ context.Context, key string, max int64) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gets++
+	if m.fail != nil {
+		return nil, m.fail
+	}
 	b, ok := m.objs[key]
 	if !ok {
 		return nil, objects.ErrNotFound
@@ -239,6 +245,34 @@ func TestAnInvalidImageIsRefusedByLuxAndFailsTheSteer(t *testing.T) {
 	_, failed, reason := w.directive("dir_bad")
 	if !failed || !strings.HasPrefix(reason, "lux refused its images: attachments[0]: the data is not image/png") {
 		t.Fatalf("failed=%v reason=%q", failed, reason)
+	}
+}
+
+// Storage refusing the read (a role without access to the bucket) answers
+// the same next time: the steer fails with why, rather than waiting for
+// ever. Storage failing (5xx, unreachable) may pass: the send waits, as
+// for lux unreachable, and goes once storage answers.
+func TestStorageRefusingAnImageFailsTheSteerAndStorageDownWaits(t *testing.T) {
+	w := newImageWorld(t, "acp")
+	w.store.fail = &objects.RefusedError{Status: 403, Err: errors.New("AccessDenied: Access Denied")}
+	w.steer("dir_denied", "see", "att_a")
+	w.deliver()
+	want := "its image checkout.png could not be read: storage refused it (403)"
+	if sent, failed, reason := w.directive("dir_denied"); sent || !failed || reason != want {
+		t.Fatalf("sent=%v failed=%v reason=%q, want %q", sent, failed, reason, want)
+	}
+
+	w.store.fail = errors.New("reading an attachment from storage: 503 SlowDown")
+	w.steer("dir_slow", "again", "att_b")
+	w.deliver()
+	if sent, failed, _ := w.directive("dir_slow"); sent || failed {
+		t.Fatalf("storage down: sent=%v failed=%v, want it waiting", sent, failed)
+	}
+	w.store.fail = nil
+	w.exec(`UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, w.run.ID)
+	w.deliver()
+	if sent, failed, _ := w.directive("dir_slow"); !sent || failed {
+		t.Fatalf("storage back: sent=%v failed=%v", sent, failed)
 	}
 }
 

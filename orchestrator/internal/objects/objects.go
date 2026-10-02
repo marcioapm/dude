@@ -11,12 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // Store reads objects. An interface so tests can stand in.
@@ -31,6 +34,27 @@ var ErrNotFound = errors.New("no such object")
 
 // ErrUnconfigured: no bucket is configured, so nothing was ever stored.
 var ErrUnconfigured = errors.New("image storage is not configured (s3.bucket)")
+
+// ErrTooLarge: the object is larger than the reader takes.
+var ErrTooLarge = errors.New("the stored object is too large")
+
+// RefusedError: storage answered and refused the read (access denied, no
+// such bucket): asked again, it answers the same. Anything else — no
+// answer, 429, 5xx — may pass. The same line lux.Error.Retryable draws.
+type RefusedError struct {
+	Status int
+	Err    error
+}
+
+func (e *RefusedError) Error() string {
+	var ae smithy.APIError
+	if errors.As(e.Err, &ae) {
+		return fmt.Sprintf("storage refused it (%d %s: %s)", e.Status, ae.ErrorCode(), ae.ErrorMessage())
+	}
+	return fmt.Sprintf("storage refused it (%d)", e.Status)
+}
+
+func (e *RefusedError) Unwrap() error { return e.Err }
 
 // Config is the s3.* settings.
 type Config struct {
@@ -78,6 +102,12 @@ func (s *S3) Get(ctx context.Context, key string, max int64) ([]byte, error) {
 		if errors.As(err, &missing) {
 			return nil, ErrNotFound
 		}
+		var res *smithyhttp.ResponseError
+		if errors.As(err, &res) {
+			if status := res.HTTPStatusCode(); status >= 400 && status < 500 && status != http.StatusTooManyRequests {
+				return nil, &RefusedError{Status: status, Err: err}
+			}
+		}
 		// The SDK's error names the operation and status, never credentials.
 		return nil, fmt.Errorf("reading an attachment from storage: %w", err)
 	}
@@ -87,7 +117,7 @@ func (s *S3) Get(ctx context.Context, key string, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("reading an attachment from storage: %w", err)
 	}
 	if int64(len(b)) > max {
-		return nil, fmt.Errorf("an attachment in storage is larger than %d bytes", max)
+		return nil, fmt.Errorf("%w: more than %d bytes", ErrTooLarge, max)
 	}
 	return b, nil
 }
