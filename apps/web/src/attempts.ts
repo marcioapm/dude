@@ -3,19 +3,23 @@
  * whole pipeline again), and the task page shows one at a time. What
  * belongs to which attempt is read from the Runs: a Run carries its
  * attempt, and a finding, a file or a pull request belongs to the attempt
- * of the Run that made it.
+ * of the Run that made it. A task's conductor is the task's, not an
+ * attempt's: it makes no attempt, ends none and begins none.
  */
 
 import { firstName } from "@dude/design-system";
-import { runLabel, type PersistedEvent } from "@dude/domain";
+import { isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
 
+/** A Run that is an attempt's own work: neither a branch preview nor the task's conductor. */
+const ofAttempt = (r: Run) => r.kind !== "preview" && !isConductor(r);
+
 /** Every attempt the task has had, newest first: distinct `attempt` over its agent Runs. */
 export function attemptsOf(runs: readonly Run[]): number[] {
-  return [...new Set(runs.filter((r) => r.kind !== "preview").map((r) => r.attempt))].sort((a, b) => b - a);
+  return [...new Set(runs.filter(ofAttempt).map((r) => r.attempt))].sort((a, b) => b - a);
 }
 
 /** The attempt a Run's session is listed under: a branch preview serves the task now, so the current one. */
@@ -73,7 +77,7 @@ export function closedAtStartOver(pr: PullRequest, events: readonly PersistedEve
 export function attemptStarts(runs: readonly Run[]): Map<number, string> {
   const starts = new Map<number, string>();
   for (const r of runs) {
-    if (r.kind === "preview") continue;
+    if (!ofAttempt(r)) continue;
     const at = starts.get(r.attempt);
     if (at === undefined || r.createdAt < at) starts.set(r.attempt, r.createdAt);
   }
@@ -82,16 +86,18 @@ export function attemptStarts(runs: readonly Run[]): Map<number, string> {
 
 /**
  * The attempt an event happened in: the one a start over began, its Run's,
- * its pull request's, else the attempt under way when it happened. Built
- * once per pass over the ledger; asked only of the events that make a line.
+ * its pull request's, else the attempt under way when it happened; null for
+ * one on the task's conductor, which is no attempt's. Built once per pass
+ * over the ledger; asked only of the events that make a line.
  */
-export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number {
+export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number | null {
   const byId = runsById(runs);
   // Latest first, for an event on no known Run.
   const begun = [...attemptStarts(runs)].sort((a, b) => b[0] - a[0]);
   return (e) => {
     if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
     const run = e.runId ? byId.get(e.runId) : undefined;
+    if (run && isConductor(run)) return null;
     if (run) return attemptOfRun(run, current);
     if (e.eventType.startsWith("pull_request.")) {
       const pr = prOfEvent(e, prs);
@@ -103,7 +109,7 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
 
 /** An earlier attempt's last aborted or failed Run: where it stopped. */
 function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
-  return runs.filter((r) => r.attempt === attempt && r.kind !== "preview" && (r.status === "aborted" || r.status === "failed"))
+  return runs.filter((r) => r.attempt === attempt && ofAttempt(r) && (r.status === "aborted" || r.status === "failed"))
     .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
 }
 

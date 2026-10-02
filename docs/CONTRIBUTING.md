@@ -84,8 +84,10 @@ attempt's, and an earlier one is read-only. A finding, file or pull request
 belongs to the attempt of the Run that made it. A pull request whose Run is
 unknown goes to the attempt its branch names (`dude/<task>/attempt-N`), else
 the current one; a finding or file whose Run is unknown, to the current
-attempt (`apps/web/src/attempts.ts`). Activity and Servers
-are the whole task's. The URL names the attempt (`?attempt=1`) only when it
+attempt (`apps/web/src/attempts.ts`). Chat, Activity and Servers
+are the whole task's. The task's conductor is no attempt's: its Run makes,
+ends and begins no attempt, and its session is listed, live, on every
+attempt's Sessions. The URL names the attempt (`?attempt=1`) only when it
 is not the current one.
 
 ### Delivery, end to end

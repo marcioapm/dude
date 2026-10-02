@@ -265,8 +265,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
   const current = attempts[0] ?? 1;
   const many = attempts.length > 1;
+  // The task's conductor is no attempt's: its session opens on the attempt the place says.
   const openedRow = openedRun ? byId.get(openedRun) : undefined;
-  const shown = openedRow ? attemptOfRun(openedRow, current)
+  const shown = openedRow && !isConductor(openedRow) ? attemptOfRun(openedRow, current)
     : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
   const earlier = shown !== current;
 
@@ -299,8 +300,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         const theirs = ofAttempt(n);
         return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
       }),
-      // Newest first, the task's conductor above them all.
-      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown)
+      // Newest first, the task's conductor above them all, on every attempt.
+      sessions: (item?.runs ?? []).filter((r) => isConductor(r) || attemptOfRun(r, current) === shown)
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, artifacts, allPrs, item, byId, attempts, current, shown]);
@@ -328,11 +329,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const retried = shownRun ? retriedRun(byId.get(shownRun), item?.runs ?? []) : false;
   // Only ever the current attempt's: what stopped the task is a Run of it.
   const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
+  // The task's conductor is never set aside with an attempt: it stays as on any attempt.
+  const shownConductor = shownRun !== null && isConductor(byId.get(shownRun) ?? {});
   const openStopped = useMemo<StoppedRun | undefined>(
-    () => (earlier ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
+    () => (earlier && !shownConductor ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
       : retried ? { setAside: "retry" }
       : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
-    [earlier, current, toCurrent, retried, pickUpHere, keptUntil]);
+    [earlier, shownConductor, current, toCurrent, retried, pickUpHere, keptUntil]);
 
   // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
@@ -493,7 +496,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
-            tooltip={many ? <>Attempt {shown}'s sessions</> : undefined}>Sessions</Tab>
+            tooltip={many ? <>Attempt {shown}'s sessions{conductors.length > 0 ? ", and the task's conductor" : ""}</> : undefined}>Sessions</Tab>
           <Tab value="files" count={mine.artifacts.length > 0 ? fileCount(mine.artifacts) : undefined}
             tooltip={many ? <>Attempt {shown}'s files; {othersSaid("files")}</> : undefined}>Files</Tab>
           <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
@@ -912,14 +915,14 @@ function Activity({ events, people, runs, prs, current, many, shown, onOpenRun, 
     <Timeline data-testid="activity">
       {lines.map((l) => (
         <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
-          data-testid="activity-item" data-attempt={l.attempt}>
+          data-testid="activity-item" data-attempt={l.attempt ?? undefined}>
           {l.text}
-          {many ? <span className="lineAttempt" data-shown={l.attempt === shown || undefined}> · attempt {l.attempt}</span> : null}
+          {many && l.attempt !== null ? <span className="lineAttempt" data-shown={l.attempt === shown || undefined}> · attempt {l.attempt}</span> : null}
           {l.open ? (
             <>
               {" "}
               <Button size="sm" variant="quiet" trailingIcon="arrow-right" data-testid="activity-open"
-                onClick={() => (l.open!.runId ? onOpenRun(l.open!.runId) : onShow(l.attempt, l.open!.tab))}>
+                onClick={() => (l.open!.runId ? onOpenRun(l.open!.runId) : onShow(l.attempt ?? shown, l.open!.tab))}>
                 {l.open.label}
               </Button>
             </>
@@ -933,7 +936,8 @@ function Activity({ events, people, runs, prs, current, many, shown, onOpenRun, 
 interface ActivityLine {
   id: string;
   at: string;
-  attempt: number;
+  /** Null for a line about the task's conductor, which is no attempt's. */
+  attempt: number | null;
   who: ReactNode;
   text: ReactNode;
   quote?: ReactNode;
