@@ -9,6 +9,7 @@
   ["![a](attachment:att_x\u2003\"small\")", []],
   ["![a](\tattachment:att_tab\t\"small\" )", ["att_tab"]],
   ["![a [b] c](attachment:att_n)", []],
+  ["![a [b](attachment:att_open)", []],
   ["![a \\[b\\] c](attachment:att_escn)", ["att_escn"]],
   ["![shot.png](attachment:att_l1 \"small right\")", ["att_l1"]],
   ["![shot.png](attachment:att_l2 \"320 left\")", ["att_l2"]],
