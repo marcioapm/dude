@@ -116,6 +116,14 @@ describe("the conductor's transcript", () => {
     const second = turns[6]!;
     expect(second.kind === "human" && second.read && second.deliveredAt !== null).toBe(true);
   });
+
+  test("a message handed on from an earlier conductor shows its images", () => {
+    cursor = 0;
+    const image = { id: "att_x", name: "x.png", contentType: "image/png", width: 1, height: 1, bytes: 1,
+      original: { contentType: "image/png", width: 1, height: 1, bytes: 1 } };
+    const turns = project([ev("chat.message", { text: "see", directiveId: "dir_x", attachments: [image] }, MARCIO)], "running").turns;
+    expect(turns[0]?.kind === "human" && turns[0].attachments.map((a) => a.id)).toEqual(["att_x"]);
+  });
 });
 
 /** The fixture task, with a conductor (or none) and its events. */
@@ -345,5 +353,139 @@ describe("the Chat tab", () => {
     expect(earlier.compareDocumentPosition(briefings[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // One composer, the latest's.
     expect(page.querySelectorAll("[data-testid=task-chat] textarea").length).toBe(1);
+  });
+});
+
+describe("an earlier conductor's conversation", () => {
+  const EARLIER = "run_conductor00";
+  const IMAGE = { id: "att_layout", name: "layout.png", contentType: "image/png", width: 10, height: 10, bytes: 4,
+    original: { contentType: "image/png", width: 20, height: 20, bytes: 8 } };
+  /** An earlier conductor that read a steer with an image, and ended. */
+  function endedEvents(): PersistedEvent[] {
+    cursor = 100;
+    return [
+      ev("chat.message", { text: "who asked for 8s?" }, MARCIO),
+      ev("conductor.briefed", { text: BRIEFING.replace("why 8s?", "who asked for 8s?") }),
+      ev("agent.message", { text: "Tiago, on the PR." }, { type: "agent", id: EARLIER }),
+      ev("run.steered", { text: "see the layout", directiveId: "dir_image", attachments: [IMAGE] }, MARCIO),
+      ev("run.directive.delivered", { directiveId: "dir_image", read: true }),
+      ev("agent.message", { text: "The header overflows." }, { type: "agent", id: EARLIER }),
+      ev("run.completed", { status: "completed", reason: "its container stopped" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+  }
+  /** Two conductors, the earlier ended; every read of the earlier's ledger counted, and failing while `failing`. */
+  class TwoConductors extends ChatClient {
+    reads: Array<number> = [];
+    failing = false;
+    /** When set, the earlier's next read waits on it. */
+    hold: Promise<void> | null = null;
+    constructor(private readonly earlierEvents: PersistedEvent[] = endedEvents()) {
+      super({ status: "running" }, conductorEvents());
+    }
+    override async getTask(id: string): Promise<TaskDetail> {
+      const task = await super.getTask(id);
+      const first = { ...this.conductorBase(), id: EARLIER, status: "completed" as const, createdAt: "2026-10-02T09:00:00.000Z" };
+      return { ...task, runs: [...task.runs, first] };
+    }
+    override async events(params: LedgerQuery & { limit?: number }) {
+      if (params.runId !== EARLIER) return super.events(params);
+      this.reads.push(params.after ?? 0);
+      if (this.hold) await this.hold;
+      if (this.failing) throw new ApiError(503, "unavailable", "the ledger is unreachable");
+      const events = this.earlierEvents.filter((e) => e.cursor > (params.after ?? 0)).slice(0, params.limit ?? 1000);
+      return { events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 };
+    }
+    override async attachment(): Promise<Blob> {
+      return new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });
+    }
+  }
+  const pickTab = async (page: HTMLElement, name: string) => {
+    const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.replace(/\d+$/, "") === name)!;
+    await act(async () => {
+      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      tab.click();
+    });
+    await settle();
+  };
+
+  test("shows its images, and opens them in the viewer, as the live one's", async () => {
+    const page = await chatPage(new TwoConductors());
+    const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor]"), "the earlier conversation");
+    const thumbnail = await until(() => earlier.querySelector<HTMLButtonElement>("[data-testid=message-image]"), "the image's thumbnail");
+    expect(thumbnail.getAttribute("aria-label")).toBe("Open layout.png");
+    await act(async () => thumbnail.click());
+    const viewer = await until(() => document.querySelector<HTMLElement>("[data-testid=image-viewer]"), "the viewer");
+    expect(viewer.textContent).toContain("layout.png");
+    expect(viewer.textContent).toContain("steer to Conductor");
+  });
+
+  test("a read that failed says so with a retry, never an empty conversation; Retry reads it", async () => {
+    const client = new TwoConductors();
+    client.failing = true;
+    const page = await chatPage(client);
+    const failed = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-failed]"), "the failed read");
+    expect(failed.textContent).toContain("the ledger is unreachable");
+    expect(page.querySelector("[data-testid=earlier-conductor-ended]")).toBeNull();
+    client.failing = false;
+    await act(async () => failed.querySelector<HTMLButtonElement>("[data-testid=earlier-conductor-retry]")!.click());
+    const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the conversation, read");
+    expect(earlier.textContent).toContain("Tiago, on the PR.");
+    expect(page.querySelector("[data-testid=earlier-conductor-failed]")).toBeNull();
+  });
+
+  test("leaving Chat while a page is on its way reads no more pages", async () => {
+    // A full first page, so it would read on.
+    cursor = 100;
+    const long = Array.from({ length: 1000 }, (_, i) => ({ ...ev("agent.thought", { text: `t${i}` }), runId: EARLIER }));
+    const client = new TwoConductors(long);
+    let release: () => void = () => {};
+    client.hold = new Promise((r) => (release = r));
+    const page = await chatPage(client);
+    await until(() => client.reads.length === 1 ? page : null, "the first page asked for");
+    await pickTab(page, "Overview");
+    expect(page.querySelector("[data-testid=earlier-conductor]")).toBeNull();
+    client.hold = null;
+    await act(async () => release());
+    await settle();
+    expect(client.reads).toEqual([0]);
+  });
+
+  test("coming back to Chat does not read an ended conductor's ledger again", async () => {
+    const client = new TwoConductors();
+    const page = await chatPage(client);
+    await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation");
+    expect(client.reads).toEqual([0]);
+    await pickTab(page, "Overview");
+    await pickTab(page, "Chat");
+    await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation again");
+    expect(page.querySelector("[data-testid=earlier-conductor]")?.textContent).toContain("The header overflows.");
+    expect(client.reads).toEqual([0]);
+  });
+
+  test("a ledger that may still hear its hand-over is read again from where it stopped", async () => {
+    // Failed, with a message it never read: the sweep's failed-delivery line is still to come.
+    cursor = 100;
+    const unsettled = [
+      ev("chat.message", { text: "who asked for 8s?" }, MARCIO),
+      ev("agent.message", { text: "Tiago, on the PR." }, { type: "agent", id: EARLIER }),
+      ev("chat.message", { text: "and when?", directiveId: "dir_lost" }, MARCIO),
+      ev("run.failed", { status: "failed", error: "host lost" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+    const client = new TwoConductors(unsettled);
+    const page = await chatPage(client);
+    await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation");
+    const last = unsettled.at(-1)!.cursor;
+    unsettled.push({ ...ev("run.directive.failed", { directiveId: "dir_lost", error: `the next conductor, ${CONDUCTOR}, has it` }),
+      runId: EARLIER, cursor: last + 1 });
+    await pickTab(page, "Overview");
+    await pickTab(page, "Chat");
+    await until(() => page.querySelector("[data-testid=earlier-conductor]")?.textContent?.includes(`the next conductor, ${CONDUCTOR}, has it`) ? page : null,
+      "the hand-over's line");
+    expect(client.reads).toEqual([0, last]);
+    // Settled now: final.
+    await pickTab(page, "Overview");
+    await pickTab(page, "Chat");
+    await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation again");
+    expect(client.reads).toEqual([0, last]);
   });
 });

@@ -18,6 +18,7 @@ import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/c
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, type ChatVariant, type RunCost } from "./RunScreen.tsx";
+import type { EndedLedgers } from "./endedLedgers.ts";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -26,6 +27,8 @@ export interface ChatSectionProps {
   conductorId: string | null;
   /** The task's earlier conductors, oldest first: ended, shown read-only above the latest. */
   earlier?: ReadonlyArray<{ id: string; status: RunStatus }> | undefined;
+  /** Their ledgers, read once for the task's page. */
+  ledgers: EndedLedgers;
   findings: readonly Finding[];
   pullRequests: readonly PullRequest[];
   /** The task's ledger, for what its pull requests heard. */
@@ -39,7 +42,7 @@ export interface ChatSectionProps {
   onBack: () => void;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], findings, pullRequests, events, owner, version, onSent, onBack }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onBack }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
@@ -82,8 +85,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], findings,
   // One object while nothing in it changed: the conductor's transcript is not redrawn for each reload here.
   const earlierKey = earlier.map((r) => r.id).join(",");
   const before = useMemo(() => earlier.length === 0 ? null
-    : earlier.map((r) => <EndedConductor key={r.id} client={client} runId={r.id} status={r.status} />),
-  [client, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids
+    : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} />),
+  [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids
   const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost }), [head, send, briefedWith, before, conductorCost]);
 
   if (conductorId) {

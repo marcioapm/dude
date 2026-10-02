@@ -61,6 +61,7 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
+import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
 
 export interface RunScreenProps {
@@ -788,35 +789,54 @@ function pendingReason(wait: SteerWait) {
 
 /**
  * A task's conductor that ended, in its Chat above the next: its whole
- * conversation, read once (it will say nothing more), with nothing to
- * answer or steer. A line says where it ended; the latest conductor takes
- * what is written next.
+ * conversation, read once for the task's page (EndedLedgers), with nothing
+ * to answer or steer; its images shown, and opened in the viewer, as the
+ * live one's are. A read that failed says so, with a retry. A line says
+ * where it ended; the latest conductor takes what is written next.
  */
-export const EndedConductor = memo(function EndedConductor({ client, runId, status }: { client: ApiClient; runId: string; status: RunDetail["status"] }) {
+export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status }: {
+  ledgers: EndedLedgers;
+  runId: string;
+  status: RunDetail["status"];
+}) {
   const people = usePeople();
-  const [events, setEvents] = useState<PersistedEvent[] | null>(null);
+  const images = useSentImages(ledgers.client);
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
+  const [events, setEvents] = useState<PersistedEvent[] | null>(() => ledgers.cached(runId));
+  const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    if (ledgers.cached(runId)) return;
     let cancelled = false;
-    void (async () => {
-      const all: PersistedEvent[] = [];
-      for (let after = 0; ;) {
-        const page = await client.events({ runId, after, limit: ENDED_PAGE });
-        all.push(...page.events);
-        if (page.events.length < ENDED_PAGE) break;
-        after = page.nextCursor;
-      }
-      if (!cancelled) setEvents(all);
-    })().catch(() => {
-      if (!cancelled) setEvents([]);
+    setFailed(null);
+    ledgers.read(runId, () => cancelled).then((read) => {
+      if (read && !cancelled) setEvents(read);
+    }, (err: unknown) => {
+      if (!cancelled) setFailed(err instanceof ApiError ? err.message : "the request failed");
     });
     return () => {
       cancelled = true;
     };
-  }, [client, runId]);
+  }, [ledgers, runId, attempt]);
   const turns = useMemo(() => (events ? asides(project(events, status).turns) : []), [events, status]);
+  if (failed && !events) {
+    return (
+      <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
+        <Callout tone="danger" data-testid="earlier-conductor-failed">
+          <span className="noticeLine">
+            Could not read this earlier conductor’s conversation: {failed}
+            <Button size="sm" variant="quiet" onClick={() => setAttempt((n) => n + 1)} data-testid="earlier-conductor-retry">
+              Retry
+            </Button>
+          </span>
+        </Callout>
+      </div>
+    );
+  }
   if (!events) return null;
   const dude = dudeName(events[0]?.taskId ?? "");
-  const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude);
+  const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
+  const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
   return (
     <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
       {turns.map((group) => Array.isArray(group)
@@ -824,12 +844,21 @@ export const EndedConductor = memo(function EndedConductor({ client, runId, stat
         : render(group))}
       <ChatNotice kind="parked" by={dude} at={events.at(-1)?.occurredAt ?? Date.now()} data-testid="earlier-conductor-ended"
         text="This conductor has ended. The next one takes what you write, briefed afresh." />
+      {viewing ? (
+        <ImageViewer
+          images={viewing.turn.attachments.map(images.sent)}
+          index={viewing.index}
+          onIndexChange={(index) => setViewing({ ...viewing, index })}
+          onClose={() => setViewing(null)}
+          context={viewedContext(viewing.turn, people, "Conductor", dude)}
+          readAt={viewing.turn.kind === "human" && viewing.turn.read && viewing.turn.deliveredAt ? clock(viewing.turn.deliveredAt) : undefined}
+          onWantOriginal={(i) => images.wantOriginal(viewing.turn.attachments[i]!.id)}
+          onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
+        />
+      ) : null}
     </div>
   );
 });
-
-/** Events per read of an ended conductor's ledger: the API's most. */
-const ENDED_PAGE = 1000;
 
 /** A turn whose images the viewer shows. */
 type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
