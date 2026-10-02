@@ -16,7 +16,7 @@ from datetime import datetime
 import pytest
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, query, wait_until
+from helpers import ApiClient, assert_timed_is_its_row, query, wait_until
 
 
 def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
@@ -247,7 +247,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     answered_at = next(e["occurredAt"] for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered")
     assert _at(timed["occurredAt"]) >= _at(answered_at), (timed, answered_at)
     # Due from the answer itself, not from when the orchestrator noticed it.
-    row = _resume_row_in_order(owner_dsn, run["id"])
+    row = _resume_row_in_order(owner_dsn, run["id"], timed)
     answered = query(owner_dsn, "SELECT answered_at FROM questions WHERE id = %s", (question["id"],))[0]["answered_at"]
     assert row["woken_at"] == answered, (row["woken_at"], answered)
 
@@ -288,13 +288,16 @@ def _timed_resume(client: ApiClient, run_id: str, cause: str) -> dict:
     assert cursors and all(c < event["cursor"] for c in cursors.values()), (cursors, event)
     assert any(e["eventType"] in ("agent.message", "agent.thought", "agent.tool.called") and e["cursor"] < event["cursor"]
                and e["cursor"] > min(cursors.values()) for e in events), "timed before the agent said anything"
+    unparked = [e["payload"] for e in events if e["eventType"] == "run.unparked"]
+    assert all(p["epoch"] == payload["epoch"] for p in unparked), (unparked, payload)
     return event
 
 
-def _resume_row_in_order(owner_dsn: str, run_id: str) -> dict:
-    """The Run's one run_resumes row: every column filled, and each clock's
+def _resume_row_in_order(owner_dsn: str, run_id: str, timed: dict) -> dict:
+    """The Run's one run_resumes row: every column filled, each clock's
     timestamps in order — dude's (due, asked, running, busy, first words),
-    the new placement's and the stopped one's, as lux reported them."""
+    the new placement's and the stopped one's, as lux reported them — and
+    its run.resume.timed saying exactly what it says."""
     rows = query(owner_dsn, "SELECT * FROM run_resumes WHERE run_id = %s", (run_id,))
     assert len(rows) == 1, rows
     row = rows[0]
@@ -306,6 +309,7 @@ def _resume_row_in_order(owner_dsn: str, run_id: str) -> dict:
         stamps = [row[c] for c in clock]
         assert stamps == sorted(stamps), dict(zip(clock, stamps))
     assert row["snapshot_bytes"] > 0 and row["moved"] is False, row
+    assert_timed_is_its_row(timed["payload"], row)
     return row
 
 
@@ -377,13 +381,13 @@ def test_a_persons_pause_and_resume_is_timed_from_their_resume(client: ApiClient
     wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND status = 'paused' AND lux_state = 'stopped'",
                              (run["id"],)), timeout=20, message="lux never stopped the paused run")
     assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
-    asked = query(owner_dsn, "SELECT control_requested_at FROM runs WHERE id = %s", (run["id"],))[0]["control_requested_at"]
 
     timed = _timed_resume(client, run["id"], "person")
-    row = _resume_row_in_order(owner_dsn, run["id"])
-    assert row["woken_at"] == asked, (row["woken_at"], asked)
-    resumed_at = next(e["occurredAt"] for e in client.events(runId=run["id"]) if e["eventType"] == "run.resumed")
-    assert _at(timed["occurredAt"]) >= _at(resumed_at)
+    row = _resume_row_in_order(owner_dsn, run["id"], timed)
+    resumed = next(e for e in client.events(runId=run["id"]) if e["eventType"] == "run.resumed")
+    # When they asked, as the API stored it with their request.
+    assert row["woken_at"] == _at(resumed["payload"]["requestedAt"]), (row["woken_at"], resumed["payload"])
+    assert _at(timed["occurredAt"]) >= _at(resumed["occurredAt"])
 
 
 def test_a_runner_key_cannot_reach_the_product_api(env, org: dict):
