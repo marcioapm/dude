@@ -26,6 +26,8 @@
  * four spaces), footnotes, reference links.
  */
 
+import { attachmentReferences } from "@dude/domain";
+
 export type Inline =
   | { readonly t: "text"; readonly v: string }
   | { readonly t: "code"; readonly v: string }
@@ -33,7 +35,7 @@ export type Inline =
   | { readonly t: "em"; readonly c: readonly Inline[] }
   | { readonly t: "del"; readonly c: readonly Inline[] }
   | { readonly t: "link"; readonly href: string; readonly c: readonly Inline[] }
-  | { readonly t: "image"; readonly src: string; readonly alt: string }
+  | { readonly t: "image"; readonly src: string; readonly alt: string; readonly title?: string }
   | { readonly t: "br" };
 
 export type TableAlign = "left" | "center" | "right" | null;
@@ -495,8 +497,18 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       const link = parseLink(ctx, i + 1, to, depth, links);
       if (link) {
         flush();
-        // attachment: names one of the caller's own images; Markdown draws it only through a resolver.
-        const s = /^attachment:[\w-]+$/.test(link.href.trim()) ? link.href.trim() : safeUrl(link.href);
+        if (/^<?attachment:/.test(link.href.trim())) {
+          // One of the caller's own images, drawn only where the backend would
+          // attach it: exactly the span `attachmentReferences` matches. Any
+          // other spelling reaches the agent as text, so it shows as text.
+          const span = src.slice(i, link.end);
+          const ref = attachmentReferences(span)[0];
+          if (ref && ref.from === 0 && ref.to === span.length) nodes.push({ t: "image", src: `attachment:${ref.id}`, alt: plain(link.nodes), ...(ref.title !== undefined ? { title: ref.title } : {}) });
+          else nodes.push({ t: "text", v: span });
+          i = link.end;
+          continue;
+        }
+        const s = safeUrl(link.href);
         const alt = plain(link.nodes);
         if (s) nodes.push({ t: "image", src: s, alt });
         else nodes.push({ t: "text", v: alt });
