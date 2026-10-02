@@ -1147,14 +1147,7 @@ def test_a_parked_agent_is_answered_from_its_chat(
                timeout=30, message="the answer did not resume the parked agent")
     # Once timed, its return says how long it took, its phases on hover:
     # exactly the numbers of its run.resume.timed.
-    timed = wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "run.resume.timed"],
-                       timeout=30, message="the resume was never timed")
-    assert len(timed) == 1, timed
-    text, title = _resume_notice(timed[0]["payload"], "Taken back up")
-    back = page.get_by_test_id("chat-notice").filter(has_text="Taken back up")
-    expect(back).to_have_count(1)
-    expect(back).to_contain_text(text)
-    expect(back).to_have_attribute("title", title)
+    _expect_resume_notice(page, client, implement["id"], "Taken back up", "Taken back up")
     assert console_errors == []
 
 
@@ -1196,6 +1189,20 @@ def _resume_notice(payload: dict, lead: str) -> tuple[str, str]:
     return text, title
 
 
+def _expect_resume_notice(page: Page, client: ApiClient, run_id: str, lead: str, has_text: str,
+                          count_timeout: float | None = None) -> None:
+    """The Run's one run.resume.timed is said by exactly one chat notice
+    with has_text: its sentence, led by lead, and its hover."""
+    timed = wait_until(lambda: [e for e in client.events(runId=run_id) if e["eventType"] == "run.resume.timed"],
+                       timeout=30, message="the resume was never timed")
+    assert len(timed) == 1, timed
+    text, title = _resume_notice(timed[0]["payload"], lead)
+    notice = page.get_by_test_id("chat-notice").filter(has_text=has_text)
+    expect(notice).to_have_count(1, timeout=count_timeout)
+    expect(notice).to_contain_text(text)
+    expect(notice).to_have_attribute("title", title)
+
+
 def test_a_persons_resume_says_how_long_it_took(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
@@ -1215,14 +1222,7 @@ def test_a_persons_resume_says_how_long_it_took(
     wait_until(lambda: any(e["eventType"] == "run.paused" and e["payload"].get("confirmed")
                            for e in client.events(runId=run["id"])), timeout=30, message="the run never paused")
     assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
-    timed = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.resume.timed"],
-                       timeout=30, message="the resume was never timed")
-    assert len(timed) == 1, timed
-    text, title = _resume_notice(timed[0]["payload"], "Resumed")
-    resumed = page.get_by_test_id("chat-notice").filter(has_text="Resumed in")
-    expect(resumed).to_have_count(1, timeout=30_000)
-    expect(resumed).to_contain_text(text)
-    expect(resumed).to_have_attribute("title", title)
+    _expect_resume_notice(page, client, run["id"], "Resumed", "Resumed in", count_timeout=30_000)
     assert console_errors == []
 
 
