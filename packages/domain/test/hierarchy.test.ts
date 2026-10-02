@@ -3,6 +3,7 @@ import {
   ALL_AGENT_ROLES,
   agentModelConfigSchema,
   resolveAgentModel,
+  taskGoalShortBy,
   type AgentModels,
   type Organization,
   type Project,
@@ -91,5 +92,16 @@ describe("agentModelConfigSchema", () => {
     expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", temperature: 3 }).success).toBe(false);
     expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", maxTokens: 0 }).success).toBe(false);
     expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", costLimitUsd: -1 }).success).toBe(false);
+  });
+});
+
+describe("taskGoalShortBy", () => {
+  test("counts UTF-16 units of the goal without its surrounding whitespace", () => {
+    expect(taskGoalShortBy("")).toBe(16);
+    expect(taskGoalShortBy("a".repeat(15))).toBe(1);
+    expect(taskGoalShortBy("a".repeat(16))).toBe(0);
+    expect(taskGoalShortBy(`  \n${"a".repeat(15)}\t `)).toBe(1);
+    expect(taskGoalShortBy(`${"😀".repeat(7)}a`)).toBe(1);
+    expect(taskGoalShortBy("😀".repeat(8))).toBe(0);
   });
 });
