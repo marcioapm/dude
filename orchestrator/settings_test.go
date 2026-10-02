@@ -30,10 +30,11 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	// The implementer is a real model so its spec carries a real prompt;
-	// the reviewer's model is the organization's to say.
+	// the implementer's tier is the organization's to say.
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{"implementer":{"effort":"high"}}'::jsonb WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('mtr_org_impl_' || $1, $1, 'Org coder', 'llm-impl')`, w.org)
 	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models =
-		'{"implementer":{"model":"llm/impl","effort":"low","timeLimitMinutes":45}}'::jsonb WHERE id = $1`, w.org)
+		jsonb_build_object('implementer', jsonb_build_object('tier', 'mtr_org_impl_' || $1, 'effort', 'low', 'timeLimitMinutes', 45)) WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by, created_at)
 		VALUES ('pv_old', $1, 'implementer', 'OLD ORG PROMPT', 'key_x', now() - interval '1 hour'),
 		       ('pv_org', $1, 'implementer', 'ORG PROMPT', 'key_x', now())`, w.org)
@@ -45,8 +46,9 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	var spec *lux.Spec
 	w.until("the implementer to reach lux", func() bool { spec = w.specOf("implement"); return spec != nil })
 
-	if spec.Labels["dude.model"] != "llm/impl" || spec.Labels["dude.effort"] != "high" {
-		t.Errorf("model %q effort %q: want the organization's model and the project's effort", spec.Labels["dude.model"], spec.Labels["dude.effort"])
+	if spec.Labels["dude.model"] != "llm-impl" || spec.Labels["dude.model_tier"] != "Org coder" || spec.Labels["dude.effort"] != "high" {
+		t.Errorf("model %q tier %q effort %q: want the organization's tier and the project's effort",
+			spec.Labels["dude.model"], spec.Labels["dude.model_tier"], spec.Labels["dude.effort"])
 	}
 	if spec.Timeout != "45m" {
 		t.Errorf("timeout = %q, want the organization's 45m", spec.Timeout)
@@ -76,7 +78,7 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 // record none.
 func TestAnOrganizationThatNeverEditsRunsTheBuiltInPrompt(t *testing.T) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("implementer", "llm-impl")
 	wi := w.task()
 	w.deliver(wi)
 	var spec *lux.Spec

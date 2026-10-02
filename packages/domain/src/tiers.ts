@@ -132,9 +132,10 @@ export const THINKER_ROLES = ["investigator", "reviewer", "simplifier", "qa_brow
 // ---------------------------------------------------------------------------
 
 /**
- * The tier a role runs on: the project's, then the organization's — for
- * the fixer, then the implementer's over the same layers. A stored id that
- * names no tier is skipped. null: no layer names one of the tiers. The
+ * The tier a role runs on: the first layer that names one — the
+ * project's, then the organization's; for the fixer, then the
+ * implementer's over the same layers. null: none does, or the one named is
+ * not among the tiers (never, while removals move what named them). The
  * orchestrator's delivery.ResolveRole is the same rule, for the Run.
  */
 export function resolveTier(
@@ -147,7 +148,8 @@ export function resolveTier(
   for (const r of chain) {
     for (const [name, layer] of ordered) {
       const id = (layer as Record<string, { tier?: string }> | null | undefined)?.[r]?.tier;
-      if (id && tiers.some((t) => t.id === id)) return { tierId: id, from: r === role ? name : "implementer" };
+      if (!id) continue;
+      return { tierId: tiers.some((t) => t.id === id) ? id : null, from: r === role ? name : "implementer" };
     }
   }
   return { tierId: null, from: null };

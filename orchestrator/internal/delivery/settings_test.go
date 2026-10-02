@@ -8,17 +8,17 @@ import (
 )
 
 func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
-	org := json.RawMessage(`{"reviewer":{"model":"org/review","effort":"high","timeLimitMinutes":20},
-		"implementer":{"model":"org/impl","context":"org notes"}}`)
-	project := json.RawMessage(`{"reviewer":{"effort":"low"},"implementer":{"model":"proj/impl"}}`)
+	org := json.RawMessage(`{"reviewer":{"tier":"mtr_thinker","effort":"high","timeLimitMinutes":20},
+		"implementer":{"tier":"mtr_coder","context":"org notes"}}`)
+	project := json.RawMessage(`{"reviewer":{"effort":"low"},"implementer":{"tier":"mtr_fast"}}`)
 
-	// The project changed only the reviewer's effort: the model and limit
+	// The project changed only the reviewer's effort: the tier and limit
 	// are still its organization's.
-	if got, want := ResolveRole("reviewer", project, org), (RoleSettings{Model: "org/review", Effort: "low", TimeLimitMinutes: 20}); got != want {
+	if got, want := ResolveRole("reviewer", project, org), (RoleSettings{Tier: "mtr_thinker", Effort: "low", TimeLimitMinutes: 20}); got != want {
 		t.Errorf("reviewer = %+v, want %+v", got, want)
 	}
-	// Each field on its own: the project's model, the organization's notes.
-	if got, want := ResolveRole("implementer", project, org), (RoleSettings{Model: "proj/impl", Context: "org notes"}); got != want {
+	// Each field on its own: the project's tier, the organization's notes.
+	if got, want := ResolveRole("implementer", project, org), (RoleSettings{Tier: "mtr_fast", Context: "org notes"}); got != want {
 		t.Errorf("implementer = %+v, want %+v", got, want)
 	}
 	// Nothing configured anywhere is nothing: the caller refuses to run it.
@@ -26,18 +26,18 @@ func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
 		t.Errorf("simplifier = %+v", got)
 	}
 	// A layer that is not JSON (or absent) is skipped, not fatal.
-	if got := ResolveRole("implementer", nil, json.RawMessage(`not json`), org); got.Model != "org/impl" {
+	if got := ResolveRole("implementer", nil, json.RawMessage(`not json`), org); got.Tier != "mtr_coder" {
 		t.Errorf("implementer over a broken layer = %+v", got)
 	}
 }
 
 func TestTheFixerIsTheImplementerUnlessSetApart(t *testing.T) {
-	org := json.RawMessage(`{"implementer":{"model":"org/impl","effort":"medium"}}`)
-	if got := ResolveRole("fixer", nil, org); got.Model != "org/impl" || got.Effort != "medium" {
+	org := json.RawMessage(`{"implementer":{"tier":"mtr_coder","effort":"medium"}}`)
+	if got := ResolveRole("fixer", nil, org); got.Tier != "mtr_coder" || got.Effort != "medium" {
 		t.Errorf("fixer = %+v, want the implementer's", got)
 	}
 	project := json.RawMessage(`{"fixer":{"effort":"high"}}`)
-	if got := ResolveRole("fixer", project, org); got.Model != "org/impl" || got.Effort != "high" {
+	if got := ResolveRole("fixer", project, org); got.Tier != "mtr_coder" || got.Effort != "high" {
 		t.Errorf("fixer with its own effort = %+v", got)
 	}
 	if PromptRoleForPhase[PhaseFix] != "fixer" || PromptRoleForPhase[PhaseReview] != "reviewer" {

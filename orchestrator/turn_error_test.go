@@ -9,24 +9,23 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// What OpenCode answers a session/prompt for a model it has no provider for,
-// as lux's ACP adapter relays it.
+// What OpenCode answers a session/prompt for a model the proxy will not
+// serve, as lux's ACP adapter relays it.
 const cannotConnect = "session/prompt: Internal error: Cannot connect to API: Unable to connect. " +
 	"Is the computer able to access the url? (-32603)"
 
-// An agent whose turn fails fails its phase with the agent's error, and
-// nothing is pushed: the branch would be the base commit, and the push's own
-// error would hide why.
+// An agent whose turn fails fails its phase with the agent's error, naming
+// the tier and the model it requested, and nothing is pushed: the branch
+// would be the base commit, and the push's own error would hide why.
 func TestAFailedTurnFailsThePhaseWithTheAgentsErrorAndPushesNothing(t *testing.T) {
-	for _, model := range []string{"claude-sonnet-5-5", "llm-anthropic/claude-sonnet-5-5"} {
+	for _, model := range []string{"claude-sonnet-5-5", "gpt-5.6-sol"} {
 		t.Run(model, func(t *testing.T) { testFailedTurn(t, model) })
 	}
 }
 
 func testFailedTurn(t *testing.T, model string) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || jsonb_build_object('implementer', jsonb_build_object('model', $2::text))
-		WHERE id = $1`, w.project, model)
+	w.onModel("implementer", model)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{TurnError: cannotConnect} }
 	wi := w.task()
 	w.deliver(wi)
@@ -38,8 +37,8 @@ func testFailedTurn(t *testing.T, model string) {
 		FROM runs WHERE task_id = $1`, wi).Scan(&status, &errText, &pushAsked); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || !strings.Contains(errText, `model "`+model+`"`) || !strings.Contains(errText, "Cannot connect to API") {
-		t.Errorf("run %s: %q; want failed, naming the model and the agent's error", status, errText)
+	if status != "failed" || !strings.Contains(errText, `on `+model+`, which requested "`+model+`" from the LLM proxy`) || !strings.Contains(errText, "Cannot connect to API") {
+		t.Errorf("run %s: %q; want failed, naming the tier, its model and the agent's error", status, errText)
 	}
 	if pushAsked || w.lux.Runs()[0].Pushed {
 		t.Errorf("a turn that failed was pushed")

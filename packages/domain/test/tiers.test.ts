@@ -82,9 +82,9 @@ describe("resolving a role's tier", () => {
       .toEqual({ tierId: "thinker", from: "organization" });
   });
 
-  test("an id that names no tier is passed over; none at all is null", () => {
+  test("the first layer naming one decides; an id that names no tier is none; none at all is null", () => {
     expect(resolveTier("reviewer", { project: { reviewer: { tier: "gone" } }, organization: { reviewer: { tier: "thinker" } } }, tiers))
-      .toEqual({ tierId: "thinker", from: "organization" });
+      .toEqual({ tierId: null, from: "project" });
     expect(resolveTier("reviewer", { organization: {} }, tiers)).toEqual({ tierId: null, from: null });
   });
 });
