@@ -53,7 +53,7 @@ const SESSION_SELECT = `
  */
 export function escalationJson(alias = "tasks"): string {
   // Resume only while the Run that failed is still kept to resume
-  // (run_kept, migration 066): after that, the other ways are left.
+  // (run_kept, migration 068): after that, the other ways are left.
   return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
     'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
         WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,

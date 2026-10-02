@@ -500,12 +500,15 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 			return fail(http.StatusConflict, "conflict", "run %s is %s, not paused", runID, ri.Status)
 		}
 		// A request, like pause and abort; the syncer resumes the lux Run
-		// and moves it back to running.
-		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = 'resume', control_requested_at = now(),
-			control_reason = $2 WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
+		// and moves it back to running. When it was asked is what a
+		// resume's timing counts from (run_resumes.woken_at).
+		var requestedAt time.Time
+		if err := tx.QueryRow(r.Context(), `UPDATE runs SET control = 'resume', control_requested_at = now(),
+			control_reason = $2 WHERE id = $1 RETURNING control_requested_at`, runID, db.Nullable(body.Reason)).Scan(&requestedAt); err != nil {
 			return err
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", principalOf(r),
+			map[string]any{"reason": db.Nullable(body.Reason), "requestedAt": requestedAt})
 	})
 	if err != nil {
 		return err
