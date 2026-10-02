@@ -752,6 +752,31 @@ describe("how long a resume took", () => {
       expect.stringContaining("Parked"), "Taken back up in 6.4s.", "Resumed in 1.5s.",
     ]);
   });
+
+  // A person's own resume (epoch 2, no run.unparked) is timed only after
+  // the agent was parked again: its timing is still said, and the next
+  // park's return gets its own.
+  const delayedPersonal = [
+    ev(EventTypes.RunPaused, { requested: true }),
+    ev(EventTypes.RunResumed, {}),
+    ev("run.parked", { reason: "person" }),
+    timed({ epoch: 2, cause: "person", moved: false, totalMs: 6400, phases: {} }),
+    ev("run.unparked", { reason: "person", epoch: 3 }),
+    timed({ epoch: 3, cause: "answer", moved: false, totalMs: 1500, phases: {} }),
+  ];
+
+  test("a person's resume timed after the next park is still said, and so is that park's return", () => {
+    const { turns } = project(delayedPersonal);
+    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual([
+      expect.stringContaining("Parked"), "Resumed in 6.4s.", "Taken back up in 1.5s.",
+    ]);
+  });
+
+  test("folded one event at a time, a delayed personal resume and the park's return are the same", () => {
+    const state = emptyProjection();
+    for (const e of delayedPersonal) apply(state, [e]);
+    expect(snapshot(state).turns).toEqual(project(delayedPersonal).turns);
+  });
 });
 
 describe("how a run ended", () => {

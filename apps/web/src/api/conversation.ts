@@ -401,14 +401,12 @@ export interface Projection {
    */
   untimedUnpark: NoticeTurn | null;
   /**
-   * Whether dude's last word on a park was `run.parked`, not its
-   * `run.unparked`: the orchestrator writes `run.unparked` on a resume
-   * exactly then, whoever resumed it. A timing that arrives meanwhile is
-   * a park's return still to be written, kept here by epoch until it is;
-   * otherwise it is a person's resume of their own pause.
+   * "Resumed in …" notices said on their own, by the epoch their timing
+   * names. Such a timing can be a park's return whose `run.unparked` is
+   * still to come (lux streamed the first words before answering the
+   * resume): when it comes, the notice becomes that return, not a second one.
    */
-  parked: boolean;
-  earlyTimings: Map<number, { took: string; title: string }>;
+  standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -433,8 +431,7 @@ export function emptyProjection(): Projection {
     lands: null,
     untimedUnparks: new Map(),
     untimedUnpark: null,
-    parked: false,
-    earlyTimings: new Map(),
+    standaloneTimings: new Map(),
     cursor: 0,
   };
 }
@@ -721,21 +718,24 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.idle_nudged": {
         const { notice, text } = NOTICES[event.eventType]!;
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
+        if (notice === "unparked" && typeof payload.epoch === "number") {
+          // Its timing came first and was said on its own: that notice is
+          // this return.
+          const said = state.standaloneTimings.get(payload.epoch);
+          if (said) {
+            state.standaloneTimings.delete(payload.epoch);
+            said.turn.text = `Taken back up ${said.took}.`;
+            break;
+          }
+        }
         turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
           state.untimedUnpark = null;
-          state.parked = true;
         }
         if (notice === "unparked") {
-          state.parked = false;
-          const early = typeof payload.epoch === "number" ? state.earlyTimings.get(payload.epoch) : undefined;
-          if (early) {
-            state.earlyTimings.delete(payload.epoch as number);
-            turn.text = `Taken back up ${early.took}.`;
-            turn.title = early.title;
-          } else if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
+          if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
           else state.untimedUnpark = turn;
         }
         break;
@@ -747,18 +747,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunResumeTimed: {
         // How long the resume took: said on its own "taken back up" notice,
-        // by epoch — a timing can arrive after the next park, or before its
-        // own notice while the Run is still parked — or, for a person's
-        // resume of their own pause (which has none), on a notice of its own.
+        // by epoch — a timing can arrive after the next park — or else on a
+        // notice of its own, kept by epoch in case its park's return is
+        // still to come.
         const timing = resumeTiming(payload);
         if (!timing) break;
         let unparked: NoticeTurn | null | undefined;
         if (typeof payload.epoch === "number" && state.untimedUnparks.has(payload.epoch)) {
           unparked = state.untimedUnparks.get(payload.epoch);
           state.untimedUnparks.delete(payload.epoch);
-        } else if (typeof payload.epoch === "number" && state.parked) {
-          state.earlyTimings.set(payload.epoch, timing);
-          break;
         } else {
           unparked = state.untimedUnpark;
           state.untimedUnpark = null;
@@ -768,8 +765,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           unparked.title = timing.title;
           break;
         }
-        turns.push({ kind: "notice", id: event.eventId, notice: "unparked", text: `Resumed ${timing.took}.`,
-          title: timing.title, at: event.occurredAt });
+        const own: NoticeTurn = { kind: "notice", id: event.eventId, notice: "unparked", text: `Resumed ${timing.took}.`,
+          title: timing.title, at: event.occurredAt };
+        turns.push(own);
+        if (typeof payload.epoch === "number") state.standaloneTimings.set(payload.epoch, { turn: own, took: timing.took });
         break;
       }
 
