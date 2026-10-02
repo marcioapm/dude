@@ -316,31 +316,64 @@ func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
 	})
 }
 
-// A delivery whose workflow could not start is asked again with the same
-// images: they are already the prompt's, and it goes.
+// A delivery whose workflow could not start is asked again: its images are
+// the last set named, in its order — already the prompt's ones go again,
+// and those no longer named are let go, as if never sent.
 func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
 	w := newWorld(t)
 	b := w.withImages()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.upload(b, "att_design", wi, "design.png", screenshot)
+	w.upload(b, "att_a", wi, "a.png", screenshot)
+	w.upload(b, "att_b", wi, "b.png", screenshot)
 	// The workflow cannot start, for this organization only.
 	mustExec(t, w.owner, fmt.Sprintf(`CREATE FUNCTION refuse_%[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN RAISE EXCEPTION 'workflow store down'; END $$;
 		CREATE TRIGGER refuse_%[1]s BEFORE INSERT ON workflow_runs FOR EACH ROW
 		WHEN (NEW.organization_id = '%[1]s') EXECUTE FUNCTION refuse_%[1]s()`, w.org))
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 500 {
-		t.Fatalf("deliver with the workflow store down: %d %v", status, body)
+	failing := func(ids ...string) {
+		t.Helper()
+		if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": ids}); status != 500 {
+			t.Fatalf("deliver %v with the workflow store down: %d %v", ids, status, body)
+		}
 	}
+	// What the chip's ✕ (DELETE /v1/attachments/{id}) needs: not sent.
+	unsent := func(id string) bool {
+		return w.count(`SELECT count(*) FROM attachments WHERE id = $1 AND NOT for_prompt AND attached_at IS NULL`, id) == 1
+	}
+	// A different set: a.png goes back to the tray's.
+	failing("att_a")
+	failing("att_b")
+	if !unsent("att_a") {
+		t.Error("an image no longer named is still the prompt's")
+	}
+	// A smaller set: a.png goes back again.
+	failing("att_a", "att_b")
+	failing("att_b")
+	if !unsent("att_a") {
+		t.Error("an image left out of a smaller set is still the prompt's")
+	}
+	failing("att_design")
 	mustExec(t, w.owner, fmt.Sprintf(`DROP TRIGGER refuse_%[1]s ON workflow_runs; DROP FUNCTION refuse_%[1]s()`, w.org))
 
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_b", "att_design"}}); status != 201 {
 		t.Fatalf("deliver again: %d %v", status, body)
 	}
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
+	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"b.png", "design.png"}) {
 		t.Fatalf("the implementer was given %v", got)
 	}
 	// It was sent, with the prompt: a steer cannot take it.
+	var runID string
+	w.until("the implementer to run", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "x", "attachmentIds": []string{"att_design"}})
+	if want := "image att_design was already sent"; status != 400 || errorMessage(body) != want {
+		t.Errorf("a steer naming the prompt's image: %d %q, want 400 %q", status, errorMessage(body), want)
+	}
 	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_design' AND for_prompt AND attached_at IS NOT NULL`); n != 1 {
 		t.Errorf("the image is not the prompt's")
 	}
