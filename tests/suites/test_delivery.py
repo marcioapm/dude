@@ -11,10 +11,12 @@ orchestrator records is what the API and the live stream show.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, query, wait_until
 
 
 def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
@@ -199,8 +201,9 @@ def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient
     assert resp.status_code == 400, resp.text
 
 
-def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict):
-    """The question reaches the API and the sidebar; parked while it waits, the answer resumes it."""
+def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict, owner_dsn: str):
+    """The question reaches the API and the sidebar; parked while it waits,
+    the answer resumes it, and the resume is timed from the answer."""
     # The suite parks a waiting agent after seconds (DUDE_PARK_AFTER).
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"},
@@ -240,6 +243,70 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
         lambda: any(r["phase"] == "implement" and r["status"] == "completed" for r in client.task_runs(task["id"])),
         timeout=30, message="the implementer never carried on after the answer",
     )
+    timed = _timed_resume(client, run["id"], "answer")
+    answered_at = next(e["occurredAt"] for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered")
+    assert _at(timed["occurredAt"]) >= _at(answered_at), (timed, answered_at)
+    # Due from the answer itself, not from when the orchestrator noticed it.
+    row = _resume_row_in_order(owner_dsn, run["id"])
+    answered = query(owner_dsn, "SELECT answered_at FROM questions WHERE id = %s", (question["id"],))[0]["answered_at"]
+    assert row["woken_at"] == answered, (row["woken_at"], answered)
+
+
+# A resume's phases, in the order run.resume.timed lists them.
+RESUME_PHASES = ("react", "schedule", "image", "restore", "start", "reload", "take", "firstOutput")
+
+
+def _at(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
+def _timed_resume(client: ApiClient, run_id: str, cause: str) -> dict:
+    """The Run's one run.resume.timed, once its agent spoke after the resume:
+    its cause, every phase (the fake lux reports every placement time), each
+    a duration, the total at least their sum less lux's and dude's skew, and
+    after the run.unparked or run.resumed that started it."""
+    def timed():
+        return [e for e in client.events(runId=run_id) if e["eventType"] == "run.resume.timed"]
+
+    found = wait_until(timed, timeout=30, message="the resume was never timed")
+    assert len(found) == 1, found
+    event, payload = found[0], found[0]["payload"]
+    assert payload["cause"] == cause and payload["epoch"] == 2, payload
+    assert payload["moved"] is False and payload["hostName"], payload
+    phases = payload["phases"]
+    assert list(phases) and set(phases) == set(RESUME_PHASES), phases
+    # Phases within one clock are never negative; those that cross from
+    # dude's clock to lux's (schedule, reload) carry their skew.
+    for name in ("react", "image", "restore", "start", "take", "firstOutput"):
+        assert phases[name] >= 0, (name, phases)
+    assert payload["totalMs"] >= payload["untilBusyMs"] >= phases["react"], payload
+    # Each rounded to the millisecond on its own.
+    assert abs(payload["totalMs"] - payload["untilBusyMs"] - phases["firstOutput"]) <= 1, payload
+    # Timed after the resume it is about, and after the agent's first words.
+    events = client.events(runId=run_id)
+    cursors = {e["eventType"]: e["cursor"] for e in events if e["eventType"] in ("run.resumed", "run.unparked")}
+    assert cursors and all(c < event["cursor"] for c in cursors.values()), (cursors, event)
+    assert any(e["eventType"] in ("agent.message", "agent.thought", "agent.tool.called") and e["cursor"] < event["cursor"]
+               and e["cursor"] > min(cursors.values()) for e in events), "timed before the agent said anything"
+    return event
+
+
+def _resume_row_in_order(owner_dsn: str, run_id: str) -> dict:
+    """The Run's one run_resumes row: every column filled, and each clock's
+    timestamps in order — dude's (due, asked, running, busy, first words),
+    the new placement's and the stopped one's, as lux reported them."""
+    rows = query(owner_dsn, "SELECT * FROM run_resumes WHERE run_id = %s", (run_id,))
+    assert len(rows) == 1, rows
+    row = rows[0]
+    missing = [k for k, v in row.items() if v is None]
+    assert missing == [], missing
+    for clock in (("woken_at", "requested_at", "running_at", "busy_at", "first_output_at"),
+                  ("assigned_at", "image_ready_at", "volumes_restored_at", "container_started_at", "workload_started_at"),
+                  ("stop_requested_at", "exited_at", "snapshot_done_at", "uploaded_at")):
+        stamps = [row[c] for c in clock]
+        assert stamps == sorted(stamps), dict(zip(clock, stamps))
+    assert row["snapshot_bytes"] > 0 and row["moved"] is False, row
+    return row
 
 
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
@@ -289,6 +356,34 @@ def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_p
     types = [e["eventType"] for e in client.events(runId=run["id"])]
     for expected in ("run.steered", "run.directive.delivered", "run.paused", "run.resumed", "run.aborted"):
         assert expected in types, f"{expected} missing: {types}"
+
+
+def test_a_persons_pause_and_resume_is_timed_from_their_resume(client: ApiClient, forge_project: dict, owner_dsn: str):
+    """A person pauses a working agent and resumes it, as the UI does: the
+    resume is recorded with its cause and every stamp in order, and timed
+    once the agent says something, from when they asked."""
+    # Working, never finishing until it is resumed; then it says it is done.
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    task = client.create_task(forge_project["id"], "Pause me, then carry on")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
+    run = wait_until(
+        lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
+        timeout=30, message="the implementer never started",
+    )
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND lux_state = 'running'", (run["id"],)),
+               timeout=20, message="lux never ran the implementer")
+    assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND status = 'paused' AND lux_state = 'stopped'",
+                             (run["id"],)), timeout=20, message="lux never stopped the paused run")
+    assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+    asked = query(owner_dsn, "SELECT control_requested_at FROM runs WHERE id = %s", (run["id"],))[0]["control_requested_at"]
+
+    timed = _timed_resume(client, run["id"], "person")
+    row = _resume_row_in_order(owner_dsn, run["id"])
+    assert row["woken_at"] == asked, (row["woken_at"], asked)
+    resumed_at = next(e["occurredAt"] for e in client.events(runId=run["id"]) if e["eventType"] == "run.resumed")
+    assert _at(timed["occurredAt"]) >= _at(resumed_at)
 
 
 def test_a_runner_key_cannot_reach_the_product_api(env, org: dict):
