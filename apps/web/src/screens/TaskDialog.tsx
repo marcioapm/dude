@@ -12,6 +12,10 @@
  * where it sits (its epic) can change; the fields say so rather than failing
  * on save.
  *
+ * Saving needs a title and a goal of at least TASK_GOAL_MIN characters,
+ * trimmed, as the API does; a task saved before that rule opens as it is,
+ * and saves once its goal is long enough.
+ *
  * Read shows the whole task as one document, as it stands (saved or not),
  * in place of the fields; Back to writing, Escape or Ctrl/⌘+Shift+R return
  * to them as they were.
@@ -22,7 +26,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AttachDropZone, AttachmentChip, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, attachmentWarning } from "@dude/design-system";
-import { TASK_CRITERIA_MAX, TASK_GOAL_MAX } from "@dude/domain";
+import { TASK_CRITERIA_MAX, TASK_GOAL_MAX, taskGoalShortBy } from "@dude/domain";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -39,6 +43,12 @@ const isReadKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKe
 function overBy(value: string, max: number): string | undefined {
   const over = value.length - max;
   return over > 0 ? `${over.toLocaleString("en-US")} ${over === 1 ? "character" : "characters"} over the limit; shorten it to save.` : undefined;
+}
+
+/** Under the shortest goal a task is saved with: how much more to write. */
+function shortGoalText(goal: string): string | undefined {
+  const short = taskGoalShortBy(goal);
+  return short > 0 ? `${short} more ${short === 1 ? "character" : "characters"} to save: why it matters and what should change.` : undefined;
 }
 
 export type ExistingTask = { id: string; delivering: boolean } & TaskFields;
@@ -64,6 +74,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const [opened] = useState(() => [existing?.title ?? "", existing?.goal ?? "", criteriaToMarkdown(existing?.acceptanceCriteria ?? [])] as const);
   const [title, setTitle] = useState(opened[0]);
   const [goal, setGoal] = useState(opened[1]);
+  const [goalTyped, setGoalTyped] = useState(false);
   const [criteriaSource, setCriteriaSource] = useState(opened[2]);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
   const [chosen, setChosen] = useState<TaskRepository[]>(existing?.repositories ?? []);
@@ -114,11 +125,14 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // task says otherwise.
   const choosing = repositories.length > 1;
   const criteria = useMemo(() => criteriaFromMarkdown(criteriaSource), [criteriaSource]);
-  const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX);
+  // Too short says how much more only once the person has typed in the goal:
+  // before that, an empty or old short goal only says "required".
+  const goalShortText = locked ? undefined : shortGoalText(goal);
+  const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX) ?? (goalTyped ? goalShortText : undefined);
   // Reading criteria only strips markers and indentation, so bounding their
   // Markdown source also bounds the total saved by the server.
   const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
-  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !criteriaError && !busy && imagesReady;
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy && imagesReady;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
   function submit(deliver: boolean) {
@@ -254,10 +268,14 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         value={title} disabled={locked} maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="task-title" />
       <MarkdownEditor
         label="Goal"
+        labelNote={locked ? undefined : "required"}
         hint="Why it matters, what exists today, and anything an agent can't guess."
         placeholder="Why does this matter? What exists today? What must an agent not break?"
         value={goal}
-        onChange={setGoal}
+        onChange={(value) => {
+          setGoal(value);
+          setGoalTyped(true);
+        }}
         fill
         breaks
         minRows={4}

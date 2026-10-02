@@ -24,6 +24,8 @@ import (
 func (s *Server) githubRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/webhooks/register", s.auth(s.registerWebhooks))
 	mux.Handle("POST /internal/pull-requests/{id}/{action}", s.auth(s.pullRequestAction))
+	mux.Handle("GET /internal/pull-requests/{id}/reviewer-candidates", s.auth(s.pullRequestReviewerCandidates))
+	mux.Handle("GET /internal/reviewer-candidates", s.auth(s.organizationReviewerCandidates))
 	mux.Handle("GET /internal/github-settings", s.auth(s.githubSettings))
 	mux.Handle("PATCH /internal/github-settings", s.auth(s.updateGithubSettings))
 }

@@ -11,6 +11,8 @@
 //	dude memory show ID                   one memory in full
 //	dude memory add --title T --content C [--kind K] [--about KEY]... [--org]
 //	dude event TYPE [--data JSON]         record an event on this run
+//	dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
+//	                                      what a Run of this task changed
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
 //
@@ -35,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,6 +56,10 @@ type many []string
 
 func (m *many) String() string     { return strings.Join(*m, ",") }
 func (m *many) Set(v string) error { *m = append(*m, v); return nil }
+
+// runID is how `dude diff` tells a Run from a path: an id as internal/ids
+// mints it, run_ then 9 base36 characters of time and 16 hex.
+var runID = regexp.MustCompile(`^run_[0-9a-z]{9}[0-9a-f]{16}$`)
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
@@ -106,7 +113,7 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason, "wait": *wait}))
 	case "task create":
 		title := fs.String("title", "", "what should change, in one line")
-		goal := fs.String("goal", "", "why, and what someone needs to know")
+		goal := fs.String("goal", "", "why it matters and what should change; required, at least 16 characters")
 		epic := fs.String("epic", "", "an existing epic's title")
 		var criteria many
 		fs.Var(&criteria, "criterion", "a thing that must be true when it is done (repeatable)")
@@ -203,6 +210,31 @@ func run(args []string, out io.Writer) error {
 			body["data"] = json.RawMessage(*data)
 		}
 		return show(out, *asJSON, call("emit_event", body))
+	case "diff":
+		nameStatus := fs.Bool("name-status", false, "each file's path and status only")
+		limit := fs.Int("limit", 0, "files per page, 1 to 1000 (default 200)")
+		offset := fs.Int("offset", 0, "files to skip, for the next page")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{}
+		if len(args) > 0 && runID.MatchString(args[0]) {
+			body["run"], args = args[0], args[1:]
+		}
+		if len(args) > 0 {
+			body["paths"] = args
+		}
+		if *nameStatus {
+			body["nameStatus"] = true
+		}
+		if *limit != 0 {
+			body["limit"] = *limit
+		}
+		if *offset != 0 {
+			body["offset"] = *offset
+		}
+		return show(out, *asJSON, call("run_diff", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
 		args, err := parse(fs, rest)
@@ -389,6 +421,16 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              (--content - reads stdin); live at once
   dude event TYPE [--data JSON]              record an event on this run, e.g.
                                              dude event progress --data '{"done":3,"of":10}'
+  dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
+                                             what a Run changed: this Run's checkout, uncommitted
+                                             work included, against the commit it started from
+                                             (one snapshot, no history). RUN (run_…) is yours by
+                                             default, or another of your task's. Without PATH the
+                                             changed files, most changed first, with line counts
+                                             (--limit default 200, max 1000; hasMore says there is
+                                             another page); --name-status, path and status only.
+                                             With PATHs (exact, as listed) their changes as
+                                             unified diff text, at most 2,000 lines a call
   dude publish FILE [--name NAME]            keep a file for people, shown with the task
   dude tools                                 the tools this run may use
   dude --version                             this CLI's version
