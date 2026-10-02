@@ -1,8 +1,10 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -17,6 +19,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // Wakeable previews (runs.wakeable): a preview is lux servers of its own,
@@ -50,6 +53,9 @@ const (
 	// How often a running preview with no idle mark is checked for servers
 	// lux never reports idle (never ready: starting, unreachable).
 	parkSweepEvery = 5 * time.Minute
+	// Starts in a row of a preview's Run that may fail before it runs
+	// before dude stops trying new ones by itself (startFailed).
+	previewStartAttempts = 3
 )
 
 // wakeRun is a wakeable preview as the sweep reads it.
@@ -67,6 +73,16 @@ type wakeRun struct {
 	LuxLeft bool
 	// Its servers are to be checked for idleness (wakeableSelect's park_due).
 	ParkDue bool
+	// Starts of its lux Run in a row that failed before running.
+	StartFailures int
+	// lux_start_event before the request this wake's acknowledgement
+	// (woken) answers: once it has moved, an event of that start or a later
+	// one was applied, and is newer than the answer.
+	StartBefore int64
+	// lux_after_event when the wake was claimed, before lux was asked what
+	// the Run is: an attach-only acknowledgement is older than any event
+	// applied past it.
+	ObservedAfter int64
 }
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
@@ -82,8 +98,8 @@ type wakeRun struct {
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
 const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
-		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due
-	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at,
+		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures
+	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at, r.start_failures,
 			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
 			t.status IN ('done', 'failed', 'aborted') AS task_ended,
 			r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories, ps.live, ps.idle,
@@ -147,7 +163,8 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (wakeRun, error) {
 			var r wakeRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
-				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue)
+				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue,
+				&r.StartFailures)
 		})
 		return err
 	}); err != nil {
@@ -336,7 +353,11 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
 		WakeTimeout: previewWakeTimeout, ExpireAfter: previewExpireAfter}
-	plain := PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, "")
+	domain := p.PreviewDomain
+	if p.PreviewRelative {
+		domain = ""
+	}
+	plain := PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, "")
 	sv, err := p.adoptOrCreate(ctx, r, body, plain)
 	if le, ok := lux.AsError(err); !ok || le.Code != "hostname_taken" {
 		return sv, err
@@ -347,7 +368,7 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 		return sv, err
 	}
 	p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", plain)
-	return p.adoptOrCreate(ctx, r, body, PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, r.ID))
+	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, r.ID))
 }
 
 func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.CreateServer, hostname string) (lux.TenantServer, error) {
@@ -398,23 +419,34 @@ func (p *Previews) primaryRepoName(ctx context.Context, r wakeRun) (string, erro
 	return refs[0].Name, nil
 }
 
-// claimWake takes a wanted wake for this orchestrator: false when another
-// holds it, or it was done meanwhile.
-func (p *Previews) claimWake(ctx context.Context, r wakeRun) (bool, error) {
+// claimWake takes the wake the sweep selected for this orchestrator, once
+// it is due: false when another holds it, it was done meanwhile, or it was
+// replaced (startFailed's next wake, after its backoff, is the next sweep's).
+func (p *Previews) claimWake(ctx context.Context, r *wakeRun) (bool, error) {
 	var ok bool
 	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET wake_claimed_at = now() WHERE id = $1 AND wake_wanted_at IS NOT NULL
-			AND (wake_claimed_at IS NULL OR wake_claimed_at < now() - make_interval(secs => $2))`, r.ID, wakeClaimFor.Seconds())
-		ok = err == nil && tag.RowsAffected() > 0
+		err := tx.QueryRow(ctx, `UPDATE runs SET wake_claimed_at = now() WHERE id = $1 AND wake_wanted_at = $3
+			AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+			AND (wake_claimed_at IS NULL OR wake_claimed_at < now() - make_interval(secs => $2))
+			RETURNING lux_start_event, lux_after_event`, r.ID, wakeClaimFor.Seconds(), *r.WakeWanted).
+			Scan(&r.StartBefore, &r.ObservedAfter)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		ok = err == nil
 		return err
 	})
 	return ok, err
 }
 
+// releaseWake lets go of this wake's claim, to be tried after retryIn. A
+// wake replaced meanwhile (startFailed cleared the claim and set its own
+// backoff) is left as it is.
 func (p *Previews) releaseWake(ctx context.Context, r wakeRun, retryIn time.Duration) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET wake_claimed_at = NULL,
-			next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`, r.ID, retryIn.Seconds())
+			next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1 AND wake_wanted_at = $3`,
+			r.ID, retryIn.Seconds(), *r.WakeWanted)
 		return err
 	})
 }
@@ -423,44 +455,84 @@ func (p *Previews) releaseWake(ctx context.Context, r wakeRun, retryIn time.Dura
 // resumed with every checkout synced to the task's branch, or, with no Run
 // that can run again, a new one submitted and the servers attached to it.
 func (p *Previews) wake(ctx context.Context, r wakeRun) (bool, error) {
-	claimed, err := p.claimWake(ctx, r)
+	claimed, err := p.claimWake(ctx, &r)
 	if err != nil || !claimed {
 		return false, err
 	}
+	if err := p.wakeClaimed(ctx, r); err != nil {
+		// Not left claimed for wakeClaimFor: tried again after the backoff.
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return true, err
+	}
+	return true, nil
+}
+
+func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 	if r.LuxRunID != "" {
 		lr, err := p.Lux.Get(ctx, r.LuxRunID)
 		switch {
 		case lux.IsNotFound(err):
 			// lux lost it: a new one.
 		case err != nil:
-			_ = p.releaseWake(ctx, r, 5*time.Second)
-			return true, err
+			return err
 		default:
 			switch lr.State {
 			case "stopping":
 				// An idle stop under way: resumed once it has stopped. lux
 				// does not ask again while this wake is open.
-				return true, p.releaseWake(ctx, r, time.Second)
-			case "stopped", "failed", "lost":
-				return true, p.resumeWoken(ctx, r, lr)
+				return p.releaseWake(ctx, r, time.Second)
+			case "failed", "lost":
+				// Whether its last start ran is decided by what lux reported
+				// of it, applied first: a failed start the feed has not
+				// applied yet is counted now, and moves the wake on.
+				if err := p.drain(ctx, r); err != nil {
+					return err
+				}
+				ran, wake, err := p.startState(ctx, r)
+				if err != nil {
+					return err
+				}
+				if wake == nil || !wake.Equal(*r.WakeWanted) {
+					// startFailed took this wake over (a new one, after its
+					// backoff, or none past the bound) and cleared the claim.
+					return nil
+				}
+				if ran {
+					// It ran, then crashed or lost its host: lux resumes it
+					// from its snapshot.
+					return p.resumeWoken(ctx, r, lr)
+				}
+				// Its last start failed before it ran: resuming it again
+				// repeats what failed (its container, its placement). A
+				// new one below; this one is cancelled so lux drops what
+				// it kept to resume it.
+				p.Log.Warn("a preview's Run failed to start; submitting a new run", "run", r.ID, "luxRun", r.LuxRunID,
+					"state", lr.State, "startFailures", r.StartFailures)
+				p.unfollow(r.ID)
+				if err := p.Lux.Cancel(ctx, r.LuxRunID); err != nil {
+					if le, ok := lux.AsError(err); !ok || le.Retryable() {
+						return err
+					}
+				}
+			case "stopped":
+				return p.resumeWoken(ctx, r, lr)
 			case "succeeded", "cancelled":
 				// Never runs again: a new one below.
 			default:
 				// On its way up or running already: its servers come with it.
 				if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
-					_ = p.releaseWake(ctx, r, 5*time.Second)
-					return true, err
+					return p.attachFailed(ctx, r, r.LuxRunID, err)
 				}
-				return true, p.woken(ctx, r, r.LuxRunID, lr.State, false)
+				return p.woken(ctx, r, r.LuxRunID, lr.State, false)
 			}
 		}
 		if err := p.retireRun(ctx, r); err != nil {
-			return true, err
+			return err
 		}
 		r.LuxRunID, r.LuxState = "", ""
 		r.Generation++
 	}
-	return true, p.submitWoken(ctx, r)
+	return p.submitWoken(ctx, r)
 }
 
 // resumeWoken resumes a stopped preview Run, syncing its checkouts.
@@ -500,6 +572,14 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		}
 		attachAfter = true
 	}
+	// After what drain applied of the Run's earlier starts: their ends are
+	// older than this resume's answer, whenever they reached dude.
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&r.StartBefore)
+	}); err != nil {
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
+	}
 	res, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
 		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())})
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
@@ -533,8 +613,7 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	}
 	if attachAfter {
 		if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
-			_ = p.releaseWake(ctx, r, 5*time.Second)
-			return err
+			return p.attachFailed(ctx, r, r.LuxRunID, err)
 		}
 	}
 	return p.woken(ctx, r, r.LuxRunID, res.State, true)
@@ -556,13 +635,110 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 	return out, nil
 }
 
+// drain applies an ended Run's lifecycle events before deciding whether its
+// last start ran. applyEvent shares locking and deduplication with the follower,
+// so luxEvent counts each failed start once. Events avoids Output's archived
+// output replay. Exhaustion requires an empty page and an applied state matching
+// lux.Recorded: even a short nonempty page may omit a later start with the same
+// state. drainPages and DrainFor bound the whole drain; on error, the next wake
+// attempt continues from the durable cursor.
+func (p *Previews) drain(ctx context.Context, r wakeRun) error {
+	dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
+	defer cancel()
+	for range drainPages {
+		after, err := p.afterEvent(dctx, r.previewRun)
+		if err != nil {
+			return err
+		}
+		page, err := p.Lux.Events(dctx, r.LuxRunID, after)
+		if err != nil {
+			return err
+		}
+		for _, f := range page {
+			if err := p.applyEvent(dctx, r.previewRun, f); err != nil {
+				return err
+			}
+		}
+		current, applied, err := p.appliedState(dctx, r)
+		if err != nil || !current {
+			return err
+		}
+		if len(page) > 0 {
+			continue
+		}
+		lr, err := p.Lux.Get(dctx, r.LuxRunID)
+		if err != nil {
+			return err
+		}
+		if applied == lux.Recorded(lr.State, lr.StateReason) {
+			return nil
+		}
+	}
+	return fmt.Errorf("lux run %s: no page of its events came back empty within %d pages", r.LuxRunID, drainPages)
+}
+
+// appliedState is whether the wake's lux Run is still the preview's, and
+// the state dude applied of it.
+func (p *Previews) appliedState(ctx context.Context, r wakeRun) (current bool, applied string, err error) {
+	err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, COALESCE(lux_state, '') FROM runs WHERE id = $1`,
+			r.ID, r.LuxRunID).Scan(&current, &applied)
+	})
+	return current, applied, err
+}
+
+// drain's bounds: the whole paging, and its pages (lux's are up to 1000
+// events each; what is applied stays applied for the next try).
+const (
+	drainFor   = 30 * time.Second
+	drainPages = 5
+)
+
+// startState is what dude has applied of the preview's Run: whether its
+// current start ran, and the wake it holds now.
+func (p *Previews) startState(ctx context.Context, r wakeRun) (ran bool, wake *time.Time, err error) {
+	err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_ran_event >= lux_start_event, wake_wanted_at
+			FROM runs WHERE id = $1`, r.ID).Scan(&ran, &wake)
+	})
+	return ran, wake, err
+}
+
+// startFailed records the nth start in a row of a wakeable preview's Run
+// that ended (failed, lost) before it ran, in the transaction that saw it
+// end, and returns the error the preview shows. The next wake submits a new
+// Run (wake), since resuming this one repeats what failed. Below
+// previewStartAttempts the wake is asked for here, after workflow.Backoff,
+// so whoever opened the URL and is on lux's waking page gets the new Run;
+// from then on only a new request (lux's next server.wake_requested, or a
+// person starting a server) tries again, once each.
+func (p *Previews) startFailed(ctx context.Context, tx pgx.Tx, r previewRun, n int, reason string) (string, error) {
+	retry := n < previewStartAttempts
+	why := fmt.Sprintf("the preview's Run failed to start (%s)", reason)
+	if retry {
+		why += fmt.Sprintf("; trying a new Run (start %d of %d)", n+1, previewStartAttempts)
+	} else {
+		why += fmt.Sprintf(" %d times in a row; starting a server, or opening a URL once lux stops waiting, tries a new Run", n)
+	}
+	// The wake that made this start is done with either way: below the
+	// bound a new one (a new wake_wanted_at) after the backoff, else none.
+	// The start's own acknowledgement (woken) is of the old one and so
+	// writes nothing over this.
+	_, err := tx.Exec(ctx, `UPDATE runs SET start_failures = $2, error = $3,
+		wake_wanted_at = CASE WHEN $4 THEN GREATEST(clock_timestamp(), COALESCE(wake_wanted_at, '-infinity') + interval '1 millisecond') END,
+		wake_claimed_at = NULL,
+		next_attempt_at = CASE WHEN $4 THEN now() + make_interval(secs => $5) ELSE next_attempt_at END
+		WHERE id = $1`, r.ID, n, why, retry, workflow.Backoff(n).Seconds())
+	return why, err
+}
+
 // retireRun forgets a preview's lux Run that can never run again (or that
 // lux no longer has), so the next submit makes another: the generation in
 // the submit's key moves on.
 func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 	p.unfollow(r.ID)
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = NULL, lux_state = NULL, lux_after_event = 0, lux_stop_reason = NULL,
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = NULL, lux_state = NULL, lux_after_event = 0, lux_start_event = 0, lux_ran_event = 0, lux_stop_reason = NULL,
 			lux_generation = lux_generation + 1 WHERE id = $1 AND lux_run_id = $2`, r.ID, r.LuxRunID)
 		return err
 	})
@@ -601,19 +777,44 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// machine: the size this lux Run was submitted on; a later generation
-		// records its own.
+		// records its own. Its first start begins here, before any of its
+		// events (lux_start_event 1), so a failure before its first running
+		// is a failed start; StartBefore 0 makes every event of it newer
+		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, started_at = COALESCE(started_at, now())
+			machine = $7::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
 			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
 		return err
 	}); err != nil {
 		return err
 	}
+	r.StartBefore = 0
 	if err := p.attachAll(ctx, r, lr.ID); err != nil {
+		return p.attachFailed(ctx, r, lr.ID, err)
+	}
+	return p.woken(ctx, r, lr.ID, lr.State, true)
+}
+
+// attachFailed handles a wake's attach that failed. One lux refused as the
+// Run is over (409 finished: it ended before its servers were on it) is
+// not left for a later wake to misread: what lux reported of the Run is
+// applied now (drain), counting a failed start; the wake is then either
+// taken over by startFailed or tried again, deciding on the Run as it is.
+func (p *Previews) attachFailed(ctx context.Context, r wakeRun, luxRunID string, err error) error {
+	if le, ok := lux.AsError(err); !ok || le.Code != "finished" {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
-	return p.woken(ctx, r, lr.ID, lr.State, true)
+	r.LuxRunID = luxRunID
+	if derr := p.drain(ctx, r); derr != nil {
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return derr
+	}
+	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET wake_claimed_at = NULL, next_attempt_at = GREATEST(next_attempt_at, now())
+			WHERE id = $1 AND wake_wanted_at = $2`, r.ID, *r.WakeWanted)
+		return err
+	})
 }
 
 // attachAll attaches every server of the preview to its Run: one attached
@@ -650,16 +851,38 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 }
 
 // woken records a wake done: lux has the Run coming up. Its idle marks are
-// of the last period.
+// of the last period. Only for the wake this start was for: a failed start
+// recorded meanwhile (startFailed) has moved the wake on, and wins.
+//
+// What lux answered may be older than what the feed applied meanwhile;
+// then the applied lux_state stands and the status follows it (kept). For a
+// resume or a submit (started) that is once an event of this start was
+// applied (lux_start_event past StartBefore, read before the request): an
+// end or running applied before that is of an earlier start. For an
+// attach-only wake it is any event applied after the claim (lux_after_event
+// past ObservedAfter), as lux was asked what the Run is after the claim; an
+// end applied then is not acknowledged: the wake stays wanted, released.
 func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string, started bool) error {
+	const kept = `(CASE WHEN $3 THEN lux_start_event > $5 ELSE lux_after_event > $7 END)`
+	const keptEnd = `(NOT $3 AND lux_after_event > $7 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET wake_wanted_at = NULL, wake_claimed_at = NULL, next_attempt_at = NULL,
-			status = CASE WHEN $2 = 'running' THEN 'running'::run_status
+		tag, err := tx.Exec(ctx, `UPDATE runs SET
+			wake_wanted_at = CASE WHEN `+keptEnd+` THEN wake_wanted_at END,
+			wake_claimed_at = NULL,
+			next_attempt_at = CASE WHEN `+keptEnd+` THEN now() END,
+			lux_state = CASE WHEN `+kept+` THEN lux_state WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
+			status = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running' THEN 'running'::run_status
+				WHEN `+kept+` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled') THEN status
 				WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
-			active_since = CASE WHEN $2 = 'running' THEN COALESCE(active_since, now()) ELSE active_since END,
-			lux_state = CASE WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
-			lux_stop_reason = NULL, dude_pause = NULL, error = NULL
-			WHERE id = $1 AND wake_wanted_at = $4`, r.ID, state, started, *r.WakeWanted)
+			active_since = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running'
+				THEN COALESCE(active_since, now()) ELSE active_since END,
+			lux_stop_reason = CASE WHEN `+keptEnd+` THEN lux_stop_reason END,
+			dude_pause = CASE WHEN `+keptEnd+` THEN dude_pause END,
+			-- A start that failed stays said until one runs (luxEvent), as
+			-- does an end kept.
+			error = CASE WHEN start_failures > 0 OR `+keptEnd+` THEN error END
+			WHERE id = $1 AND wake_wanted_at = $4 AND lux_run_id = $6`,
+			r.ID, state, started, *r.WakeWanted, r.StartBefore, luxRunID, r.ObservedAfter)
 		if err != nil {
 			return err
 		}
@@ -862,11 +1085,11 @@ func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 }
 
 // Wakeable says whether a new preview of the project takes the wakeable
-// path: lux has a preview domain, and the project has a server to start in
+// path: lux supports previews, and the project has a server to start in
 // previews (a preview of none has nothing to wake by URL, and keeps the
 // eager path).
 func (s *Service) wakeable(ctx context.Context, tx pgx.Tx, projectID string) (bool, error) {
-	if s.PreviewDomain == "" {
+	if !s.PreviewRelative && s.PreviewDomain == "" {
 		return false, nil
 	}
 	var some bool
@@ -908,6 +1131,14 @@ func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *
 		}
 	}
 	slices.SortFunc(out.Servers, func(a, b lux.Server) int { return strings.Compare(a.Name, b.Name) })
+	if r.Error != "" {
+		v.Error = &r.Error
+	}
+	if r.StartFailures >= previewStartAttempts && !r.WakeWanted {
+		// dude stopped trying new Runs: lux may hold its wake open until
+		// its wakeTimeout, but nothing is on its way. Its error says why.
+		waking = false
+	}
 	status := r.Status
 	if status == "paused" && waking {
 		status = "scheduled"

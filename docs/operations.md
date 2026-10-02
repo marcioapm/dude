@@ -198,7 +198,7 @@ lowercased with anything outside `a-z0-9` made `-`; a label longer than 63
 characters is cut and ends in `-` and 8 hex characters of a hash of the
 three parts, so it is stable and distinct. lux refusing a hostname another
 server has (`hostname_taken`) makes dude choose a second, hashed one. dude
-keeps lux's server id; it never reads a hostname back.
+keeps lux's server id and stores the full hostname and URL lux returns.
 
 - **Declaring a preview** creates its servers (`wake: request`, `lifetime:
   owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
@@ -207,8 +207,29 @@ keeps lux's server id; it never reads a hostname back.
 - **Opening a URL** (signed in to lux's previews) shows lux's waking page,
   and lux tells dude on its event feed (`GET /v1/events`). dude resumes the
   preview's Run, every checkout synced to the task's branch, or, the first
-  time (or when lux can no longer resume it), submits one and attaches the
-  servers. The page drops into the app once it serves.
+  time, submits one and attaches the servers. A Run lux refuses to resume
+  (a 4xx: `no_snapshot`, `not_resumable`, `secrets_required`), or no longer
+  has, or that can never run again (`succeeded`, `cancelled`), is replaced:
+  a new Run is submitted and the servers attached to it. The page drops into
+  the app once it serves.
+- **A Run that fails to start**: lux took the resume or the submit, and the
+  Run then ended `failed` or `lost` before it ran (a container that would
+  not start, an image that would not pull, a host lost mid-start). Resuming
+  it would repeat what failed, so the next wake cancels it and submits a new
+  Run instead. dude asks for that wake itself, after 1 s, then 2 s, so
+  whoever is on the waking page gets the new Run: up to 3 starts in a row
+  for one request. After the third, dude stops. The preview shows asleep,
+  with the error (`the preview's Run failed to start (<lux's reason>) 3
+  times in a row`), and lux's page says "no answer" once its 5-minute wake
+  timeout passes. From then on each new request, a person starting a server
+  or a URL opened after "no answer", tries one more new Run. The count
+  resets once a start runs. A Run that ran and then crashed or lost its
+  host is resumed from its snapshot as before: only a start that never ran
+  counts. "Never ran" is read from lux's own order of the Run's events
+  (`runs.lux_start_event`, `runs.lux_ran_event`): no `running` since the
+  `resuming` (or the new Run's first event) that began the start. It does
+  not depend on dude's status, or on whether the feed or the wake's own
+  answer from lux is recorded first; each event is applied once.
 - **Unused**: lux reports a server idle after `idleAfter` without a
   request; once every server of the preview is, dude stops the Run (its
   checkout and state volume kept for the next wake). lux reports idleness
@@ -234,9 +255,18 @@ replays at most that much, applied once, and misses no event.
 **Requirements.** dude needs a lux with `/v1/servers`: the orchestrator
 refuses to start against an older one (404 or 405 there), naming the
 release. A lux that does not answer at startup is asked again, backing off
-to once a minute, rather than stopping the orchestrator. `previews.domain`
-may be left unset (lux's own is used); set, it must equal lux's. Without a
-preview domain in lux, previews keep the old path below.
+to once a minute, rather than stopping the orchestrator. When lux reports
+`previews: true` in `GET /v1/whoami`, dude sends only the DNS label and lux
+appends its domain. `previews.domain` (`DUDE_PREVIEW_DOMAIN`) is optional,
+including when Cloudflare Access makes lux's `previewDomain` null. If set,
+it must still match a domain lux reports; if lux reports null, dude ignores
+the setting for naming and logs that at INFO. Startup logs the naming mode.
+`previews: false` disables wake-on-request previews.
+
+For an older lux without the `previews` field, dude sends full hostnames:
+`previews.domain` is needed only if lux's `previewDomain` is null; otherwise
+lux's domain is used. A configured domain must match lux's when both are
+available. Without either, previews keep the old path below.
 
 **Switching over.** Previews created before this release, and previews of
 a project with no server marked to start in previews, keep the old path
@@ -402,7 +432,7 @@ does not refuse to start.
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
 | `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
 | `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
-| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | lux's (`GET /v1/whoami` `previewDomain`) | orchestrator | The domain lux serves branch previews under, e.g. `preview-absmartly.dev`. Each preview server is one DNS label under it, `<server>-<task>-<project>.<domain>` (see [Branch previews](#branch-previews)): the domain's wildcard certificate need cover one level only. Must be lux's `preview.domain`. |
+| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | optional; older lux's `previewDomain` | orchestrator | Needed only for lux predating relative hostnames when it does not report its domain. New lux receives only `<server>-<task>-<project>` and returns the full hostname and URL (see [Branch previews](#branch-previews)). If set, must match a domain lux reports; ignored for naming when new lux reports null. |
 | `previews.reap_after` | `DUDE_PREVIEW_REAP_AFTER` | `168h` | orchestrator | A branch preview nobody has opened for this long is ended and its lux servers deleted; positive. lux's own `expireAfter` (30 days, set by dude) is the safety net. |
 | `llm.url` | `DUDE_LLM_URL` | none | orchestrator | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
 | `llm.key` | `DUDE_LLM_KEY` | none | orchestrator | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -19,7 +20,52 @@ import (
 var quietLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func domainOf(c *lux.HTTPClient, configured string) (string, error) {
-	return previewDomainOf(context.Background(), c, configured, quietLog, time.Millisecond)
+	mode, err := previewModeOf(context.Background(), c, configured, quietLog, time.Millisecond)
+	return mode.Domain, err
+}
+
+func TestPreviewCapabilityModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, whoami, configured, domain string
+		relative, refused, ignored       bool
+	}{
+		{"relative", `{"previews":true,"previewDomain":null}`, "", "", true, false, false},
+		{"stopgap", `{"previews":true,"previewDomain":null}`, "preview.test", "", true, false, true},
+		{"mismatch", `{"previews":true,"previewDomain":"preview.test"}`, "other.test", "", false, true, false},
+		{"matching", `{"previews":true,"previewDomain":"Preview.Test."}`, "preview.test", "", true, false, false},
+		{"old-domain", `{"previewDomain":"Preview.Test."}`, "", "preview.test", false, false, false},
+		{"old-env", `{"previewDomain":null}`, "preview.test", "preview.test", false, false, false},
+		{"old-off", `{"previewDomain":null}`, "", "", false, false, false},
+		{"off", `{"previews":false,"previewDomain":null}`, "preview.test", "", false, false, false},
+		{"off-matching", `{"previews":false,"previewDomain":"preview.test"}`, "preview.test", "", false, false, false},
+		{"off-mismatch", `{"previews":false,"previewDomain":"preview.test"}`, "other.test", "", false, true, false},
+		{"relative-reported", `{"previews":true,"previewDomain":"preview.test"}`, "", "", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/whoami" {
+					_, _ = io.WriteString(w, tc.whoami)
+				} else {
+					_, _ = io.WriteString(w, `{"servers":[]}`)
+				}
+			}))
+			defer srv.Close()
+			var logs bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logs, nil))
+			mode, err := previewModeOf(context.Background(), lux.New(srv.URL, "k"), tc.configured, log, time.Millisecond)
+			if (err != nil) != tc.refused {
+				t.Fatalf("mode = %+v, error = %v", mode, err)
+			}
+			if err == nil && (mode.Domain != tc.domain || mode.Relative != tc.relative ||
+				mode.LuxOff != strings.Contains(tc.whoami, `"previews":false`)) {
+				t.Fatalf("mode = %+v", mode)
+			}
+			if ignored := strings.Contains(logs.String(), "level=INFO") && strings.Contains(logs.String(), "DUDE_PREVIEW_DOMAIN ignored"); ignored != tc.ignored {
+				t.Fatalf("logs = %s", logs.String())
+			}
+		})
+	}
 }
 
 // A lux from before the server resource (no /v1/servers: 404, or 405 from
@@ -34,7 +80,7 @@ func TestALuxWithoutServersStopsStartup(t *testing.T) {
 		}))
 		// Bounded: a refusal read as "not answering" would be asked forever.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err := previewDomainOf(ctx, lux.New(old.URL, "k"), "", quietLog, time.Millisecond)
+		_, err := previewModeOf(ctx, lux.New(old.URL, "k"), "", quietLog, time.Millisecond)
 		cancel()
 		old.Close()
 		if !errors.Is(err, lux.ErrNoServers) || !strings.Contains(err.Error(), "/v1/servers") || !strings.Contains(err.Error(), "lux#41") {
@@ -69,7 +115,7 @@ func TestALuxNotAnsweringAtStartupIsAskedAgain(t *testing.T) {
 	defer down.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := previewDomainOf(ctx, lux.New(down.URL, "k"), "", quietLog, time.Millisecond); err == nil || errors.Is(err, lux.ErrNoServers) {
+	if _, err := previewModeOf(ctx, lux.New(down.URL, "k"), "", quietLog, time.Millisecond); err == nil || errors.Is(err, lux.ErrNoServers) {
 		t.Errorf("a lux down until shutdown: %v", err)
 	}
 }
@@ -92,5 +138,16 @@ func TestThePreviewDomainIsLuxsOrMatchesIt(t *testing.T) {
 	}
 	if _, err := domainOf(c, "other.dev"); err == nil || !strings.Contains(err.Error(), "previews.domain") {
 		t.Errorf("another domain: %v", err)
+	}
+}
+
+// Startup's service carries the mode: relative mode reaches the service
+// that names previews, so they are created wakeable with a bare label.
+func TestPreviewModeReachesTheService(t *testing.T) {
+	for _, m := range []previewMode{{Relative: true}, {Domain: "preview.test"}, {LuxOff: true}} {
+		s := m.service(nil, nil, nil, "https://console.test")
+		if s.PreviewRelative != m.Relative || s.PreviewDomain != m.Domain || s.ConsoleURL != "https://console.test" {
+			t.Errorf("mode %+v: service %+v", m, s)
+		}
 	}
 }

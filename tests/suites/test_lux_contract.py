@@ -22,7 +22,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, query, wait_until
+from helpers import RESUME_STARTED, RESUME_STOPPED, ApiClient, assert_timed_is_its_row, lux_stamp, query, wait_until
 
 pytestmark = pytest.mark.lux
 
@@ -247,10 +247,11 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
 
 
 @pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")
-def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_answer(client: ApiClient, lux_project):
+def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_answer(client: ApiClient, env, lux_project):
     """The agent asks with ask_person through lux's service socket and ends
     its turn; past the grace period dude stops the lux Run (nothing held);
-    the answer resumes the same lux Run, in the same agent session."""
+    the answer resumes the same lux Run, in the same agent session, and the
+    resume is timed with every timestamp lux reports, in order."""
     project, _ = lux_project
     client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
@@ -263,6 +264,7 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     try:
         wait_until(lambda: (implementer() or {}).get("status") == "paused", timeout=180, interval=1,
                    message="the waiting agent was never parked on lux")
+        stopped_epoch = _stopped_epoch(client, env, implementer()["id"])
         question = client.get("/v1/questions").json()["questions"]
         question = next(q for q in question if q["taskId"] == task["id"])
         assert client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"}).status_code == 200
@@ -277,6 +279,88 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implementer()["id"])
                         if e["eventType"] == "agent.message")
     assert "Answer to your question" in messages, messages
+    _resume_timed_on_lux(client, env, implementer()["id"], "answer", stopped_epoch)
+
+
+def _stopped_epoch(client: ApiClient, env, run_id: str) -> int:
+    """The epoch lux stopped the parked or paused Run in, read from lux once
+    it reports the Run stopped, before anything resumes it."""
+    lux_run_id = query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run_id,))[0]["lux_run_id"]
+    run = wait_until(lambda: (r := _lux(env, "GET", f"/v1/runs/{lux_run_id}").json())["state"] == "stopped" and r,
+                     timeout=120, interval=1, message="lux never reported the Run stopped")
+    return run["epoch"]
+
+
+def _resume_timed_on_lux(client: ApiClient, env, run_id: str, cause: str, stopped_epoch: int) -> dict:
+    """A resume on real lux is recorded under the epoch of lux's placement
+    that started after the resume — the first above stopped_epoch, the one
+    it was stopped in, which is also the epoch lux's answer to the resume
+    carries — with every field lux reports of both placements, as lux
+    reports them, and timed once with what the row says."""
+    timed = wait_until(lambda: [e for e in client.events(runId=run_id) if e["eventType"] == "run.resume.timed"],
+                       timeout=120, interval=1, message="the resume on lux was never timed")
+    rows = query(env.owner_dsn, "SELECT r.*, runs.lux_run_id FROM run_resumes r JOIN runs ON runs.id = r.run_id "
+                                "WHERE r.run_id = %s", (run_id,))
+    print("resume:", rows, "timed:", [e["payload"] for e in timed])
+    assert len(rows) == 1 and len(timed) == 1, (rows, timed)
+    row = rows[0]
+    placements = _lux(env, "GET", f"/v1/runs/{row['lux_run_id']}").json()["placements"]
+    after = min(p["epoch"] for p in placements if p["epoch"] > stopped_epoch)
+    assert row["cause"] == cause and row["epoch"] == after and row["epoch"] > stopped_epoch, (row, stopped_epoch, placements)
+    unparked = [e["payload"].get("epoch") for e in client.events(runId=run_id) if e["eventType"] == "run.unparked"]
+    assert all(epoch == row["epoch"] for epoch in unparked), (unparked, row["epoch"])
+    missing = [c for c in ("woken_at", "requested_at", "running_at", "busy_at", "first_output_at", "moved")
+               if row[c] is None]
+    assert missing == [], f"dude left {missing} unrecorded: {row}"
+    assert row["frames_missed"] is False, row
+    # The new placement is the resume's epoch, the stopped one the latest
+    # before it, as lux reports them now.
+    resumed = next(p for p in placements if p["epoch"] == row["epoch"])
+    stopped = next(p for p in placements if p["epoch"] == stopped_epoch)
+    for placement, fields in ((resumed, RESUME_STARTED), (stopped, RESUME_STOPPED)):
+        for column, field in fields:
+            want = placement.get(field)
+            assert want is not None, f"lux left {field} of epoch {placement['epoch']} unreported: {placement}"
+            if column.endswith("_at"):
+                want = lux_stamp(want)
+            assert row[column] == want, (column, row[column], field, want)
+    # Within one placement's own clock (its host's), its stamps are in order;
+    # different hosts' clocks, and luxd's, are not compared.
+    for placement, fields in ((resumed, RESUME_STARTED), (stopped, RESUME_STOPPED)):
+        stamps = [row[c] for c, _ in fields if c.endswith("_at")]
+        assert stamps == sorted(stamps), (placement["epoch"], stamps)
+    # dude's own, one clock: Postgres's.
+    dude = [row[c] for c in ("woken_at", "requested_at", "running_at", "busy_at", "first_output_at")]
+    assert dude == sorted(dude), dude
+    assert row["snapshot_bytes"] > 0, row
+    assert row["moved"] == (row["host_name"] != row["stopped_host_name"]), row
+    assert_timed_is_its_row(timed[0]["payload"], row)
+    return row
+
+
+def test_a_person_pause_and_resume_on_real_lux_is_timed(client: ApiClient, env, lux_project):
+    """A person pauses a working agent on lux and resumes it: lux reports
+    every placement time of both placements, and dude records them in order
+    and times the resume once the agent speaks."""
+    project, _ = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    task = client.create_task(project["id"], "Pause on lux, then carry on")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
+                     timeout=120, interval=1, message="the agent never started on lux")
+    wait_until(lambda: query(env.owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND lux_state = 'running'", (run["id"],)),
+               timeout=120, interval=1, message="lux never ran the agent")
+    try:
+        assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+        wait_until(lambda: query(env.owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND status = 'paused' AND lux_state = 'stopped'",
+                                 (run["id"],)), timeout=120, interval=1, message="lux never stopped the paused run")
+        stopped_epoch = _stopped_epoch(client, env, run["id"])
+        assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+        _resume_timed_on_lux(client, env, run["id"], "person", stopped_epoch)
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+        client.post(f"/v1/runs/{run['id']}/abort", {})
 
 
 # ---------------------------------------------------------------------------

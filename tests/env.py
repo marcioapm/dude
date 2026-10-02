@@ -137,6 +137,9 @@ class TestEnvironment:
     web_proc: subprocess.Popen | None = field(default=None, repr=False)
     # A real lux to drive instead of the fake: its env.json (see lux_env).
     real_lux: dict | None = field(default=None, repr=False)
+    # Set on the orchestrator over the suite's own settings: a harness
+    # measuring a real model passes its LLM's URL and key this way.
+    orchestrator_env: dict = field(default_factory=dict, repr=False)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
     lux_proc: subprocess.Popen | None = field(default=None, repr=False)
@@ -260,6 +263,7 @@ class TestEnvironment:
                 # The images people send agents: it reads what the backend stored.
                 **self.s3_env,
                 **self._tools_env(),
+                **self.orchestrator_env,
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,
         )
@@ -342,10 +346,14 @@ class TestEnvironment:
         """Serve the built web app, proxying the API to this run's control plane.
 
         `vite preview` rather than the dev server, for the same reason as the
-        gallery: the tests should exercise what ships.
+        gallery: the tests should exercise what ships. On 127.0.0.1, where
+        `web_url` looks for it: vite's own default host is localhost, which
+        on macOS resolves to ::1 first.
         """
+        # On 127.0.0.1, where web_url looks: vite's default, localhost, is
+        # only ::1 on macOS, so the app came up where nothing looked.
         self.web_proc = subprocess.Popen(
-            ["bunx", "vite", "preview"],
+            ["bunx", "vite", "preview", "--host", "127.0.0.1"],
             cwd=REPO_ROOT / "apps" / "web",
             env={
                 **os.environ,
@@ -516,6 +524,7 @@ class TestEnvironment:
         env.gallery_proc = None
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
         env.real_lux = lux_env() if os.environ.get("DUDE_TEST_REAL_LUX") else None
+        env.orchestrator_env = {}
         env._init_services()
         # The lux the orchestrator drives: the fake's address, or the real one's.
         env.lux_url = os.environ.get("DUDE_TEST_LUX_URL", "")
