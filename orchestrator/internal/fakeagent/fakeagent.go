@@ -75,6 +75,9 @@ const AskModel = "fake/ask"
 // Question is what AskModel's implementer asks: ask_person's arguments.
 const Question = `{"question":"Should FACTORY.md be in English?","choices":["yes","no"]}`
 
+// ConductorQuestion is what AskModel's conductor asks, in its first turn.
+const ConductorQuestion = `{"question":"Make it a follow-up task?","choices":["Yes","No"]}`
+
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
 
@@ -131,6 +134,45 @@ type Step struct {
 // the prompt invites an agent to leave.
 const Notes = "NOTES.md"
 
+// Conductor is the phase label a task's conductor runs under (it has no
+// phase: its role names it).
+const Conductor = "conductor"
+
+// ConductorReply is the scripted conductor's answer to one input: the line
+// of its briefing that names the task, quoted, so a test sees the briefing
+// arrived, and the input it answers, quoted back.
+func ConductorReply(task, input string) string {
+	said, _, _ := strings.Cut(strings.TrimSpace(input), "\n")
+	return fmt.Sprintf("Briefed on %q. You asked: %q. Read-only: I changed nothing.", task, said)
+}
+
+// ConductorScript is the scripted conductor's first turn, from the
+// briefing dude wrote it: the reply to the message the briefing ends with.
+// It is the Run's prompt in place of the briefing, as every scripted
+// phase's script is (for a real lux, a lux-fake script).
+func ConductorScript(briefing string) string {
+	task := ""
+	if _, after, ok := strings.Cut(briefing, "## The task\n\n"); ok {
+		task, _, _ = strings.Cut(after, "\n")
+	}
+	message := ""
+	if i := strings.LastIndex(briefing, "'s message\n\n"); i >= 0 {
+		message = briefing[i+len("'s message\n\n"):]
+	}
+	return "echo " + ConductorReply(task, message)
+}
+
+// ConductorTurn is the scripted conductor's reply to a later input, from
+// its script (ConductorScript): the same task, the new input.
+func ConductorTurn(script, input string) string {
+	first := strings.TrimPrefix(script, "echo ")
+	var task string
+	if _, err := fmt.Sscanf(first, "Briefed on %q.", &task); err != nil {
+		return first
+	}
+	return ConductorReply(task, input)
+}
+
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.
 func For(phase, model, runID string, fixed bool) Step {
@@ -182,6 +224,13 @@ func For(phase, model, runID string, fixed bool) Step {
 			return Step{Reply: "Reviewed the fix; no further problems.\n\n" + Verdict}
 		}
 		return Step{Reply: "One problem:\n\n```yaml\n" + Finding + "```\n"}
+	case Conductor:
+		// Each turn's reply is ConductorReply, from its briefing and input.
+		step := Step{Reply: "Read-only: I changed nothing."}
+		if model == AskModel {
+			step.Ask = ConductorQuestion
+		}
+		return step
 	}
 	return Step{Reply: "Nothing to do for " + phase + "."}
 }

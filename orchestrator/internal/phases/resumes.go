@@ -40,10 +40,13 @@ const (
 	causeRepository = "repository"
 	causePerson     = "person"
 	causeIdle       = "idle"
+	// A person's message to a parked conductor.
+	causeConductor = "conductor"
 )
 
 // resumeCause is why whilePaused resumes r: a person's Resume, of an idle
-// park or of anything else, or dude's own reason being over.
+// park or of anything else, a message to a parked conductor, or dude's own
+// reason being over.
 func resumeCause(r phaseRun) string {
 	switch {
 	case r.Control == "resume" && r.DudePause == "idle":
@@ -52,6 +55,8 @@ func resumeCause(r phaseRun) string {
 		return causePerson
 	case r.DudePause == "repository":
 		return causeRepository
+	case r.DudePause == "conductor":
+		return causeConductor
 	}
 	return causeAnswer
 }
@@ -94,11 +99,13 @@ func placementsAround(ps []lux.Placement, epoch int) (cur, prev lux.Placement) {
 // a question, or a blocking repository request) answered or decided since
 // the park began. The park began at its run.parked's parkedAt, on the
 // database's clock like the answers; older parks without it fall back to
-// occurred_at, the orchestrator's clock.
+// occurred_at, the orchestrator's clock. A message to a parked conductor:
+// the first message it has not been sent yet.
 const woken = `CASE $3
 	WHEN 'person' THEN r.control_requested_at
 	WHEN 'idle' THEN r.control_requested_at
 	WHEN 'repository' THEN (SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'approved')
+	WHEN 'conductor' THEN (SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
 	ELSE (SELECT GREATEST(
 			(SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id AND q.answered_at >= park.at),
 			(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.blocking

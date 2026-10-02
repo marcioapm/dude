@@ -56,6 +56,10 @@ type Syncer struct {
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
 	// takes delivery.DefaultPolicy's.
 	ParkAfter, IdleAfter time.Duration
+	// How long a task's conductor stays running after its turn ends, for
+	// projects whose policy sets none (DUDE_CONDUCTOR_WARM; finer than the
+	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
+	ConductorWarm time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -103,9 +107,12 @@ const (
 // a stop dude asked for is not mistaken for the agent dying.
 const stopPause = "pause"
 
-// phaseRun is a phase Run's row, as the syncer reads it.
+// phaseRun is a phase Run's row, as the syncer reads it — or a task's
+// conductor's (Phase "", Role conductor), which the syncer drives the same
+// way except where conductor() says otherwise.
 type phaseRun struct {
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
+	Role                                               string
 	Category                                           string
 	LuxRunID, LuxState, LuxStopReason                  string
 	PushRequestID                                      string
@@ -148,9 +155,21 @@ type phaseRun struct {
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
 	Attempt                        int
+	// A conductor whose turn ended longer ago than its warm period.
+	WarmOver bool
 }
 
-const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
+// conductor says whether r is its task's conductor: no phase, never
+// finished at a turn's end, never published.
+func (r phaseRun) conductor() bool { return r.Phase == "" && r.Role == delivery.RoleConductor }
+
+// sweptRuns (SQL, over runs r): the Runs the syncer drives — every phase
+// Run, and each task's conductor. Not a branch preview, nor a Run made by
+// hand through the API.
+const sweptRuns = `(r.phase IS NOT NULL OR (r.role = 'conductor' AND r.kind = 'agent'))`
+
+const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, COALESCE(r.phase::text, ''), r.status::text, r.control::text,
+	COALESCE(r.role::text, ''),
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
@@ -169,13 +188,15 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
-	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
+	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
+	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false)`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
 // in several places), and how long its project
 // lets an agent wait on a person (park_secs) or stay quiet (idle_secs, 0 for
-// never) — the project's delivery policy, over its organization's, over the
+// never), and a conductor stay warm after its turn (warm_secs) — the
+// project's delivery policy, over its organization's, over the
 // factory's defaults.
 // Its parameters are Syncer.limits.
 const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
@@ -183,7 +204,9 @@ const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organization
 		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, (o.delivery_policy->>'parkAfterMinutes')::float8 * 60,
 			$1::float8) AS park_secs,
 		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, (o.delivery_policy->>'idleNudgeMinutes')::float8 * 60,
-			$2::float8) AS idle_secs) lim
+			$2::float8) AS idle_secs,
+		COALESCE((p.delivery_policy->>'conductorWarmMinutes')::float8 * 60, (o.delivery_policy->>'conductorWarmMinutes')::float8 * 60,
+			$3::float8) AS warm_secs) lim
 	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask`
 
 // quiet (SQL, over runFrom): the agent is mid-turn, running no tool, waiting
@@ -203,33 +226,42 @@ const unreadGraceSecs = `120`
 
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
-// (at once), a person it waited on (once nothing is open for them). An idle
+// (at once), a person it waited on (once nothing is open for them), a
+// conductor parked after its warm period (once someone wrote to it). An idle
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
-	OR (r.dude_pause = 'person' AND NOT ask.open)))`
+	OR (r.dude_pause = 'person' AND NOT ask.open)
+	OR (r.dude_pause = 'conductor' AND ` + unsentDirective + `)))`
 
-// limits are runFrom's parameters: the factory's grace before parking and
-// idle limit, in seconds, for projects that set none — the syncer's own if
-// it has them, else delivery.DefaultPolicy's.
+// unsentDirective (SQL, over runs r): something is queued for the agent
+// that lux does not have yet.
+const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)`
+
+// limits are runFrom's parameters: the factory's grace before parking, idle
+// limit and conductor's warm period, in seconds, for projects that set none
+// — the syncer's own if it has them, else delivery.DefaultPolicy's.
 func (s *Syncer) limits() []any {
 	d := delivery.DefaultPolicy()
-	park, idle := s.ParkAfter, s.IdleAfter
+	park, idle, warm := s.ParkAfter, s.IdleAfter, s.ConductorWarm
 	if park == 0 {
 		park = time.Duration(d.ParkAfterMinutes) * time.Minute
 	}
 	if idle == 0 {
 		idle = time.Duration(d.IdleNudgeMinutes) * time.Minute
 	}
-	return []any{park.Seconds(), idle.Seconds()}
+	if warm == 0 {
+		warm = time.Duration(d.ConductorWarmMinutes) * time.Minute
+	}
+	return []any{park.Seconds(), idle.Seconds(), warm.Seconds()}
 }
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
-	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Phase, &r.Status, &r.Control,
+	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Phase, &r.Status, &r.Control, &r.Role,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
-		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver)
 	return r, err
 }
 
@@ -245,14 +277,14 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 		// crowd out a newer one that is waiting to be submitted. Runs with
 		// something to do sort first.
 		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM `+runFrom+`
-			WHERE r.phase IS NOT NULL
+			WHERE `+sweptRuns+`
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR `+resumable+`
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
-			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
+			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
 			LIMIT 1000`, append(s.limits(), s.RetryAhead.Seconds())...)
 		if err != nil {
@@ -328,6 +360,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			return true, s.nudge(ctx, r)
 		}
 	}
+	if r.TurnDone && r.conductor() {
+		return s.betweenTurns(ctx, r)
+	}
 	if r.TurnDone {
 		// A steer that reached dude as the turn ended holds the Run open:
 		// sent, the agent takes it as its next turn, whose end is the one
@@ -349,6 +384,42 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	return s.deliverDirectives(ctx, r)
+}
+
+// betweenTurns is a conductor whose turn has ended. It is never finished:
+// a person's next message is its next turn. It stays running for its warm
+// period, then is parked (dude_pause 'conductor') until someone writes.
+// One whose container stopped on its own ended there, and a new message
+// gets a new conductor.
+func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
+	if lux.Terminal(r.LuxState) && r.LuxStopReason == "" && r.Control == "none" {
+		return true, s.endConductor(ctx, r, "its container stopped")
+	}
+	if r.Status != statusRunning || r.LuxState != "running" {
+		return false, nil
+	}
+	switch {
+	case r.HasDirectives:
+		return s.deliverDirectives(ctx, r)
+	case r.Unread:
+		return false, nil
+	case r.WarmOver && r.Control == "none":
+		return true, s.requestPause(ctx, r, "conductor", "parked after its warm period")
+	}
+	return false, nil
+}
+
+// endConductor completes a conductor that can no longer be resumed.
+func (s *Syncer) endConductor(ctx context.Context, r phaseRun, why string) error {
+	s.unfollow(r.ID)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = 'complete'
+			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed", "reason": why})
+	})
 }
 
 // submit builds the Run's spec and hands it to lux.
@@ -423,20 +494,23 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var briefing string
+	promptRole := delivery.PromptRoleFor(r.Phase, r.Role)
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models, o.default_agent_models
+			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models, o.default_agent_models,
+				COALESCE((SELECT prompt FROM runs WHERE id = $2), '')
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
-			WHERE w.id = $1`, r.TaskID).
-			Scan(&title, &goal, &criteria, &image, &projectModels, &orgModels); err != nil {
+			WHERE w.id = $1`, r.TaskID, r.ID).
+			Scan(&title, &goal, &criteria, &image, &projectModels, &orgModels, &briefing); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, delivery.PromptRoleForPhase[r.Phase]); err != nil {
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, promptRole); err != nil {
 			return err
 		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
@@ -473,7 +547,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		return lux.Spec{}, nil, err
 	}
 	role := delivery.RoleForPhase[r.Phase]
-	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
+	if r.conductor() {
+		role = delivery.RoleConductor
+	}
+	settings := delivery.ResolveRole(promptRole, projectModels, orgModels)
 	if settings.Model == "" {
 		return lux.Spec{}, nil, fmt.Errorf("no model is configured for the %s role", role)
 	}
@@ -487,13 +564,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		if base := r.BaseRefs[repo.Name]; base != "" {
 			ref = base
 		}
-		readOnly := repo.Access == "read"
+		readOnly := repo.Access == "read" || r.conductor()
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
 	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
-	if m, ok := sizes.ForRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels); ok {
+	if m, ok := sizes.ForRole(promptRole, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
 	in.Image = image
@@ -517,7 +594,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		promptIn.BaseRef = in.Repos[0].Ref
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
-	// Pushed only by a phase that publishes. Even with nowhere to change
+	if r.conductor() {
+		in.Prompt = delivery.ConductorPrompt(briefing, promptIn)
+	}
+	// Pushed only by a phase that publishes — never a conductor, which has
+	// no phase. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a
 	// resume, and lux pushes only to the branch the spec named at submit.
 	if delivery.Publishes[r.Phase] {
@@ -833,6 +914,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 // Repositories that did not move are left alone — no branch, no PR — and a
 // read-only one is never pushed at all (lux reports it "skipped").
 func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, error) {
+	if r.conductor() {
+		// Read-only: its spec names no push branch, and nothing it holds
+		// may move the task's branch.
+		return nil, fmt.Errorf("a conductor does not publish")
+	}
 	var push struct {
 		Results []struct {
 			Repo, Branch, Commit, Status, Error string
@@ -1170,6 +1256,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
+			  AND ($3 <> 'conductor' OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
 			RETURNING r.control_requested_at`, r.ID, why, kind, r.QuietSince).Scan(&parkedAt)
 		if db.IsNotFound(err) {
 			return nil

@@ -9,6 +9,7 @@
     {"name": "orchestrator.pr_reconcile", "env": "DUDE_PR_RECONCILE", "kind": "duration", "use": "orchestrator", "default": "15m", "secret": false},
     {"name": "orchestrator.park_after", "env": "DUDE_PARK_AFTER", "kind": "duration", "use": "orchestrator", "default": "0s", "secret": false},
     {"name": "orchestrator.idle_after", "env": "DUDE_IDLE_AFTER", "kind": "duration", "use": "orchestrator", "default": "0s", "secret": false},
+    {"name": "orchestrator.conductor_warm", "env": "DUDE_CONDUCTOR_WARM", "kind": "duration", "use": "orchestrator", "default": "0s", "secret": false},
     {"name": "orchestrator.diff_every", "env": "DUDE_DIFF_EVERY", "kind": "duration", "use": "orchestrator", "default": "15s", "secret": false},
     {"name": "orchestrator.machine_usd_per_hour", "env": "DUDE_MACHINE_USD_PER_HOUR", "kind": "float", "use": "orchestrator", "default": "0.20", "secret": false},
     {"name": "orchestrator.lux_cost_every", "env": "DUDE_LUX_COST_EVERY", "kind": "duration", "use": "orchestrator", "default": "2m", "secret": false},

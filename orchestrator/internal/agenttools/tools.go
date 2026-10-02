@@ -37,7 +37,7 @@ var tools = []tool{
 	define("ask_person", "Ask a person something only a person can decide — the task is ambiguous in a way that "+
 		"changes what you build, or two reasonable readings conflict. After calling it, end your turn: the answer "+
 		"is your next message. Do not ask about anything you can decide or find out yourself.",
-		[]string{"implementer", "investigator"}, askPerson),
+		[]string{"implementer", "investigator", "conductor"}, askPerson),
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
 		"your chat and the run's events.", nil, emitEvent).limit(eventsPerRun),

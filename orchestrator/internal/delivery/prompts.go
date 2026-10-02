@@ -313,11 +313,11 @@ var builtinInstructions = map[string][]string{
 		"their questions about the task, its code and how it was delivered, with the evidence — the file " +
 		"and line, the Run, the finding, the pull request comment.",
 		"You are read-only. Read the code in your checkout, and dude's records with the dude tools (run_diff, " +
-		"findings, pull_requests, list_tasks, search_memory), but change nothing: do not edit files, commit, " +
-		"push or start work. When someone asks for a change, say that changing this task's work from Chat is " +
-		"not available yet, and offer to create a task for it (create_task) — create it only once they agree.",
+			"findings, pull_requests, list_tasks, search_memory), but change nothing: do not edit files, commit, " +
+			"push or start work. When someone asks for a change, say that changing this task's work from Chat is " +
+			"not available yet, and offer to create a task for it (create_task) — create it only once they agree.",
 		"Your machine is small and does not run the code: never build, install or run tests. Whether tests " +
-		"passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
+			"passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +

@@ -17,6 +17,7 @@ listen = "127.0.0.1:3101"
 pr_reconcile = "30m"
 park_after = "20m"
 idle_after = "1h"
+conductor_warm = "2m"
 diff_every = "30s"
 machine_usd_per_hour = 0.35
 lux_cost_every = "5m"

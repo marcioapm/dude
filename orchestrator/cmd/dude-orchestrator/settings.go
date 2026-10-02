@@ -32,6 +32,7 @@ type settings struct {
 
 	ReconcileEvery       time.Duration
 	ParkAfter, IdleAfter time.Duration
+	ConductorWarm        time.Duration
 	DiffEvery            time.Duration
 	MachineUSDPerHour    float64
 	LuxCostEvery         time.Duration
@@ -118,6 +119,7 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 
 	s.ReconcileEvery = cfg.Duration("DUDE_PR_RECONCILE")
 	s.ParkAfter, s.IdleAfter = cfg.Duration("DUDE_PARK_AFTER"), cfg.Duration("DUDE_IDLE_AFTER")
+	s.ConductorWarm = cfg.Duration("DUDE_CONDUCTOR_WARM")
 	s.DiffEvery = cfg.Duration("DUDE_DIFF_EVERY")
 	// One rate for every lux host until lux reports each host's own.
 	if s.MachineUSDPerHour = cfg.Float("DUDE_MACHINE_USD_PER_HOUR"); s.MachineUSDPerHour < 0 {

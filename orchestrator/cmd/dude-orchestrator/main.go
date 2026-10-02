@@ -151,7 +151,7 @@ func run(log *slog.Logger) error {
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
-		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter,
+		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
