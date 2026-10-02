@@ -411,6 +411,11 @@ def test_an_image_dropped_on_the_goal_goes_to_the_tray(page: Page, web_url: str,
     expect(chips).to_have_count(1)
     expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
     expect(page.get_by_test_id("task-goal")).to_have_value("Match the design attached.")
+    # Off the dialog, on its backdrop, the window claims the drag too, so the browser does not open the file.
+    body = page.locator("body")
+    assert _drag(body, "dragover", dt)
+    assert _drag(body, "drop", dt)
+    expect(chips).to_have_count(1)
     assert console_errors == []
 
 
@@ -445,11 +450,16 @@ def test_an_image_pasted_in_the_title_goes_to_the_tray_and_text_does_not(page: P
     expect(chips).to_have_count(1)
     expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
     expect(title).to_have_value("Summary")
-    # An image with text beside it (as some apps copy): the image is taken, the text let through.
+    # An image with a caption beside it: the image is taken, the caption let through.
     both = _files(page, [("both.png", png(200, 200), "image/png")])
-    both.evaluate("dt => dt.setData('text/plain', 'both.png')")
+    both.evaluate("dt => dt.setData('text/plain', 'see the header')")
     assert not _paste_into(page.get_by_test_id("task-goal"), both)
     expect(chips).to_have_count(2)
+    # A file copied in a file manager carries its own name as text: that is not text, and the paste is claimed.
+    copied = _files(page, [("copied.png", png(200, 200), "image/png")])
+    copied.evaluate("dt => dt.setData('text/plain', 'copied.png')")
+    assert _paste_into(page.get_by_test_id("task-goal"), copied)
+    expect(chips).to_have_count(3)
     assert console_errors == []
 
 
@@ -463,6 +473,14 @@ def test_attach_images_is_a_labelled_button(page: Page, web_url: str, org: dict,
     _shoot(page, "5-task-prompt-empty")
     attach.hover()
     expect(page.get_by_role("tooltip")).to_contain_text("up to 10 MB each")
+    # Pressed from the keyboard, it opens the file picker.
+    attach.focus()
+    with page.expect_file_chooser() as chooser:
+        page.keyboard.press("Enter")
+    chooser.value.set_files([{"name": "picked.png", "mimeType": "image/png", "buffer": png(200, 120)}])
+    chips = page.get_by_test_id("attachment-chip")
+    expect(chips).to_have_count(1)
+    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
     assert console_errors == []
 
 
@@ -482,7 +500,9 @@ def test_a_file_dropped_on_the_dialog_without_storage_is_refused_in_place(page: 
     assert _drag(goal, "drop", dt)
     expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
     # Outside the dialog, on its backdrop, too.
-    assert _drag(page.locator("body"), "drop", dt)
+    body = page.locator("body")
+    assert _drag(body, "dragover", dt)
+    assert _drag(body, "drop", dt)
     expect(page.get_by_test_id("task-title")).to_have_value("Kept")
 
 
@@ -501,9 +521,9 @@ def test_the_composer_takes_images_dropped_anywhere_on_the_session(
     for i, place in enumerate(places):
         assert _drop_on(place, _files(page, [(f"drop-{i}.png", png(120, 80), "image/png")]), page=page)
         expect(chips).to_have_count(i + 1)
-    # Text pasted with an image goes into the field; the image to the tray.
+    # A caption pasted with an image goes into the field; the image to the tray.
     both = _files(page, [("both.png", png(200, 200), "image/png")])
-    both.evaluate("dt => dt.setData('text/plain', 'both.png')")
+    both.evaluate("dt => dt.setData('text/plain', 'the total is cut off')")
     assert not _paste_into(field, both)
     expect(chips).to_have_count(4)
     _paste(page, [("pasted.png", png(90, 90), "image/png")])
