@@ -9,11 +9,13 @@
  */
 
 import { z } from "zod";
-import { EventTypes, epicState, epicStateSchema, newId, taskCriteriaInput, taskGoalInput, taskGoalShortBy, type EpicState } from "@dude/domain";
+import {
+  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, epicState, epicStateSchema, newId, taskCriteriaInput,
+  taskGoalInput, taskGoalShortBy, type EpicState,
+} from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
-import { goalTooShort } from "./work.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
@@ -346,7 +348,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   if ("started" in result) {
     throw conflict(`delivery has started (${result.started}); what it asks for can no longer change — abort and create a new one`);
   }
-  if ("shortGoal" in result) throw goalTooShort();
+  if ("shortGoal" in result) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
   if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
   if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);

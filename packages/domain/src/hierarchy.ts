@@ -279,6 +279,8 @@ export const TASK_GOAL_MAX = 65_536;
 export const TASK_GOAL_MIN = 16;
 export const TASK_GOAL_TOO_SHORT =
   `a task needs a goal of at least ${TASK_GOAL_MIN} characters: why it matters and what should change`;
+/** A short goal as a validation error on `goal`, shaped like zod's `flatten()`. */
+export const TASK_GOAL_TOO_SHORT_DETAILS = { formErrors: [], fieldErrors: { goal: [TASK_GOAL_TOO_SHORT] } };
 
 /** How many more characters `goal` needs to be saved; 0 when it has enough. */
 export function taskGoalShortBy(goal: string): number {
