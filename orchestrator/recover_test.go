@@ -117,7 +117,7 @@ func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 func TestRetryingAnAbortedTaskStartsANewAgentOnTheSameBranch(t *testing.T) {
 	w := newWorld(t)
 	// A real model, so the prompt is the one a real one reads.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("implementer", "llm-impl")
 	wi, runID := w.aborted()
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "retry", "note": "Use the new API."}); status != 200 {
 		t.Fatalf("retry: %d %v", status, body)
@@ -489,8 +489,9 @@ func TestAReviewerNeverStartedIsQueuedAgainOnResume(t *testing.T) {
 	var started, pending string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY created_at LIMIT 1`, wi).Scan(&started)
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND id <> $2 LIMIT 1`, wi, started).Scan(&pending)
-	// The second never reached lux.
-	mustExec(t, w.owner, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL WHERE id = $1`, pending)
+	// The second never reached lux: it began waiting for an image long ago.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL,
+		image_waiting_since = now() - interval '3 hours' WHERE id = $1`, pending)
 	if status, body := w.call("/internal/runs/"+started+"/abort", map[string]any{}); status != 200 {
 		t.Fatalf("abort: %d %v", status, body)
 	}
@@ -502,6 +503,10 @@ func TestAReviewerNeverStartedIsQueuedAgainOnResume(t *testing.T) {
 	}
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
+	}
+	// As if new: the image it waited on before is asked for afresh.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND image_waiting_since IS NULL`, pending); n != 1 {
+		t.Errorf("a never-started reviewer resumed still waits on its old image job")
 	}
 	w.until("the never-started reviewer to be submitted", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, pending) == 1

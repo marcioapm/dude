@@ -297,8 +297,10 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 			return err
 		}
 		// Those lux never had start now, as they would have.
+		// As if new: any image it waited on before is asked for afresh.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'pending', control = 'none', keep = false, ended_at = NULL,
-				control_reason = NULL, phase_notified_at = NULL, finishes = finishes + 1
+				control_reason = NULL, phase_notified_at = NULL, finishes = finishes + 1,
+				image_build_id = NULL, image_waiting_since = NULL, next_attempt_at = NULL
 			WHERE id = ANY($1) AND lux_run_id IS NULL AND status IN ('aborted', 'failed')`, t.Unstarted); err != nil {
 			return err
 		}
