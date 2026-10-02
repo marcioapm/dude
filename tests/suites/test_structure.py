@@ -234,7 +234,7 @@ def test_publishing_preflight_contacts_test_gateway(client: ApiClient, env):
             "auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url,
         }).raise_for_status()
         project = client.create_project(
-            name="Gateway preflight", slug=f"gateway-{gh.api_port}", runtimeImage="dude-runtime:test",
+            name="Gateway preflight", slug=f"gateway-{gh.api_port}",
             agentModels={role: {"model": "fake/scripted"} for role in ("implementer", "reviewer", "fixer", "simplifier")},
             repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
         )

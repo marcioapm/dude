@@ -22,6 +22,7 @@ const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
   effort: org(null),
   timeLimitMinutes: org(null),
   machineSize: org(null),
+  image: org(null),
   enabled: null,
   prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 } },
   ...over,

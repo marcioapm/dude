@@ -14,7 +14,7 @@ import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
-import { ImagesBlock } from "./Images.tsx";
+import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";

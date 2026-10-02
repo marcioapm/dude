@@ -1,7 +1,8 @@
 /**
  * Project settings → Servers: the project's server definitions (a table,
  * with a dialog to add or edit one), and how its branch previews run —
- * the image, the egress allowlist, the idle timeout, who may open one.
+ * the image (from the library), the egress allowlist, the idle timeout,
+ * who may open one.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,10 +13,11 @@ import { egressProblem, type MachineSizeWithUse, type PreviewSettings, type Reci
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
+import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 
-export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount }: {
+export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount, images, onManageImages }: {
   client: ApiClient;
   project: ProjectDetail;
   canEdit: boolean;
@@ -23,6 +25,9 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
   /** The organisation's sizes, as the settings screen loaded them; null while loading. */
   sizes: readonly MachineSizeWithUse[] | null;
   onCount?: ((n: number) => void) | undefined;
+  /** The organisation's images, as the settings screen loaded them. */
+  images: ImageChoices;
+  onManageImages?: (() => void) | undefined;
 }) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
@@ -35,6 +40,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
   const [previewRound, setPreviewRound] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
   const defaultSize = sizes?.find((s) => s.isDefault) ?? null;
+  const runtime = imageWords(images.images, project.runtimeImageId);
 
   const latest = useRef(0);
   const load = useCallback(async () => {
@@ -124,9 +130,14 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         <SettingsNote icon="info">
           A preview is one run with every server that starts in previews. Servers someone starts from a session run inside that agent’s machine instead, sharing its CPUs and memory.
         </SettingsNote>
-        <SettingRow label="Image" help="The container a preview run starts in. The project’s runner image unless changed here."
-          source={previews.image === null ? <SettingSource source="organization" from="the project’s runner" /> : <SettingSource source="project" from="the project’s runner" onReset={canEdit ? () => savePreviews({ image: null }, "Image reset") : undefined} />}>
-          <ImageField key={previewRound} value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || previewSave.busy} onSave={(image) => savePreviews({ image }, "Image saved")} />
+        <SettingRow label="Image" help="What a preview run starts in. The project’s runtime image unless changed here." data-testid="preview-image-row"
+          source={previews.imageId === null ? <SettingSource source="organization" from="the project’s runtime image" /> : <SettingSource source="project" from="the project’s runtime image" onReset={canEdit ? () => savePreviews({ imageId: null }, "Image reset") : undefined} />}>
+          <ImageField key={previewRound} testId="preview-image" label="Preview image" images={images.images} value={previews.imageId} orgName={orgName}
+            allowNone="The project’s runtime image" noneLabel={runtime ? `The project’s runtime image · ${runtime}` : "The project’s runtime image"}
+            legacy={previews.image} shadowedBy={runtime ?? imageWords(images.images, images.defaultImageId)}
+            disabled={!canEdit || previewSave.busy} onManage={onManageImages}
+            onChange={(imageId) => savePreviews({ imageId }, imageId ? "Image saved" : "Image reset")}
+            onClearLegacy={() => savePreviews({ image: null }, "Typed image cleared")} />
         </SettingRow>
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
           <HostChips hosts={previews.egress} validate={egressProblem} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
@@ -184,18 +195,5 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         }
       />
     </>
-  );
-}
-
-/** The preview image: typed in place, saved on blur or Enter; empty means the runner's. Keyed by its parent per save, so a refused value goes. */
-function ImageField({ value, fallback, disabled, onSave }: { value: string | null; fallback: string | null; disabled: boolean; onSave: (image: string | null) => void }) {
-  const [draft, setDraft] = useState(value ?? "");
-  const commit = () => {
-    const next = draft.trim() || null;
-    if (next !== value) onSave(next);
-  };
-  return (
-    <Input aria-label="Image" mono value={draft} disabled={disabled} placeholder={fallback ?? "The runner’s image"} style={{ minWidth: 340 }} data-testid="preview-image"
-      onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
   );
 }

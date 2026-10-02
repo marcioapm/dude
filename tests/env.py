@@ -50,6 +50,11 @@ POSTGRES_APP_USER = os.environ.get("DUDE_TEST_PG_APP_USER", "dude_app")
 POSTGRES_APP_PASSWORD = os.environ.get("DUDE_TEST_PG_APP_PASSWORD", "dude_app")
 POSTGRES_ADMIN_DB = os.environ.get("DUDE_TEST_PG_ADMIN_DB", "postgres")
 
+# The dude layer library images are finished with. The fake lux runs any
+# ref, so this one is never pulled; set, the image library is on. An
+# organization that names no library image runs as it did before it.
+TEST_LAYER = "registry.test/dude/layer@sha256:" + "a" * 64
+
 # The backend stores photos in versitygw, which closes the connection after
 # each PUT; Bun before this reports that as ConnectionClosed and fails the
 # upload (apps/control-plane/src/storage.ts, MIN_BUN_FOR_S3).
@@ -243,6 +248,7 @@ class TestEnvironment:
                 # lux-fake's image when the lux is real: it is preloaded on
                 # every host, and it is what the fake models run.
                 "DUDE_AGENT_IMAGE": "localhost/lux-fake:test" if self.real_lux else "dude-runtime:test",
+                "DUDE_LAYER_IMAGE": TEST_LAYER,
                 # No real agent credentials in the suite; fake models only,
                 # and memory searched by words.
                 "DUDE_LLM_URL": "",
@@ -314,6 +320,7 @@ class TestEnvironment:
                 "PORT": str(self.control_plane_port),
                 "DUDE_ORCHESTRATOR_URL": self.orchestrator_url,
                 "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
+                "DUDE_LAYER_IMAGE": TEST_LAYER,
                 **self.s3_env,
             },
             stdout=self._log("control-plane"),

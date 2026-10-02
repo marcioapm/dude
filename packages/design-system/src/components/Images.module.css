@@ -1,0 +1,262 @@
+/*
+ * The image library's pieces. Square structure told apart by shade: the
+ * queue a strip on the sunken shade, the stages cells on chrome (the
+ * current one on the info tint), the history a list on chrome beside its
+ * diff. No lines but the diff's own.
+ */
+
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.spacer {
+  flex: 1;
+}
+.link {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ds-color-accent-text);
+}
+.link:hover {
+  text-decoration: underline;
+}
+
+/* The queue */
+.queue {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.queueNow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.queueNow b {
+  font-weight: var(--ds-weight-medium);
+}
+.queueWaiting {
+  color: var(--ds-color-text-secondary);
+}
+.limits {
+  display: inline-flex;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+/* Stages */
+.stages {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stage {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+  min-width: 0;
+}
+.stageMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.stageText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.stageText b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.stageDetail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-done .stageMark {
+  color: var(--ds-tone-success-fg);
+}
+.stage-current {
+  background: var(--ds-tone-info-bg);
+}
+.stage-current .stageDetail {
+  color: var(--ds-tone-info-fg);
+}
+.stage-failed {
+  background: var(--ds-tone-danger-bg);
+}
+.stage-failed .stageMark,
+.stage-failed .stageDetail {
+  color: var(--ds-tone-danger-fg);
+}
+.stage-todo .stageMark {
+  color: var(--ds-color-text-muted);
+}
+@media (max-width: 560px) {
+  .stages {
+    grid-auto-flow: row;
+  }
+}
+
+/* State in a row */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+}
+.stateDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--ds-radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+.stateDotHollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+.tone-success {
+  color: var(--ds-tone-success-fg);
+}
+.tone-info {
+  color: var(--ds-tone-info-fg);
+}
+.tone-danger {
+  color: var(--ds-tone-danger-fg);
+}
+.tone-attention {
+  color: var(--ds-tone-attention-fg);
+}
+.tone-neutral {
+  color: var(--ds-color-text-secondary);
+}
+
+/* History */
+.history {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  min-height: 360px;
+  background: var(--ds-color-surface);
+}
+.versions {
+  margin: 0;
+  padding: var(--ds-space-8);
+  list-style: none;
+  overflow: auto;
+  background: var(--ds-color-chrome);
+  max-height: 720px;
+}
+.version {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ds-space-8);
+  width: 100%;
+  padding: var(--ds-space-8);
+  font: inherit;
+  text-align: left;
+  color: var(--ds-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--ds-radius-control);
+}
+.version:hover {
+  background: var(--ds-color-hover-wash);
+}
+.version:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+}
+.versionCurrent {
+  background: var(--ds-color-active-wash);
+}
+.versionText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.versionText small {
+  font-size: var(--ds-text-xs);
+}
+.versionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.versionHead b {
+  font-family: var(--ds-font-mono);
+}
+.failedName {
+  color: var(--ds-tone-danger-fg);
+}
+.versionNote {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.diffPane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.diffHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-16);
+}
+.diffTitle {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+}
+.add {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-diff-add-fg);
+}
+.del {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-diff-del-fg);
+}
+.versionError {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: 0;
+  padding: var(--ds-space-8) var(--ds-space-16);
+  background: var(--ds-tone-danger-bg);
+  color: var(--ds-tone-danger-fg);
+  font-size: var(--ds-text-sm);
+}
+.diff {
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .history {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .versions {
+    max-height: 280px;
+  }
+}

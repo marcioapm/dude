@@ -18,7 +18,7 @@ import { withoutTenant } from "./db/client.ts";
 export const DEFAULT_PATH = "/etc/dude/dude.toml";
 
 type Kind = "string" | "int" | "float" | "bool" | "list" | "duration";
-type Use = "backend" | "orchestrator" | "both";
+type Use = "backend" | "orchestrator" | "builder" | "both" | "all";
 
 export interface Key {
   /** The file key, dotted: "auth.cloudflare_access.team". */
@@ -73,6 +73,15 @@ export const KEYS: readonly Key[] = [
   key("registry.host", "DUDE_REGISTRY", "string", "orchestrator"),
   key("registry.credential", "DUDE_REGISTRY_CREDENTIAL", "string", "orchestrator", "", true),
   key("registry.ecr_role_arn", "DUDE_ECR_ROLE_ARN", "string", "orchestrator"),
+  key("images.layer", "DUDE_LAYER_IMAGE", "string", "all"),
+  key("builder.database_url", "DUDE_BUILDER_DATABASE_URL", "string", "builder", "", true),
+  key("builder.repository", "DUDE_BUILDER_REPOSITORY", "string", "builder"),
+  key("builder.authfile", "DUDE_BUILDER_AUTHFILE", "string", "builder"),
+  key("builder.platform", "DUDE_BUILDER_PLATFORM", "string", "builder", "linux/arm64"),
+  key("builder.cpus", "DUDE_BUILDER_CPUS", "float", "all", "1.5"),
+  key("builder.memory", "DUDE_BUILDER_MEMORY", "string", "all", "1536m"),
+  key("builder.timeout", "DUDE_BUILDER_TIMEOUT", "duration", "builder", "60m"),
+  key("builder.min_free_bytes", "DUDE_BUILDER_MIN_FREE_BYTES", "int", "builder", "8589934592"),
   key("tools.listen", "DUDE_TOOLS_LISTEN", "string", "orchestrator"),
   key("tools.url", "DUDE_TOOLS_URL", "string", "orchestrator"),
   key("tools.service", "DUDE_TOOLS_SERVICE", "bool", "orchestrator", "true"),
@@ -91,7 +100,8 @@ export const KEYS: readonly Key[] = [
 
 const byEnv = new Map(KEYS.map((k) => [k.env, k]));
 const byName = new Map(KEYS.map((k) => [k.name, k]));
-const usedHere = (k: Key) => k.use !== "orchestrator";
+// "both" is the backend and the orchestrator; "all" adds dude-image-builder.
+const usedHere = (k: Key) => k.use === "backend" || k.use === "both" || k.use === "all";
 export const label = (k: Key) => `${k.name} (${k.env})`;
 
 /**
@@ -407,6 +417,10 @@ export class Config {
 
   int(env: string): number {
     return (this.value(env, "int") as number | undefined) ?? 0;
+  }
+
+  float(env: string): number {
+    return (this.value(env, "float") as number | undefined) ?? 0;
   }
 
   bool(env: string): boolean {
