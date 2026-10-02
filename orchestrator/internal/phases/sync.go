@@ -10,8 +10,9 @@
 //	              → stop the lux Run → completed
 //
 // Pause stops the lux Run (its state is kept); resume resumes it, and the
-// agent continues its conversation from the transcript lux kept. Abort
-// cancels it.
+// agent continues its conversation from the transcript lux kept. An abort,
+// or an agent that died, stops it and keeps it a while (end) so a person
+// can resume it the same way; then it is cancelled.
 //
 // Every step is idempotent and keyed on durable columns, so the loop can be
 // killed at any point and a new orchestrator picks up exactly where the old
@@ -67,6 +68,9 @@ type Syncer struct {
 	// much earlier, so a retry a minute out is exercised without the wait.
 	// Zero outside tests.
 	RetryAhead time.Duration
+	// How long an aborted or failed Run's lux Run is kept for a resume
+	// (DUDE_KEEP_STOPPED); zero takes KeepFor.
+	KeepFor time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -142,6 +146,9 @@ type phaseRun struct {
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
 	Attempt                        int
+	// Aborted or failed and worth resuming (runs.keep), and whether the
+	// time it is kept for has passed.
+	Keep, KeepExpired bool
 }
 
 const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
@@ -163,7 +170,8 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
-	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
+	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
+	r.keep, COALESCE(r.kept_until <= now(), false)`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -223,7 +231,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
-		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.Keep, &r.KeepExpired)
 	return r, err
 }
 
@@ -242,8 +250,11 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			WHERE r.phase IS NOT NULL
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR `+resumable+`
-			       -- Aborted in dude but not yet cancelled in lux.
-			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
+			       -- Aborted or failed in dude, and not yet kept or cancelled in
+			       -- lux; or kept, and its time is up.
+			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
+			           AND (r.lux_stop_reason IS NULL OR r.lux_stop_reason NOT IN ('cancel', 'kept')
+			                OR r.lux_stop_reason = 'kept' AND r.kept_until <= now())))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
@@ -287,13 +298,13 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	switch {
 	case r.Status == statusAborted || r.Status == "failed":
-		return true, s.cancel(ctx, r)
+		return true, s.end(ctx, r)
 	case r.Status == statusPending && r.LuxRunID == "":
 		return true, s.submit(ctx, r)
 	case r.Status == statusPaused:
 		return s.whilePaused(ctx, r)
 	case r.Control == "abort":
-		return true, s.cancel(ctx, r)
+		return true, s.end(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
 	}
@@ -720,7 +731,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		// the agent's own records by up to a second, so the state recorded
 		// here can still say "scheduled" when the agent has already finished.
 		if lux.Terminal(r.LuxState) {
-			return true, s.fail(ctx, r, "the agent's container stopped before its work was pushed")
+			return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed")
 		}
 		if r.LuxState == "resuming" {
 			// lux is moving it to another host (lux.Recorded): pushed once
@@ -735,7 +746,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		reqID := "push-" + r.ID
 		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
-				return true, s.fail(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
+				return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
 			}
 			return true, s.retryLater(ctx, r, err)
 		}
@@ -754,7 +765,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			if forge.Transient(err) {
 				return true, s.retryLater(ctx, r, err)
 			}
-			return true, s.fail(ctx, r, err.Error())
+			return true, s.failKept(ctx, r, err.Error())
 		}
 	}
 	if r.Phase == delivery.PhaseReview || r.Phase == delivery.PhaseTest {
@@ -946,6 +957,38 @@ func judged(shown []string, verdicts map[int]bool) map[string]bool {
 	return out
 }
 
+// KeepFor is how long an aborted or failed Run's lux Run is kept, by
+// default, for a person to resume it where it stopped.
+const KeepFor = 7 * 24 * time.Hour
+
+// end settles the lux Run of a failed or aborted Run. One worth resuming
+// (runs.keep) is stopped and kept until kept_until, its workspace and the
+// agent's conversation with it; then, or straight away for any other, it is
+// cancelled.
+func (s *Syncer) end(ctx context.Context, r phaseRun) error {
+	if r.Keep && !r.KeepExpired && r.LuxRunID != "" {
+		return s.keep(ctx, r)
+	}
+	return s.cancel(ctx, r)
+}
+
+// keep stops a failed or aborted Run's lux Run and keeps it.
+func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
+	s.unfollow(r.ID)
+	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+		return err
+	}
+	keepFor := s.KeepFor
+	if keepFor <= 0 {
+		keepFor = KeepFor
+	}
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'kept', control = 'none',
+			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2)) WHERE id = $1`, r.ID, keepFor.Seconds())
+		return err
+	})
+}
+
 // cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
@@ -955,7 +998,7 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		}
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL WHERE id = $1`, r.ID)
 		return err
 	})
 }
@@ -1350,15 +1393,27 @@ func (s *Syncer) unfollow(runID string) {
 	}
 }
 
-// fail ends a Run as failed, and its lux Run with it.
+// fail ends a Run as failed, and its lux Run with it: for a reason a
+// resume would only meet again (lux refused it, it cannot be built).
 func (s *Syncer) fail(ctx context.Context, r phaseRun, reason string) error {
 	s.unfollow(r.ID)
 	if r.LuxRunID != "" && !lux.Terminal(r.LuxState) {
 		_ = s.Lux.Cancel(ctx, r.LuxRunID)
 	}
+	return s.failed(ctx, r, reason, false)
+}
+
+// failKept ends a Run as failed and keeps its lux Run (end), for a person
+// to resume: what it had not pushed is still in its workspace.
+func (s *Syncer) failKept(ctx context.Context, r phaseRun, reason string) error {
+	s.unfollow(r.ID)
+	return s.failed(ctx, r, reason, true)
+}
+
+func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep bool) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now()
-			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason)
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
+			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason, keep)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -1562,11 +1617,16 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 // not yet been told. A sweep rather than a hook on the status change, so a
 // Run ended by any path — including one this process never saw — still
 // wakes its workflow. The signal's key makes a repeat harmless.
-func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx context.Context, org, workflowRunID, runID, status string) error) (int, error) {
-	type finished struct{ ID, Org, Status, WorkflowRunID string }
+//
+// key names this finish, for the signal's idempotency: a Run taken back up
+// after it failed or was aborted finishes again, and that is a new signal.
+func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx context.Context, org, workflowRunID, runID, status, key string) error) (int, error) {
+	type finished struct{ ID, Org, Status, WorkflowRunID, Key string }
 	var runs []finished
 	if err := database.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, w.id FROM runs r
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, w.id,
+				'phase-finished:' || r.id || CASE WHEN r.tool_starts > 0 THEN ':' || r.tool_starts ELSE '' END
+			FROM runs r
 			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
 			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
@@ -1586,7 +1646,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 	}
 	handled := 0
 	for _, r := range runs {
-		if err := signal(ctx, r.Org, r.WorkflowRunID, r.ID, r.Status); err != nil {
+		if err := signal(ctx, r.Org, r.WorkflowRunID, r.ID, r.Status, r.Key); err != nil {
 			// One workflow that cannot be signalled must not stall the rest.
 			continue
 		}

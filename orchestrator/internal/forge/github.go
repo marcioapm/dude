@@ -951,6 +951,12 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
+// ClosePullRequest closes a pull request without merging it. One already
+// closed or merged is left as it is.
+func (g *GitHub) ClosePullRequest(ctx context.Context, slug string, number int) error {
+	return g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), map[string]any{"state": "closed"}, nil)
+}
+
 // Merge methods, as GitHub names them.
 var MergeMethods = []string{"squash", "merge", "rebase"}
 

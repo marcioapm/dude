@@ -159,6 +159,17 @@ async function decideTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
+/** How a stopped task can be picked back up, and until when a resume can. */
+async function recoveryOptions(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET", `/internal/tasks/${ctx.params.id}/recover`, undefined, ctx.principal);
+}
+
+/** Pick a stopped task back up: resume, retry or restart, with a note for the agents. */
+async function recoverTask(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/recover`,
+    await ctx.request.text(), ctx.principal);
+}
+
 async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
@@ -387,6 +398,8 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
+  router.get("/v1/tasks/:id/recover", recoveryOptions);
+  router.post("/v1/tasks/:id/recover", recoverTask);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

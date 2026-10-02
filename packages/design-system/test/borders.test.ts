@@ -26,6 +26,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/primitives/Select.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/NumberInput.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
+  "packages/design-system/src/primitives/ChoiceList.module.css": { ".dot": "a radio is its outline", ".chosen .dot": "a radio is its outline" },
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },
   "packages/design-system/src/components/Sidebar.module.css": { ".search": "a field's edge", ".search:hover": "a field's edge", ".search:focus-within": "focus" },
   "packages/design-system/src/components/DiffView.module.css": { ".gutter": "a diff's gutter" },

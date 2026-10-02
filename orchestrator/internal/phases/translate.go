@@ -237,7 +237,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if reason == "" {
 		reason = state
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now()
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = true
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
 		t.run.ID, "the agent's run ended before finishing its task: "+reason)
@@ -645,7 +645,7 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, model, produced)
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err

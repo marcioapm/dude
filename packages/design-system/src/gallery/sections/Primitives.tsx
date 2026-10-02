@@ -10,6 +10,7 @@ import { HelpList, KeyHint, MarkdownCheatsheet } from "../../primitives/Kbd.tsx"
 import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
+import { ChoiceList } from "../../primitives/ChoiceList.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Card, CardBody, CardFooter, CardHeader } from "../../primitives/Card.tsx";
 import { Table, TBody, Td, Th, THead, Tr, TableEmpty, type SortDirection } from "../../primitives/Table.tsx";
@@ -249,6 +250,12 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Checkbox label="Disabled checked" disabled defaultChecked />
             <Checkbox label="Auto-merge when green" description="Requires all required checks and one approving review." defaultChecked />
           </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-choice" title="ChoiceList" note="One of a few ways to do something, each with a sentence on what it means — a decision in a dialog, where the options differ by more than a word. A radio group: one tab stop, arrows move and choose. An option that cannot be chosen says why in place of its description (disabledReason), and is skipped. Two or three views of one thing are a Segmented; a value from a list is a Select.">
+        <Panes mode={mode}>
+          <ChoiceDemo />
         </Panes>
       </Block>
 
@@ -815,5 +822,27 @@ function DiscardConfirmExample() {
         onDiscard={() => setOpen(false)}
       />
     </>
+  );
+}
+
+function ChoiceDemo() {
+  const [way, setWay] = useState<"resume" | "retry" | "restart">("retry");
+  return (
+    <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+      <div style={{ width: 420 }}>
+        <ChoiceList label="How to pick it back up" value={way} onChange={setWay} options={[
+          { value: "resume", icon: "play", label: "Resume the implementer", description: "The same agent picks up where it stopped, with its conversation and unpushed work." },
+          { value: "retry", icon: "retry", label: "Try again with a new implementer", description: "Same branch, from what was pushed. Nothing it was thinking comes along." },
+          { value: "restart", icon: "git-branch", label: "Start over as attempt 2", description: "A new branch from main and the whole pipeline again." },
+        ]} />
+      </div>
+      <div style={{ width: 420 }}>
+        <ChoiceList label="How to pick it back up (no longer kept)" value="retry" onChange={() => undefined} options={[
+          { value: "resume", icon: "play", label: "Resume the implementer", disabledReason: "No longer kept: lux keeps a stopped session 7 days." },
+          { value: "retry", icon: "retry", label: "Try again with a new implementer", description: "Same branch, from what was pushed." },
+          { value: "restart", icon: "git-branch", label: "Start over as attempt 2", description: "A new branch from main." },
+        ]} />
+      </div>
+    </div>
   );
 }

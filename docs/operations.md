@@ -395,6 +395,7 @@ does not refuse to start.
 | `orchestrator.diff_every` | `DUDE_DIFF_EVERY` | `15s` | orchestrator | How often a working agent's diff is read besides after its edits. |
 | `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
 | `orchestrator.lux_cost_every` | `DUDE_LUX_COST_EVERY` | `2m` | orchestrator | How often an agent's Run's cost is read from lux (`GET /v1/runs/{id}/cost`), until lux reports it final or eight days after the Run ended; positive. |
+| `orchestrator.keep_stopped` | `DUDE_KEEP_STOPPED` | `168h` | orchestrator | How long an aborted or failed agent Run is kept in lux (stopped, its workspace and conversation with it) so a person can resume it; then it is cancelled. Kept Runs count against lux's storage quota (a Go duration). |
 | `s3.bucket` | `DUDE_S3_BUCKET` | off | backend | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
 | `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). versitygw needs Bun ≥ 1.4.0 (see [Bun](#bun)); the release has it. |
 | `s3.region` | `DUDE_S3_REGION` | `us-east-1` | backend | |

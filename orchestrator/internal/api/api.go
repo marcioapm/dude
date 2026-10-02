@@ -107,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	s.githubRoutes(mux)
+	s.recoverRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
@@ -512,9 +513,6 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 	return nil
 }
 
-// abort stops a Run and its task at once. The lux Run is cancelled by
-// the syncer; its events and workspace are kept — abort stops work, it does
-// not erase it.
 // answer gives an agent the answer to the question it stopped on. The
 // answer is delivered the way a steer is — a directive, acknowledged by lux
 // when the agent takes it — so it starts the agent's next turn.
@@ -581,6 +579,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 	return nil
 }
 
+// abort stops a Run and its task at once, and the Runs beside it. Their lux
+// Runs are stopped and kept a while by the syncer, so the task can be picked
+// back up — resumed where it stopped (recover.go); its events stay — abort
+// stops work, it does not erase it.
 func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
 	var body struct{ Reason string }
@@ -597,8 +599,14 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			return fail(http.StatusConflict, "conflict", "run %s is already %s", runID, ri.Status)
 		}
 		taskID = ri.TaskID
+		// The step it is part of stops with it — the reviewers beside it, the
+		// whole of a delivery — each kept, so the task can be picked back up
+		// where it stopped (phases.Syncer.end).
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-			control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
+			control_reason = $3, ended_at = now(), keep = true
+			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL)
+			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`,
+			runID, ri.TaskID, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
 		// The task stops too: an aborted Run should not leave its work
@@ -775,6 +783,12 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 		}
 		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "decide"); err != nil {
 			return err
+		}
+		if body.Action == "resume" {
+			// The Run that failed, taken back up now; the workflow waits on it.
+			if err := resumeKept(r.Context(), tx, org, projectID, taskID, []string{e.RunID()}, strings.TrimSpace(body.Note)); err != nil {
+				return err
+			}
 		}
 		// Taken now, in the workflow's own state: a second decision is
 		// refused from here on, before the workflow has acted on this one.

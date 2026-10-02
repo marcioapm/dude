@@ -46,6 +46,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["p-rowmenu", "RowMenu"],
       ["p-select", "Select"],
       ["p-checkbox", "Checkbox"],
+      ["p-choice", "ChoiceList"],
       ["p-badge", "Badge"],
       ["p-card", "Card"],
       ["p-table", "Table"],
