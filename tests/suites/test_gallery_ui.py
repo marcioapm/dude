@@ -295,8 +295,11 @@ def test_a_select_list_with_long_descriptions_fits_a_phone(gallery_page: Page, c
     for width, most in ((390, 390 - 16), (1440, 560)):
         gallery_page.set_viewport_size({"width": width, "height": 844})
         gallery_page.get_by_role("link", name="Select").click()
-        gallery_page.locator("[data-testid=gallery-select-long]").first.click()
-        listbox = gallery_page.get_by_role("listbox")
+        # The light pane's: the dark pane's row runs under it at some widths.
+        trigger = gallery_page.locator("[data-testid=gallery-select-long]").last
+        trigger.click()
+        expect(trigger).to_have_attribute("aria-expanded", "true")
+        listbox = gallery_page.locator(f"[id='{trigger.get_attribute('aria-controls')}']")
         expect(listbox).to_be_visible()
         box = listbox.bounding_box()
         assert box is not None

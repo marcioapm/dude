@@ -1570,6 +1570,65 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     assert console_errors == []
 
 
+def test_a_task_started_over_shows_one_attempt_at_a_time(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
+):
+    """Attempt 1 reaches a pull request with a finding, its pull request is
+    closed, and the task is started over. The page opens on attempt 2 with a
+    picker in its header; picking attempt 1 shows its findings and branch and
+    says it was set aside, read-only; Activity shows both attempts either way."""
+    item = client.create_task(forge_project["id"], "Start me over")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    pr = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": item["id"]}).json()["pullRequests"],
+                    timeout=180, message="attempt 1 opened no pull request")[0]
+    fake_github.close(pr["number"])
+    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "aborted",
+               timeout=60, message="closing the pull request did not stop the task")
+    resp = client.post(f"/v1/tasks/{item['id']}/recover", {"action": "restart", "note": "Smaller this time."})
+    assert resp.status_code == 200, resp.text
+    wait_until(lambda: any(r["attempt"] == 2 for r in client.task_runs(item["id"])),
+               timeout=60, message="starting over made no attempt 2")
+    findings = client.get("/v1/findings", params={"taskId": item["id"]}).json()["findings"]
+    assert findings, "attempt 1's reviewer raised nothing"
+
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{item['id']}")
+    picker = page.get_by_test_id("attempt-picker")
+    expect(picker).to_contain_text("Attempt 2")
+    expect(picker).to_contain_text("current")
+    expect(page.get_by_test_id("earlier-bar")).to_have_count(0)
+    expect(page.get_by_test_id("branch")).to_contain_text("attempt-2", timeout=30_000)
+
+    picker.click()
+    page.get_by_role("option").filter(has_text="Attempt 1").click()
+    expect(page).to_have_url(re.compile(r"\?attempt=1$"))
+    bar = page.get_by_test_id("earlier-bar")
+    expect(bar).to_contain_text("Attempt 1 was set aside")
+    expect(bar).to_contain_text("started over: “Smaller this time.”")
+    expect(page.get_by_test_id("branch")).to_contain_text("attempt-1")
+    expect(page.get_by_test_id("pr-panel").get_by_test_id("pr-merge")).to_have_count(0)
+    tabs = page.get_by_role("tablist", name="Task")
+    tabs.get_by_role("tab", name="Findings").click()
+    expect(page).to_have_url(re.compile(r"/findings\?attempt=1$"))
+    expect(page.get_by_test_id("finding")).to_have_count(len(findings))
+
+    # The way back to the current attempt, and Back to attempt 1 again.
+    bar.get_by_test_id("go-current").click()
+    expect(page.get_by_test_id("earlier-bar")).to_have_count(0)
+    expect(page).to_have_url(re.compile(rf"#/task/{item['id']}/findings$"))
+    page.go_back()
+    expect(page.get_by_test_id("earlier-bar")).to_be_visible()
+    expect(page.get_by_test_id("finding")).to_have_count(len(findings))
+
+    tabs.get_by_role("tab", name="Activity").click()
+    expect(page).to_have_url(re.compile(rf"#/task/{item['id']}/activity$"))
+    lines = page.get_by_test_id("activity-item")
+    expect(page.locator("[data-testid=activity-item][data-attempt='1']").first).to_be_visible()
+    expect(page.locator("[data-testid=activity-item][data-attempt='2']").first).to_be_visible()
+    expect(lines.filter(has_text="started over as attempt 2")).to_contain_text("· attempt 2")
+    assert console_errors == []
+
+
 def test_a_refused_key_asks_for_another(page: Page, web_url: str, org: dict, console_errors: list):
     """A key the server does not take (mistyped, revoked) goes back to the key
     prompt, saying so — not an error above a spinner that never ends."""
