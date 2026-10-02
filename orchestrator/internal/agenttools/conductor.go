@@ -67,9 +67,12 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 		return nil, err
 	}
 	full := len(ids) > 0
+	// The text only when asked for by id: a list of up to findingsMax reads
+	// none of it.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
 			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''),
-			title, description, suggested_fix, COALESCE(resolution_note, '')
+			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
+			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(resolution_note, '') ELSE '' END
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
@@ -81,9 +84,8 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 		var f findingOut
 		var file string
 		var line, attempts int
-		var title, description, fix, note string
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
-			&title, &description, &fix, &note); err != nil {
+			&f.Title, &f.Description, &f.SuggestedFix, &f.ResolutionNote); err != nil {
 			return nil, err
 		}
 		f.Where = file
@@ -91,9 +93,6 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 			f.Where = fmt.Sprintf("%s:%d", file, line)
 		}
 		f.Settled = settledAs(f.Status, f.ResolvedBy, attempts)
-		if full {
-			f.Title, f.Description, f.SuggestedFix, f.ResolutionNote = title, description, fix, note
-		}
 		seen[f.ID] = true
 		out.Findings = append(out.Findings, f)
 	}
@@ -204,13 +203,18 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ pullRequestsIn) (a
 			return nil, err
 		}
 		// The latest feedbackMax, oldest first. Acted on: a Run of this task
-		// was sent the same author's words about the same path (runs.pr_feedback
-		// keeps what woke each fixer, not the comment's id).
+		// was sent the same author's words about the same repository and
+		// path. runs.pr_feedback keeps what woke each fixer, not the
+		// comment's id, so this is the closest match there is; a fix sent
+		// before repo was recorded (a one-repository task) matches by path.
 		frows, err := tx.Query(ctx, `SELECT COALESCE(e.payload->>'author', ''), COALESCE(e.payload->>'kind', ''),
 				COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'body', ''), e.occurred_at::text,
 				COALESCE((SELECT r.id FROM runs r, jsonb_array_elements(COALESCE(r.pr_feedback, '[]')) f
 					WHERE r.task_id = e.task_id AND f->>'source' = 'review' AND f->>'author' = e.payload->>'author'
-					  AND f->>'body' = e.payload->>'body' ORDER BY r.created_at LIMIT 1), ''),
+					  AND f->>'body' = e.payload->>'body'
+					  AND COALESCE(f->>'repo', $3) = $3
+					  AND COALESCE(f->>'path', '') = COALESCE(e.payload->>'path', '')
+					ORDER BY r.created_at LIMIT 1), ''),
 				COALESCE(e.payload->>'ignored', '')
 			FROM (SELECT * FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
 				AND (payload->>'number')::int = $2 AND payload->>'repo' = $3 ORDER BY cursor DESC LIMIT $4) e
