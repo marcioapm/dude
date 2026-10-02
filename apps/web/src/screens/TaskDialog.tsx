@@ -24,16 +24,21 @@
  * task (or empty).
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { AttachDropZone, AttachmentChip, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, attachmentWarning } from "@dude/design-system";
-import { TASK_CRITERIA_MAX, TASK_GOAL_MAX, taskGoalShortBy } from "@dude/domain";
-import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AttachDropZone, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
+import { ATTACHMENT_LIMITS, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy } from "@dude/domain";
+import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
-import { limitsHint, useAttachmentLimits, useImageTray, type ImageTray } from "../hooks/useImages.tsx";
+import { limitsHint, useAttachmentLimits } from "../hooks/useImages.tsx";
+import { LOCAL_PREFIX, uploadingMarkdown, useTaskImages, withUploadedIds } from "../hooks/useTaskImages.tsx";
+import { BUDGET_SPENT, ShrinkError, prepare, refuse, type Limits, type Prepared } from "../images.ts";
 
 const NO_EPIC = "__none__";
+/** A file that is not an image dude takes, with why. */
+class Refused extends Error {}
+let localSeq = 0;
 // Read. Reload (Ctrl/⌘+R's family) is not one of the keys a browser keeps from a page, so the dialog takes it.
 const READ_KEYS = ["mod", "Shift", "R"];
 const isReadKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) =>
@@ -93,11 +98,24 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const [created, setCreated] = useState<string | null>(null);
   const { busy, problem, save } = useSave();
   const [reading, setReading] = useState(false);
-  // Images for the first agent, with the prompt: made now, uploaded once the task exists.
-  const limits = useAttachmentLimits(client);
-  const tray = useImageTray(client, undefined, limits);
-  const withImages = !existing && tray.attachments.length > 0;
-  const imagesReady = tray.attachments.every((a) => a.state === "ready");
+  const limitsAnswer = useAttachmentLimits(client);
+  const limits: Limits = limitsAnswer ?? ATTACHMENT_LIMITS;
+  const goalEditor = useRef<MarkdownEditorHandle>(null);
+  const criteriaEditor = useRef<MarkdownEditorHandle>(null);
+  // Where the Attach images button inserts: the field last written in.
+  const lastField = useRef<"goal" | "criteria">("goal");
+  // New task's images, made and kept in the browser until Create gives them a task, by stand-in id.
+  const [held, setHeld] = useState<ReadonlyMap<string, { made: Prepared; url: string }>>(new Map());
+  const uploadedHeld = useRef(new Map<string, string>());
+  const [making, setMaking] = useState(0);
+  const [refusals, setRefusals] = useState<string[]>([]);
+  const local = useCallback((id: string) => held.get(id)?.url, [held]);
+  const images = useTaskImages(client, local);
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  useEffect(() => () => {
+    for (const h of heldRef.current.values()) URL.revokeObjectURL(h.url);
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -138,8 +156,106 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // Reading criteria only strips markers and indentation, so bounding their
   // Markdown source also bounds the total saved by the server.
   const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
-  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy && imagesReady;
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy && making === 0;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
+  const imagesOff = locked ? "Delivery is running, so what the task asks for is fixed, and its images too."
+    : limitsAnswer && !limitsAnswer.enabled ? "Image storage isn't set up" : undefined;
+
+  /**
+   * Puts each image in a field as `![name](attachment:id)` where the person
+   * dropped or pasted it: a placeholder at once, replaced in place when the
+   * image is made and (editing a task that exists) uploaded, or removed,
+   * with why, when it cannot be. One after another, so two placeholders
+   * with one name are replaced in the order they were put in.
+   */
+  function addImages(files: File[], field: "goal" | "criteria", at?: number) {
+    const editor = (field === "goal" ? goalEditor : criteriaEditor).current;
+    if (!editor || imagesOff) return;
+    setRefusals([]);
+    const placeholders = files.map((f) => uploadingMarkdown(f.name || "pasted image"));
+    // In the goal, on lines of their own, as figures in the text around them; in a criterion,
+    // inline, so it stays that list item's (a paragraph of its own would fall outside the list).
+    const gap = field === "goal" ? "\n\n" : " ";
+    const block = placeholders.join(gap);
+    const source = editor.text();
+    let where = Math.min(at ?? editor.caret(), source.length);
+    let upTo = where;
+    // In the goal, the spaces either side give way to the paragraph break.
+    if (field === "goal") {
+      while (where > 0 && source[where - 1] === " ") where--;
+      while (upTo < source.length && source[upTo] === " ") upTo++;
+    }
+    const before = where > 0 && !/\s/.test(source[where - 1]!) ? gap : "";
+    const after = upTo < source.length && !/\s/.test(source[upTo]!) ? gap : "";
+    // On an empty line of the criteria, an image is a criterion of its own.
+    const lineSoFar = source.slice(source.lastIndexOf("\n", where - 1) + 1, where);
+    const marker = field === "criteria" && !lineSoFar.trim() ? "- [ ] " : "";
+    editor.insert(marker + before + block + after, where, upTo);
+    setMaking((n) => n + files.length);
+    void (async () => {
+      for (const [i, file] of files.entries()) {
+        const placeholder = placeholders[i]!;
+        try {
+          const refused = await refuse(file, limits);
+          if (refused) throw new Refused(`${file.name || "the image"}: ${refused.detail}`);
+          // An even share of what one message carries, so the task's six fit together.
+          const made = await prepare(file, limits, Math.floor(limits.messageBytes / limits.perMessage));
+          let reference: string;
+          if (existing) {
+            const uploaded = await client.uploadAttachment(existing.id, made);
+            reference = attachmentMarkdown(uploaded.name, uploaded.id);
+          } else {
+            const id = `${LOCAL_PREFIX}${++localSeq}`;
+            const url = URL.createObjectURL(made.delivered);
+            setHeld((m) => new Map(m).set(id, { made, url }));
+            reference = attachmentMarkdown(made.name, id);
+          }
+          if (!editor.replace(placeholder, reference)) continue; // the person deleted the placeholder meanwhile
+        } catch (err) {
+          // With the break that set it apart, so the text reads as it did.
+          void (editor.replace(gap + placeholder, "") || editor.replace(placeholder + gap, "") || editor.replace(placeholder, ""));
+          const why = err instanceof Refused ? err.message
+            : err instanceof ShrinkError && err.message === BUDGET_SPENT ? `${file.name}: ${BUDGET_SPENT.toLowerCase()}`
+            : err instanceof ApiError ? `${file.name}: ${err.message}` : `${file.name}: it could not be read or uploaded`;
+          setRefusals((r) => [...r, why]);
+        } finally {
+          setMaking((n) => n - 1);
+        }
+      }
+    })();
+  }
+
+  /** A drop or paste on the dialog: into the field it landed in, else at the end of the goal. */
+  function onDialogFiles(files: File[], on: EventTarget | null) {
+    const node = on instanceof Node ? on : null;
+    const inField = (h: MarkdownEditorHandle | null) => Boolean(node && h?.root()?.contains(node));
+    const field = inField(criteriaEditor.current) ? "criteria" : inField(goalEditor.current) ? "goal" : null;
+    // After the paste's own text, if it had some, has gone in at the caret.
+    setTimeout(() => field ? addImages(files, field) : addImages(files, "goal", Number.MAX_SAFE_INTEGER), 0);
+  }
+
+  /**
+   * New task: the task, then its held images uploaded to it, then its text
+   * with each stand-in id replaced by the uploaded one — one request more
+   * than a task without images. A retry after a failure uploads only what
+   * did not go up.
+   */
+  async function createWithImages(fields: Partial<TaskFields>, goalText: string, items: string[]): Promise<string> {
+    const id = created ?? (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
+    setCreated(id);
+    const ids = taskAttachmentIds(goalText, items).filter((i) => i.startsWith(LOCAL_PREFIX) && held.has(i));
+    if (ids.length === 0) return id;
+    for (const local of ids) {
+      if (uploadedHeld.current.has(local)) continue;
+      const uploaded = await client.uploadAttachment(id, held.get(local)!.made);
+      uploadedHeld.current.set(local, uploaded.id);
+    }
+    await client.updateTask(id, {
+      goal: withUploadedIds(goalText, uploadedHeld.current),
+      acceptanceCriteria: items.map((c) => withUploadedIds(c, uploadedHeld.current)),
+    });
+    return id;
+  }
 
   function submit(deliver: boolean) {
     const fields: Partial<TaskFields> = { epicId: epic === NO_EPIC ? null : epic };
@@ -158,11 +274,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
     void save(
       async () => {
         if (existing) await client.updateTask(existing.id, fields);
-        else if (!created) {
-          id = (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
-          setCreated(id);
-        }
-        if (deliver) await client.deliver(id, withImages ? await tray.uploadTo(id) : []);
+        else id = await createWithImages(fields, goal.trim(), criteria.items);
+        if (deliver) await client.deliver(id);
       },
       () => {
         onClose();
@@ -200,8 +313,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         : existing?.fixed === "repositories" ? "Its delivery stopped: what it asks for can change before it is picked back up. Its repositories are fixed." : undefined}
       submitLabel={existing ? "Save" : "Create"}
       submitTestId="task-save"
-      // Images go with the prompt, which only a delivery gives.
-      canSubmit={canSave && !withImages}
+      canSubmit={canSave}
       onSubmit={() => submit(false)}
       problem={problem ?? loadProblem}
       unsavedWords={unsaved}
@@ -215,7 +327,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         </Tooltip>
       }
       reading={reading ? (
-        <Markdown title={title} untitled="Untitled task" source={readingSource} breaks data-testid="task-reading" />
+        <Markdown title={title} untitled="Untitled task" source={readingSource} breaks attachmentImage={images.attachmentImage} data-testid="task-reading" />
       ) : undefined}
       readingLabel="The task as it reads"
       onCloseReading={() => setReading(false)}
@@ -229,15 +341,19 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       }}
       // Over the task, the confirmation takes the key from the browser (a hard reload loses the draft) and does nothing.
       onConfirmKeyDown={(e) => isReadKey(e) && e.preventDefault()}
-      // The whole dialog takes a dropped or pasted image, wherever the person is writing.
-      wrapContent={existing ? undefined : (content) => (
-        <AttachDropZone className="taskDrop" onFiles={tray.add} takePaste disabledReason={tray.disabledReason}
-          detail="They go to the first agent with the task.">
+      // The whole dialog takes a dropped or pasted image: into the field it landed in, else the goal's end.
+      // While a delivery runs it takes none, and a file dragged over says why.
+      wrapContent={(content) => (
+        <AttachDropZone className="taskDrop" onFiles={onDialogFiles} takePaste disabledReason={imagesOff}
+          detail="It goes into the task where you drop it, or at the end of the goal.">
           {content}
+          {images.viewer}
         </AttachDropZone>
       )}
       footerStart={
         <>
+          <AttachImages off={imagesOff} limits={limits}
+            onFiles={(files) => addImages(files, lastField.current)} />
           <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
           {locked || reading ? null : <KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint>}
           <KeyHint keys={READ_KEYS}>{reading ? "back to writing" : "read"}</KeyHint>
@@ -262,7 +378,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           {choosing ? (
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={existing?.fixed != null} />
           ) : null}
-          {existing ? null : <PromptImages tray={tray} />}
+          {refusals.length > 0 ? (
+            <Callout tone="attention" data-testid="task-image-refused">
+              <b>{refusals.length === 1 ? "An image wasn't added" : `${refusals.length} images weren't added`}:</b> {refusals.join("; ")}.
+            </Callout>
+          ) : null}
           <HelpList title="What makes a good task" items={[
             <><strong>Goal:</strong> why it matters, what exists today, and the constraints an agent can't guess.</>,
             <><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</>,
@@ -290,6 +410,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         maxLength={TASK_GOAL_MAX}
         locked={locked}
         error={goalError}
+        attachmentImage={images.attachmentImage}
+        onFocus={() => {
+          lastField.current = "goal";
+        }}
+        editorRef={goalEditor}
         data-testid="task-goal"
       />
       <MarkdownEditor
@@ -309,6 +434,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           </Badge>
         ) : undefined}
         notice={criteria.stray && !locked ? "Text outside a list item isn't saved as a criterion" : undefined}
+        attachmentImage={images.attachmentImage}
+        onFocus={() => {
+          lastField.current = "criteria";
+        }}
+        editorRef={criteriaEditor}
         data-testid="task-criteria"
       />
     </FormDialog>
@@ -316,37 +446,30 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
 }
 
 /**
- * Images the first agent is given with the task: a design, a screenshot of
- * the bug. The composer's tray, outside a composer: the chips and the
- * attach button. Paste and drop are the whole dialog's (`wrapContent`).
+ * The labelled Attach images button: puts the picked images where the
+ * person was last writing. Paste and drop are the whole dialog's.
  */
-function PromptImages({ tray }: { tray: ImageTray }) {
+function AttachImages({ off, limits, onFiles }: { off: string | undefined; limits: Limits; onFiles: (files: File[]) => void }) {
   const [input, setInput] = useState<HTMLInputElement | null>(null);
-  const off = tray.disabledReason !== undefined;
   return (
-    <Fieldset legend="Images" data-testid="task-images"
-      hint={tray.attachments.length > 0 ? "Given to the first agent with the task: use Create and deliver." : "A design or a screenshot for the first agent. Paste, drop or attach."}>
-      <div className="taskImages">
-        {tray.attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={tray.remove} />)}
-        <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits, "this task")} keepOnPress={off}>
-          <span>
-            <Button variant="secondary" size="sm" leadingIcon="paperclip" disabled={off} onClick={() => input?.click()}
-              data-testid="task-attach">
-              Attach images
-            </Button>
-          </span>
-        </Tooltip>
-        <input ref={setInput} type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" data-testid="task-attach-input"
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            e.target.value = "";
-            if (files.length > 0) tray.add(files);
-          }} />
-      </div>
-      {tray.attachments.some((a) => a.state === "error") ? (
-        <Callout tone="attention">{attachmentWarning(tray.attachments)}</Callout>
-      ) : null}
-    </Fieldset>
+    <>
+      <Tooltip content={off ?? limitsHint(limits, "this task")} keepOnPress={off !== undefined}>
+        <span>
+          <Button variant="secondary" size="sm" leadingIcon="paperclip" disabled={off !== undefined}
+            // The field keeps its caret: the image goes where the person was writing.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => input?.click()} data-testid="task-attach">
+            Attach images
+          </Button>
+        </span>
+      </Tooltip>
+      <input ref={setInput} type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" data-testid="task-attach-input"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = "";
+          if (files.length > 0) onFiles(files);
+        }} />
+    </>
   );
 }
 

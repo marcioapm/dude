@@ -831,8 +831,8 @@ export class ApiClient {
    * Start the delivery workflow: implement, review, fix, simplify, then a
    * pull request. Idempotent — a second call joins the delivery in flight.
    */
-  deliver(taskId: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, attachmentIds.length > 0 ? { attachmentIds } : {});
+  deliver(taskId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, {});
   }
 
   /** Approve or decline an agent's request for a repository. */
