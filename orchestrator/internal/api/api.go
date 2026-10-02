@@ -565,14 +565,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err := ownerOnly(r.Context(), tx, ri.TaskID, principalOf(r).Person, "answer"); err != nil {
 			return err
 		}
-		var priorStatus string
-		if err := tx.QueryRow(r.Context(), `SELECT COALESCE((SELECT e.payload->>'taskStatus' FROM events e
-			WHERE e.run_id = $1 AND e.event_type = 'question.asked' AND e.payload->>'questionId' = $2 LIMIT 1), '')`,
-			runID, questionID).Scan(&priorStatus); err != nil {
-			return err
-		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, priorStatus, body.Text, actor(r))
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri, questionID, prompt, body.Text, actor(r))
 		if err != nil {
 			return err
 		}
@@ -595,9 +589,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // answerQuestion settles an open question with a person's answer, queued
 // for its agent as a steer is — which starts its next turn — quoting the
 // question it settles; and takes the task off waiting on a person: back to
-// running, or for a conductor's question to the status it had before it
-// asked (priorStatus), since a conductor changes nothing about the task.
-func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runInfo, questionID, prompt, priorStatus, text, by string) (string, error) {
+// running, or for a conductor's question only the wait that question
+// raised, to the status it had (delivery.EndConductorWait).
+func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runInfo, questionID, prompt, text, by string) (string, error) {
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
 		return "", err
@@ -607,11 +601,10 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, ri runI
 	if err != nil {
 		return "", err
 	}
-	back := "running"
-	if ri.Role == delivery.RoleConductor && priorStatus != "" {
-		back = priorStatus
+	if ri.Role == delivery.RoleConductor {
+		return directiveID, delivery.EndConductorWait(ctx, tx, ref, questionID)
 	}
-	_, err = delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", back, "a person answered the agent")
+	_, err = delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running", "a person answered the agent")
 	return directiveID, err
 }
 

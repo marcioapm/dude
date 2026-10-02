@@ -445,8 +445,10 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 }
 
 // AskTx records an agent's question for a person, and the task waiting
-// on it. The question's event keeps the status the task had before
-// (taskStatus), for an answer to a conductor to put back.
+// on it. When the question is what moved the task, its event keeps the
+// status the task had before (taskStatus) and the move's own event
+// (waitCursor): the mark an answer to a conductor checks before putting
+// the task back (EndConductorWait).
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
 	id := ids.New(ids.Question)
 	opts, _ := json.Marshal(db.NonNil(options))
@@ -464,10 +466,53 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 	}
 	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}
 	if moved {
-		payload["taskStatus"] = before
+		// The move's event is this transaction's latest for the task, whose
+		// row the move holds.
+		var cursor int64
+		if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = $2`,
+			r.TaskID, EvTaskStatusChanged).Scan(&cursor); err != nil {
+			return "", err
+		}
+		payload["taskStatus"], payload["waitCursor"] = before, cursor
 	}
 	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
 	return id, err
+}
+
+// EndConductorWait takes the task off waiting on a person once a
+// conductor's question is answered, back to the status it had — only when
+// that question is what put it there and nothing has moved it since (its
+// waitCursor is still the task's latest status change), and nothing else
+// waits on a person: no other open question, no blocking repository
+// request, no escalation. A conductor changes nothing about the task, so
+// it never ends a wait it does not own.
+func EndConductorWait(ctx context.Context, tx pgx.Tx, r RunRef, questionID string) error {
+	var before string
+	var mark *int64
+	err := tx.QueryRow(ctx, `SELECT COALESCE(payload->>'taskStatus', ''), (payload->>'waitCursor')::bigint FROM events
+		WHERE run_id = $1 AND event_type = $2 AND payload->>'questionId' = $3 LIMIT 1`,
+		r.RunID, EvQuestionAsked, questionID).Scan(&before, &mark)
+	if db.IsNotFound(err) || err == nil && (before == "" || mark == nil) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var own bool
+	if err := tx.QueryRow(ctx, `SELECT t.status = 'awaiting_input'
+			AND (SELECT max(e.cursor) FROM events e WHERE e.task_id = t.id AND e.event_type = $3) = $2
+			AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open' AND q.id <> $4)
+			AND NOT EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
+			AND NOT EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
+				AND wf.state ? 'escalation')
+		FROM tasks t WHERE t.id = $1 FOR UPDATE OF t`, r.TaskID, *mark, EvTaskStatusChanged, questionID).Scan(&own); err != nil {
+		return err
+	}
+	if !own {
+		return nil
+	}
+	_, err = SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", before, "a person answered the conductor")
+	return err
 }
 
 // RecordDecisionTx records something a person decided about the task, as
