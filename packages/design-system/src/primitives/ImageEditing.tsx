@@ -50,25 +50,27 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
   const key = useId();
   const [selected, setSelected] = useState<number | null>(null);
   const [slot, setSlot] = useState<{ n: number; y: number } | null>(null);
-  const history = useRef<string[]>([]);
+  const history = useRef<Array<{ before: string; after: string }>>([]);
   const on = Boolean(kind) && enabled;
 
-  // Each edit is one step Ctrl/⌘+Z in Preview takes back.
+  // Each edit is one step Ctrl/⌘+Z in Preview takes back, while the field
+  // still holds the text that edit produced.
   const edit = useCallback((next: string | null | undefined) => {
     const now = text();
     if (next == null || next === now) return;
-    history.current.push(now);
+    history.current.push({ before: now, after: next });
     if (history.current.length > 100) history.current.shift();
     setText(next);
   }, [text, setText]);
 
+  // A drag between fields changes two texts: it is not an undo step in either.
   useEffect(() => {
     if (!on || !kind) return;
-    fields.set(key, { kind, text, setText: (next) => edit(next), select: setSelected });
+    fields.set(key, { kind, text, setText, select: setSelected });
     return () => {
       fields.delete(key);
     };
-  }, [on, kind, key, text, edit]);
+  }, [on, kind, key, text, setText]);
   useEffect(() => {
     if (!on) setSelected(null);
   }, [on]);
@@ -178,15 +180,22 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
       const put = insertReference(text(), cut.ref, target.n, kind);
       source.setText(cut.text);
       source.select(null);
-      edit(put.text);
+      setText(put.text);
       setSelected(indexAt(put.text, put.at));
     },
     onKeyDown: (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z" && history.current.length > 0) {
-        e.preventDefault();
-        setText(history.current.pop()!);
-        setSelected(null);
+      if (!((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z")) return;
+      const top = history.current[history.current.length - 1];
+      if (!top) return;
+      e.preventDefault();
+      // Changed since by typing, an upload, or a drop: restoring a snapshot would lose that.
+      if (text() !== top.after) {
+        history.current = [];
+        return;
       }
+      history.current.pop();
+      setText(top.before);
+      setSelected(null);
     },
   } : {};
 

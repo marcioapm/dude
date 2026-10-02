@@ -52,6 +52,14 @@ async function mountFields(fields: Field[]) {
     button: (label: string) => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`),
     press: async (label: string) => act(async () => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`)!.click()),
     key: async (el: Element, key: string, init: KeyboardEventInit = {}) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }))),
+    panel: (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"]`)!,
+    undo: async (id: string) => act(async () => void container.querySelector(`[data-testid="${id}-preview"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }))),
+    // A change from outside the image editing: typing, or an upload replacing its placeholder.
+    type: async (id: string, next: string) => act(async () => {
+      const area = container.querySelector<HTMLTextAreaElement>(`textarea[data-testid="${id}"]`)!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, next);
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    }),
   };
 }
 
@@ -72,6 +80,34 @@ test("Wrap right then Small write the title; Full disables the wraps and drops t
   expect(f.button("Wrap right")!.disabled).toBe(true);
   await f.press("Medium");
   expect(f.value("goal")).toBe(`Intro.\n\n${A}\n\nOutro.`);
+});
+
+test("Ctrl+Z in Preview takes back one edit at a time", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  await f.select("goal");
+  await f.press("Wrap right");
+  await f.press("Small");
+  await f.undo("goal");
+  expect(f.value("goal")).toBe('Intro.\n\n![a.png](attachment:att_a "right")\n\nOutro.');
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(`Intro.\n\n${A}\n\nOutro.`);
+});
+
+test("after a change from outside, Ctrl+Z restores nothing, and later edits survive", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n${A}` }]);
+  await f.select("goal");
+  await f.press("Small");
+  const typed = 'One.\n\n![a.png](attachment:att_a "small")\n\nTyped in Write.';
+  await f.type("goal", typed);
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
+  await f.select("goal");
+  await f.press("Wrap left");
+  expect(f.value("goal")).toBe('One.\n\n![a.png](attachment:att_a "small left")\n\nTyped in Write.');
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
 });
 
 test("Move up and down step past a paragraph, and past a criterion as a continuation", async () => {
@@ -161,4 +197,8 @@ test("a drag from the goal drops under a criterion as its continuation line", as
   await act(async () => dnd("drop", panel, 41));
   expect(f.value("goal")).toBe("Intro.\n\nOutro.");
   expect(f.value("crit")).toBe(`- [ ] One\n- [ ] Two\n  ${A}\n- [ ] Three`);
+  // Not an undo step: undoing in one field alone would leave the image in neither.
+  await f.undo("crit");
+  expect(f.value("crit")).toBe(`- [ ] One\n- [ ] Two\n  ${A}\n- [ ] Three`);
+  expect(f.value("goal")).toBe("Intro.\n\nOutro.");
 });
