@@ -16,8 +16,8 @@ import { canStart, canStop } from "@dude/design-system";
 import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
 import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { ApiClient, ApiError, type Member, type ProjectDetail, type ReviewerCandidate, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 
@@ -173,6 +173,11 @@ export class FixtureClient extends ApiClient {
   }
   override githubSettings() {
     return Promise.resolve({ whoCanWake: "members" as const, openAs: "ready" as const, requestReviewFrom: "codeowners" as const, reviewLogins: [], mergeMethod: "squash" as const, whenBehind: "update" as const, fixRoundsPerPr: 5, ciStuckMinutes: 30 });
+  }
+  override reviewerCandidates(_id: string | null, q: string): Promise<ReviewerCandidate[]> {
+    const words = q.trim().toLowerCase();
+    if (!words) return Promise.resolve(REVIEWERS.filter((r) => r.reason));
+    return Promise.resolve(REVIEWERS.filter((r) => `${r.login} ${r.name ?? ""}`.toLowerCase().includes(words)).map(({ reason: _, ...r }) => r));
   }
   override listPeople(): Promise<{ people: Member[]; you: string }> {
     return Promise.resolve({ people: PEOPLE, you: YOU });

@@ -11,7 +11,7 @@ import { Segmented, SettingRow, SettingsSection } from "@dude/design-system/comp
 import { Badge, Button, Callout, Input, Select, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, GithubSettings, WebhookHealth } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { parseLogins } from "../pullRequests.ts";
+import { ReviewerPicker } from "./ReviewerPicker.tsx";
 
 const ago = (iso: string) => formatTimestamp(iso, "relative");
 
@@ -106,8 +106,11 @@ export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: b
           <Segmented label="Request review from" value={draft.requestReviewFrom} onChange={(v) => set("requestReviewFrom", v)}
             options={[{ value: "nobody", label: "Nobody" }, { value: "codeowners", label: "CODEOWNERS" }, { value: "logins", label: "These people" }]} />
           {draft.requestReviewFrom === "logins" ? (
-            <Input aria-label="GitHub logins" placeholder="GitHub logins, comma-separated" value={draft.reviewLogins.join(", ")}
-              onChange={(e) => set("reviewLogins", parseLogins(e.target.value))} />
+            <div className="settingsReviewers" data-testid="setting-review-logins">
+              <ReviewerPicker client={client} pullRequestId={null} size="md"
+                picked={draft.reviewLogins.map((login) => ({ kind: login.includes("/") ? "team" : "user", login }))}
+                onChange={(picked) => set("reviewLogins", picked.map((p) => p.login))} />
+            </div>
           ) : null}
         </SettingRow>
         <SettingRow label="Merge method" help="What the Merge button in dude does first.">

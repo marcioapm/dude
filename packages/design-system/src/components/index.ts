@@ -5,6 +5,8 @@ export type { NeedsYouCountProps, StatusMarkProps } from "./StatusMark.tsx";
 export { AuthorLine, PersonAvatar, PersonAvatarStack, PersonLine, personTitle } from "./PersonAvatar.tsx";
 export type { AuthorLineProps, Person, PersonAvatarProps, PersonAvatarStackProps, PersonAvatarSize, PersonLineProps } from "./PersonAvatar.tsx";
 export { EntityLine } from "./EntityLine.tsx";
+export { GitHubFace, GitHubUserLine } from "./GitHubUserLine.tsx";
+export type { GitHubUser, GitHubUserLineProps } from "./GitHubUserLine.tsx";
 export type { EntityLineProps } from "./EntityLine.tsx";
 export { ProjectAvatar } from "./ProjectAvatar.tsx";
 export type { ProjectAvatarProps, ProjectFace } from "./ProjectAvatar.tsx";
