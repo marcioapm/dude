@@ -367,10 +367,7 @@ func changedTask(title, goal string, rawCriteria []byte) string {
 	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title,
 		strings.TrimSpace(delivery.ImagesAsText(goal)))
 	if len(criteria) > 0 {
-		for i, c := range criteria {
-			criteria[i] = delivery.ImagesAsText(c)
-		}
-		text += "\n\nAcceptance criteria:\n" + delivery.CriteriaList(criteria)
+		text += "\n\nAcceptance criteria:\n" + delivery.CriteriaList(delivery.CriteriaImagesAsText(criteria))
 	}
 	return text
 }
