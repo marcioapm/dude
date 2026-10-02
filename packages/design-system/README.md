@@ -411,6 +411,46 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   412 KB, scaled from 2400×1520 · 1.9 MB · read at 15:52:40" — leaving out
   "scaled from" when it was not.
 
+### Picking a stopped task back up
+
+- A task that stopped — a person aborted it, its agent died, or delivery
+  stopped and its owner said Stop — says so where an escalation would: a
+  `Callout` under the header (attention for an abort, danger for a
+  failure), in the escalation's grammar. First line: **who stopped what,
+  and why**, quoted ("Ana aborted the implementer 1h ago: “…”"), with the
+  way to the session. Second line, secondary ink: what it left — the commit
+  it pushed (mono) and its counts, and whether its workspace and
+  conversation are still kept and until when ("kept until Thu 8 Oct"), or
+  that they are gone.
+- Then the **three ways back**, as buttons, the one that fits first and
+  primary: **Resume…** (the same agent, while it is kept), **Try again…**
+  (a new agent on the same branch, from what was pushed), **Start over…**
+  (a new attempt on a new branch). Each opens one `Dialog` whose
+  `ChoiceList` holds all three, so the choice is made with what each keeps
+  and throws away in view: under it, one line per thing the task has —
+  conversation, workspace, branch, session — marked *kept*, *new* or
+  *gone*. A way that is not possible stays in the list with its reason
+  (`disabledReason`: "No longer kept: lux keeps a stopped session 7
+  days"); it is never simply missing. A note for the agents (optional)
+  follows — on Resume it is the agent's next message, otherwise one of the
+  task's decisions.
+- Only the task's owner picks it back up; anyone else reads, in the
+  notice's place for the buttons, whom it waits on and how to make it
+  theirs ("Only Márcio, its owner, can pick it back up. Take over the task
+  to do it yourself.").
+- A stopped session's end strip (`RunEnded`) offers the same: **Resume…**
+  while it is kept, and **Other ways…**, both opening the dialog.
+- **Nothing of an earlier attempt is hidden or lost.** The pipeline shows
+  the current attempt ("Pipeline · attempt 2") with one muted line under it
+  for each earlier one — how it stopped, and **Show attempt 1**, which
+  folds it open: its steps as they ended, who stopped it and why, who set
+  it aside and their note, its branch and last commit, and what lux still
+  keeps. The Sessions list groups by attempt under small-caps heads
+  ("Attempt 2 · current", "Attempt 1 · set aside") once there is more than
+  one; a set-aside session reads as it ended, its strip saying it was set
+  aside and the way to where the work goes on. Activity is one timeline
+  across attempts.
+
 ### Nesting
 
 - A subagent's conversation nests inside its parent's (`ChatThread`). The
@@ -1165,6 +1205,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<NumberInput step={0.5} min={0.5} unit="CPUs" error="Whole or half CPUs: 0.5, 1, 1.5…" />` | `<input type="number" step="0.5">`, rounding what was typed without saying |
 | `<Select options={[{ value, label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB" }]} />` | a label string with the spec glued on in the same ink |
 | `<ProportionBar segments={[{ kind: "reserved", … }, …]} legend={…} />` | a chart library, or an app-local bar in its own CSS |
+| `<ChoiceList options={[{ value, label, description, icon }, { …, disabledReason: "No longer kept" }]} />` for one of a few ways to act | radio buttons hand-rolled in the app, or an option silently left out |
+| a stopped task's `Callout` with Resume… / Try again… / Start over…, each opening the one dialog | a "Retry" button that guesses which of the three was meant |
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
@@ -1174,7 +1216,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
-`footer`), Checkbox,
+`footer`), Checkbox, ChoiceList (a radio group of a few ways to act, each
+with a sentence; `disabledReason` says why one cannot be chosen),
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
 a `tooltip`), Dialog (`size=

@@ -1,5 +1,5 @@
 /**
- * Images a person sends an agent (migration 070).
+ * Images a person sends an agent (migration 071).
  *
  * The browser scales each image before it uploads (apps/web/src/images.ts)
  * and sends two files: the original as picked, and the variant the agent is

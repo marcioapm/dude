@@ -65,8 +65,12 @@ const SESSION_SELECT = `
  * since. The workflow ends on it, so there is at most one worth showing.
  */
 export function escalationJson(alias = "tasks"): string {
+  // Resume only while the Run that failed is still kept to resume
+  // (run_kept, migration 070): after that, the other ways are left.
   return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
-    'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb), 'at', e.occurred_at)
+    'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
+        WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
+    'at', e.occurred_at)
   FROM events e
   WHERE ${alias}.status = 'awaiting_input'
     AND e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'escalation'
@@ -175,6 +179,17 @@ async function markTaskDone(ctx: RequestContext): Promise<Response> {
 /** Its owner decides how delivery goes on after it stopped for them. */
 async function decideTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decide`,
+    await ctx.request.text(), ctx.principal);
+}
+
+/** How a stopped task can be picked back up, and until when a resume can. */
+async function recoveryOptions(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET", `/internal/tasks/${ctx.params.id}/recover`, undefined, ctx.principal);
+}
+
+/** Pick a stopped task back up: resume, retry or restart, with a note for the agents. */
+async function recoverTask(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/recover`,
     await ctx.request.text(), ctx.principal);
 }
 
@@ -408,6 +423,8 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
+  router.get("/v1/tasks/:id/recover", recoveryOptions);
+  router.post("/v1/tasks/:id/recover", recoverTask);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

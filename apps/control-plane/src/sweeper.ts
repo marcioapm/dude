@@ -4,7 +4,7 @@
  * Images uploaded and never sent are removed a day later, and every object
  * whose attachment row is gone — swept, removed by a person, or taken with
  * its task (ON DELETE CASCADE) — is deleted from storage. The rows' trigger
- * queues the keys (migration 070); this drains the queue. A key whose
+ * queues the keys (migration 071); this drains the queue. A key whose
  * delete fails stays queued for the next pass.
  *
  * It looks across organizations, so it runs as dude_sweeper, which may see
