@@ -85,30 +85,32 @@ func (w *resumeWorld) committed(c string, within time.Duration) time.Duration {
 }
 
 // holding runs sql in a transaction on another connection, holding its
-// locks until the returned func is called or the test ends.
+// locks until the returned func is called or the test ends. Each resource
+// is let go at the test's end from when it is acquired, so a failed step
+// leaks nothing; letting go twice is a no-op.
 func (w *resumeWorld) holding(sql string, args ...any) func() {
 	w.t.Helper()
 	other, err := pgx.Connect(w.ctx, w.owner.Config().ConnString())
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	w.t.Cleanup(func() { _ = other.Close(w.ctx) })
 	tx, err := other.Begin(w.ctx)
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	w.t.Cleanup(func() { _ = tx.Rollback(w.ctx) })
 	if _, err := tx.Exec(w.ctx, sql, args...); err != nil {
 		w.t.Fatal(err)
 	}
 	released := false
-	release := func() {
+	return func() {
 		if !released {
 			released = true
 			_ = tx.Rollback(w.ctx)
 			_ = other.Close(w.ctx)
 		}
 	}
-	w.t.Cleanup(release)
-	return release
 }
 
 // lockResume holds the resume row's lock from another connection.
