@@ -13,14 +13,12 @@ import (
 )
 
 // streamLux is lux streaming a Run's output from a channel, and answering
-// Get as placementLux does — after gate is closed, when there is one.
+// Get as placementLux does.
 type streamLux struct {
 	*placementLux
 	frames chan lux.Frame
 	// Output was called: the stream is open.
 	opened chan struct{}
-	// Get waits for gate, and says it is waiting on entered.
-	gate, entered chan struct{}
 }
 
 func newStreamLux(p *placementLux) *streamLux {
@@ -42,21 +40,6 @@ func (f *streamLux) Output(ctx context.Context, _, _ string, _ int64, fn func(lu
 			return ctx.Err()
 		}
 	}
-}
-
-func (f *streamLux) Get(ctx context.Context, id string) (lux.Run, error) {
-	if f.gate != nil {
-		select {
-		case f.entered <- struct{}{}:
-		default:
-		}
-		select {
-		case <-f.gate:
-		case <-ctx.Done():
-			return lux.Run{}, ctx.Err()
-		}
-	}
-	return f.placementLux.Get(ctx, id)
 }
 
 // following starts the real follower on w's Run with lux streaming from
@@ -101,9 +84,9 @@ func (w *resumeWorld) committed(c string, within time.Duration) time.Duration {
 	return 0
 }
 
-// lockResume holds the resume row's lock from another connection until
-// the returned func is called.
-func (w *resumeWorld) lockResume(epoch int) func() {
+// holding runs sql in a transaction on another connection, holding its
+// locks until the returned func is called or the test ends.
+func (w *resumeWorld) holding(sql string, args ...any) func() {
 	w.t.Helper()
 	other, err := pgx.Connect(w.ctx, w.owner.Config().ConnString())
 	if err != nil {
@@ -113,7 +96,7 @@ func (w *resumeWorld) lockResume(epoch int) func() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	if _, err := tx.Exec(w.ctx, `SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $2 FOR UPDATE`, w.run.ID, epoch); err != nil {
+	if _, err := tx.Exec(w.ctx, sql, args...); err != nil {
 		w.t.Fatal(err)
 	}
 	released := false
@@ -126,6 +109,22 @@ func (w *resumeWorld) lockResume(epoch int) func() {
 	}
 	w.t.Cleanup(release)
 	return release
+}
+
+// lockResume holds the resume row's lock from another connection.
+func (w *resumeWorld) lockResume(epoch int) func() {
+	w.t.Helper()
+	return w.holding(`SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $2 FOR UPDATE`, w.run.ID, epoch)
+}
+
+// whilePaused runs the real whilePaused on w's Run, resumable.
+func (w *resumeWorld) whilePaused() {
+	w.t.Helper()
+	r := w.run
+	r.Resumable = true
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 // A resume row locked elsewhere holds up nothing of the Run: the batch
@@ -146,10 +145,7 @@ func TestALockedResumeRowDoesNotHoldUpTheRunsStream(t *testing.T) {
 	if took := w.committed("c1", 5*time.Second); took > 600*time.Millisecond {
 		t.Errorf("the batch took %s to commit behind a locked resume row", took)
 	}
-	var luxState string
-	var busyAt *time.Time
-	_ = w.owner.QueryRow(w.ctx, `SELECT lux_state, agent_busy_at FROM runs WHERE id = $1`, w.run.ID).Scan(&luxState, &busyAt)
-	if luxState != "running" || busyAt == nil {
+	if luxState, busyAt := w.runState(); luxState != "running" || busyAt == nil {
 		t.Errorf("the Run's own state was not recorded: lux_state %q busy %v", luxState, busyAt)
 	}
 	st.frames <- cursorFrame(spoke(2), "locked-output")
@@ -175,14 +171,10 @@ func TestALockedResumeRowDoesNotHoldUpTheRunsStream(t *testing.T) {
 func TestFramesStreamedBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
-	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
-		t.Fatal(err)
-	}
+	w.sessionOn(1)
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	st := w.following()
-	eager := &eagerLux{streamLux: st, w: w}
-	w.s.Lux = eager
+	w.s.Lux = &earlyFramesLux{streamLux: w.following(), w: w, epoch: 2}
 	if _, _, err := w.s.resume(w.ctx, w.run, ""); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -194,20 +186,22 @@ func TestFramesStreamedBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 	}
 }
 
-// eagerLux streams the resumed placement's session, busy and first words,
-// and has them committed, before it answers the resume.
-type eagerLux struct {
+// earlyFramesLux resumes the Run into epoch, streaming that placement's
+// session, busy and first words, and having them committed, before it
+// answers.
+type earlyFramesLux struct {
 	*streamLux
-	w *resumeWorld
+	w     *resumeWorld
+	epoch int
 }
 
-func (f *eagerLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
-	f.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
-	f.frames <- cursorFrame(busy(2), "e1")
+func (f *earlyFramesLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.frames <- session(f.epoch)
+	f.frames <- cursorFrame(busy(f.epoch), "e1")
 	f.w.committed("e1", 5*time.Second)
-	f.frames <- cursorFrame(spoke(2), "e2")
+	f.frames <- cursorFrame(spoke(f.epoch), "e2")
 	f.w.committed("e2", 5*time.Second)
-	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 2}, nil
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: f.epoch}, nil
 }
 
 // The resume's row is in before lux is asked, so the new placement's
@@ -216,10 +210,7 @@ func TestFramesBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
 	w.lux.set(runningAgain(base, "host-a"), nil)
-	// The agent's session was established on epoch 1.
-	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
-		t.Fatal(err)
-	}
+	w.sessionOn(1)
 	st := w.following()
 	w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base))
 	asked := w.row(2)["requested_at"]
@@ -227,7 +218,7 @@ func TestFramesBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 		t.Fatal("no requested_at once lux was asked")
 	}
 	// lux's answer is not in yet: the Run is still paused.
-	st.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+	st.frames <- session(2)
 	st.frames <- cursorFrame(busy(2), "c1")
 	w.committed("c1", 5*time.Second)
 	st.frames <- cursorFrame(spoke(2), "c2")
@@ -277,22 +268,13 @@ func TestAResumeIntoAnotherEpochIsTimedOnceItsRowMoves(t *testing.T) {
 func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
-	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
-		t.Fatal(err)
-	}
+	w.sessionOn(1)
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
 	st := w.following()
-	w.s.Lux = &otherEpochLux{streamLux: st, w: w}
-	r := w.run
-	r.Resumable = true
-	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for len(w.timed()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	w.s.Lux = &earlyFramesLux{streamLux: st, w: w, epoch: 3}
+	w.whilePaused()
+	w.untilTimed()
 	if n := len(w.timed()); n != 1 {
 		t.Fatalf("%d run.resume.timed with no frame after lux's answer, want 1", n)
 	}
@@ -333,7 +315,7 @@ func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *t
 func TestAnOlderEpochsRunningStateBeforeTheMoveMarksNothingMissed(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
-	w.exec(`UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+	w.sessionOn(1)
 	if foreseen := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base)); foreseen != 2 {
 		t.Fatalf("foreseen epoch %d, want 2", foreseen)
 	}
@@ -345,7 +327,7 @@ func TestAnOlderEpochsRunningStateBeforeTheMoveMarksNothingMissed(t *testing.T) 
 	if row := w.row(3); row["frames_missed"] != false {
 		t.Errorf("frames_missed = %v on epoch 3's row after only an epoch-1 frame, want false", row["frames_missed"])
 	}
-	w.follow(record(3, "lux.session", map[string]any{"sessionId": "s1"}), busy(3), spoke(3))
+	w.follow(session(3), busy(3), spoke(3))
 	row := w.row(3)
 	if row["busy_at"] == nil || row["first_output_at"] == nil {
 		t.Errorf("epoch 3's frames after the move were not stamped: busy %v, first output %v",
@@ -360,7 +342,7 @@ func TestAnOlderEpochsRunningStateBeforeTheMoveMarksNothingMissed(t *testing.T) 
 func TestAnOlderEpochsActivityAfterTheAskMarksNothingMissed(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
-	w.exec(`UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+	w.sessionOn(1)
 	foreseen := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base))
 	if foreseen != 2 {
 		t.Fatalf("foreseen epoch %d, want 2", foreseen)
@@ -374,7 +356,7 @@ func TestAnOlderEpochsActivityAfterTheAskMarksNothingMissed(t *testing.T) {
 	if row := w.row(3); row["frames_missed"] != false {
 		t.Errorf("frames_missed = %v on epoch 3's row after only epoch 1's activity, want false", row["frames_missed"])
 	}
-	w.follow(record(3, "lux.session", map[string]any{"sessionId": "s1"}), busy(3), spoke(3))
+	w.follow(session(3), busy(3), spoke(3))
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_session_epoch = 3`); n != 1 {
 		t.Errorf("epoch 3's session was not recorded")
 	}
@@ -382,22 +364,6 @@ func TestAnOlderEpochsActivityAfterTheAskMarksNothingMissed(t *testing.T) {
 		t.Errorf("epoch 3's frames after the move were not stamped: busy %v, first output %v",
 			row["busy_at"], row["first_output_at"])
 	}
-}
-
-// otherEpochLux resumes the Run into epoch 3 (dude foresees 2), streaming
-// and having committed its session, busy and one chunk before it answers.
-type otherEpochLux struct {
-	*streamLux
-	w *resumeWorld
-}
-
-func (f *otherEpochLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
-	f.frames <- record(3, "lux.session", map[string]any{"sessionId": "s1"})
-	f.frames <- cursorFrame(busy(3), "e1")
-	f.w.committed("e1", 5*time.Second)
-	f.frames <- cursorFrame(spoke(3), "e2")
-	f.w.committed("e2", 5*time.Second)
-	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 3}, nil
 }
 
 // lux answers a resume with the Run's current epoch, still the one it was
@@ -409,9 +375,7 @@ func TestALuxAnswerCarryingTheStoppedEpochLeavesTheRowAtTheForeseenOne(t *testin
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
 	// The session was established on epoch 1, the one it was stopped in.
-	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
-		t.Fatal(err)
-	}
+	w.sessionOn(1)
 	// Parked before the question was answered (2s ago), so the answer woke it.
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
 		return w.s.event(w.ctx, tx, w.run, evParked, ledger.ActorSystem,
@@ -423,11 +387,7 @@ func TestALuxAnswerCarryingTheStoppedEpochLeavesTheRowAtTheForeseenOne(t *testin
 	w.lux.set(stoppedOnHost1(base), nil)
 	st := w.following()
 	w.s.Lux = &stoppedEpochLux{streamLux: st, base: base}
-	r := w.run
-	r.Resumable = true
-	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
-		t.Fatal(err)
-	}
+	w.whilePaused()
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1 AND epoch = 1`); n != 0 {
 		t.Errorf("the row moved to the stopped epoch 1")
 	}
@@ -441,15 +401,12 @@ func TestALuxAnswerCarryingTheStoppedEpochLeavesTheRowAtTheForeseenOne(t *testin
 	}
 
 	// lux assigns epoch 2, and its placement's frames come.
-	st.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+	st.frames <- session(2)
 	st.frames <- running(2)
 	st.frames <- busy(2)
 	st.frames <- cursorFrame(spoke(2), "c1")
 	w.committed("c1", 5*time.Second)
-	deadline := time.Now().Add(5 * time.Second)
-	for len(w.timed()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	w.untilTimed()
 	time.Sleep(100 * time.Millisecond)
 	got := w.timed()
 	if len(got) != 1 {
@@ -490,24 +447,16 @@ func TestARefusedResumeLeavesNoRowAndARetriedOneIsTimedFromTheAttemptLuxTook(t *
 	refusing := &refusingLux{placementLux: w.lux, err: &lux.Error{Status: 503, Code: "unavailable"}}
 	w.s.Lux = refusing
 	w.lux.set(stoppedOnHost1(base), nil)
-	r := w.run
-	r.Resumable = true
-	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
-		t.Fatal(err)
-	}
+	w.whilePaused()
 	first := w.row(2)["requested_at"].(time.Time)
 	time.Sleep(20 * time.Millisecond)
-	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
-		t.Fatal(err)
-	}
+	w.whilePaused()
 	if again := w.row(2)["requested_at"].(time.Time); !again.After(first) {
 		t.Errorf("a retry after lux kept the Run stopped left requested_at at the first attempt: %v", again)
 	}
 
 	refusing.err = &lux.Error{Status: 400, Code: "invalid", Message: "no"}
-	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
-		t.Fatal(err)
-	}
+	w.whilePaused()
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 0 {
 		t.Errorf("%d rows for a resume lux refused for good", n)
 	}
@@ -520,10 +469,7 @@ func TestARefusedResumeLeavesNoRowAndARetriedOneIsTimedFromTheAttemptLuxTook(t *
 // spec, and no forge.
 func (w *resumeWorld) resumable() {
 	w.t.Helper()
-	if _, err := w.owner.Exec(w.ctx, `UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb
-		WHERE id = $1`, w.run.ProjectID); err != nil {
-		w.t.Fatal(err)
-	}
+	w.exec(`UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.run.ProjectID)
 	w.s.Forges = forge.Resolver{DB: w.s.DB}
 }
 
@@ -533,17 +479,11 @@ type refusingLux struct {
 	err error
 }
 
-func (f *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) { return lux.Run{}, f.err }
-func (f *refusingLux) Cancel(context.Context, string) error                              { return nil }
-
-func (w *resumeWorld) count(sql string) int {
-	w.t.Helper()
-	var n int
-	if err := w.owner.QueryRow(w.ctx, sql, w.run.ID).Scan(&n); err != nil {
-		w.t.Fatal(err)
-	}
-	return n
+func (f *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	return lux.Run{}, f.err
 }
+
+func (f *refusingLux) Cancel(context.Context, string) error { return nil }
 
 // A timing statement waiting on a lock while the Run's batch has a short
 // deadline fails on its own budget, inside that deadline: the Run's
@@ -611,19 +551,7 @@ func TestTheTimingBudgetIsPutBackForTheRunsTransaction(t *testing.T) {
 // timing of its earlier resumes waits on.
 func TestAFollowerOpensTheStreamWithoutWaitingOnTiming(t *testing.T) {
 	w := newResumeWorld(t)
-	other, err := pgx.Connect(w.ctx, w.owner.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close(w.ctx)
-	tx, err := other.Begin(w.ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(w.ctx)
-	if _, err := tx.Exec(w.ctx, `LOCK TABLE run_resumes IN ACCESS EXCLUSIVE MODE`); err != nil {
-		t.Fatal(err)
-	}
+	defer w.holding(`LOCK TABLE run_resumes IN ACCESS EXCLUSIVE MODE`)()
 	st := w.following()
 	select {
 	case <-st.opened:

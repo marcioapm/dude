@@ -243,39 +243,24 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		// when, in fifths of the start, the Run is ended
-		at  int
-		end func(client *lux.HTTPClient, id string) error
+		// when, in fifths of the start, the Run is cancelled
+		at int
 	}{
-		{"cancelled before a host", 0, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
-		{"cancelled once placed", 2, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
-		{"resumed, then cancelled while resuming", -1, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
+		{"cancelled before a host", 0},
+		{"cancelled once placed", 2},
+		{"resumed, then cancelled while resuming", -1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 			fake.StartAfter = 500 * time.Millisecond
-			srv := httptest.NewServer(fake.Handler())
-			t.Cleanup(srv.Close)
-			client := lux.New(srv.URL, "k")
-			run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
-				Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "k-"+c.name)
-			if err != nil {
-				t.Fatal(err)
-			}
+			client, run := submitGeneric(t, fake, "k-"+c.name)
 			if c.at < 0 {
-				// Run, stopped, resumed; ended two fifths into the resume.
-				waitState(t, client, run.ID, "running")
-				if err := client.Stop(context.Background(), run.ID); err != nil {
-					t.Fatal(err)
-				}
-				waitState(t, client, run.ID, "stopped")
-				if _, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{}); err != nil {
-					t.Fatal(err)
-				}
+				// Run, stopped, resumed; cancelled two fifths into the resume.
+				stopAndResume(t, client, run.ID)
 				c.at = 2
 			}
 			time.Sleep(time.Duration(c.at)*fake.StartAfter/5 + fake.StartAfter/10)
-			if err := c.end(client, run.ID); err != nil {
+			if err := client.Cancel(context.Background(), run.ID); err != nil {
 				t.Fatal(err)
 			}
 			ended, _ := client.Get(context.Background(), run.ID)
@@ -311,23 +296,8 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	holds := holdStarts(t, fake, "2/"+holdAssign)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
-	run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
-		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "k-epoch")
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, client, run.ID, "running")
-	if err := client.Stop(context.Background(), run.ID); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, client, run.ID, "stopped")
-	resumed, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, run := submitGeneric(t, fake, "k-epoch")
+	resumed := stopAndResume(t, client, run.ID)
 	if resumed.State != "resuming" || resumed.Epoch != 1 {
 		t.Errorf("resume answered %s at epoch %d, want resuming at the stopped epoch 1", resumed.State, resumed.Epoch)
 	}
@@ -478,6 +448,36 @@ func TestAStartTheRunHasGivenUpOnGoesNoFurther(t *testing.T) {
 	if p := got.Placements[1]; p.Epoch != 2 || p.WorkloadStartedAt == nil {
 		t.Errorf("the resume's placement is epoch %d, workload started %v; want epoch 2, started", p.Epoch, p.WorkloadStartedAt)
 	}
+}
+
+// submitGeneric serves fake and submits one generic Run to it under key.
+func submitGeneric(t *testing.T, fake *Server, key string) (*lux.HTTPClient, lux.Run) {
+	t.Helper()
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, run
+}
+
+// stopAndResume waits for the Run to run, stops it, and resumes it once
+// stopped; it returns lux's answer to the resume.
+func stopAndResume(t *testing.T, c *lux.HTTPClient, id string) lux.Run {
+	t.Helper()
+	waitState(t, c, id, "running")
+	if err := c.Stop(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, id, "stopped")
+	resumed, err := c.Resume(context.Background(), id, lux.ResumeInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resumed
 }
 
 func waitState(t *testing.T, c *lux.HTTPClient, id, state string) {

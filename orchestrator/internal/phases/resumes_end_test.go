@@ -44,10 +44,7 @@ func TestAnEndingRunTimesTheResumeItsFollowerNeverDid(t *testing.T) {
 			if err := c.end(w); err != nil {
 				t.Fatal(err)
 			}
-			deadline := time.Now().Add(5 * time.Second)
-			for len(w.timed()) == 0 && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
-			}
+			w.untilTimed()
 			got := w.timed()
 			if len(got) != 1 || got[0]["epoch"] != 2.0 || got[0]["totalMs"] != 3000.0 {
 				t.Errorf("run.resume.timed after the Run %s: %v, want one for epoch 2 of 3000ms", c.name, got)

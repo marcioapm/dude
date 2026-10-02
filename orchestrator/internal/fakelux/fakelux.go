@@ -144,8 +144,8 @@ type Run struct {
 	// a start under way goes on only while it is still the latest one.
 	starts int
 	// Its next placement goes to another host (a migrate).
-	moveNext bool
-	artifacts  []*artifact
+	moveNext  bool
+	artifacts []*artifact
 	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
 	published map[string]string
 
