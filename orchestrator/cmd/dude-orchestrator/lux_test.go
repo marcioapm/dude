@@ -37,6 +37,9 @@ func TestPreviewCapabilityModes(t *testing.T) {
 		{"old-env", `{"previewDomain":null}`, "preview.test", "preview.test", false, false, false},
 		{"old-off", `{"previewDomain":null}`, "", "", false, false, false},
 		{"off", `{"previews":false,"previewDomain":null}`, "preview.test", "", false, false, false},
+		{"off-matching", `{"previews":false,"previewDomain":"preview.test"}`, "preview.test", "", false, false, false},
+		{"off-mismatch", `{"previews":false,"previewDomain":"preview.test"}`, "other.test", "", false, true, false},
+		{"relative-reported", `{"previews":true,"previewDomain":"preview.test"}`, "", "", true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +57,8 @@ func TestPreviewCapabilityModes(t *testing.T) {
 			if (err != nil) != tc.refused {
 				t.Fatalf("mode = %+v, error = %v", mode, err)
 			}
-			if err == nil && (mode.Domain != tc.domain || mode.Relative != tc.relative) {
+			if err == nil && (mode.Domain != tc.domain || mode.Relative != tc.relative ||
+				mode.LuxOff != strings.Contains(tc.whoami, `"previews":false`)) {
 				t.Fatalf("mode = %+v", mode)
 			}
 			if ignored := strings.Contains(logs.String(), "level=INFO") && strings.Contains(logs.String(), "DUDE_PREVIEW_DOMAIN ignored"); ignored != tc.ignored {
@@ -134,5 +138,16 @@ func TestThePreviewDomainIsLuxsOrMatchesIt(t *testing.T) {
 	}
 	if _, err := domainOf(c, "other.dev"); err == nil || !strings.Contains(err.Error(), "previews.domain") {
 		t.Errorf("another domain: %v", err)
+	}
+}
+
+// Startup's service carries the mode: relative mode reaches the service
+// that names previews, so they are created wakeable with a bare label.
+func TestPreviewModeReachesTheService(t *testing.T) {
+	for _, m := range []previewMode{{Relative: true}, {Domain: "preview.test"}, {LuxOff: true}} {
+		s := m.service(nil, nil, nil, "https://console.test")
+		if s.PreviewRelative != m.Relative || s.PreviewDomain != m.Domain || s.ConsoleURL != "https://console.test" {
+			t.Errorf("mode %+v: service %+v", m, s)
+		}
 	}
 }
