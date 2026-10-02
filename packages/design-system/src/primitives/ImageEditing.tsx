@@ -126,9 +126,10 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     };
   }, [selected, key, preview]);
 
-  // A move remounts the figure, which drops focus to the body: the moved
-  // figure takes it back when focus was in this panel, or the move was a drop.
-  const claim = useRef(false);
+  // A move remounts the figure, which drops focus to the body. The moved
+  // figure takes it back when focus was in this panel or the move was a drop;
+  // a toolbar button that was pressed gets it back itself (`claim` names it).
+  const claim = useRef<false | true | string>(false);
   const takeFocus = useCallback(() => {
     const c = claim.current;
     claim.current = false;
@@ -139,15 +140,20 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     if (!kind) return;
     const r = moveReference(text(), n, dir, kind);
     if (!r) return;
-    claim.current = Boolean(preview.current?.contains(document.activeElement));
+    const active = document.activeElement;
+    const button = active?.closest("[data-image-toolbar]") ? active.getAttribute("aria-label") : null;
+    claim.current = button ?? Boolean(preview.current?.contains(active));
     edit(r.text);
     setSelected(r.index);
   }, [kind, text, edit, preview]);
 
   const remove = useCallback((n: number) => {
+    const had = Boolean(preview.current?.contains(document.activeElement));
     edit(removeReference(text(), n));
     setSelected(null);
-  }, [text, edit]);
+    // The figure is gone: focus stays in the field, on its panel.
+    if (had) preview.current?.focus({ preventScroll: true });
+  }, [text, edit, preview]);
 
   const relayout = useCallback((n: number, layout: ImageLayout) => edit(withLayout(text(), n, layout)), [text, edit]);
 
@@ -281,7 +287,7 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
   onRemove: () => void;
   canUp: boolean;
   canDown: boolean;
-  takeFocus: () => boolean;
+  takeFocus: () => boolean | string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const passClick = useRef(false);
@@ -301,7 +307,11 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
     const fig = ref.current;
     if (!selected || !fig || fig.contains(document.activeElement)) return;
     const inPanel = Boolean(fig.closest('[role="tabpanel"]')?.contains(document.activeElement));
-    if (takeFocus() || inPanel) fig.focus({ preventScroll: true });
+    const claim = takeFocus();
+    const button = typeof claim === "string" ? fig.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${CSS.escape(claim)}"]`) : null;
+    // Pressed again at the end of the list, the button is disabled: the figure takes focus.
+    if (button && !button.disabled) button.focus({ preventScroll: true });
+    else if (claim || inPanel) fig.focus({ preventScroll: true });
   }, [selected]);
 
   const open = () => {
