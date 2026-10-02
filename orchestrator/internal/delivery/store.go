@@ -89,6 +89,8 @@ type PhaseRun struct {
 	// Makes creation idempotent: a step that runs twice after a crash finds
 	// the Run the first attempt made instead of creating a second.
 	Key string
+	// The attempt at the task it is part of; zero for the task's highest.
+	Attempt int
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -108,8 +110,8 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		var projectID string
 		var attempt int
 		if err := tx.QueryRow(ctx, `
-			SELECT w.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = w.id), 1)
-			FROM tasks w WHERE w.id = $1`, in.TaskID).Scan(&projectID, &attempt); err != nil {
+			SELECT w.project_id, COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = w.id), 1)
+			FROM tasks w WHERE w.id = $1`, in.TaskID, in.Attempt).Scan(&projectID, &attempt); err != nil {
 			return fmt.Errorf("task %s: %w", in.TaskID, err)
 		}
 		feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
@@ -146,6 +148,26 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		return err
 	})
 	return runID, err
+}
+
+// KeptRun (SQL, over a runs row named runs) is a Run a person can take
+// back up where it stopped: migration 070's run_kept, the one definition.
+const KeptRun = `run_kept(runs)`
+
+// Kept says whether a failed Run is kept for a person to resume
+// (phases.Syncer.end): its agent died, rather than dude failing it for a
+// reason a resume would meet again.
+func (s *Store) Kept(ctx context.Context, org, runID string) (bool, error) {
+	var kept bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// Its keep, not KeptRun: the syncer stops and keeps it a moment
+		// after the workflow hears it failed.
+		return tx.QueryRow(ctx, `SELECT keep FROM runs WHERE id = $1`, runID).Scan(&kept)
+	})
+	if db.IsNotFound(err) {
+		return false, nil
+	}
+	return kept, err
 }
 
 // Outcome is what a finished phase Run produced.
@@ -229,11 +251,16 @@ func nonNilMap(m map[string]string) map[string]string {
 	return m
 }
 
-func (s *Store) Findings(ctx context.Context, org, taskID string) ([]FindingState, error) {
+// thisAttempt (SQL, with $1 the task and $2 its attempt, 0 for any): a
+// finding of the attempt delivering now. Each start over is reviewed
+// afresh; what an earlier attempt's reviewers found stays with it.
+const thisAttempt = `($2 = 0 OR EXISTS (SELECT 1 FROM runs fr WHERE fr.id = review_findings.run_id AND fr.attempt = $2))`
+
+func (s *Store) Findings(ctx context.Context, org string, st *State) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts FROM review_findings
-			WHERE task_id = $1 ORDER BY created_at`, taskID)
+			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -259,22 +286,23 @@ func (s *Store) MarkAttempted(ctx context.Context, org string, findingIDs []stri
 
 // AcceptFindings is a person deciding the task ships with the findings
 // still open: accepted, they block nothing.
-func (s *Store) AcceptFindings(ctx context.Context, org, taskID string) error {
+func (s *Store) AcceptFindings(ctx context.Context, org string, st *State) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted',
 			resolution_note = 'accepted by a person', updated_at = now()
-			WHERE task_id = $1 AND status = 'open'`, taskID)
+			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt, st.TaskID, st.Attempt)
 		return err
 	})
 }
 
 // AttemptedFindings is, per category, the open findings a fix has been
 // sent — what the next reviewer of that category is asked to judge.
-func (s *Store) AttemptedFindings(ctx context.Context, org, taskID string) (map[string][]string, error) {
+func (s *Store) AttemptedFindings(ctx context.Context, org string, st *State) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
-			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 ORDER BY created_at`, taskID)
+			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 AND `+thisAttempt+` ORDER BY created_at`,
+			st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -328,12 +356,18 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{
+	return true, RecordStatusTx(ctx, tx, org, projectID, taskID, status, reason)
+}
+
+// RecordStatusTx records that a task's status changed, and why: what time
+// and cost count from.
+func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: map[string]any{"status": status, "reason": reason},
 	})
-	return true, err
+	return err
 }
 
 // Emit records a workflow event about the task.
@@ -559,7 +593,7 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	if gh == nil {
 		return nil, fmt.Errorf("no forge credential to open pull requests with")
 	}
-	title, body, err := s.pullRequestText(ctx, org, st.TaskID)
+	title, body, err := s.pullRequestText(ctx, org, st)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +609,8 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 
 // pullRequestText is a task's pull request title and body, rendered
 // from what the ledger recorded.
-func (s *Store) pullRequestText(ctx context.Context, org, taskID string) (string, string, error) {
+func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
+	taskID := st.TaskID
 	var title, goal string
 	var criteria []string
 	var findings []struct{ Category, Severity, Status, Title string }
@@ -588,7 +623,7 @@ func (s *Store) pullRequestText(ctx context.Context, org, taskID string) (string
 		}
 		_ = json.Unmarshal(raw, &criteria)
 		rows, err := tx.Query(ctx, `SELECT category, severity::text, status::text, title FROM review_findings
-			WHERE task_id = $1 ORDER BY created_at`, taskID)
+			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, taskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -596,7 +631,8 @@ func (s *Store) pullRequestText(ctx context.Context, org, taskID string) (string
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
-			WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, taskID).Scan(&reviewers)
+			WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
+			taskID, st.Attempt).Scan(&reviewers)
 	})
 	return title, prBody(goal, criteria, findings, reviewers), err
 }

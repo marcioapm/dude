@@ -12,6 +12,7 @@
     {"name": "orchestrator.diff_every", "env": "DUDE_DIFF_EVERY", "kind": "duration", "use": "orchestrator", "default": "15s", "secret": false},
     {"name": "orchestrator.machine_usd_per_hour", "env": "DUDE_MACHINE_USD_PER_HOUR", "kind": "float", "use": "orchestrator", "default": "0.20", "secret": false},
     {"name": "orchestrator.lux_cost_every", "env": "DUDE_LUX_COST_EVERY", "kind": "duration", "use": "orchestrator", "default": "2m", "secret": false},
+    {"name": "orchestrator.keep_stopped", "env": "DUDE_KEEP_STOPPED", "kind": "duration", "use": "orchestrator", "default": "168h", "secret": false},
     {"name": "s3.bucket", "env": "DUDE_S3_BUCKET", "kind": "string", "use": "backend", "default": "", "secret": false},
     {"name": "s3.endpoint", "env": "DUDE_S3_ENDPOINT", "kind": "string", "use": "backend", "default": "", "secret": false},
     {"name": "s3.region", "env": "DUDE_S3_REGION", "kind": "string", "use": "backend", "default": "us-east-1", "secret": false},

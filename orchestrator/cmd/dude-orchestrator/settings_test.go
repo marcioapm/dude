@@ -75,6 +75,7 @@ idle_after = "1h"
 diff_every = "30s"
 machine_usd_per_hour = 0.35
 lux_cost_every = "5m"
+keep_stopped = "48h"
 [lux]
 url = "https://lux.file"
 api_key = "lux-file-key"
@@ -108,7 +109,7 @@ logins = ["file-bot"]
 		PreviewDomain: "preview-absmartly.dev", PreviewReapAfter: 72 * time.Hour,
 		Registry:       registrySettings{Mode: "ecr", ECRRoleARN: "arn:aws:iam::123456789012:role/file"},
 		ReconcileEvery: 30 * time.Minute, ParkAfter: 20 * time.Minute, IdleAfter: time.Hour, DiffEvery: 30 * time.Second,
-		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, FactoryLogins: []string{"file-bot"},
+		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, KeepStopped: 48 * time.Hour, FactoryLogins: []string{"file-bot"},
 		VAPIDPublic: "BFile", VAPIDPrivate: "vapid-file-private", VAPIDSubject: "mailto:file@example.com",
 		Embeddings: embeddingsConfig{URL: "https://llm.file/v1", Key: "llm-file-key",
 			URLFrom: "DUDE_LLM_URL", KeyFrom: "DUDE_LLM_KEY"},

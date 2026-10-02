@@ -292,8 +292,13 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 			recorded = append(recorded, id)
 		}
-		err = tx.QueryRow(ctx, `SELECT id, step FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
-			LIMIT 1`, pr.TaskID).Scan(&workflowRunID, &workflowStep)
+		// The delivery the pull request is from: a task started over has a
+		// delivery per attempt, each on its own branch, and an earlier
+		// attempt's pull request must not wake the next one.
+		err = tx.QueryRow(ctx, `SELECT w.id, w.step FROM workflow_runs w JOIN pull_requests p ON p.id = $2
+			WHERE w.task_id = $1 AND w.status IN ('running', 'waiting')
+			  AND COALESCE(w.state->>'branch', p.head_branch) = p.head_branch
+			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep)
 		if db.IsNotFound(err) {
 			return nil
 		}

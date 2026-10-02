@@ -624,6 +624,17 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 	return done
 }
 
+// CancelInLux cancels a Run as an operator would in lux itself: nothing of
+// it is left to resume.
+func (s *Server) CancelInLux(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.Cancelled = true
+		s.setState(run, "cancelled")
+	}
+}
+
 // FailStarts makes the next n starts (a submit's or a resume's placement)
 // of Runs whose spec has the label "key=value" fail before the workload
 // runs, as lux reports a container that would not start; n <= 0 clears it.
