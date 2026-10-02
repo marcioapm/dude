@@ -30,6 +30,7 @@ export { criteriaLines } from "./util/criteria.ts";
 export type { CriteriaItem, CriteriaLines } from "./util/criteria.ts";
 export * as imageLayout from "./util/imageLayout.ts";
 export type { ImageLayout, ImageSize, ImageAlign, FieldKind as ImageFieldKind } from "./util/imageLayout.ts";
+export { IMAGE_DRAG_TYPE } from "./util/imageDrag.ts";
 export { parseAnsi } from "./util/ansi.ts";
 export type { AnsiColor, AnsiStyle, AnsiSegment, ParseAnsiOptions } from "./util/ansi.ts";
 export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";

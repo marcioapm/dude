@@ -2,6 +2,7 @@ import * as RadixDialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent, type ReactNode, type RefObject } from "react";
 import { cx } from "../util/cx.ts";
 import { formatBytes } from "../util/format.ts";
+import { isImageMove } from "../util/imageDrag.ts";
 import { Icon } from "../icons/index.tsx";
 import styles from "./ImageAttachments.module.css";
 
@@ -107,7 +108,11 @@ export interface AttachDropZoneProps {
   readonly children: ReactNode;
 }
 
-const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+// An image repositioned in Preview carries "Files" too (Chrome offers its <img>): it is not a file drop.
+const hasFiles = (e: DragEvent) => {
+  const types = Array.from(e.dataTransfer?.types ?? []);
+  return types.includes("Files") && !isImageMove(types);
+};
 
 /**
  * Takes a paste's files for `onFiles`. The paste's text, when it has some

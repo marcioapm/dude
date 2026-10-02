@@ -18,9 +18,8 @@ import { ImageFigure, type AttachmentFrameProps } from "../components/Markdown.t
 import { IconButton } from "./Button.tsx";
 import { Tooltip } from "./Tooltip.tsx";
 import type { IconName } from "../icons/index.tsx";
+import { IMAGE_DRAG_TYPE as DRAG_TYPE, endImageDrag, startImageDrag } from "../util/imageDrag.ts";
 import styles from "./ImageEditing.module.css";
-
-const DRAG_TYPE = "application/x-dude-image";
 
 /** The editors on the page that take a dragged image, by key: a drop on one cuts from the other. */
 const fields = new Map<string, { kind: FieldKind; text: () => string; setText: (next: string) => void; select: (n: number | null) => void }>();
@@ -397,7 +396,9 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
         e.stopPropagation();
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ key: fieldKey, n }));
+        startImageDrag();
       }}
+      onDragEnd={endImageDrag}
     >
       {children}
       {selected ? (
