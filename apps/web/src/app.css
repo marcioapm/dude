@@ -259,14 +259,6 @@ body {
   min-height: var(--ds-size-row-default);
 }
 
-/* The images given with a task's prompt: chips, then the paperclip. */
-.taskImages {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
-
 /* A task's owner, labelled inline among its header's actions. */
 .ownerField {
   display: inline-flex;

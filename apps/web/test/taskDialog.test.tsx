@@ -1,8 +1,9 @@
 /**
  * The task dialog saves only with a goal of at least TASK_GOAL_MIN
  * characters, trimmed, and says how many more once the person types in it.
- * A new task's images hold Create and deliver until they are made; an edit
- * takes no images. Mounted in happy-dom against the fixture client.
+ * A dropped image goes into the text where it was dropped, as a reference
+ * once it is made; while delivery runs none can be added. Mounted in
+ * happy-dom against the fixture client.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -112,54 +113,87 @@ describe("editing a task saved before the rule", () => {
     expect(d.save().disabled).toBe(false);
   });
 
-  test("a file dragged over it shows no drop overlay: an edit takes no images", async () => {
-    await open(old(false));
+  test("while delivery runs, a file dragged over it says images are fixed, and the Attach button is off", async () => {
+    await open(old(true));
     await act(async () => void fileEvent("dragenter", PNG));
-    expect(document.querySelectorAll('[data-testid="drop-overlay"]').length).toBe(0);
+    const overlay = document.querySelector('[data-testid="drop-overlay"]');
+    expect(overlay?.getAttribute("data-refused")).toBe("true");
+    expect(overlay?.textContent).toContain("Delivery is running, so what the task asks for is fixed, and its images too.");
+    expect(document.querySelector<HTMLButtonElement>("[data-testid=task-attach]")!.disabled).toBe(true);
   });
 });
 
 const PNG = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "design.png", { type: "image/png" });
 
-/** A file drag event on the goal, carrying `file`. */
-function fileEvent(type: string, file: File) {
+/** A file drag event on `target` (the goal), carrying `file`. */
+function fileEvent(type: string, file: File, target = "task-goal") {
   const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
   e.dataTransfer = { types: ["Files"], items: [file], files: [file], dropEffect: "" };
-  document.querySelector("[data-testid=task-goal]")!.dispatchEvent(e);
+  document.querySelector(`[data-testid=${target}]`)!.dispatchEvent(e);
   return e;
 }
 
-describe("a new task's images", () => {
-  test("Create and deliver waits for a dropped image to be made, and is enabled once it is", async () => {
-    // Decoding is held until released, so the chip stays "uploading"; the canvas encodes a small PNG.
-    let decoded!: () => void;
-    const held = new Promise<void>((r) => (decoded = r));
-    const g = globalThis as { createImageBitmap?: unknown };
-    const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
-    const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
-    g.createImageBitmap = async () => {
-      await held;
-      return { width: 40, height: 30, close() {} };
-    };
-    canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
-    canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
-    try {
-      const d = await open();
-      await d.title("Show invoices in euros");
-      await d.goal("Keep invoices in euros for EU customers.");
-      expect(d.deliver()!.disabled).toBe(false);
-      await act(async () => void fileEvent("drop", PNG));
-      const chip = () => document.querySelector("[data-testid=attachment-chip]");
-      expect(chip()?.getAttribute("data-state")).toBe("uploading");
-      expect(d.deliver()!.disabled).toBe(true);
-      await act(async () => decoded());
-      await until(() => chip()?.getAttribute("data-state") === "ready", "the chip, ready");
-      expect(d.deliver()!.disabled).toBe(false);
-    } finally {
+/** A canvas that encodes a small PNG, its decoding held until `decoded` is called. */
+function heldCanvas() {
+  let decoded!: () => void;
+  const held = new Promise<void>((r) => (decoded = r));
+  const g = globalThis as { createImageBitmap?: unknown };
+  const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+  const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
+  g.createImageBitmap = async () => {
+    await held;
+    return { width: 40, height: 30, close() {} };
+  };
+  canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
+  canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
+  return {
+    decoded: () => decoded(),
+    restore() {
       g.createImageBitmap = saved.bitmap;
       canvas["getContext"] = saved.getContext;
       canvas["toBlob"] = saved.toBlob;
+    },
+  };
+}
+
+const goalValue = () => document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!.value;
+
+describe("a new task's images", () => {
+  test("a drop on the goal puts a placeholder at the caret, held saves until the image is made, then its reference", async () => {
+    const canvas = heldCanvas();
+    try {
+      const d = await open();
+      await d.title("Show invoices in euros");
+      await d.goal("Keep invoices in euros. Like this: and done.");
+      const area = document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!;
+      area.setSelectionRange(34, 34);
+      expect(d.deliver()!.disabled).toBe(false);
+      await act(async () => void fileEvent("drop", PNG));
+      await until(() => goalValue().includes("![Uploading design.png…]()"), "the placeholder");
+      expect(goalValue()).toBe("Keep invoices in euros. Like this:\n\n![Uploading design.png…]()\n\nand done.");
+      expect(d.deliver()!.disabled).toBe(true);
+      expect(d.save().disabled).toBe(true);
+      await act(async () => canvas.decoded());
+      await until(() => !goalValue().includes("Uploading"), "the reference");
+      expect(goalValue()).toMatch(/^Keep invoices in euros\. Like this:\n\n!\[design\.png\]\(attachment:att_local\d+\)\n\nand done\.$/);
+      expect(d.deliver()!.disabled).toBe(false);
+      // Plain Create is not held back by images any more.
+      expect(d.save().disabled).toBe(false);
+      // The tray is gone.
+      expect(document.querySelector("[data-testid=task-images]")).toBeNull();
+      expect(document.querySelector("[data-testid=attachment-chip]")).toBeNull();
+    } finally {
+      canvas.restore();
     }
+  });
+
+  test("a file that is not an image leaves no placeholder, and says why", async () => {
+    const d = await open();
+    await d.goal("Keep invoices in euros for EU customers.");
+    await act(async () => void fileEvent("drop", new File(["%PDF-1.7"], "spec.pdf", { type: "application/pdf" })));
+    await until(() => document.querySelector("[data-testid=task-image-refused]"), "the warning");
+    expect(goalValue()).toBe("Keep invoices in euros for EU customers.");
+    expect(document.querySelector("[data-testid=task-image-refused]")!.textContent).toContain("spec.pdf: only PNG, JPEG, WebP and GIF can be sent");
   });
 });
 

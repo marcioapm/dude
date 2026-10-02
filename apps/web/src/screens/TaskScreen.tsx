@@ -46,6 +46,7 @@ import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useServers } from "../hooks/useServers.ts";
+import { useTaskImages } from "../hooks/useTaskImages.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
@@ -214,6 +215,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
     wasStream.current = stream;
   }, [stream]);
   const servers = useServers(client, { taskId }, serversVersion);
+  // The images its goal and criteria show, in place.
+  const taskImages = useTaskImages(client);
   // A stopped task's ways back, read again whenever the page is.
   const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
@@ -398,7 +401,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   <h2 className="ds-label">Goal</h2>
                   <div className="taskGoal">
                     {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
-                    <Markdown source={item.goal} breaks />
+                    <Markdown source={item.goal} breaks attachmentImage={taskImages.attachmentImage} />
                   </div>
                 </section>
               ) : null}
@@ -407,11 +410,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   <h2 className="ds-label">Acceptance criteria</h2>
                   <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
                     {item.acceptanceCriteria.map((c, i) => (
-                      <li key={i}><Markdown source={c} breaks /></li>
+                      <li key={i}><Markdown source={c} breaks attachmentImage={taskImages.attachmentImage} /></li>
                     ))}
                   </ul>
                 </section>
               ) : null}
+              {taskImages.viewer}
 
               <section className="taskBlock" aria-label="Pipeline">
                 <h2 className="ds-label">Pipeline{attempts.length > 1 ? ` · attempt ${current}` : ""}</h2>
