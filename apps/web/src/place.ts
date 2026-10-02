@@ -24,7 +24,7 @@ export type TaskTab = "chat" | "findings" | "sessions" | "files" | "servers" | "
 const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "files", "servers", "activity"];
 
 /** Tabs whose content is one attempt's: the others show the whole task, whatever attempt is picked. */
-export const attemptScoped = (tab: TaskTab | undefined): boolean => tab !== "servers" && tab !== "activity";
+export const attemptScoped = (tab: TaskTab | undefined): boolean => tab !== "servers" && tab !== "activity" && tab !== "chat";
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
@@ -75,7 +75,7 @@ export function formatPlace(place: Place | null): string {
 
 /**
  * A place in the tree, from a tree reference. The attempt is kept only on
- * a tab that shows one attempt: Activity and Servers show them all.
+ * a tab that shows one attempt: Chat, Activity and Servers show them all.
  */
 export const inTree = (ref: NavRef, tab?: TaskTab, attempt?: number): Place => ({
   view: "tree", ref, ...(tab ? { tab } : {}), ...(attempt && attemptScoped(tab) ? { attempt } : {}),
