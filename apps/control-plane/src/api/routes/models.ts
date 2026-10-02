@@ -33,6 +33,7 @@ import {
   type ProxyModels,
 } from "@dude/domain";
 import { SQL } from "bun";
+import { config } from "../../config.ts";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -43,10 +44,6 @@ import type { RequestContext, Router } from "../router.ts";
 import { PROJECT_IMAGE_URL } from "./projects.ts";
 
 type Json = Record<string, unknown>;
-
-// The orchestrator bounds a test message at 30 s (llm.TestTimeout) and
-// reports a slow proxy itself; the call waits that long and a little more.
-const TEST_TIMEOUT_MS = 35_000;
 
 /** The organization's tiers, in the order admins gave them. */
 export async function listTiers(scope: OrgScope): Promise<ModelTier[]> {
@@ -308,7 +305,7 @@ async function testModel(ctx: RequestContext): Promise<Response> {
     return distinct.length ? distinct : [null];
   });
   const res = await orchestrator(ctx.principal.organizationId, "POST", "/internal/llm/test",
-    JSON.stringify({ model: input.model, efforts }), undefined, TEST_TIMEOUT_MS);
+    JSON.stringify({ model: input.model, efforts }), undefined, config().orchestratorTimeouts.testMessageMs);
   if (!res.ok) return res;
   return json((await res.json()) as { model: string; results: ModelTestResult[] });
 }
