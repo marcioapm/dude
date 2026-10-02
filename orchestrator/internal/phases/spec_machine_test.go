@@ -25,7 +25,7 @@ func TestTheMachineSizeIsTheSpecsResourcesAndPool(t *testing.T) {
 		{"half steps in a named pool", &delivery.Machine{Name: "Large", CPUs: 6.5, MemoryMiB: 23040, DiskGiB: 120, PoolID: &big, Pool: &name},
 			`{"cpus":6.5,"memory":24159191040,"disk":128849018880}`, `{"poolId":"pool_b8r2n5w1c7z3"}`},
 	} {
-		for _, model := range []string{"llm/impl", "fake/scripted"} {
+		for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
 			t.Run(tc.name+" "+model, func(t *testing.T) {
 				c, in := goldenInput(model)
 				in.Machine = tc.machine

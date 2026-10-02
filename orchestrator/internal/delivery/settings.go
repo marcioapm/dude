@@ -4,7 +4,7 @@ package delivery
 // default, else the factory's. Each layer stores only what it sets (a
 // missing key is "inherited"), so each value is resolved on its own: a
 // project that changes only the reviewer's effort keeps its organization's
-// reviewer model.
+// reviewer tier.
 
 import (
 	"context"
@@ -16,7 +16,9 @@ import (
 
 // RoleSettings is how one agent role runs, resolved.
 type RoleSettings struct {
-	Model string
+	// The model tier's id, as the first layer names it; resolved to a tier
+	// by Tiers.ForRole, which passes over ids that are gone.
+	Tier string
 	// How hard the model thinks (low, medium, high, max); "" leaves it to
 	// the model.
 	Effort string
@@ -30,7 +32,7 @@ type RoleSettings struct {
 // roleLayer is one layer's config for a role, as stored: agent_models on a
 // project, default_agent_models on an organization ({role -> config}).
 type roleLayer struct {
-	Model            *string `json:"model"`
+	Tier             *string `json:"tier"`
 	Effort           *string `json:"effort"`
 	TimeLimitMinutes *int    `json:"timeLimitMinutes"`
 	Context          *string `json:"context"`
@@ -62,8 +64,8 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 	for _, r := range chain {
 		for _, m := range parsed {
 			l := m[r]
-			if rs.Model == "" && l.Model != nil {
-				rs.Model = *l.Model
+			if rs.Tier == "" && l.Tier != nil {
+				rs.Tier = *l.Tier
 			}
 			if rs.Effort == "" && l.Effort != nil {
 				rs.Effort = *l.Effort

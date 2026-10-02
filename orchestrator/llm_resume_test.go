@@ -10,8 +10,7 @@ import (
 // key again, or lux refuses the resume and the Run fails.
 func TestAResumedRealAgentIsGivenTheLLMKeyAgain(t *testing.T) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm-anthropic/impl"}}'::jsonb
-		WHERE id = $1`, w.project)
+	w.onModel("implementer", "claude-impl")
 	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)

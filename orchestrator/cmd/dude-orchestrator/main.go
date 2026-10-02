@@ -57,6 +57,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
@@ -222,7 +223,8 @@ func run(log *slog.Logger) error {
 		Addr: set.Listen,
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
-			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick}).Handler(),
+			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick,
+			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it
