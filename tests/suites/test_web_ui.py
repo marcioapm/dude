@@ -1180,7 +1180,84 @@ def test_a_parked_agent_is_answered_from_its_chat(
     page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the answer did not resume the parked agent")
-    expect(page.get_by_test_id("chat-notice").last).to_contain_text("Taken back up")
+    # Once timed, its return says how long it took, its phases on hover:
+    # exactly the numbers of its run.resume.timed.
+    _expect_resume_notice(page, client, implement["id"], "Taken back up", "Taken back up")
+    assert console_errors == []
+
+
+# A resume's phases, in order, as the notice's hover names them.
+_RESUME_LABELS = (("react", "dude asked lux"), ("schedule", "lux placed it"), ("image", "image ready"),
+                  ("restore", "restored"), ("start", "started"), ("reload", "agent reloaded"),
+                  ("take", "took its input"), ("firstOutput", "first words"))
+
+
+def _duration(ms: float) -> str:
+    """The design system's formatDuration, short style, as far as a resume
+    reaches (under a day): JavaScript's rounding, half away from zero."""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    if ms < 0:
+        return "—"
+    if ms == 0:
+        return "0s"
+    if ms < 0.5:
+        return "<1ms"
+    if ms < 999.5:
+        return f"{int(Decimal(ms).quantize(Decimal(1), ROUND_HALF_UP))}ms"
+    s = ms / 1000
+    if s < 60:
+        return f"{Decimal(s).quantize(Decimal('0.1'), ROUND_HALF_UP)}s" if s < 10 else \
+            f"{int(Decimal(s).quantize(Decimal(1), ROUND_HALF_UP))}s"
+    m = int(s // 60)
+    if m < 60:
+        return f"{m}m {int(s % 60):02d}s"
+    return f"{m // 60}h {m % 60:02d}m"
+
+
+def _resume_notice(payload: dict, lead: str) -> tuple[str, str]:
+    """The notice a run.resume.timed gives: its sentence and its hover."""
+    where = ", on another host" if payload["moved"] is True else ""
+    text = f"{lead} in {_duration(payload['totalMs'])}{where}."
+    title = "\n".join(f"{label} {_duration(payload['phases'][key])}"
+                      for key, label in _RESUME_LABELS if key in payload["phases"])
+    return text, title
+
+
+def _expect_resume_notice(page: Page, client: ApiClient, run_id: str, lead: str, has_text: str,
+                          count_timeout: float | None = None) -> None:
+    """The Run's one run.resume.timed is said by exactly one chat notice
+    with has_text: its sentence, led by lead, and its hover."""
+    timed = wait_until(lambda: [e for e in client.events(runId=run_id) if e["eventType"] == "run.resume.timed"],
+                       timeout=30, message="the resume was never timed")
+    assert len(timed) == 1, timed
+    text, title = _resume_notice(timed[0]["payload"], lead)
+    notice = page.get_by_test_id("chat-notice").filter(has_text=has_text)
+    expect(notice).to_have_count(1, timeout=count_timeout)
+    expect(notice).to_contain_text(text)
+    expect(notice).to_have_attribute("title", title)
+
+
+def test_a_persons_resume_says_how_long_it_took(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """A person pauses a working agent and resumes it: its chat says how long
+    the resume took once the agent speaks, with the phases on hover."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], "Pause, then carry on")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["status"] == "running"), None),
+                     timeout=30, message="the implementer never started")
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    wait_until(lambda: any(e["eventType"] == "agent.tool.called" for e in client.events(runId=run["id"])),
+               timeout=30, message="the agent never started working")
+    assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+    wait_until(lambda: any(e["eventType"] == "run.paused" and e["payload"].get("confirmed")
+                           for e in client.events(runId=run["id"])), timeout=30, message="the run never paused")
+    assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+    _expect_resume_notice(page, client, run["id"], "Resumed", "Resumed in", count_timeout=30_000)
     assert console_errors == []
 
 
