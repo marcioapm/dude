@@ -122,6 +122,22 @@ func setup() {
 	_, _ = admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", template)
 }
 
+// Builder connects to owner's database as dude-image-builder's role
+// (migration 068), which aiverse gives a password in production.
+func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := owner.Exec(ctx, `ALTER ROLE dude_builder PASSWORD 'dude_builder'`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.Open(ctx, fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	return b
+}
+
 // Org inserts an organization and returns its id.
 func Org(t *testing.T, owner *pgx.Conn) string {
 	t.Helper()

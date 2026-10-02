@@ -1,0 +1,68 @@
+/*
+ * CodeEditor: a field (its edge is the frame's, as MarkdownEditor's is)
+ * holding a header and a footer on the chrome shade, the text on the field
+ * background, and, under the text, what is added after it on the sunken
+ * shade — read-only, told apart by shade, not by a line.
+ */
+
+.frame {
+  --ds-code-line: 22px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-field-bg);
+  overflow: hidden;
+}
+.frame:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.frame:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+[data-density="compact"] .frame {
+  --ds-code-line: 20px;
+}
+
+.header,
+.footer {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-12);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  flex-wrap: wrap;
+}
+
+.text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.loading {
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) 48px;
+}
+
+.after {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: var(--ds-code-line);
+  color: var(--ds-color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* CodeMirror's own parts, themed by tokens in CodeEditorCore. */
+.cm {
+  flex: 1;
+  min-width: 0;
+}

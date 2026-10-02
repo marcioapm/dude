@@ -152,7 +152,6 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
-        runtimeImage="dude-runtime:test",
         agentModels={
             "implementer": {"model": "fake/scripted"},
             "reviewer": {"model": "fake/scripted"},

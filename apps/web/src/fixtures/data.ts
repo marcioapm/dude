@@ -39,6 +39,7 @@ export const PROJECT: ProjectDetail = {
   ],
   agentModels: {},
   runtimeImage: "ghcr.io/example/runner:node22-go1.23",
+  runtimeImageId: null,
   deliveryPolicy: {},
   createdAt: iso(60 * 24 * 60 * MIN),
   imageUrl: null,
@@ -56,6 +57,7 @@ function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run[
     branch: BRANCH, harness: "opencode", model: "claude-sonnet-4.5", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
+    image: null, preparingImage: null,
     createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null,
     ...patch,
   };
@@ -199,6 +201,7 @@ export const SETTINGS: SettingsResponse = {
     effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
     machineSize: { value: null, source: "organization", organization: null },
+    image: { value: null, source: "organization", organization: null },
     enabled: role === "simplifier" || role === "qa_browser" ? { value: role === "simplifier", source: "organization" } : null,
     prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 }, project: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0, mode: "inherit" } },
   }])) as SettingsResponse["roles"],

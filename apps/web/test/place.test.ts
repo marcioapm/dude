@@ -28,4 +28,12 @@ describe("places", () => {
     }
     expect(parsePlace("#/project/prj_1/settings/fixer")).toEqual({ view: "projectSettings", projectId: "prj_1", page: "fixer" });
   });
+
+  test("an image, its tab, and a build are deeper than the Images page, and read back", () => {
+    for (const hash of ["#/org/settings/images/img_1", "#/org/settings/images/img_1/history", "#/org/settings/images/builds/imb_1"]) {
+      expect(formatPlace(parsePlace(hash))).toBe(hash);
+    }
+    expect(parsePlace("#/org/settings/images/img_1/history")).toEqual({ view: "orgSettings", page: "images", sub: "img_1/history" });
+    expect(parsePlace("#/org/settings/images")).toEqual({ view: "orgSettings", page: "images" });
+  });
 });
