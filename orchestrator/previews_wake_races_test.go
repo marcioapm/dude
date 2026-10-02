@@ -370,41 +370,86 @@ func TestARunningSeenBeforeTheWakeCommitsIsNotAFailedStart(t *testing.T) {
 	}
 }
 
-// The replaced Run's own trailing events (its failed, then its cancelled),
-// delivered by a follower held on its stream until the preview holds its
-// replacement, are not the preview's: it stays on the new Run, serving,
-// with no error.
+// The replaced Run's own trailing events (its failed, its cancelled),
+// delivered by another orchestrator's follower held on its stream until the
+// preview holds its replacement and none of the replacement's events (its
+// cursor back at 0), are not the preview's: the failed start is counted
+// once, and the preview serves on the new Run.
 func TestAReplacedRunsTrailingEventIsNotThePreviews(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
-	_, other := w.secondOrchestrator(runID, web, "")
+	g, other := w.secondOrchestrator(runID, web, "")
 	old := w.luxRuns()[0]
 	w.lux.Idle(web)
 	w.until("parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
-	reached, release := w.holdOneStream("failed")
+
+	// The resumed start waits until the other orchestrator follows the Run;
+	// its follower is held at the start's failed. Every event of any other
+	// Run (the replacement) waits until the old Run's trailing events are
+	// delivered.
+	startHeld, startRelease := make(chan struct{}), make(chan struct{})
+	newRelease := make(chan struct{})
+	var once sync.Once
+	w.lux.BeforeStart(func(id string) {
+		if id != old.ID {
+			return
+		}
+		mine := false
+		once.Do(func() { mine = true; close(startHeld) })
+		if mine {
+			<-startRelease
+		}
+	})
+	w.lux.BeforeEvent(func(id string, _ int64, _ string) {
+		if id != old.ID {
+			<-newRelease
+		}
+	})
+	t.Cleanup(func() {
+		w.lux.BeforeStart(nil)
+		w.lux.BeforeEvent(nil)
+		for _, ch := range []chan struct{}{startRelease, newRelease} {
+			if !isClosed(ch) {
+				close(ch)
+			}
+		}
+	})
+	g.mu.Lock()
+	g.holdAt = "failed"
+	g.mu.Unlock()
 	w.lux.FailStarts("dude.preview="+runID, 1)
 	w.lux.RequestServer(web, "/")
-	w.untilPreview(runID, "a new Run running", func() bool {
-		_, _ = other.Sweep(context.Background())
-		return len(w.luxRuns()) == 2 &&
-			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+	w.untilPreview(runID, "the resume acknowledged, its start held", func() bool {
+		return isClosed(startHeld) &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'scheduled' AND wake_wanted_at IS NULL`, runID) == 1
 	})
-	wait(t, reached, "a follower held at the old Run's failed")
-	fresh := w.luxRuns()[1]
-	close(release)
-	waitFor(t, "the old Run cancelled", func() bool { return w.lux.State(old.ID) == "cancelled" })
-	for range 5 {
-		w.pump()
+	if _, err := other.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND status = 'running' AND lux_state = 'running'
-		AND error IS NULL AND start_failures = 0`, runID, fresh.ID); n != 1 {
+	close(startRelease)
+	wait(t, g.reached, "the other orchestrator's follower held at the old Run's failed")
+
+	w.untilPreview(runID, "the replacement submitted", func() bool {
+		return len(w.luxRuns()) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND lux_after_event = 0`, runID, w.luxRuns()[1].ID) == 1
+	})
+	fresh := w.luxRuns()[1]
+	close(g.release)
+	wait(t, g.done, "the held follower to deliver the old Run's trailing events")
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND lux_after_event = 0 AND start_failures = 1
+		AND lux_start_event = 1 AND lux_ran_event = 0`, runID, fresh.ID); n != 1 {
 		t.Fatalf("the old Run's trailing events were applied to the preview:\n%s", w.preview(runID))
 	}
+	close(newRelease)
+	w.untilPreview(runID, "the new Run running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND status = 'running' AND lux_state = 'running'
+			AND error IS NULL AND start_failures = 0`, runID, fresh.ID) == 1
+	})
 	w.open(web)
 }
 
