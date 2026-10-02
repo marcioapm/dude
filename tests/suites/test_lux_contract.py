@@ -174,7 +174,7 @@ def test_an_image_steer_and_an_image_prompt_on_real_lux(client: ApiClient, lux_p
     or a steer that never settles — is a contract break.
     """
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
     task = client.create_task(project["id"], "See this on lux")
     prompt_image = _upload_png(client, task["id"], "design.png", _png(64, 48))
     assert client.post(f"/v1/tasks/{task['id']}/deliver", {"attachmentIds": [prompt_image["id"]]}).status_code == 201
