@@ -145,35 +145,29 @@ export class FixtureClient extends ApiClient {
   #restart() {
     this.#restarted = true;
     this.#task = { ...this.#task, status: "running", runs: RESTARTED_RUNS };
-    this.#runPatch = {};
     const minAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
     const ana = { type: "human" as const, id: "u_ana", name: "Ana Ribeiro" };
     const me = { type: "human" as const, id: YOU, name: "Márcio Martins" };
     const dude = { type: "system" as const, id: "dude" };
-    const extra: PersistedEvent[] = [];
-    const push = (min: number, eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"], runId: string | null) =>
-      extra.push({ ...this.#events[0]!, cursor: 10_000 + extra.length, eventId: `evt_restart_${extra.length}`, eventType,
-        occurredAt: minAgo(min), runId, sessionId: runId ? `${runId}-s` : null, actor, payload });
-    const created = (r: Run) => push((Date.now() - Date.parse(r.createdAt)) / 60_000, "run.created", { phase: r.phase, role: r.role }, dude, r.id);
-    for (const r of [...RESTARTED_RUNS].reverse()) {
-      created(r);
-      if (r.id === "run_a1_review") push(141.5, "review.completed", { phase: "review", count: 3 }, { type: "agent", id: r.id }, r.id);
-      if (r.id === "run_a2_review") push(41.5, "review.completed", { phase: "review", count: 0 }, { type: "agent", id: r.id }, r.id);
-      if (r.id === RUN_ID) push(170, "artifact.created", { artifactId: "art_a1_notes", name: "notes/routing.md" }, { type: "agent", id: r.id }, r.id);
-      if (r.id === "run_attempt2") push(60, "artifact.created", { artifactId: "art_a2_notes", name: "notes/form-split.md" }, { type: "agent", id: r.id }, r.id);
-      if (r.id === "run_a1_simplify") push(129, "pull_request.opened", { number: 478, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[0]!.url }, dude, null);
-      if (r.id === "run_a1_fix") {
-        push(97, "run.aborted", { reason: RESTART.abortReason }, ana, r.id);
-        push(RESTART.setAsideMin, "task.recovered", { action: "restart", attempt: 2, note: RESTART.note }, me, null);
-        push(RESTART.setAsideMin - 0.1, "pull_request.closed", { number: 478, repo: "example/web-console" }, dude, null);
-      }
-      if (r.id === "run_a2_simplify") push(31, "pull_request.opened", { number: 483, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[1]!.url }, dude, null);
-    }
-    // A person's acts on no Run: a decision that sent attempt 1's fixer, and a hand-over during attempt 2.
-    push(112, "task.decided", { action: "retry", note: "Fix the CI first." }, me, null);
-    push(50, "task.owner_changed", { to: YOU }, ana, null);
-    extra.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
-    extra.forEach((e, i) => Object.assign(e, { cursor: 10_000 + i }));
+    const agent = (id: string) => ({ type: "agent" as const, id });
+    // [when, type, payload, actor, Run]: the persons' acts on no Run fall on either side of the start over.
+    type Act = [string, string, Record<string, unknown>, PersistedEvent["actor"], string | null];
+    const acts: Act[] = [
+      ...RESTARTED_RUNS.map((r): Act => [r.createdAt, "run.created", { phase: r.phase, role: r.role }, dude, r.id]),
+      [minAgo(170), "artifact.created", { artifactId: "art_a1_notes", name: "notes/routing.md" }, agent(RUN_ID), RUN_ID],
+      [minAgo(141.5), "review.completed", { phase: "review", count: 3 }, agent("run_a1_review"), "run_a1_review"],
+      [minAgo(129), "pull_request.opened", { number: 478, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[0]!.url }, dude, null],
+      [minAgo(112), "task.decided", { action: "retry", note: "Fix the CI first." }, me, null],
+      [minAgo(97), "run.aborted", { reason: RESTART.abortReason }, ana, "run_a1_fix"],
+      [minAgo(RESTART.setAsideMin), "task.recovered", { action: "restart", attempt: 2, note: RESTART.note }, me, null],
+      [minAgo(RESTART.setAsideMin - 0.1), "pull_request.closed", { number: 478, repo: "example/web-console" }, dude, null],
+      [minAgo(60), "artifact.created", { artifactId: "art_a2_notes", name: "notes/form-split.md" }, agent("run_attempt2"), "run_attempt2"],
+      [minAgo(50), "task.owner_changed", { to: YOU }, ana, null],
+      [minAgo(41.5), "review.completed", { phase: "review", count: 0 }, agent("run_a2_review"), "run_a2_review"],
+      [minAgo(31), "pull_request.opened", { number: 483, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[1]!.url }, dude, null],
+    ];
+    const extra = acts.sort((a, b) => a[0].localeCompare(b[0])).map(([occurredAt, eventType, payload, actor, runId], i): PersistedEvent => ({
+      ...this.#events[0]!, cursor: 10_000 + i, eventId: `evt_restart_${i}`, eventType, occurredAt, runId, sessionId: runId ? `${runId}-s` : null, actor, payload }));
     // The task's creation, then both attempts: none of scenario a's single implementer.
     this.#events = [this.#events[0]!, ...extra];
   }
