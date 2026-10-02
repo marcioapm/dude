@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, assert_timed_is_its_row, query, wait_until
+from helpers import RESUME_PHASE_PAIRS, ApiClient, assert_timed_is_its_row, query, wait_until
 
 
 def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
@@ -256,7 +256,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
 
 
 # A resume's phases, in the order run.resume.timed lists them.
-RESUME_PHASES = ("react", "schedule", "image", "restore", "start", "reload", "take", "firstOutput")
+RESUME_PHASES = tuple(name for name, _, _ in RESUME_PHASE_PAIRS)
 
 
 def _at(stamp: str) -> datetime:

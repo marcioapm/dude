@@ -142,6 +142,12 @@ class Cleanup:
         monkeypatch.setattr(m, "log", self.logged.append)
         self.cycler, self.states = cycler, states
 
+    def aborts(self) -> list[str]:
+        return [a for a in self.asked if a.startswith("abort")]
+
+    def logged_with(self, text: str) -> list[str]:
+        return [line for line in self.logged if text in line]
+
 
 def test_cleanup_stops_the_workflows_then_aborts_every_run_still_going_and_waits_for_lux_to_cancel_it(monkeypatch):
     c = Cleanup(monkeypatch, rows={"run_a": ("running", "lrun_a"), "run_b": ("completed", "lrun_b")},
@@ -149,23 +155,23 @@ def test_cleanup_stops_the_workflows_then_aborts_every_run_still_going_and_waits
                 listings=[["run_a", "run_b"]])
     c.cycler.abort_all(timeout=5)
     assert c.asked[:2] == ["stop workflows", "list"]
-    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_a"]
+    assert c.aborts() == ["abort run_a"]
     assert c.states["lrun_a"] == ["cancelled"]
-    assert not [line for line in c.logged if "could not" in line], c.logged
+    assert not c.logged_with("could not"), c.logged
 
 
 def test_a_failed_run_lux_failed_has_ended_at_once(monkeypatch):
     c = Cleanup(monkeypatch, rows={"run_f": ("failed", "lrun_f"), "run_x": ("aborted", "lrun_x")},
                 states={"lrun_f": ["failed"], "lrun_x": ["succeeded"]}, listings=[["run_f", "run_x"]])
     c.cycler.abort_all(timeout=0)
-    assert not [a for a in c.asked if a.startswith("abort")]
-    assert not [line for line in c.logged if "could not" in line], c.logged
+    assert not c.aborts()
+    assert not c.logged_with("could not"), c.logged
 
 
 def test_an_aborted_run_lux_stopped_has_not_ended(monkeypatch):
     c = Cleanup(monkeypatch, rows={"run_x": ("aborted", "lrun_x")}, states={"lrun_x": ["stopped"]}, listings=[["run_x"]])
     c.cycler.abort_all(timeout=0)
-    assert [line for line in c.logged if "could not end Run run_x" in line], c.logged
+    assert c.logged_with("could not end Run run_x"), c.logged
 
 
 def test_a_run_whose_abort_fails_does_not_keep_the_next_from_being_aborted(monkeypatch):
@@ -173,9 +179,9 @@ def test_a_run_whose_abort_fails_does_not_keep_the_next_from_being_aborted(monke
                 states={"lrun_c": ["running"], "lrun_a": ["running", "cancelled"]},
                 listings=[["run_c", "run_a"]], failing=("run_c",))
     c.cycler.abort_all(timeout=5)
-    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_c", "abort run_a"]
+    assert c.aborts() == ["abort run_c", "abort run_a"]
     assert c.states["lrun_a"] == ["cancelled"]
-    assert [line for line in c.logged if "could not end Run run_c" in line], c.logged
+    assert c.logged_with("could not end Run run_c"), c.logged
 
 
 def test_a_run_a_workflow_step_created_after_the_first_listing_is_aborted_too(monkeypatch):
@@ -183,7 +189,7 @@ def test_a_run_a_workflow_step_created_after_the_first_listing_is_aborted_too(mo
                 states={"lrun_i": ["stopped"], "lrun_r": ["running", "cancelled"]},
                 listings=[["run_i"], ["run_i", "run_r"]])
     c.cycler.abort_all(timeout=5)
-    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_r"]
+    assert c.aborts() == ["abort run_r"]
     assert c.asked.count("list") == 2
     assert c.states["lrun_r"] == ["cancelled"]
 
@@ -195,17 +201,17 @@ def test_a_run_a_claimed_step_creates_once_it_finishes_is_aborted_too(monkeypatc
                 states={"lrun_i": ["stopped"], "lrun_r": ["running", "cancelled"]},
                 listings=[["run_i"]], claims=[["wf_1"], []], after_clear=["run_r"])
     c.cycler.abort_all(timeout=5, claim_wait=60)
-    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_r"]
+    assert c.aborts() == ["abort run_r"]
     assert c.states["lrun_r"] == ["cancelled"]
     assert c.asked.count("claimed?") == 2
-    assert not [line for line in c.logged if "still claimed" in line], c.logged
+    assert not c.logged_with("still claimed"), c.logged
 
 
 def test_a_step_claimed_past_the_bound_is_said_and_cleanup_goes_on(monkeypatch):
     c = Cleanup(monkeypatch, rows={"run_r": ("running", "lrun_r")}, states={"lrun_r": ["running", "cancelled"]},
                 listings=[["run_r"]], claims=[["wf_1"]])
     c.cycler.abort_all(timeout=5, claim_wait=0)
-    assert [line for line in c.logged if "still claimed after 0s: wf_1" in line], c.logged
+    assert c.logged_with("still claimed after 0s: wf_1"), c.logged
     assert c.asked.count("list") == 2
 
 

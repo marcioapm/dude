@@ -634,6 +634,15 @@ describe("an agent that asks", () => {
 describe("how long a resume took", () => {
   const timed = (payload: Record<string, unknown>) => ev(EventTypes.RunResumeTimed, payload);
   const phases = { react: 120, schedule: 300, image: 1000, restore: 1200, start: 800, reload: 2100, take: 400, firstOutput: 1600 };
+  type Turns = ReturnType<typeof project>["turns"];
+  const noticeTexts = (turns: Turns) => turns.map((t) => t.kind === "notice" && t.text);
+  const unparkedNotices = (turns: Turns) => turns.filter((t) => t.kind === "notice" && t.notice === "unparked");
+  // The turns of events folded one at a time, as the UI streams them.
+  const folded = (events: PersistedEvent[]) => {
+    const state = emptyProjection();
+    for (const e of events) apply(state, [e]);
+    return snapshot(state).turns;
+  };
 
   test("a park's return says how long it took, and its phases in order on hover", () => {
     const { turns } = project([
@@ -676,7 +685,7 @@ describe("how long a resume took", () => {
       ev(EventTypes.RunPaused, { requested: true }),
       timed({ epoch: 3, cause: "person", moved: false, totalMs: 2000, phases: {} }),
     ]);
-    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual(["Taken back up where it left off.", "Resumed in 2.0s."]);
+    expect(noticeTexts(turns)).toEqual(["Taken back up where it left off.", "Resumed in 2.0s."]);
   });
 
   test("folded one event at a time, the notice is the same", () => {
@@ -684,9 +693,7 @@ describe("how long a resume took", () => {
       ev("run.unparked", { reason: "person" }),
       timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases }),
     ];
-    const state = emptyProjection();
-    for (const e of events) apply(state, [e]);
-    expect(snapshot(state).turns).toEqual(project(events).turns);
+    expect(folded(events)).toEqual(project(events).turns);
   });
 
   // Two parks, each resume's timing arriving late: each goes to its own
@@ -704,7 +711,7 @@ describe("how long a resume took", () => {
         : timed({ epoch: 3, cause: "answer", moved: true, totalMs: 2000, phases: { react: 50 } });
       const late = order === "in order" ? [timing(2), timing(3)] : [timing(3), timing(2)];
       const { turns } = project([...parks, ...late]);
-      expect(turns.filter((t) => t.kind === "notice" && t.notice === "unparked")).toEqual([
+      expect(unparkedNotices(turns)).toEqual([
         expect.objectContaining({ text: "Taken back up in 6.4s.", title: "dude asked lux 120ms" }),
         expect.objectContaining({ text: "Taken back up in 2.0s, on another host.", title: "dude asked lux 50ms" }),
       ]);
@@ -719,7 +726,7 @@ describe("how long a resume took", () => {
       ev(EventTypes.RunResumed, {}),
       timed({ epoch: 3, cause: "person", moved: false, totalMs: 1500, phases: {} }),
     ]);
-    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual(["Taken back up in 6.4s.", "Resumed in 1.5s."]);
+    expect(noticeTexts(turns)).toEqual(["Taken back up in 6.4s.", "Resumed in 1.5s."]);
   });
 
   // lux streams the resumed agent's first words before its answer to the
@@ -731,12 +738,10 @@ describe("how long a resume took", () => {
       ev("run.unparked", { reason: "person", epoch: 2 }),
     ];
     const { turns } = project(events);
-    expect(turns.filter((t) => t.kind === "notice" && t.notice === "unparked")).toEqual([
+    expect(unparkedNotices(turns)).toEqual([
       expect.objectContaining({ text: "Taken back up in 6.4s.", title: "dude asked lux 120ms\ntook its input 400ms" }),
     ]);
-    const state = emptyProjection();
-    for (const e of events) apply(state, [e]);
-    expect(snapshot(state).turns).toEqual(turns);
+    expect(folded(events)).toEqual(turns);
   });
 
   test("a person's resume of a Run no park holds is said at once", () => {
@@ -748,7 +753,7 @@ describe("how long a resume took", () => {
       ev(EventTypes.RunResumed, {}),
       timed({ epoch: 3, cause: "person", moved: false, totalMs: 1500, phases: {} }),
     ]);
-    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual([
+    expect(noticeTexts(turns)).toEqual([
       expect.stringContaining("Parked"), "Taken back up in 6.4s.", "Resumed in 1.5s.",
     ]);
   });
@@ -767,15 +772,13 @@ describe("how long a resume took", () => {
 
   test("a person's resume timed after the next park is still said, and so is that park's return", () => {
     const { turns } = project(delayedPersonal);
-    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual([
+    expect(noticeTexts(turns)).toEqual([
       expect.stringContaining("Parked"), "Resumed in 6.4s.", "Taken back up in 1.5s.",
     ]);
   });
 
   test("folded one event at a time, a delayed personal resume and the park's return are the same", () => {
-    const state = emptyProjection();
-    for (const e of delayedPersonal) apply(state, [e]);
-    expect(snapshot(state).turns).toEqual(project(delayedPersonal).turns);
+    expect(folded(delayedPersonal)).toEqual(project(delayedPersonal).turns);
   });
 });
 
