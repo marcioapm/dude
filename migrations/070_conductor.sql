@@ -37,6 +37,11 @@ ALTER TABLE runs ADD COLUMN prompt text;
 CREATE UNIQUE INDEX runs_live_conductor_idx ON runs (task_id)
   WHERE role = 'conductor' AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused');
 
+-- Messages no agent has read or been told it will not: the syncer looks
+-- here for those an ended conductor still holds, to hand to the next one.
+-- Unlike directives_pending_idx it leaves out failed ones, which are kept.
+CREATE INDEX directives_unsettled_idx ON directives (run_id) WHERE delivered_at IS NULL AND failed_at IS NULL;
+
 -- conductor: parked after its warm period; a person's message resumes it.
 ALTER TABLE runs DROP CONSTRAINT runs_dude_pause_check;
 ALTER TABLE runs ADD CONSTRAINT runs_dude_pause_check

@@ -273,6 +273,9 @@ func scan(row pgx.Row) (phaseRun, error) {
 // Runs that need attention is the job; each is then handled in its own
 // organization's scope.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+	if err := s.handOverUnheard(ctx); err != nil {
+		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+	}
 	var runs []phaseRun
 	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
 		// Every live Run, not the oldest N: a Run with nothing to do still
@@ -412,17 +415,50 @@ func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
 	return false, nil
 }
 
-// endConductor completes a conductor that can no longer be resumed.
+// endConductor completes a conductor that can no longer be resumed, under
+// its task's Chat lock, handing what it never read to the next conductor
+// (delivery.EndConductor).
 func (s *Syncer) endConductor(ctx context.Context, r phaseRun, why string) error {
 	s.unfollow(r.ID)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = 'complete'
-			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
-		if err != nil || tag.RowsAffected() == 0 {
+		if err := delivery.LockChat(ctx, tx, r.TaskID); err != nil {
 			return err
 		}
-		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed", "reason": why})
+		return delivery.EndConductor(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}, why)
 	})
+}
+
+// handOverUnheard settles input left on conductors that ended some other
+// way — failed mid-turn, or aborted — while a message was on its way to
+// them: handed to the task's next conductor, or, for one a person
+// aborted, failed saying so (delivery.HandOver).
+func (s *Syncer) handOverUnheard(ctx context.Context) error {
+	type ended struct{ ID, Org, ProjectID, TaskID, Status string }
+	var todo []ended
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text
+			FROM runs r WHERE `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[ended])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, e := range todo {
+		if err := s.DB.InOrg(ctx, e.Org, func(tx pgx.Tx) error {
+			if err := delivery.LockChat(ctx, tx, e.TaskID); err != nil {
+				return err
+			}
+			_, err := delivery.HandOver(ctx, tx, delivery.RunRef{Org: e.Org, ProjectID: e.ProjectID, TaskID: e.TaskID, RunID: e.ID},
+				e.Status != statusAborted)
+			return err
+		}); err != nil {
+			s.Log.Warn("handing a stopped conductor's messages on failed", "run", e.ID, "error", err)
+		}
+	}
+	return nil
 }
 
 // submit builds the Run's spec and hands it to lux. A Run whose image is
