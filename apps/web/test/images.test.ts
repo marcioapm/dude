@@ -1,15 +1,17 @@
 /**
  * What the browser does to an image before it is uploaded: which files it
- * refuses, how large the agent's copy is drawn, and the order of encodings
- * it tries until the copy fits its budget.
+ * refuses, how large the agent's copy is drawn, which encodings it draws
+ * until the copy fits its budget, and how a tray's images share a message.
  */
 
 import { expect, test } from "bun:test";
 import { ATTACHMENT_LIMITS } from "@dude/domain";
 import {
-  BUDGET_SPENT, MIN_IMAGE_BUDGET, ShrinkError, budgetFor, deliveredName, encodings, fit, nextScale, prepare, refuse, sentChips, shrink,
-  sniffImage, type Encoder,
+  BEST_QUALITY, BUDGET_SPENT, MIN_IMAGE_BUDGET, ShrinkError, budgetFor, deliveredName, fit, makeChip, nextScale, prepare, refuse, sentChips, shrink,
+  sniffImage, type BudgetChip, type Encoder,
 } from "../src/images.ts";
+
+const MiB = 1024 * 1024;
 
 const bytes = (...b: number[]) => new Uint8Array(b);
 const PNG = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0);
@@ -41,12 +43,22 @@ test("the agent's copy is at most 2000 px on its long side, never enlarged", () 
   expect(fit({ width: 900, height: 900 }, 2000, 0.5)).toEqual({ width: 450, height: 450 });
 });
 
-test("a PNG is tried as a PNG first; everything else goes lossy, WebP then JPEG, quality falling", () => {
-  expect(encodings("image/png")[0]).toEqual({ type: "image/png" });
-  expect(encodings("image/gif")[0]).toEqual({ type: "image/webp", quality: 0.92 });
-  const qualities = encodings("image/jpeg").map((e) => e.quality!);
-  expect(qualities).toEqual([...qualities].sort((a, b) => b - a));
-  expect(encodings("image/jpeg").every((e) => e.type !== "image/png")).toBe(true);
+test("a PNG is tried as a PNG first, at full size; anything else starts lossy at the best quality", async () => {
+  const png = weighing((type) => (type === "image/png" ? 4 : 0.1));
+  await shrink({ width: 1000, height: 1000 }, "image/png", png, 2000, 2 * MiB);
+  expect(png.tried).toEqual(["image/png@- 1000x1000", `image/webp@${BEST_QUALITY} 1000x1000`]);
+  const gif = weighing(() => 0.1);
+  await shrink({ width: 1000, height: 1000 }, "image/gif", gif, 2000, 2 * MiB);
+  expect(gif.tried).toEqual([`image/webp@${BEST_QUALITY} 1000x1000`]);
+});
+
+test("a PNG stays lossless only within its lossless budget: over it, it goes lossy at full size", async () => {
+  const e = weighing((type) => (type === "image/png" ? 1 : 0.4));
+  const kept = await shrink({ width: 1000, height: 1000 }, "image/png", e, 2000, 3 * MiB, 1_000_000);
+  expect(kept.blob.type).toBe("image/png");
+  const lossy = await shrink({ width: 1000, height: 1000 }, "image/png", e, 2000, 3 * MiB, 999_999);
+  expect(lossy.blob.type).toBe("image/webp");
+  expect(lossy.size).toEqual({ width: 1000, height: 1000 });
 });
 
 /** An encoder whose output weighs one byte per pixel, times a factor per type and quality. */
@@ -93,7 +105,6 @@ test("the next scale is estimated from how far over the last try came, and alway
   expect(nextScale(0.5, 1_010_000, 1_000_000)).toBeCloseTo(0.45);
 });
 
-const MiB = 1024 * 1024;
 const LIMITS = { ...ATTACHMENT_LIMITS, messageBytes: 5 * MiB, deliveredBytes: 4.5 * MiB };
 
 test("an image's budget is what the message's other images leave, shared with those still being made", () => {
@@ -135,22 +146,47 @@ test("a message with no room left refuses an image before drawing it", async () 
   expect(e.tried).toEqual([]);
 });
 
-/**
- * Six images attached at once, made one after another as the tray does:
- * each with its budgetFor share. The size model is the performance
- * review's: a PNG weighs `png` bytes a pixel, a lossy encoding 0.45 × its
- * quality.
- */
-async function attachSix(source: { width: number; height: number }, file: () => File, png: number) {
-  const chips: Array<{ id: string; state: "uploading" | "ready" | "error"; deliveredBytes?: number }> =
-    Array.from({ length: 6 }, (_, i) => ({ id: `c${i}`, state: "uploading" }));
-  const out: Array<{ encodes: number; long: number; bytes: number }> = [];
-  for (const chip of chips) {
-    const e = weighing((type, q) => (type === "image/png" ? png : 0.45 * (q ?? 1)));
-    const made = await prepare(file(), LIMITS, budgetFor(chips, chip.id, LIMITS.messageBytes), decoded(source, e));
+/** The performance review's size model: a PNG weighs `png` bytes a pixel, a lossy encoding 0.45 × its quality. */
+const sized = (png: number) => weighing((type, q) => (type === "image/png" ? png : 0.45 * (q ?? 1)));
+
+/** What one chip came to: its draws, its long side, its bytes; refused for lack of room. */
+type Outcome = { encodes: number; long: number; bytes: number } | "no room";
+
+/** Makes `chip` as the tray does (makeChip), with the model's encoder, and records it on the chip. */
+async function make(chips: BudgetChip[], chip: BudgetChip, source: { width: number; height: number }, file: File, png: number): Promise<Outcome> {
+  const e = sized(png);
+  try {
+    const result = await makeChip(chips, chip.id, file, LIMITS, decoded(source, e));
+    if (!("made" in result)) throw new Error(`refused: ${result.refused.detail}`);
     chip.state = "ready";
-    chip.deliveredBytes = made.delivered.size;
-    out.push({ encodes: e.tried.length, long: Math.max(made.width, made.height), bytes: made.delivered.size });
+    chip.deliveredBytes = result.made.delivered.size;
+    return { encodes: e.tried.length, long: Math.max(result.made.width, result.made.height), bytes: result.made.delivered.size };
+  } catch (err) {
+    if (!(err instanceof ShrinkError && err.message === BUDGET_SPENT)) throw err;
+    chip.state = "error";
+    return "no room";
+  }
+}
+
+/** Six images attached at once (one drop): every chip is there before the first is made. */
+async function attachSix(source: { width: number; height: number }, file: () => File, png: number) {
+  const chips: BudgetChip[] = Array.from({ length: 6 }, (_, i) => ({ id: `c${i}`, state: "uploading" }));
+  const out: Outcome[] = [];
+  for (const chip of chips) out.push(await make(chips, chip, source, file(), png));
+  return out.map((o) => {
+    if (o === "no room") throw new Error("an image of six attached at once found no room");
+    return o;
+  });
+}
+
+/** Six images pasted one at a time: each chip appears only after the one before is made. */
+async function pasteSix(source: { width: number; height: number }, file: () => File, png: number) {
+  const chips: BudgetChip[] = [];
+  const out: Outcome[] = [];
+  for (let i = 0; i < 6; i++) {
+    const chip: BudgetChip = { id: `p${i}`, state: "uploading" };
+    chips.push(chip);
+    out.push(await make(chips, chip, source, file(), png));
   }
   return out;
 }
@@ -167,6 +203,23 @@ test("six retina screenshots: at most 3 draws each, none starved, together withi
   expect(Math.max(...six.map((i) => i.encodes))).toBeLessThanOrEqual(3);
   expect(Math.min(...six.map((i) => i.long))).toBeGreaterThanOrEqual(1400);
   expect(six.reduce((n, i) => n + i.bytes, 0)).toBeLessThanOrEqual(LIMITS.messageBytes);
+});
+
+test("six retina screenshots pasted one at a time: the first five are readable, together within the message", async () => {
+  const six = await pasteSix({ width: 3024, height: 1964 }, () => pngFile("shot.png"), 1.2);
+  for (const [i, image] of six.slice(0, 5).entries()) {
+    if (image === "no room") throw new Error(`screenshot ${i + 1} found no room`);
+    expect(image.long).toBeGreaterThanOrEqual(1400);
+  }
+  const made = six.filter((o) => o !== "no room");
+  expect(made.reduce((n, i) => n + i.bytes, 0)).toBeLessThanOrEqual(LIMITS.messageBytes);
+});
+
+test("a file the tray cannot send is refused with why, and never drawn", async () => {
+  const e = sized(1);
+  const result = await makeChip([], "c", new File([new TextEncoder().encode("%PDF-1.7")], "spec.pdf"), LIMITS, decoded({ width: 10, height: 10 }, e));
+  expect(result).toEqual({ refused: { short: "PDF not supported", detail: "only PNG, JPEG, WebP and GIF can be sent" } });
+  expect(e.tried).toEqual([]);
 });
 
 test("a message's chips are cleared only for the images it took", () => {

@@ -10,7 +10,7 @@ import { MessageImages, type ComposerAttachment, type SentImage } from "@dude/de
 import { formatBytes } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, type AttachmentInfo } from "@dude/domain";
 import { ApiError, type ApiClient, type AttachmentLimits } from "../api/client.ts";
-import { BUDGET_SPENT, ShrinkError, budgetFor, deliveredName, prepare, refuse, sentChips, type Limits, type Prepared } from "../images.ts";
+import { BUDGET_SPENT, ShrinkError, deliveredName, makeChip, sentChips, type Limits, type Prepared } from "../images.ts";
 
 interface Chip extends ComposerAttachment {
   /** What the delivered variant weighs, once made: the message's budget counts it. */
@@ -89,18 +89,18 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
     void (async () => {
       for (const [i, file] of taken.entries()) {
         const chip = fresh[i]!;
-        const why = await refuse(file, limits);
-        if (why) {
-          // Not an image, or one too big to draw: no thumbnail, the file glyph.
-          const url = previews.current.get(chip.id);
-          if (url) URL.revokeObjectURL(url);
-          previews.current.delete(chip.id);
-          update(chip.id, { state: "error", error: why.short, errorDetail: why.detail, previewUrl: undefined });
-          continue;
-        }
         let made;
         try {
-          made = await prepare(file, limits, budgetFor(chipsRef.current, chip.id, limits.messageBytes));
+          const result = await makeChip(chipsRef.current, chip.id, file, limits);
+          if ("refused" in result) {
+            // Not an image, or one too big to draw: no thumbnail, the file glyph.
+            const url = previews.current.get(chip.id);
+            if (url) URL.revokeObjectURL(url);
+            previews.current.delete(chip.id);
+            update(chip.id, { state: "error", error: result.refused.short, errorDetail: result.refused.detail, previewUrl: undefined });
+            continue;
+          }
+          made = result.made;
         } catch (err) {
           const full = err instanceof ShrinkError && err.message === BUDGET_SPENT;
           update(chip.id, full
