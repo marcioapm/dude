@@ -38,19 +38,20 @@ const attachmentJSON = `json_build_object('id', a.id, 'name', a.name, 'contentTy
 // is sent. Returns their metadata, in the order given, for the message's
 // event. Locks the rows, so two messages cannot both take one.
 //
-// For the prompt, ids is the whole set: a delivery asked again (its first
-// start failed) may name a different one, and the prompt's images it no
-// longer names are let go. Callers attach to the prompt only while no
-// agent Run exists, so no agent has seen them.
+// For the prompt, ids is the whole set, empty included: a delivery asked
+// again (its first start failed) may name a different one or none, and the
+// prompt's images it no longer names are let go. Callers attach to the
+// prompt only while no agent Run exists, so no agent has seen them.
 func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []string) ([]json.RawMessage, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
 	if directiveID == "" {
+		// A nil slice is SQL NULL, and NOT (id = ANY(NULL)) matches nothing.
 		if _, err := tx.Exec(ctx, `UPDATE attachments SET for_prompt = false, attached_at = NULL, position = 0
-			WHERE task_id = $1 AND for_prompt AND NOT (id = ANY($2))`, taskID, ids); err != nil {
+			WHERE task_id = $1 AND for_prompt AND NOT (id = ANY($2))`, taskID, append([]string{}, ids...)); err != nil {
 			return nil, err
 		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
 	}
 	if len(ids) > MaxAttachmentsPerMessage {
 		return nil, AttachmentError{fmt.Sprintf("a message carries at most %d images", MaxAttachmentsPerMessage)}

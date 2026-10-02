@@ -355,13 +355,42 @@ func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
 		t.Error("an image left out of a smaller set is still the prompt's")
 	}
 	failing("att_design")
+	// Every image removed: a delivery asked again with none sends none —
+	// whether it names an empty list or, as the web app does, none at all.
+	bare := w.task()
+	w.upload(b, "att_removed", bare, "removed.png", screenshot)
+	deliverBare := func(body map[string]any, want int) {
+		t.Helper()
+		if status, out := w.call("/internal/tasks/"+bare+"/deliver", body); status != want {
+			t.Fatalf("deliver %v: %d %v, want %d", body, status, out, want)
+		}
+	}
+	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
+	deliverBare(map[string]any{}, 500)
+	if !unsent("att_removed") {
+		t.Error("an image removed from a delivery asked again naming none is still the prompt's")
+	}
+	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
 	mustExec(t, w.owner, fmt.Sprintf(`DROP TRIGGER refuse_%[1]s ON workflow_runs; DROP FUNCTION refuse_%[1]s()`, w.org))
+	deliverBare(map[string]any{"attachmentIds": []string{}}, 201)
+	if !unsent("att_removed") {
+		t.Error("an image removed from a delivery asked again with none is still the prompt's")
+	}
+	w.until("the bare task's implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	if got := promptImages(t, w.lux.Runs()[0].Spec); len(got) != 0 {
+		t.Fatalf("a delivery asked again with no images gave the implementer %v", got)
+	}
 
 	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_b", "att_design"}}); status != 201 {
 		t.Fatalf("deliver again: %d %v", status, body)
 	}
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"b.png", "design.png"}) {
+	// Deliver pressed again at once (no images: the task's own button)
+	// is the same delivery, and does not take its images away.
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 200 {
+		t.Fatalf("deliver a delivery already started: %d %v", status, body)
+	}
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 2 })
+	if got := promptImages(t, w.lux.Runs()[1].Spec); !slices.Equal(got, []string{"b.png", "design.png"}) {
 		t.Fatalf("the implementer was given %v", got)
 	}
 	// It was sent, with the prompt: a steer cannot take it.
