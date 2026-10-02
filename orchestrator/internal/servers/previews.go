@@ -454,7 +454,7 @@ func (p *Previews) follow(r previewRun) {
 			p.mu.Unlock()
 			cancel()
 		}()
-		if err := p.followEvents(ctx, r); err != nil && ctx.Err() == nil {
+		if _, err := p.followEvents(ctx, r); err != nil && ctx.Err() == nil {
 			p.Log.Warn("following a preview's lux events stopped", "run", r.ID, "error", err)
 		}
 	}()
@@ -483,15 +483,16 @@ func (p *Previews) Stop() {
 // and lux leaves its servers' output out of the stream, so its records are
 // skipped: only the event position is kept. lux ends every stream it
 // finishes with an end frame: one that stops without it was cut short
-// (errNoEnd).
-func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
+// (errNoEnd). Returns how many lifecycle events lux sent past the stored
+// cursor.
+func (p *Previews) followEvents(ctx context.Context, r previewRun) (int, error) {
 	var after int64
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	ended := false
+	ended, sent := false, 0
 	err := p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
 		if f.Kind == "end" {
 			ended = true
@@ -499,6 +500,7 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 		if f.Kind != "lux" {
 			return nil
 		}
+		sent++
 		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// Skipped: an event of a Run the preview has let go of
 			// (retireRun), whose stream is still draining; and one already
@@ -518,11 +520,11 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 	})
 	if err == nil && !ended {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return sent, ctx.Err()
 		}
-		return errNoEnd
+		return sent, errNoEnd
 	}
-	return err
+	return sent, err
 }
 
 var errNoEnd = errors.New("lux's event stream stopped without its end")

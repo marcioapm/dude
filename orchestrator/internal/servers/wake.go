@@ -636,40 +636,51 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 // follower: whether its start ran decides what a wake does with it, and a
 // failed start is counted once (luxEvent) wherever it is first applied.
 // lux's stream of an ended Run ends after its last event, or after one page
-// of a long backlog: drained until the state applied is the Run's state in
-// lux now, at most drainPasses times; short of that, an error (the wake is
-// tried again later).
+// of a long backlog, and its end frame does not say which; nor does the
+// Run's state, which a later start can end in again. So the Run is drained
+// until a pass from the stored cursor reaches lux's end with no event past
+// it, and the state applied is the Run's state in lux then; short of that
+// within drainPasses, an error (the wake is tried again later).
 func (p *Previews) drain(ctx context.Context, r wakeRun) error {
 	for range drainPasses {
 		dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
-		err := p.followEvents(dctx, r.previewRun)
+		sent, err := p.followEvents(dctx, r.previewRun)
 		cancel()
 		if err != nil {
 			return err
+		}
+		current, applied, err := p.appliedState(ctx, r)
+		if err != nil || !current {
+			return err
+		}
+		if sent > 0 {
+			continue
 		}
 		lr, err := p.Lux.Get(ctx, r.LuxRunID)
 		if err != nil {
 			return err
 		}
-		var current bool
-		var applied string
-		if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, COALESCE(lux_state, '') FROM runs WHERE id = $1`,
-				r.ID, r.LuxRunID).Scan(&current, &applied)
-		}); err != nil {
-			return err
-		}
-		if !current || applied == lux.Recorded(lr.State, lr.StateReason) {
+		if applied == lux.Recorded(lr.State, lr.StateReason) {
 			return nil
 		}
 	}
-	return fmt.Errorf("lux run %s: its events were not all applied after %d passes", r.LuxRunID, drainPasses)
+	return fmt.Errorf("lux run %s: no pass of its events reached their end within %d passes", r.LuxRunID, drainPasses)
+}
+
+// appliedState is whether the wake's lux Run is still the preview's, and
+// the state dude applied of it.
+func (p *Previews) appliedState(ctx context.Context, r wakeRun) (current bool, applied string, err error) {
+	err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, COALESCE(lux_state, '') FROM runs WHERE id = $1`,
+			r.ID, r.LuxRunID).Scan(&current, &applied)
+	})
+	return current, applied, err
 }
 
 // drain's bounds: each pass's stream, and the passes.
 const (
 	drainFor    = 30 * time.Second
-	drainPasses = 3
+	drainPasses = 5
 )
 
 // startState is what dude has applied of the preview's Run: whether its
