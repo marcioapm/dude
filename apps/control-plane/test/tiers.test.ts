@@ -32,6 +32,8 @@ const NAME = `dude_tiers_api_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
 const ORG = "org_tiers";
 const OTHER = "org_tiers_other";
 const PROJECT = "prj_tiers";
+/** The project as the API shows it where it names one. */
+const DOCS_SITE = { id: PROJECT, name: "Docs site", imageUrl: null };
 
 function databaseUrl(appRole = false): string {
   const url = new URL(OWNER_URL);
@@ -58,7 +60,8 @@ const timeouts = { callMs: 200, testMessageMs: 1_000 };
 /** How long the stand-in takes to answer a test of the model "slow", or GET /internal/push/key: between the two. */
 const slowMs = 500;
 /** How it answers GET /internal/llm/models. */
-let modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+const listedModels = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+let modelsReply = listedModels;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const body = async (res: Response): Promise<Json> => res.json();
@@ -99,11 +102,10 @@ beforeAll(async () => {
         const asked = await req.json() as { model: string; efforts: Array<string | null> };
         tested.push(asked);
         if (asked.model === "slow") await Bun.sleep(slowMs);
-        if (asked.model === "nope") {
-          return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({
-            efforts: [effort], sent: effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" })) });
-        }
-        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({ efforts: [effort], sent: effort, ok: true, latencyMs: 800, status: 200, error: null })) });
+        const refused = asked.model === "nope";
+        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => refused
+          ? { efforts: [effort], sent: effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }
+          : { efforts: [effort], sent: effort, ok: true, latencyMs: 800, status: 200, error: null }) });
       }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
@@ -242,7 +244,7 @@ describe("roles name a tier", () => {
     await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { tier: cheap.id, effort: "high" } } });
     expect((await byName("Cheap")).usedBy).toEqual([
       { kind: "organization", role: "simplifier", project: null, effort: "high" },
-      { kind: "project", role: "reviewer", project: { id: PROJECT, name: "Docs site", imageUrl: null }, effort: "low" },
+      { kind: "project", role: "reviewer", project: DOCS_SITE, effort: "low" },
     ]);
   });
 
@@ -251,7 +253,7 @@ describe("roles name a tier", () => {
     const before = await projectModels();
     try {
       await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: cheap.id, effort: "medium" } } });
-      const project = { id: PROJECT, name: "Docs site", imageUrl: null };
+      const project = DOCS_SITE;
       expect((await byName("Cheap")).usedBy.filter((u: Json) => u.kind === "project")).toEqual([
         { kind: "project", role: "reviewer", project, effort: "low" },
         { kind: "project", role: "implementer", project, effort: "medium" },
@@ -335,7 +337,7 @@ describe("the proxy's models", () => {
       const fast = await byName("Fast");
       expect((await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", model: "not-listed-anywhere" })).status).toBe(200);
     } finally {
-      modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
+      modelsReply = listedModels;
     }
   });
 });
@@ -392,7 +394,7 @@ describe("the upgrade's notes", () => {
     const notes = (await body(await call(adminKey, "GET", "/v1/models/tiers"))).upgrade;
     expect(notes.map((n: Json) => ({ ...n, id: 0 }))).toEqual([
       { id: 0, role: "reviewer", project: null, oldModel: "llm-anthropic/claude-sonnet-5-5", tierId: thinker.id, tierName: "Thinker", newTier: false, modelChanged: true },
-      { id: 0, role: "implementer", project: { id: PROJECT, name: "Docs site", imageUrl: null }, oldModel: "llm-openai/gpt-5.6-sol", tierId: null, tierName: "gpt-5.6-sol", newTier: false, modelChanged: false },
+      { id: 0, role: "implementer", project: DOCS_SITE, oldModel: "llm-openai/gpt-5.6-sol", tierId: null, tierName: "gpt-5.6-sol", newTier: false, modelChanged: false },
     ]);
     expect((await body(await call(memberKey, "GET", "/v1/models/tiers"))).upgrade).toEqual([]);
     const done = await call(adminKey, "POST", "/v1/models/upgrade/dismiss");
