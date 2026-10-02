@@ -49,10 +49,10 @@ var tools = []tool{
 		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
 		"or told it was declined.",
 		nil, requestRepository).limit(requestsPerRun),
-	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
+	define("create_task", fmt.Sprintf("Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. The goal is required (at least 16 characters): say why it matters and what should change.",
-		creators, createTask).limit(createsPerRun),
+		"and decides. The goal is required (at least %d characters): say why it matters and what should change.",
+		GoalMin), creators, createTask).limit(createsPerRun),
 	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
 		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
 		"Search before you investigate something that may already be known, and before you remember something.",
@@ -120,7 +120,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 
 type createTaskIn struct {
 	Title              string   `json:"title" jsonschema:"what should change, in one line"`
-	Goal               string   `json:"goal" jsonschema:"required, at least 16 characters: why it matters, what should change, and any detail another agent or a person needs"`
+	Goal               string   `json:"goal" jsonschema:"required: why it matters, what should change, and any detail another agent or a person needs; see the tool's description for the minimum"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
 	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
 }
