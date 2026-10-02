@@ -140,6 +140,71 @@ def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     assert client.post(f"/v1/runs/{run['id']}/abort", {}).status_code == 200
 
 
+def _png(width: int, height: int) -> bytes:
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + bytes((x * 7) % 256 for x in range(width * 3)) for _ in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _upload_png(client: ApiClient, task_id: str, name: str, data: bytes) -> dict:
+    res = requests.post(f"{client.base_url}/v1/tasks/{task_id}/attachments",
+                        files={"original": (name, data, "image/png"), "delivered": (name, data, "image/png")},
+                        data={"originalType": "image/png", "deliveredType": "image/png", "name": name},
+                        headers={"authorization": f"Bearer {client.api_key}"}, timeout=30)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_an_image_steer_and_an_image_prompt_on_real_lux(client: ApiClient, lux_project):
+    """lux feat/input-attachments: a steer's image goes on POST /input as
+    `attachments`, and the task's on `workload.attachments`. lux takes both
+    (the spec is validated at submit, so a Run that starts took the prompt's).
+
+    lux-fake speaks ACP: if it does not advertise `promptCapabilities.image`
+    lux accepts the input and then fails it with "the agent does not take
+    images"; that, or delivery, is what the contract allows. Anything else —
+    a 400 invalid_attachment, which dude shows as "lux refused its images",
+    or a steer that never settles — is a contract break.
+    """
+    project, _ = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    task = client.create_task(project["id"], "See this on lux")
+    prompt_image = _upload_png(client, task["id"], "design.png", _png(64, 48))
+    assert client.post(f"/v1/tasks/{task['id']}/deliver", {"attachmentIds": [prompt_image["id"]]}).status_code == 201
+
+    run = wait_until(
+        lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
+        timeout=120, interval=1, message="the agent given a prompt image never started on lux",
+    )
+    prompt = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "agent.prompt.delivered"],
+                        timeout=60, interval=1, message="lux never acknowledged the prompt")
+    assert [a["id"] for a in prompt[0]["payload"].get("attachments", [])] == [prompt_image["id"]]
+
+    steer_image = _upload_png(client, task["id"], "checkout.png", _png(120, 80))
+    res = client.post(f"/v1/runs/{run['id']}/steer", {"text": "see this", "interrupt": True, "attachmentIds": [steer_image["id"]]})
+    assert res.status_code == 201, res.text
+    directive = res.json()["id"]
+
+    def settled():
+        d = next(d for d in client.get(f"/v1/runs/{run['id']}/directives").json()["directives"] if d["id"] == directive)
+        if d["deliveredAt"]:
+            return ("delivered", None)
+        failed = [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.directive.failed"
+                  and e["payload"].get("directiveId") == directive]
+        return ("failed", failed[0]["payload"]["error"]) if failed else None
+
+    outcome = wait_until(settled, timeout=90, interval=1, message="lux never settled the image steer")
+    assert outcome in (("delivered", None), ("failed", "the agent does not take images")), outcome
+    assert client.post(f"/v1/runs/{run['id']}/abort", {}).status_code == 200
+
+
 @pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")
 def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
     """lux hands the agent dude's MCP server, authenticated as its Run; the

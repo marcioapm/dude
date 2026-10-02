@@ -63,6 +63,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
+	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
@@ -151,8 +152,18 @@ func run(log *slog.Logger) error {
 	default:
 		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
 	}
+	bucket, err := objects.New(set.Objects)
+	if err != nil {
+		log.Error("image storage", "error", err)
+		os.Exit(2)
+	}
+	// A nil *S3 in the interface would not be a nil Store.
+	var objectStore objects.Store
+	if bucket != nil {
+		objectStore = bucket
+	}
 	syncer := &phases.Syncer{
-		DB: database, Lux: luxClient,
+		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
 		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,

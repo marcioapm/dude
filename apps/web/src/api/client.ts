@@ -63,6 +63,7 @@ import type {
   Memory,
   MemoryInput,
   SearchOutcome,
+  AttachmentInfo,
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
@@ -305,6 +306,17 @@ export interface Artifact {
   version: number;
   /** How many of its name there are. */
   versions: number;
+}
+
+/** Whether images can be attached, and the limits the browser keeps to (packages/domain attachments.ts). */
+export interface AttachmentLimits {
+  enabled: boolean;
+  types: string[];
+  perMessage: number;
+  originalBytes: number;
+  deliveredBytes: number;
+  messageBytes: number;
+  maxSide: number;
 }
 
 export class ApiClient {
@@ -819,8 +831,8 @@ export class ApiClient {
    * Start the delivery workflow: implement, review, fix, simplify, then a
    * pull request. Idempotent — a second call joins the delivery in flight.
    */
-  deliver(taskId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, {});
+  deliver(taskId: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, attachmentIds.length > 0 ? { attachmentIds } : {});
   }
 
   /** Approve or decline an agent's request for a repository. */
@@ -875,8 +887,61 @@ export class ApiClient {
   // -- intervention (plan §24) --------------------------------------------
 
   /** Answer the question an agent stopped on; the answer starts its next turn. */
-  answer(questionId: string, text: string): Promise<{ id: string; status: "answered" }> {
-    return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
+  answer(questionId: string, text: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ id: string; status: "answered" }> {
+    return this.#request("POST", `/v1/questions/${questionId}/answer`, { text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
+  }
+
+  // -- images a person sends an agent -------------------------------------
+
+  /** Whether images can be attached here, and the limits the browser keeps to. */
+  attachmentLimits(): Promise<AttachmentLimits> {
+    return this.#request("GET", "/v1/attachment-limits");
+  }
+
+  /**
+   * Upload one image to a task: the original as picked and the variant the
+   * agent is sent. `onProgress` follows the upload (0..1). XHR, because
+   * fetch reports no upload progress.
+   */
+  uploadAttachment(taskId: string, image: { name: string; original: Blob; delivered: Blob },
+    onProgress?: (fraction: number) => void): Promise<AttachmentInfo> {
+    const form = new FormData();
+    form.set("name", image.name);
+    form.set("original", image.original, image.name);
+    form.set("originalType", image.original.type);
+    form.set("delivered", image.delivered, image.name);
+    form.set("deliveredType", image.delivered.type);
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${this.#baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/attachments`);
+      xhr.withCredentials = true;
+      if (this.#apiKey) xhr.setRequestHeader("authorization", `Bearer ${this.#apiKey}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+      };
+      xhr.onerror = () => reject(new ApiError(0, "network", "the upload did not reach dude"));
+      xhr.onload = () => {
+        let body: { error?: { code?: string; message?: string } } & Partial<AttachmentInfo> = {};
+        try {
+          body = JSON.parse(xhr.responseText || "{}");
+        } catch {
+          // A proxy's HTML refusal: the status still applies.
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body as AttachmentInfo);
+        else reject(new ApiError(xhr.status, body.error?.code ?? "error", body.error?.message ?? `upload failed (${xhr.status})`));
+      };
+      xhr.send(form);
+    });
+  }
+
+  /** An image's bytes, as the agent got it or as it was picked. */
+  async attachment(id: string, variant: "delivered" | "original" = "delivered"): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/attachments/${encodeURIComponent(id)}?variant=${variant}`)).blob();
+  }
+
+  /** Remove an image not sent yet (its chip's ✕). */
+  removeAttachment(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/attachments/${encodeURIComponent(id)}`);
   }
 
   // -- servers: a project's recipes, and what a run serves ---------------
@@ -946,11 +1011,13 @@ export class ApiClient {
    * reads only between turns), unless `interrupt` stops the turn so it
    * hears it now. `supersedes` sends a queued or failed directive again.
    */
-  steer(runId: string, text: string, options: { scope?: DirectiveScope; interrupt?: boolean; supersedes?: string } = {}): Promise<Directive> {
+  steer(runId: string, text: string,
+    options: { scope?: DirectiveScope; interrupt?: boolean; supersedes?: string; attachmentIds?: ReadonlyArray<string> } = {}): Promise<Directive> {
     return this.#request("POST", `/v1/runs/${runId}/steer`, {
       text, scope: options.scope ?? "run",
       ...(options.interrupt ? { interrupt: true } : {}),
       ...(options.supersedes ? { supersedes: options.supersedes } : {}),
+      ...(options.attachmentIds && options.attachmentIds.length > 0 ? { attachmentIds: options.attachmentIds } : {}),
     });
   }
 

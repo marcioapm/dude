@@ -5,7 +5,8 @@
  * live event stream, search — and the front door for everything else. What
  * changes what runs (delivering, steering, pausing, resuming, aborting) is
  * forwarded to the orchestrator (orchestrator/, Go), which does all
- * background work. This process runs no background loops of its own.
+ * background work. Its one loop of its own is storage upkeep: deleting the
+ * objects of attachments that are gone (sweeper.ts).
  */
 
 import { Router } from "./api/router.ts";
@@ -31,6 +32,7 @@ import { registerLiveRoutes } from "./api/routes/live.ts";
 import { registerServerRoutes } from "./api/routes/servers.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { registerMachineRoutes } from "./api/routes/machines.ts";
+import { registerAttachmentRoutes } from "./api/routes/attachments.ts";
 import { registerModelRoutes } from "./api/routes/models.ts";
 import { registerImageRoutes } from "./api/routes/images.ts";
 import { webApp } from "./api/web.ts";
@@ -38,6 +40,7 @@ import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 import { s3RuntimeProblem } from "./storage.ts";
+import { startAttachmentSweeper } from "./sweeper.ts";
 
 export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator = authenticate): Router {
   const router = new Router(auth);
@@ -71,6 +74,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerProjectPageRoutes(router);
   registerLiveRoutes(router);
   registerServerRoutes(router);
+  registerAttachmentRoutes(router);
 
   if (webDir) router.fallback(webApp(webDir));
 
@@ -182,9 +186,11 @@ if (import.meta.main) {
   // Events are written by the orchestrator as well as here; the live stream
   // learns of them from the database.
   const stopListening = await listenForEvents(databaseUrl);
+  const stopSweeping = startAttachmentSweeper();
 
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down`);
+    stopSweeping();
     await stopListening();
     await server.stop();
     await closePool();

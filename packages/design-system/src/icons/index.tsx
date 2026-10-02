@@ -102,7 +102,11 @@ export type IconName =
   | "chip"
   | "sparkle"
   | "cube"
-  | "book-open";
+  | "book-open"
+  // attaching
+  | "paperclip"
+  | "chevron-left"
+  | "upload";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -235,6 +239,11 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   cube: { d: "M8 2.25l5 2.75v6L8 13.75 3 11V5l5-2.75ZM3 5l5 2.75L13 5M8 7.75v6" },
   /* Two open pages: reading the whole thing, as opposed to editing it. */
   "book-open": { d: "M8 4.5C6.8 3.6 5 3.25 2.5 3.25v9c2.5 0 4.3.35 5.5 1.25M8 4.5c1.2-.9 3-1.25 5.5-1.25v9c-2.5 0-4.3.35-5.5 1.25M8 4.5v9" },
+  /* A paper clip: attach something to what you are writing. */
+  paperclip: { d: "M13 7.5 8.1 12.4a3.1 3.1 0 0 1-4.4-4.4l5-5a2 2 0 0 1 2.9 2.9l-5 5a1 1 0 0 1-1.5-1.5l4.6-4.5" },
+  "chevron-left": { d: "M10 4l-4 4 4 4" },
+  /* An arrow out of a tray: drop a file here. */
+  upload: { d: "M8 10V2.5M5 5.5l3-3 3 3M2.5 10.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

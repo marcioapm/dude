@@ -14,7 +14,7 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { CostOrigin, PersistedEvent, Run, RunStatus } from "@dude/domain";
+import type { AttachmentInfo, CostOrigin, PersistedEvent, Run, RunStatus } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
@@ -80,6 +80,8 @@ export interface PromptTurn {
   id: string;
   text: string;
   at: string;
+  /** Images a person gave with the task. */
+  attachments: AttachmentInfo[];
 }
 
 /** A turn's token totals, when the turn ended on something other than a message. */
@@ -131,6 +133,8 @@ export interface HumanTurn {
   interrupting: boolean;
   /** The directive it was sent as, to re-send it (Interrupt now, Retry); null for an answer given directly. */
   directiveId: string | null;
+  /** The images sent with it, in order. */
+  attachments: AttachmentInfo[];
 }
 
 export type SteerLands = "next_step" | "next_turn";
@@ -569,8 +573,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const lands = landsOf(payload.lands);
         if (lands) state.lands = lands;
         const text = typeof payload.text === "string" ? payload.text : "";
-        if (!text.trim()) break;
-        turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt });
+        const attachments = attachmentsOf(payload.attachments);
+        if (!text.trim() && attachments.length === 0) break;
+        turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments });
         break;
       }
 
@@ -675,6 +680,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           ...humanTurn(event, "steer", String(payload.text ?? ""), null),
           interrupting: payload.interrupt === true,
           directiveId,
+          attachments: attachmentsOf(payload.attachments),
         };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
@@ -707,7 +713,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (question) question.answeredAt = event.occurredAt;
         // Delivered the way a steer is: queued until the agent takes it.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
-        const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId };
+        const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId,
+          attachments: attachmentsOf(payload.attachments) };
         if (directiveId !== null) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
@@ -1000,6 +1007,14 @@ function moveToEnd(state: Projection, turn: Turn): void {
   if (state.progressIndex !== null && state.progressIndex > from) state.progressIndex -= 1;
 }
 
+/** The images an event carries (AttachmentInfo, as the orchestrator wrote them); anything malformed is left out. */
+function attachmentsOf(value: unknown): AttachmentInfo[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((a): a is AttachmentInfo =>
+    typeof a === "object" && a !== null && typeof a.id === "string" && typeof a.name === "string" &&
+    typeof a.width === "number" && typeof a.height === "number" && typeof a.original === "object" && a.original !== null);
+}
+
 function landsOf(value: unknown): SteerLands | null {
   return value === "next_step" || value === "next_turn" ? value : null;
 }
@@ -1008,6 +1023,7 @@ function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: str
   return {
     kind: "human", id: event.eventId, intent, by: humanActor(event), text, at: event.occurredAt, deliveredAt,
     acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
+    attachments: [],
   };
 }
 

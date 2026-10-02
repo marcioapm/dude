@@ -302,6 +302,12 @@ var PromptRoleForPhase = map[string]string{
 // shown.
 var PromptRoles = []string{"implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
 
+// TaskPromptPhases are the phases whose prompt is the task itself (Prompt:
+// the task, then what to do with it), so every Run of one — a retry
+// included — is given the images the task was described with. The other
+// phases are asked about the work done, with the task as context.
+var TaskPromptPhases = []string{PhaseInvestigate, PhaseImplement}
+
 // builtinInstructions is what each role is told to do, before the work it
 // is given: the part of a phase's prompt a person may rewrite (an
 // organization's prompt replaces it, a project's adds to or replaces that).
