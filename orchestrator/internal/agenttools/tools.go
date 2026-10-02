@@ -74,6 +74,21 @@ var tools = []tool{
 	define("pull_requests", "Your task's pull requests: state, head commit, checks (each one's status), review "+
 		"(each reviewer's word), unresolved threads, and the feedback people left — author, kind, path, a short "+
 		"excerpt, and whether a fixer was sent it.", conductors, pullRequests),
+	define("start_phase", "Take the decision the delivery waits on by starting a phase from the task's head: "+
+		"implement, review (some or all categories), fix (some or all open findings; at pull request feedback, the "+
+		"feedback), simplify or test. The workflow creates the Runs as it creates its own, waits for them, and wakes "+
+		"you at the next decision. Refused when you do not take the task's decisions, or past the policy's bounds: then "+
+		"ask the person.", conductors, startPhase),
+	define("decide", "Take the decision the delivery waits on: next (what Deliver would do now), ask_person (a "+
+		"question for the person in the note; before the pull request, the fixed question Open / Draft / Show me the "+
+		"diff / Another round), wait (at pull request feedback: leave it), or open_pull_request — accepted only after "+
+		"the person answered Open or Draft to that question, at the task's current head.", conductors, decide),
+	define("dismiss_finding", "Leave an open review finding as it is, with the reason — shown with the finding, as a "+
+		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
+	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
+		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
+		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
+		"started on this attempt.", conductors, updateTask),
 }
 
 // ---- list_tasks --------------------------------------------------------------
