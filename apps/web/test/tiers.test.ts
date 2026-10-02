@@ -76,12 +76,19 @@ describe("a tier dialog's draft", () => {
 
 describe("a test message's result", () => {
   test("its latency, or the proxy's status and words as they came", () => {
-    expect(testResultWords({ effort: "high", ok: true, latencyMs: 1234, status: 200, error: null })).toBe("answered at effort high in 1.2 s");
-    expect(testResultWords({ effort: null, ok: true, latencyMs: 800, status: 200, error: null })).toBe("answered with no effort in 0.8 s");
-    expect(testResultWords({ effort: "low", ok: false, latencyMs: 12, status: 404, error: "model 'x' is not served" }))
-      .toBe("at effort low: the proxy answered 404 — model 'x' is not served");
-    expect(testResultWords({ effort: null, ok: false, latencyMs: 30000, status: null, error: "no answer from the LLM proxy in 30s" }))
+    expect(testResultWords({ efforts: ["high"], sent: "high", ok: true, latencyMs: 1234, status: 200, error: null })).toBe("answered (effort high) in 1.2 s");
+    expect(testResultWords({ efforts: [null], sent: null, ok: true, latencyMs: 800, status: 200, error: null })).toBe("answered with no effort in 0.8 s");
+    expect(testResultWords({ efforts: ["low"], sent: "low", ok: false, latencyMs: 12, status: 404, error: "model 'x' is not served" }))
+      .toBe("(effort low): the proxy answered 404 — model 'x' is not served");
+    expect(testResultWords({ efforts: [null], sent: null, ok: false, latencyMs: 30000, status: null, error: "no answer from the LLM proxy in 30s" }))
       .toBe("with no effort: no answer from the LLM proxy in 30s");
+  });
+
+  test("one request for every effort that goes out alike; a Claude model's says it went without one", () => {
+    expect(testResultWords({ efforts: ["high", "max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null }))
+      .toBe("answered (efforts high, max) in 1.2 s");
+    expect(testResultWords({ efforts: ["high", null], sent: null, ok: true, latencyMs: 900, status: 200, error: null }))
+      .toBe("answered (efforts high, none; sent without an effort, as the agent sends it) in 0.9 s");
   });
 });
 

@@ -44,6 +44,10 @@ import { PROJECT_IMAGE_URL } from "./projects.ts";
 
 type Json = Record<string, unknown>;
 
+// The orchestrator bounds a test message at 30 s (llm.TestTimeout) and
+// reports a slow proxy itself; the call waits that long and a little more.
+const TEST_TIMEOUT_MS = 35_000;
+
 /** The organization's tiers, in the order admins gave them. */
 export async function listTiers(scope: OrgScope): Promise<ModelTier[]> {
   return (await scope.sql`SELECT model_tier(t) AS tier FROM model_tiers t ORDER BY t.position, lower(t.name)`)
@@ -283,9 +287,10 @@ async function proxyModels(ctx: RequestContext): Promise<ProxyModels> {
 }
 
 /**
- * One small request to the proxy for a model, at each effort the tier's
- * agents use (once without an effort for a tier none use). A check, never
- * a gate: saving a tier does not depend on it.
+ * One small request to the proxy for a model, for each distinct request the
+ * tier's agents send (the orchestrator folds efforts that go out alike), or
+ * once without an effort for a tier none use. A check, never a gate: saving
+ * a tier does not depend on it.
  */
 async function testModel(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
@@ -298,7 +303,8 @@ async function testModel(ctx: RequestContext): Promise<Response> {
     const distinct = [...new Set(uses.map((u) => u.effort))];
     return distinct.length ? distinct : [null];
   });
-  const res = await orchestrator(ctx.principal.organizationId, "POST", "/internal/llm/test", JSON.stringify({ model: input.model, efforts }));
+  const res = await orchestrator(ctx.principal.organizationId, "POST", "/internal/llm/test",
+    JSON.stringify({ model: input.model, efforts }), undefined, TEST_TIMEOUT_MS);
   if (!res.ok) return res;
   return json((await res.json()) as { model: string; results: ModelTestResult[] });
 }

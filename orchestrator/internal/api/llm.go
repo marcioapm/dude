@@ -42,8 +42,8 @@ func (s *Server) llmRoutes(mux *http.ServeMux) {
 		if s.LLM.URL == "" {
 			return fail(http.StatusServiceUnavailable, "unavailable", "the LLM proxy is not configured (DUDE_LLM_URL)")
 		}
-		if len(in.Efforts) > 4 {
-			return fail(http.StatusBadRequest, "bad_request", "at most four efforts")
+		if len(in.Efforts) > 5 {
+			return fail(http.StatusBadRequest, "bad_request", "at most five efforts: none, low, medium, high and max")
 		}
 		efforts := make([]string, 0, len(in.Efforts))
 		for _, e := range in.Efforts {

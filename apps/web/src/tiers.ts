@@ -92,9 +92,18 @@ export function tierDraftProblems(d: TierDraft): Partial<Record<keyof TierDraft,
   return out;
 }
 
-/** A test message's result, as a line: "answered at effort high in 1.2 s", or the proxy's own words. */
+/**
+ * A test message's result, as a line: "answered (efforts high, max) in 1.2 s",
+ * "answered with no effort in 0.8 s", or the proxy's own words. One request
+ * stands for every effort that goes out alike; a Claude model is sent none,
+ * as the agent sends it, and the line says so.
+ */
 export function testResultWords(r: ModelTestResult): string {
-  const at = r.effort ? `at effort ${r.effort}` : "with no effort";
+  const asked = r.efforts.map((e) => e ?? "none");
+  const unsent = r.sent === null && r.efforts.some((e) => e !== null) ? "; sent without an effort, as the agent sends it" : "";
+  const at = r.efforts.every((e) => e === null)
+    ? "with no effort"
+    : `(${asked.length > 1 ? "efforts" : "effort"} ${asked.join(", ")}${unsent})`;
   if (r.ok) return `answered ${at} in ${(r.latencyMs / 1000).toFixed(1)} s`;
   if (r.status === null) return `${at}: ${r.error ?? "no answer"}`;
   return `${at}: the proxy answered ${r.status}${r.error ? ` — ${r.error}` : ""}`;

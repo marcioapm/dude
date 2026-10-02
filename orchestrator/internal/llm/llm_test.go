@@ -54,49 +54,74 @@ func ok(w http.ResponseWriter, _ seen) {
 	_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
 }
 
-// A test message at two efforts is two Chat Completions requests with each
-// effort as reasoning_effort (max as high), tiny, with dude's key.
-func TestATestMessageIsSentAtEachEffort(t *testing.T) {
+// efforts reads a result's efforts, "" for none.
+func efforts(r Result) []string {
+	out := []string{}
+	for _, e := range r.Efforts {
+		if e == nil {
+			out = append(out, "")
+		} else {
+			out = append(out, *e)
+		}
+	}
+	return out
+}
+
+// A test message is one Chat Completions request per distinct
+// reasoning_effort (max goes as high, so high and max are one), tiny, with
+// dude's key; each result names every effort it covers.
+func TestATestMessageIsSentOncePerDistinctRequest(t *testing.T) {
 	f := &fakeProxy{}
 	srv := f.serve(t, ok)
 	c := Client{URL: srv.URL + "/v1", Key: "sk-proxy"}
-	results := c.Test(context.Background(), "gpt-5.6-sol", []string{"low", "max"})
-	if len(results) != 2 || !results[0].OK || !results[1].OK || *results[0].Effort != "low" || *results[1].Effort != "max" ||
-		*results[0].Status != 200 || results[0].Error != nil {
+	results := c.Test(context.Background(), "gpt-5.6-sol", []string{"high", "max", "", "high"})
+	if len(results) != 2 || !results[0].OK || !results[1].OK || *results[0].Status != 200 || results[0].Error != nil {
 		t.Fatalf("results = %+v", results)
 	}
-	var efforts []string
+	if got := efforts(results[0]); !slices.Equal(got, []string{"high", "max"}) || results[0].Sent == nil || *results[0].Sent != "high" {
+		t.Errorf("first result covers %v, sent %v; want high and max, sent high", got, results[0].Sent)
+	}
+	if got := efforts(results[1]); !slices.Equal(got, []string{""}) || results[1].Sent != nil {
+		t.Errorf("second result covers %v, sent %v; want none, sent none", got, results[1].Sent)
+	}
+	var sent []string
 	for _, s := range f.seen {
 		if s.Path != "/v1/chat/completions" || s.Headers.Get("Authorization") != "Bearer sk-proxy" ||
 			s.Body["model"] != "gpt-5.6-sol" || s.Body["max_tokens"] != float64(testMaxTokens) {
 			t.Errorf("request = %+v", s)
 		}
-		efforts = append(efforts, s.Body["reasoning_effort"].(string))
+		e, _ := s.Body["reasoning_effort"].(string)
+		sent = append(sent, e)
 	}
-	slices.Sort(efforts)
-	if !slices.Equal(efforts, []string{"high", "low"}) {
-		t.Errorf("reasoning_effort sent = %v, want low and high (for max)", efforts)
+	slices.Sort(sent)
+	if !slices.Equal(sent, []string{"", "high"}) {
+		t.Errorf("reasoning_effort sent = %q, want one request with none and one with high", sent)
 	}
 }
 
 // A Claude model is sent as Anthropic Messages, with x-api-key and no
-// effort (OpenCode's Anthropic provider sends none for reasoningEffort);
-// none for a new tier is a request with no effort at all.
+// effort (OpenCode's Anthropic provider sends none for reasoningEffort), so
+// any efforts asked for are one request, and its result names them all.
 func TestAClaudeModelIsTestedAsAnthropicMessages(t *testing.T) {
 	f := &fakeProxy{}
 	srv := f.serve(t, func(w http.ResponseWriter, _ seen) { _, _ = w.Write([]byte(`{"content":[]}`)) })
 	c := Client{URL: srv.URL + "/v1/", Key: "sk-proxy"}
-	results := c.Test(context.Background(), "claude-opus-5-5", []string{""})
-	if len(results) != 1 || !results[0].OK || results[0].Effort != nil {
+	results := c.Test(context.Background(), "claude-opus-5-5", []string{"high", ""})
+	if len(results) != 1 || !results[0].OK || results[0].Sent != nil || !slices.Equal(efforts(results[0]), []string{"high", ""}) {
 		t.Fatalf("results = %+v", results)
+	}
+	if len(f.seen) != 1 {
+		t.Fatalf("%d requests, want 1", len(f.seen))
 	}
 	s := f.seen[0]
 	if s.Path != "/v1/messages" || s.Headers.Get("x-api-key") != "sk-proxy" || s.Headers.Get("anthropic-version") != "2023-06-01" ||
 		s.Headers.Get("Authorization") != "" || s.Body["model"] != "claude-opus-5-5" {
 		t.Errorf("request = %+v", s)
 	}
-	if _, has := s.Body["reasoning_effort"]; has {
-		t.Errorf("an Anthropic request carried reasoning_effort: %v", s.Body)
+	for _, key := range []string{"reasoning_effort", "effort", "output_config"} {
+		if _, has := s.Body[key]; has {
+			t.Errorf("an Anthropic request carried %s: %v", key, s.Body)
+		}
 	}
 }
 

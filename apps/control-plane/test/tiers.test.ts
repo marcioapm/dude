@@ -53,6 +53,8 @@ let otherKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 /** What the stand-in orchestrator was asked to test, in order. */
 const tested: unknown[] = [];
+/** How long it takes to answer a test of the model "slow". */
+const slowMs = 16_000;
 /** How it answers GET /internal/llm/models. */
 let modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
 
@@ -90,11 +92,12 @@ beforeAll(async () => {
       if (path === "/internal/llm/test") {
         const asked = await req.json() as { model: string; efforts: Array<string | null> };
         tested.push(asked);
+        if (asked.model === "slow") await Bun.sleep(slowMs);
         if (asked.model === "nope") {
           return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({
-            effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" })) });
+            efforts: [effort], sent: effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" })) });
         }
-        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({ effort, ok: true, latencyMs: 800, status: 200, error: null })) });
+        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => ({ efforts: [effort], sent: effort, ok: true, latencyMs: 800, status: 200, error: null })) });
       }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
@@ -244,14 +247,50 @@ describe("a test message", () => {
     tested.length = 0;
     const res = await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol", tierId: cheap.id });
     expect(res.status).toBe(200);
-    expect((await body(res)).results.map((r: Json) => [r.effort, r.ok])).toEqual([["high", true], ["low", true]]);
-    expect((await body(await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" }))).results.map((r: Json) => r.effort)).toEqual([null]);
+    expect((await body(res)).results.map((r: Json) => [r.efforts, r.ok])).toEqual([[["high"], true], [["low"], true]]);
+    expect((await body(await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" }))).results.map((r: Json) => r.efforts)).toEqual([[null]]);
     expect(tested).toEqual([{ model: "gpt-5.6-sol", efforts: ["high", "low"] }, { model: "gpt-5.6-sol", efforts: [null] }]);
   });
 
+  test("an effort several of the tier's agents share is asked for once", async () => {
+    const cheap = await byName("Cheap");
+    const before = { org: await orgModels(), project: await projectModels() };
+    try {
+      // Two more roles at high, and one at none: four uses, three efforts.
+      await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { qa_browser: { tier: cheap.id, effort: "high" } } });
+      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, {
+        roles: { simplifier: { tier: cheap.id, effort: "high" }, investigator: { tier: cheap.id } },
+      });
+      expect((await byName("Cheap")).usedBy.map((u: Json) => u.effort).sort()).toEqual(["high", "high", "high", "low", null]);
+      tested.length = 0;
+      expect((await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol", tierId: cheap.id })).status).toBe(200);
+      expect(tested).toHaveLength(1);
+      const { efforts } = tested[0] as { efforts: Array<string | null> };
+      expect([...efforts].sort()).toEqual(["high", "low", null]);
+    } finally {
+      await owner`UPDATE organizations SET default_agent_models = ${before.org}::jsonb WHERE id = ${ORG}`;
+      await owner`UPDATE projects SET agent_models = ${before.project}::jsonb WHERE id = ${PROJECT}`;
+    }
+  });
+
+  test("a member is refused before the orchestrator is asked; an admin's reaches it", async () => {
+    tested.length = 0;
+    const refused = await call(memberKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" });
+    expect(refused.status).toBe(403);
+    expect(tested).toEqual([]);
+    expect((await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" })).status).toBe(200);
+    expect(tested).toEqual([{ model: "gpt-5.6-sol", efforts: [null] }]);
+  });
+
+  test("an answer slower than other orchestrator calls may take still comes back", async () => {
+    const res = await call(adminKey, "POST", "/v1/models/test", { model: "slow" });
+    expect(res.status).toBe(200);
+    expect((await body(res)).results.map((r: Json) => r.ok)).toEqual([true]);
+  }, slowMs + 10_000);
+
   test("the proxy's refusal is passed on as it came", async () => {
     const res = await body(await call(adminKey, "POST", "/v1/models/test", { model: "nope" }));
-    expect(res.results).toEqual([{ effort: null, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }]);
+    expect(res.results).toEqual([{ efforts: [null], sent: null, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }]);
   });
 });
 
