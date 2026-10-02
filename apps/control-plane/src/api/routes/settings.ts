@@ -1,8 +1,8 @@
 /**
  * Settings: the organization's defaults, and each project's overrides.
  *
- * Two things are configured this way: how each agent role runs (model,
- * reasoning effort, time limit, whether it runs at all, and its prompt) and
+ * Two things are configured this way: how each agent role runs (model
+ * tier, reasoning effort, time limit, machine, whether it runs at all, and its prompt) and
  * how work is delivered. The organization's live on its row
  * (default_agent_models, delivery_policy), a project's on its own
  * (agent_models, delivery_policy) — and a project stores only what it
@@ -20,6 +20,7 @@ import {
   newId,
   promptRoleSchema,
   resolveMachineSize,
+  resolveTier,
   ROLE_ENABLED_BY,
   savePromptSchema,
   SETTINGS_ROLES,
@@ -46,6 +47,7 @@ import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { listSizes, requireSize } from "./machines.ts";
+import { checkTiers, listTiers } from "./models.ts";
 
 type Json = Record<string, unknown>;
 
@@ -211,6 +213,17 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         ...(layers.project ? { organization: orgOnly.from === "default" ? null : orgOnly.sizeId } : {}),
       };
     };
+    /** The tier, by the one rule (resolveTier), shaped as the machine is. */
+    const tiers = await listTiers(scope);
+    const tier = (role: SettingsRole): RoleSettings["tier"] => {
+      const { tierId, from } = resolveTier(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, tiers);
+      return {
+        value: tierId,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: resolveTier(role, { organization: layers.org.agentModels }, tiers).tierId } : {}),
+      };
+    };
     const roles = Object.fromEntries(
       SETTINGS_ROLES.map((role): [SettingsRole, RoleSettings] => {
         const enabledBy = ROLE_ENABLED_BY[role as keyof typeof ROLE_ENABLED_BY];
@@ -219,7 +232,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         return [
           role,
           {
-            model: field(role, "model"),
+            tier: tier(role),
             effort: field(role, "effort"),
             timeLimitMinutes: field(role, "timeLimitMinutes"),
             machineSize: machine(role),
@@ -281,11 +294,12 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
   return { models: nextModels as AgentModels, policy: applyKeys(policy, policyChanges) };
 }
 
-/** Every machine size a patch names must be the organization's. */
+/** Every machine size and model tier a patch names must be the organization's. */
 async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
   for (const change of Object.values(patch.roles ?? {})) {
     if (change?.machineSize) await requireSize(scope, change.machineSize);
   }
+  await checkTiers(scope, patch.roles ?? {});
 }
 
 async function recordSettings(scope: OrgScope, ctx: RequestContext, projectId: string | null, patch: SettingsPatch) {

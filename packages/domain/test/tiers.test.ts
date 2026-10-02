@@ -57,9 +57,9 @@ describe("a tier's name and description", () => {
 });
 
 describe("a test message", () => {
-  test("names a model and the efforts to try, none by default", () => {
-    expect(testModelSchema.parse({ model: "gpt-5.6-sol" })).toEqual({ model: "gpt-5.6-sol", efforts: [] });
-    expect(testModelSchema.safeParse({ model: "gpt-5.6-sol", efforts: ["extreme"] }).success).toBe(false);
+  test("names a model and the tier it is for, none for a new one", () => {
+    expect(testModelSchema.parse({ model: "gpt-5.6-sol" })).toEqual({ model: "gpt-5.6-sol", tierId: null });
+    expect(testModelSchema.safeParse({ model: "llm-openai/gpt-5.6-sol" }).success).toBe(false);
   });
 });
 
