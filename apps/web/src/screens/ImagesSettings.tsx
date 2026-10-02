@@ -12,7 +12,7 @@
  * "/history" or "/builds", or "builds/<build id>".
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   Breadcrumb,
   BuildQueueStrip,
@@ -139,7 +139,7 @@ export function ImagesPage({ client, orgName, images, sub, onSub }: ImagesPagePr
 // ---------------------------------------------------------------------------
 
 function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; orgName: string; images: ReturnType<typeof useImages>; onSub: (sub: string | undefined) => void }) {
-  const [adding, setAdding] = useState<{ from?: string } | null>(null);
+  const [adding, setAdding] = useState(false);
   const { data, problem } = images;
   if (!data) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
   const running = data.queue.find((b) => b.state === "running");
@@ -152,7 +152,7 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
       <SettingsHeader
         title="Images"
         description="What agents, servers and previews run in. Edit one here and everything that uses it gets the new version once it builds."
-        actions={data.canEdit ? <Button variant="primary" leadingIcon="plus" onClick={() => setAdding({})} data-testid="new-image">New image</Button> : undefined}
+        actions={data.canEdit ? <Button variant="primary" leadingIcon="plus" onClick={() => setAdding(true)} data-testid="new-image">New image</Button> : undefined}
       />
       {!data.canEdit ? <SettingsNote icon="info">Only {orgName}’s admins change images. Everyone can read them and their builds.</SettingsNote> : null}
       <BuilderOffline builder={data.builder} />
@@ -208,8 +208,8 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
           </TBody>
         </Table>
       )}
-      {adding ? <NewImageDialog client={client} from={adding.from} onClose={() => setAdding(null)} onMade={(id) => {
-        setAdding(null);
+      {adding ? <NewImageDialog client={client} onClose={() => setAdding(false)} onMade={(id) => {
+        setAdding(false);
         images.load();
         onSub(id);
       }} /> : null}
@@ -240,11 +240,17 @@ function treeOrder(images: readonly ImageSummary[]): Array<{ image: ImageSummary
   return out;
 }
 
+interface NewImageDialogProps {
+  client: ApiClient;
+  onClose: () => void;
+  onMade: (id: string) => void;
+}
+
 /** A new image: its name (fixed once made), what it is, and the base it starts FROM. */
-export function NewImageDialog({ client, from, onClose, onMade }: { client: ApiClient; from?: string | undefined; onClose: () => void; onMade: (id: string) => void }) {
+function NewImageDialog({ client, onClose, onMade }: NewImageDialogProps): ReactElement {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [base, setBase] = useState(from ?? "");
+  const [base, setBase] = useState("");
   const { busy, problem, save } = useSave();
   const nameProblem = name && !IMAGE_NAME.test(name) ? IMAGE_NAME_MESSAGE : undefined;
   return (
