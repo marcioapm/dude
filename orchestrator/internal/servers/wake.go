@@ -484,7 +484,7 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 				if err := p.drain(ctx, r); err != nil {
 					return err
 				}
-				ran, wake, _, err := p.startState(ctx, r)
+				ran, wake, err := p.startState(ctx, r)
 				if err != nil {
 					return err
 				}
@@ -631,18 +631,13 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 	return out, nil
 }
 
-// drain applies what lux reported of a preview's Run that has ended and
-// dude has not applied yet, here and now, rather than leaving it to a
-// follower: whether its start ran decides what a wake does with it, and a
-// failed start is counted once (luxEvent) wherever it is first applied.
-// It reads lux's lifecycle events a page at a time from the stored cursor
-// (GET events), not the Run's output stream, which replays every archived
-// output blob before its first event. A page with events says nothing of
-// what is past it, nor does the Run's state, which a later start can end in
-// again. So the Run is drained until a page from the stored cursor comes
-// back empty, and the state applied is the Run's state in lux then; short of
-// that within drainPages pages and DrainFor, an error (the wake is tried
-// again later, from the cursor reached).
+// drain applies an ended Run's lifecycle events before deciding whether its
+// last start ran. applyEvent shares locking and deduplication with the follower,
+// so luxEvent counts each failed start once. Events avoids Output's archived
+// output replay. Exhaustion requires an empty page and an applied state matching
+// lux.Recorded: even a short nonempty page may omit a later start with the same
+// state. drainPages and DrainFor bound the whole drain; on error, the next wake
+// attempt continues from the durable cursor.
 func (p *Previews) drain(ctx context.Context, r wakeRun) error {
 	dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
 	defer cancel()
@@ -697,12 +692,12 @@ const (
 
 // startState is what dude has applied of the preview's Run: whether its
 // current start ran, and the wake it holds now.
-func (p *Previews) startState(ctx context.Context, r wakeRun) (ran bool, wake *time.Time, claimed bool, err error) {
+func (p *Previews) startState(ctx context.Context, r wakeRun) (ran bool, wake *time.Time, err error) {
 	err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_ran_event >= lux_start_event, wake_wanted_at, wake_claimed_at IS NOT NULL
-			FROM runs WHERE id = $1`, r.ID).Scan(&ran, &wake, &claimed)
+		return tx.QueryRow(ctx, `SELECT lux_ran_event >= lux_start_event, wake_wanted_at
+			FROM runs WHERE id = $1`, r.ID).Scan(&ran, &wake)
 	})
-	return ran, wake, claimed, err
+	return ran, wake, err
 }
 
 // startFailed records the nth start in a row of a wakeable preview's Run

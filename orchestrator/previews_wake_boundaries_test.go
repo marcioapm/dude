@@ -1,9 +1,9 @@
 package orchestrator_test
 
 // A wake's boundaries with what lux reports meanwhile: an end applied
-// after an attach to a running Run and before its acknowledgement, a drain
-// whose pages end at a state the Run is in again later or whose Run's output
-// is slow to replay, a sweep whose selected wake is replaced before it
+// after an attach to a running Run and before its acknowledgement, an event
+// drain whose pages end at a repeated state, slow archived output that must
+// not delay that drain, a sweep whose selected wake is replaced before it
 // claims it, and a database that refuses a claimed wake's write.
 
 import (
@@ -197,10 +197,10 @@ func (w *world) crashedThenFailedResumes(n int) (runID, web string, r *fakelux.R
 	return runID, web, r
 }
 
-// The drain's first page ends after the crash, before the later resume's
-// events (lux recorded them after the page's query): lux's state (failed) is the state applied, but the later start's
-// failure is unread. It is counted before the wake decides: the Run is not
-// resumed again, it is cancelled and replaced, and the new Run serves.
+// The event drain's first page ends after the crash, before the later
+// resume's events: lux's state (failed) is the state applied, but the later
+// start's failure is unread. It is counted before the wake decides: the Run
+// is not resumed again, it is cancelled and replaced, and the new Run serves.
 func TestARepeatedStateAtAPageEndIsNotTheRunsHistory(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()

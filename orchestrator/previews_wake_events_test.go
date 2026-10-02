@@ -3,7 +3,7 @@ package orchestrator_test
 // A wakeable preview across migration 066 (rows whose earlier events were
 // applied without the start markers), a wake's acknowledgement racing an
 // earlier start's end that reaches dude after the wake was claimed, and a
-// drain whose page stops short of the Run's last event.
+// event drain whose page stops short of the Run's last event.
 
 import (
 	"context"
@@ -57,6 +57,38 @@ func stopsAfterResume(calls []string) int {
 		}
 	}
 	return n
+}
+
+// holdEndAndResume holds one follower before end and all followers before
+// resuming. The wake's Events requests remain unblocked.
+func (w *world) holdEndAndResume(runID, end string) (endHeld, endRelease, resumingRelease chan struct{}) {
+	endHeld, endRelease = make(chan struct{}), make(chan struct{})
+	resumingRelease = make(chan struct{})
+	var once sync.Once
+	w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
+		if id != runID || typ != "state" {
+			return
+		}
+		switch w.lux.EventState(id, eventID) {
+		case end:
+			mine := false
+			once.Do(func() { mine = true; close(endHeld) })
+			if mine {
+				<-endRelease
+			}
+		case "resuming":
+			<-resumingRelease
+		}
+	})
+	w.t.Cleanup(func() {
+		w.lux.BeforeEvent(nil)
+		for _, ch := range []chan struct{}{endRelease, resumingRelease} {
+			if !isClosed(ch) {
+				close(ch)
+			}
+		}
+	})
+	return endHeld, endRelease, resumingRelease
 }
 
 // A preview running when 066 is applied, which then crashes, is resumed
@@ -172,32 +204,7 @@ func TestAnOldStoppedAppliedAfterTheClaimDoesNotUndoTheResume(t *testing.T) {
 	w.running(runID, "web")
 	r := w.luxRuns()[0]
 
-	stoppedHeld, stoppedRelease := make(chan struct{}), make(chan struct{})
-	resumingRelease := make(chan struct{})
-	var once sync.Once
-	w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
-		if id != r.ID || typ != "state" {
-			return
-		}
-		switch w.lux.EventState(id, eventID) {
-		case "stopped":
-			mine := false
-			once.Do(func() { mine = true; close(stoppedHeld) })
-			if mine {
-				<-stoppedRelease
-			}
-		case "resuming":
-			<-resumingRelease
-		}
-	})
-	t.Cleanup(func() {
-		w.lux.BeforeEvent(nil)
-		for _, ch := range []chan struct{}{stoppedRelease, resumingRelease} {
-			if !isClosed(ch) {
-				close(ch)
-			}
-		}
-	})
+	stoppedHeld, stoppedRelease, resumingRelease := w.holdEndAndResume(r.ID, "stopped")
 	w.lux.Idle(web)
 	w.untilPreview(runID, "the follower held before the old stopped", func() bool { return isClosed(stoppedHeld) })
 	w.untilPreview(runID, "parked, lux stopped", func() bool {
@@ -245,32 +252,7 @@ func TestAnOldCrashDrainedAfterTheClaimDoesNotUndoTheResume(t *testing.T) {
 	w.running(runID, "web")
 	r := w.luxRuns()[0]
 
-	failedHeld, failedRelease := make(chan struct{}), make(chan struct{})
-	resumingRelease := make(chan struct{})
-	var once sync.Once
-	w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
-		if id != r.ID || typ != "state" {
-			return
-		}
-		switch w.lux.EventState(id, eventID) {
-		case "failed":
-			mine := false
-			once.Do(func() { mine = true; close(failedHeld) })
-			if mine {
-				<-failedRelease
-			}
-		case "resuming":
-			<-resumingRelease
-		}
-	})
-	t.Cleanup(func() {
-		w.lux.BeforeEvent(nil)
-		for _, ch := range []chan struct{}{failedRelease, resumingRelease} {
-			if !isClosed(ch) {
-				close(ch)
-			}
-		}
-	})
+	failedHeld, failedRelease, resumingRelease := w.holdEndAndResume(r.ID, "failed")
 	w.lux.Crash(r.ID)
 	wait(t, failedHeld, "the follower held before the crash")
 	w.lux.RequestServer(web, "/")
@@ -376,9 +358,8 @@ const (
 	pageFails
 )
 
-// A drain whose page ends before the Run's failure, lux having recorded it
-// after the page's query, is not taken as the Run's history: the state
-// applied is not lux's, so it pages again and counts the failed start
+// An event page ending before the Run's failure is not its full history.
+// The drain keeps paging until an empty page and counts the failed start
 // before deciding.
 func TestADrainEndedShortOfTheFailureDrainsAgain(t *testing.T) {
 	w := newWorld(t)
@@ -415,12 +396,7 @@ func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 		AND wake_claimed_at IS NULL AND lux_run_id = $2`, runID, r.ID); n != 1 || len(w.luxRuns()) != 1 {
 		t.Fatalf("a cut drain was decided on: %d lux runs\n%s", len(w.luxRuns()), w.preview(runID))
 	}
-	if _, err := w.owner.Exec(context.Background(), `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.previews.Sweep(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	w.sweepAgain(runID)
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1`, runID); n != 1 {
 		t.Fatalf("the next try did not count the failed start:\n%s", w.preview(runID))
 	}

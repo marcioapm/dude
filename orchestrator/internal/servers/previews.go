@@ -522,14 +522,16 @@ func (p *Previews) afterEvent(ctx context.Context, r previewRun) (int64, error) 
 // cursor past it, in one transaction holding the row.
 func (p *Previews) applyEvent(ctx context.Context, r previewRun, f lux.Frame) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// Skipped: an event of a Run the preview has let go of (retireRun),
-		// whose stream is still draining; and one already applied, by this
-		// orchestrator's drain or another's follower.
 		var current bool
 		var applied int64
 		if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, lux_after_event FROM runs WHERE id = $1 FOR UPDATE`,
-			r.ID, r.LuxRunID).Scan(&current, &applied); err != nil || !current || f.EventID <= applied {
+			r.ID, r.LuxRunID).Scan(&current, &applied); err != nil {
 			return err
+		}
+		// A retired Run's stream may still drain; a follower or wake drain
+		// may also have applied this event already.
+		if !current || f.EventID <= applied {
+			return nil
 		}
 		if err := p.luxEvent(ctx, tx, r, f); err != nil {
 			return err
