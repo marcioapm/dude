@@ -75,7 +75,7 @@ def test_a_role_names_a_tier_never_a_model(client: ApiClient):
 
 def test_task_starts_in_received(client: ApiClient, project: dict):
     task = client.create_task(
-        project["id"], "Add a health endpoint", goal="expose /health",
+        project["id"], "Add a health endpoint", goal="Expose /health so the load balancer can check the service.",
         acceptanceCriteria=["returns 200", "has a test"],
     )
     assert task["status"] == "received"
@@ -106,7 +106,7 @@ def test_retrying_creates_a_new_attempt_without_erasing_the_first(client: ApiCli
 
 
 def test_task_for_unknown_project_is_rejected(client: ApiClient):
-    resp = client.post("/v1/tasks", {"projectId": "prj_nonexistent", "title": "orphan"})
+    resp = client.post("/v1/tasks", {"projectId": "prj_nonexistent", "title": "orphan", "goal": client.DEFAULT_GOAL})
     assert resp.status_code == 404
 
 

@@ -130,7 +130,12 @@ class ApiClient:
         assert resp.status_code == 201, f"create project failed: {resp.status_code} {resp.text}"
         return resp.json()
 
+    # A task needs a goal of at least 16 characters; tests that are not about
+    # the goal get one that reads like a person's.
+    DEFAULT_GOAL = "Exercise this path end to end, as a person would ask for it."
+
     def create_task(self, project_id: str, title: str, **body) -> dict:
+        body.setdefault("goal", self.DEFAULT_GOAL)
         resp = self.post("/v1/tasks", {"projectId": project_id, "title": title, **body})
         assert resp.status_code == 201, f"create task failed: {resp.status_code} {resp.text}"
         return resp.json()
