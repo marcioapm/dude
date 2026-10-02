@@ -38,12 +38,18 @@ type Writer struct{ ActorType, ActorID, Person string }
 // conductor, from the task's head in each repository (the default branch
 // where nothing was published), briefed by dude with the message.
 func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string) (string, error) {
+	return startConductor(ctx, tx, org, projectID, taskID, w, message, false)
+}
+
+// startConductor is StartConductor; with woken, the message is dude's wake
+// note, not a person's.
+func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
 	if w.Person != "" {
 		_ = tx.QueryRow(ctx, `SELECT name FROM people WHERE id = $1`, w.Person).Scan(&person)
 	}
-	briefing, err := Briefing(ctx, tx, taskID, id, person, message)
+	briefing, err := briefing(ctx, tx, taskID, id, person, message, woken)
 	if err != nil {
 		return "", err
 	}
@@ -71,10 +77,13 @@ func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		return "", err
 	}
 	// The message, then dude's briefing of the conductor about it: what the
-	// Chat shows, whatever the agent's harness echoes back of its prompt.
+	// Chat shows, whatever the agent's harness echoes back of its prompt. A
+	// wake's note is recorded by the wake (WakeConductorTx).
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
-	if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
-		return "", err
+	if !woken {
+		if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
+			return "", err
+		}
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorBriefed, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
