@@ -8,7 +8,10 @@
 
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
-import { EventTypes, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput, taskGoalInput } from "@dude/domain";
+import {
+  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput,
+  taskGoalInput, taskGoalShortBy,
+} from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -78,6 +81,7 @@ const createTaskInput = z.object({
 
 async function createTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, createTaskInput);
+  if (taskGoalShortBy(input.goal ?? "") > 0) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
