@@ -10,7 +10,7 @@ import type { ComposerAttachment, SentImage } from "@dude/design-system/componen
 import { formatBytes } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, type AttachmentInfo } from "@dude/domain";
 import { ApiError, type ApiClient, type AttachmentLimits } from "../api/client.ts";
-import { prepare, refuse, type Limits, type Prepared } from "../images.ts";
+import { BUDGET_SPENT, ShrinkError, budgetFor, prepare, refuse, sentChips, type Limits, type Prepared } from "../images.ts";
 
 interface Chip extends ComposerAttachment {
   /** What the delivered variant weighs, once made: the message's budget counts it. */
@@ -24,8 +24,8 @@ export interface ImageTray {
   /** Files picked, pasted or dropped. */
   add: (files: File[]) => void;
   remove: (id: string) => void;
-  /** After the message is sent: the chips go, their images stay with it. */
-  clear: () => void;
+  /** After a message is sent: its images' chips go (they are the message's now); any added meanwhile stay. */
+  clear: (sentAttachmentIds: ReadonlyArray<string>) => void;
   /** Whether images can be attached; why not when they cannot. */
   disabledReason: string | undefined;
   limits: Limits;
@@ -98,13 +98,14 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
           update(chip.id, { state: "error", error: why.short, errorDetail: why.detail, previewUrl: undefined });
           continue;
         }
-        const used = chipsRef.current.filter((c) => c.id !== chip.id && c.state !== "error")
-          .reduce((n, c) => n + (c.deliveredBytes ?? 0), 0);
         let made;
         try {
-          made = await prepare(file, limits, limits.messageBytes - used);
-        } catch {
-          update(chip.id, { state: "error", error: "Can't read it", errorDetail: "an image could not be read or made small enough" });
+          made = await prepare(file, limits, budgetFor(chipsRef.current, chip.id, limits.messageBytes));
+        } catch (err) {
+          const full = err instanceof ShrinkError && err.message === BUDGET_SPENT;
+          update(chip.id, full
+            ? { state: "error", error: "No room left", errorDetail: BUDGET_SPENT.toLowerCase() }
+            : { state: "error", error: "Can't read it", errorDetail: "an image could not be read or made small enough" });
           continue;
         }
         if (!chipsRef.current.some((c) => c.id === chip.id)) continue; // removed meanwhile
@@ -138,10 +139,14 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
     setChips((cs) => cs.filter((c) => c.id !== id));
   }, [client]);
 
-  const clear = useCallback(() => {
-    for (const url of previews.current.values()) URL.revokeObjectURL(url);
-    previews.current.clear();
-    setChips([]);
+  const clear = useCallback((sent: ReadonlyArray<string>) => {
+    const gone = new Set(sentChips(chipsRef.current, sent).map((c) => c.id));
+    for (const id of gone) {
+      const url = previews.current.get(id);
+      if (url) URL.revokeObjectURL(url);
+      previews.current.delete(id);
+    }
+    setChips((cs) => cs.filter((c) => !gone.has(c.id)));
   }, []);
 
   const uploadTo = useCallback(async (task: string) => {

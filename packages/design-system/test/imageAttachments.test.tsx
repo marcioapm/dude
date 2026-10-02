@@ -90,6 +90,28 @@ test("pasting an image attaches it; pasting text does not", async () => {
   expect(got.length).toBe(1);
 });
 
+test("a message the app could not send keeps its words, and the refusal goes no further", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    let tries = 0;
+    await render(<ChatComposer mode="steer" defaultValue="look again" onSubmit={async () => {
+      tries++;
+      throw new Error("not sent");
+    }} />);
+    await act(async () => send().click());
+    // Let a rejection that escaped surface before looking.
+    await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
+    expect(tries).toBe(1);
+    expect(q<HTMLTextAreaElement>("textarea")!.value).toBe("look again");
+    expect(send().disabled).toBe(false);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 test("without storage the paperclip is off and says why", async () => {
   await render(<ChatComposer mode="steer" onAttachFiles={() => undefined} attachDisabledReason="Image storage isn't set up" onSubmit={() => undefined} />);
   const clip = q<HTMLButtonElement>('[data-testid="attach-button"]')!;

@@ -37,6 +37,7 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   readonly value?: string | undefined;
   readonly defaultValue?: string | undefined;
   readonly onValueChange?: ((value: string) => void) | undefined;
+  /** Sends the message. Rejecting means it was not sent: the words are kept. */
   readonly onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
   /** Extra controls at the left of the action row (attach, templates…). */
   readonly leading?: ReactNode;
@@ -187,6 +188,8 @@ export function ChatComposer({
       await onSubmit(submission);
       setText("");
       setInterrupt(false);
+    } catch {
+      // Not sent: the app has said why; the words stay to send again.
     } finally {
       setBusy(false);
     }
