@@ -10,13 +10,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, Run } from "@dude/domain";
 import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
-import { FINDINGS, PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
+import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { project } from "../src/api/conversation.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
-import type { ChatSent, RunDetail, TaskDetail } from "../src/api/client.ts";
+import type { ChatSent, RunDetail, TaskDetail, TaskMetrics } from "../src/api/client.ts";
 import { ApiError } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -289,6 +289,22 @@ describe("the Chat tab", () => {
       expect(client.sent).toEqual([`${TASK_ID}:and the tests?`, `${TASK_ID}:and the tests?`]);
       expect(composer.value).toBe("");
     }
+  });
+
+  test("the rail's Cost is the conductor's whole cost: its tokens and its machine time", async () => {
+    class Priced extends ChatClient {
+      override async taskMetrics(): Promise<TaskMetrics> {
+        const conductor = { id: CONDUCTOR, phase: null, role: "conductor", category: null, status: "running", activeMs: 600_000, parkedMs: 0,
+          costUsd: 0.5, cost: { totalUsd: 0.54, tokensUsd: 0.5, machineUsd: 0.04, origin: { tokens: "lux" as const, machine: "estimate" as const, settled: false } },
+          tokens: { input: 40_000, output: 2_000 } };
+        return { ...METRICS, runs: [...METRICS.runs, conductor] };
+      }
+    }
+    const page = await chatPage(new Priced({ status: "running" }, conductorEvents()));
+    const rail = await until(() => page.querySelector("[data-testid=chat-rail]"), "the rail");
+    const cost = await until(() => rail.querySelector("[aria-label^='$0.54']"), "the conductor's total cost");
+    expect(cost.getAttribute("aria-label")).toContain("machine time $0.04");
+    expect(cost.getAttribute("aria-label")).toContain("model tokens $0.50");
   });
 
   test("a conductor that ended stays in Chat above the next, read-only; only the latest takes input", async () => {

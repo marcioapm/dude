@@ -43,8 +43,9 @@ import {
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
+import type { ApiClient, CostSplit, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
+import { CostOf } from "./MetricsSection.tsx";
 import {
   PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
@@ -88,6 +89,15 @@ export interface ChatVariant {
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
   before?: ReactNode;
+  /** The conductor's whole cost, from the task's metrics; null until read. */
+  cost?: RunCost | null;
+}
+
+/** A Run's cost as the task's metrics split it: tokens and machine time. */
+export interface RunCost {
+  cost: CostSplit;
+  tokens: number;
+  activeMs: number;
 }
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
@@ -413,7 +423,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 <SessionFacts facts={[
                   ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
                   ...(run.machine ? [{ label: "Machine", value: run.machine.name }] : []),
-                  { label: "Cost", value: <CostDisplay usd={modelCostShown(conversation.costUsd, conversation.costSource.from)} /> },
+                  // The whole cost, tokens and machine time, as the task's metrics split it.
+                  { label: "Cost", value: chat.cost
+                    ? <CostOf cost={chat.cost.cost} tokens={chat.cost.tokens} activeMs={chat.cost.activeMs} />
+                    : <CostDisplay usd={modelCostShown(conversation.costUsd, conversation.costSource.from)} /> },
                 ]} />
               </SessionRailBlock>
               {tools.length > 0 ? (
