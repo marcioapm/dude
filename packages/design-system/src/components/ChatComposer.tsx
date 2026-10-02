@@ -3,7 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
-import { AttachmentChip, attachmentWarning, type ComposerAttachment } from "./ImageAttachments.tsx";
+import { AttachmentChip, attachmentWarning, takePastedFiles, type ComposerAttachment } from "./ImageAttachments.tsx";
 import styles from "./ChatComposer.module.css";
 import trayStyles from "./ImageAttachments.module.css";
 
@@ -214,11 +214,8 @@ export function ChatComposer({
   const attachOff = disabled === true || attachDisabledReason !== undefined;
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     if (!onAttachFiles || attachOff) return;
-    const files = Array.from(e.clipboardData?.files ?? []);
-    if (files.length === 0) return;
     // Pasted files are attached; pasted text still goes into the field.
-    e.preventDefault();
-    onAttachFiles(files);
+    takePastedFiles(e, onAttachFiles);
   };
   const picker = useRef<HTMLInputElement>(null);
 

@@ -139,11 +139,36 @@ def _files(page: Page, files: list[tuple[str, bytes, str]]):
 
 
 def _paste(page: Page, files: list[tuple[str, bytes, str]]) -> None:
-    dt = _files(page, files)
-    page.get_by_placeholder("Steer the agent…").evaluate("""(el, dt) => {
+    _paste_into(page.get_by_placeholder("Steer the agent…"), _files(page, files))
+
+
+def _paste_into(target, dt) -> bool:
+    """Pastes `dt` on `target` as a person would; whether the page claimed it (preventDefault)."""
+    return target.evaluate("""(el, dt) => {
+      el.focus();
       const e = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
-      el.dispatchEvent(e);
+      return !el.dispatchEvent(e);
     }""", dt)
+
+
+def _drag(target, kind: str, dt) -> bool:
+    """Fires one drag event carrying `dt` on `target`; whether the page claimed it (preventDefault)."""
+    return target.evaluate("""(el, [kind, dt]) => {
+      const e = new DragEvent(kind, { bubbles: true, cancelable: true, dataTransfer: dt });
+      return !el.dispatchEvent(e);
+    }""", [kind, dt])
+
+
+def _drop_on(target, dt, *, page: Page | None = None, shoot: str | None = None) -> bool:
+    """Drags `dt` onto `target` and drops it, as the browser fires them; whether the drop was claimed.
+    With `page`, the overlay is checked (and shot) while the files are over it."""
+    _drag(target, "dragenter", dt)
+    _drag(target, "dragover", dt)
+    if page is not None:
+        expect(page.get_by_test_id("drop-overlay")).to_be_visible()
+        if shoot:
+            _shoot(page, shoot)
+    return _drag(target, "drop", dt)
 
 
 @pytest.mark.ui
@@ -364,4 +389,125 @@ def test_a_task_created_with_an_image_gives_it_to_its_first_agent(
     assert [a["name"] for a in images] == ["Summary v3.png"] and images[0]["contentType"] == "image/png"
     page.goto(f"{web_url}#/session/{run['id']}")
     expect(page.get_by_test_id("message-image")).to_have_count(1, timeout=30_000)
+    assert console_errors == []
+
+
+def _open_new_task(page: Page, web_url: str, org: dict) -> None:
+    """The New task dialog, on the board of the org's project (the `forge_project` fixture makes it)."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    expect(page.get_by_test_id("task-title")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_an_image_dropped_on_the_goal_goes_to_the_tray(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+    _open_new_task(page, web_url, org)
+    page.get_by_test_id("task-goal").fill("Match the design attached.")
+    dt = _files(page, [("design.png", png(600, 400), "image/png")])
+    assert _drop_on(page.get_by_test_id("task-goal"), dt, page=page, shoot="5-task-prompt-drop")
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+    chips = page.get_by_test_id("attachment-chip")
+    expect(chips).to_have_count(1)
+    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
+    expect(page.get_by_test_id("task-goal")).to_have_value("Match the design attached.")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_an_image_dropped_on_the_title_goes_to_the_tray(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+    _open_new_task(page, web_url, org)
+    dt = _files(page, [("bug.png", png(300, 200, (200, 40, 40)), "image/png")])
+    assert _drop_on(page.get_by_test_id("task-title"), dt, page=page)
+    chips = page.get_by_test_id("attachment-chip")
+    expect(chips).to_have_count(1)
+    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
+    # A text drag is left to the field: no overlay, nothing claimed.
+    text = page.evaluate_handle("() => { const dt = new DataTransfer(); dt.setData('text/plain', 'words'); return dt; }")
+    assert not _drag(page.get_by_test_id("task-title"), "dragenter", text)
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_an_image_pasted_in_the_title_goes_to_the_tray_and_text_does_not(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+    _open_new_task(page, web_url, org)
+    title = page.get_by_test_id("task-title")
+    title.fill("Summary")
+    # Text alone: left to the field.
+    text = page.evaluate_handle("() => { const dt = new DataTransfer(); dt.setData('text/plain', ' page'); return dt; }")
+    assert not _paste_into(title, text)
+    expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
+    expect(title).to_have_value("Summary")
+    # An image: to the tray, the paste claimed so nothing lands in the title.
+    assert _paste_into(title, _files(page, [("pasted.png", png(400, 300, (160, 90, 250)), "image/png")]))
+    chips = page.get_by_test_id("attachment-chip")
+    expect(chips).to_have_count(1)
+    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
+    expect(title).to_have_value("Summary")
+    # An image with text beside it (as some apps copy): the image is taken, the text let through.
+    both = _files(page, [("both.png", png(200, 200), "image/png")])
+    both.evaluate("dt => dt.setData('text/plain', 'both.png')")
+    assert not _paste_into(page.get_by_test_id("task-goal"), both)
+    expect(chips).to_have_count(2)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_attach_images_is_a_labelled_button(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+    _open_new_task(page, web_url, org)
+    attach = page.get_by_role("button", name="Attach images")
+    expect(attach).to_be_visible()
+    expect(attach).to_have_attribute("data-testid", "task-attach")
+    expect(page.get_by_test_id("task-images")).to_contain_text("Paste, drop or attach.")
+    _shoot(page, "5-task-prompt-empty")
+    attach.hover()
+    expect(page.get_by_role("tooltip")).to_contain_text("up to 10 MB each")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_file_dropped_on_the_dialog_without_storage_is_refused_in_place(page: Page, web_url: str, org: dict, forge_project: dict):
+    page.route("**/v1/attachment-limits", lambda route: route.fulfill(json={
+        "enabled": False, "types": ["image/png"], "perMessage": 10, "originalBytes": 10_000_000, "maxSide": 2000}))
+    _open_new_task(page, web_url, org)
+    page.get_by_test_id("task-title").fill("Kept")
+    expect(page.get_by_role("button", name="Attach images")).to_be_disabled()
+    dt = _files(page, [("design.png", png(60, 40), "image/png")])
+    goal = page.get_by_test_id("task-goal")
+    _drag(goal, "dragenter", dt)
+    assert _drag(goal, "dragover", dt)
+    expect(page.get_by_test_id("drop-overlay")).to_contain_text("Image storage isn't set up")
+    # Claimed, so the browser does not open the file in place of the page.
+    assert _drag(goal, "drop", dt)
+    expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
+    # Outside the dialog, on its backdrop, too.
+    assert _drag(page.locator("body"), "drop", dt)
+    expect(page.get_by_test_id("task-title")).to_have_value("Kept")
+
+
+@pytest.mark.ui
+def test_the_composer_takes_images_dropped_anywhere_on_the_session(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    _, run = _hanging_run(client, forge_project, "Anywhere")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    field = page.get_by_placeholder("Steer the agent…")
+    expect(field).to_be_visible()
+    chips = page.get_by_test_id("attachment-chip")
+    places = [field, page.locator(".runChat [data-following]").first, page.locator("[data-testid=run-screen] header").first]
+    for i, place in enumerate(places):
+        assert _drop_on(place, _files(page, [(f"drop-{i}.png", png(120, 80), "image/png")]), page=page)
+        expect(chips).to_have_count(i + 1)
+    # Text pasted with an image goes into the field; the image to the tray.
+    both = _files(page, [("both.png", png(200, 200), "image/png")])
+    both.evaluate("dt => dt.setData('text/plain', 'both.png')")
+    assert not _paste_into(field, both)
+    expect(chips).to_have_count(4)
+    _paste(page, [("pasted.png", png(90, 90), "image/png")])
+    expect(chips).to_have_count(5)
+    for i in range(5):
+        expect(chips.nth(i)).to_have_attribute("data-state", "ready", timeout=20_000)
     assert console_errors == []

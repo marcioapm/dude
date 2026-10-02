@@ -169,10 +169,14 @@ body {
   min-height: 0;
   display: flex;
 }
-/* The conversation, as the drop target for images: it takes the transcript's place. */
+/* The session, as the drop target for images: header, bar and conversation alike. */
 .runDrop {
   flex: 1;
   min-width: 0;
+}
+/* The New task dialog's content, as the drop target for images: it takes the content's place. */
+.taskDrop {
+  flex: 1;
 }
 /* The paperclip's tooltip: what may be attached, one fact a line (the tooltip caps its width). */
 .attachLimitsHint {
