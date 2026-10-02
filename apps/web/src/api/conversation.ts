@@ -18,6 +18,7 @@ import type { AttachmentInfo, CostOrigin, PersistedEvent, Run, RunStatus } from 
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
+import { formatDuration } from "@dude/design-system";
 
 /**
  * What a finished tool call produced. Agents report one merged stream or
@@ -180,7 +181,8 @@ export interface RepositoryRequestTurn {
 /**
  * Something dude did to the session: parked it while it waits on a person
  * (its container stopped, nothing held), took it back up, or nudged it
- * after it went quiet.
+ * after it went quiet. A resume, once timed, says how long it took, its
+ * phases in `title`, one per line.
  */
 export interface NoticeTurn {
   kind: "notice";
@@ -188,6 +190,7 @@ export interface NoticeTurn {
   notice: "parked" | "unparked" | "nudged";
   text: string;
   at: string;
+  title?: string;
 }
 
 /**
@@ -239,6 +242,34 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
 };
+
+/** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
+const RESUME_PHASES: ReadonlyArray<readonly [key: string, label: string]> = [
+  ["react", "dude asked lux"],
+  ["schedule", "lux placed it"],
+  ["image", "image ready"],
+  ["restore", "restored"],
+  ["start", "started"],
+  ["reload", "agent reloaded"],
+  ["take", "took its input"],
+  ["firstOutput", "first words"],
+];
+
+/**
+ * How long a resume took, from its `run.resume.timed`: "in 6.4s", ", on
+ * another host" when lux moved it, and the phases it knows, one per line.
+ * Null when it carries no total.
+ */
+export function resumeTiming(payload: Record<string, unknown>): { took: string; title: string } | null {
+  if (typeof payload.totalMs !== "number") return null;
+  const phases = (payload.phases ?? {}) as Record<string, unknown>;
+  const lines = RESUME_PHASES.flatMap(([key, label]) =>
+    typeof phases[key] === "number" ? [`${label} ${formatDuration(phases[key] as number)}`] : []);
+  return {
+    took: `in ${formatDuration(payload.totalMs)}${payload.moved === true ? ", on another host" : ""}`,
+    title: lines.join("\n"),
+  };
+}
 
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
@@ -360,6 +391,26 @@ export interface Projection {
   activeTool: Conversation["activeTool"];
   toolCounts: Map<string, number>;
   lands: SteerLands | null;
+  /**
+   * "Taken back up" notices whose resume is not timed yet, by the epoch
+   * their `run.unparked` names: the `run.resume.timed` of that epoch says
+   * how long it took there, whenever it arrives.
+   */
+  untimedUnparks: Map<number, NoticeTurn>;
+  /**
+   * The same for a `run.unparked` that names no epoch (written before
+   * they did): the last one, until the next timing. A later park or pause
+   * ends the wait, so a resume never timed is not given the next one's
+   * numbers.
+   */
+  untimedUnpark: NoticeTurn | null;
+  /**
+   * "Resumed in …" notices said on their own, by the epoch their timing
+   * names. Such a timing can be a park's return whose `run.unparked` is
+   * still to come (lux streamed the first words before answering the
+   * resume): when it comes, the notice becomes that return, not a second one.
+   */
+  standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -382,6 +433,9 @@ export function emptyProjection(): Projection {
     activeTool: null,
     toolCounts: new Map(),
     lands: null,
+    untimedUnparks: new Map(),
+    untimedUnpark: null,
+    standaloneTimings: new Map(),
     cursor: 0,
   };
 }
@@ -670,11 +724,58 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.unparked":
       case "run.idle_nudged": {
         const { notice, text } = NOTICES[event.eventType]!;
-        turns.push({ kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt });
+        const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
+        if (notice === "unparked" && typeof payload.epoch === "number") {
+          // Its timing came first and was said on its own: that notice is
+          // this return.
+          const said = state.standaloneTimings.get(payload.epoch);
+          if (said) {
+            state.standaloneTimings.delete(payload.epoch);
+            said.turn.text = `Taken back up ${said.took}.`;
+            break;
+          }
+        }
+        turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
+          state.untimedUnpark = null;
         }
+        if (notice === "unparked") {
+          if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
+          else state.untimedUnpark = turn;
+        }
+        break;
+      }
+
+      case EventTypes.RunPaused:
+        state.untimedUnpark = null;
+        break;
+
+      case EventTypes.RunResumeTimed: {
+        // How long the resume took: said on its own "taken back up" notice,
+        // by epoch — a timing can arrive after the next park — or else on a
+        // notice of its own, kept by epoch in case its park's return is
+        // still to come.
+        const timing = resumeTiming(payload);
+        if (!timing) break;
+        let unparked: NoticeTurn | null | undefined;
+        if (typeof payload.epoch === "number" && state.untimedUnparks.has(payload.epoch)) {
+          unparked = state.untimedUnparks.get(payload.epoch);
+          state.untimedUnparks.delete(payload.epoch);
+        } else {
+          unparked = state.untimedUnpark;
+          state.untimedUnpark = null;
+        }
+        if (unparked) {
+          unparked.text = `Taken back up ${timing.took}.`;
+          unparked.title = timing.title;
+          break;
+        }
+        const own: NoticeTurn = { kind: "notice", id: event.eventId, notice: "unparked", text: `Resumed ${timing.took}.`,
+          title: timing.title, at: event.occurredAt };
+        turns.push(own);
+        if (typeof payload.epoch === "number") state.standaloneTimings.set(payload.epoch, { turn: own, took: timing.took });
         break;
       }
 
