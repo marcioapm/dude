@@ -912,7 +912,7 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
 <!-- ============ 1 START ============ -->
 <h2 class="sec" id="s1">1 · Starting a task</h2>
 <h3 class="q">"How would I start a task with this agent, instead of automatic delivering?"</h3>
-<p class="lede">A task that hasn't started shows two ways to start where the "Not started" empty state is today. <b>Deliver</b> is today's automatic pipeline, unchanged. <b>Talk it through</b> starts the conductor in the Chat tab; El Duderino gives it the goal and criteria as its first prompt. The header has one primary button, following the project's start mode (<code>projects.start_mode</code>; Deliver stays the default until Talk has proven itself). The other sits next to it as a secondary button. Either way you can always type in Chat: the first message on a Delivered task starts its conductor and hands it the task's decisions (section 5).</p>
+<p class="lede">A task that hasn't started shows two ways to start where the "Not started" empty state is today, <b>side by side and equal</b>: you pick each time, and no project setting picks for you. <b>Abide</b> starts the conductor in the Chat tab, to talk it through with you; El Duderino gives it the goal and criteria as its first prompt. <b>Roll</b> is today's automatic pipeline, unchanged: let it go and it runs to the PR on its own. Either way you can always type in Chat: the first message on a rolling task starts its conductor and hands it the task's decisions (section 5).</p>
 
 <div class="app tall">
   <nav class="sb">
@@ -928,8 +928,8 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
   </nav>
   <div class="main">
     <div class="crumbs">web-console <svg class="ico ico12"><use href="#i-chev"/></svg> Checkout v2 <svg class="ico ico12"><use href="#i-chev"/></svg> WC-219<span class="sp"></span>
-      <button class="btn" data-testid="talk"><svg class="ico"><use href="#i-msg"/></svg>Talk it through</button>
-      <button class="btn primary"><svg class="ico"><use href="#i-zap"/></svg>Deliver</button>
+      <button class="btn" data-testid="abide"><svg class="ico"><use href="#i-msg"/></svg>Abide</button>
+      <button class="btn" data-testid="roll"><svg class="ico"><use href="#i-zap"/></svg>Roll</button>
       <button class="btn quiet"><svg class="ico"><use href="#i-edit"/></svg>Edit</button></div>
     <div class="thead"><div class="tm"><h1 class="ttitle">Invoice option for annual plans</h1>
       <div class="tmeta"><span class="st mute"><svg class="ico ico12"><use href="#i-ring"/></svg>Not started</span><span class="mono">WC-219</span><span>created 3m ago</span></div></div>
@@ -941,17 +941,17 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
           <ul><li>Invoice is offered on the plan step only when the interval is yearly</li><li>The order API accepts <code>payment_method=invoice</code> and rejects it for monthly</li><li>Existing card flow unchanged</li></ul></div></div>
         <div class="block"><div class="lbl">How to start</div>
           <div class="modes">
-            <div class="mode pick">
-              <h4><span class="face s32 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span>Talk it through</h4>
-              <p>The conductor reads the task and the code, asks what it needs, proposes a plan, and runs the agents with you watching.</p>
+            <div class="mode">
+              <h4><span class="face s32 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span>Abide</h4>
+              <p>Talk it through. The conductor reads the task and the code, asks what it needs, proposes a plan, and runs the agents with you watching.</p>
               <ul><li>You can interrupt any time, and it steers the agents for you, or makes a small change itself</li><li>It decides the review rounds and the simplifier with you</li><li>It waits for your go before opening the PR</li></ul>
-              <div class="foot"><span class="sel">claude-opus-5-5 <svg class="ico ico12"><use href="#i-down"/></svg></span><span class="sp" style="flex:1"></span><button class="btn primary">Start talking</button></div>
+              <div class="foot"><span>Conductor · claude-opus-5-5 · Small</span><span class="sp" style="flex:1"></span><button class="btn">Abide</button></div>
             </div>
             <div class="mode">
-              <h4><span class="face s32" style="background:var(--ds-color-overlay);color:var(--ds-color-text-secondary);border-radius:var(--ds-radius-control)"><svg class="ico"><use href="#i-zap"/></svg></span>Deliver</h4>
-              <p>Today's automatic pipeline: implementer, reviewers, fixer, simplifier, then the PR. Nobody needs to be here.</p>
+              <h4><span class="face s32" style="background:var(--ds-color-overlay);color:var(--ds-color-text-secondary);border-radius:var(--ds-radius-control)"><svg class="ico"><use href="#i-zap"/></svg></span>Roll</h4>
+              <p>Deliver straight through: implementer, reviewers, fixer, simplifier, then the PR. Nobody needs to be here.</p>
               <ul><li>Stops only on a question or an escalation</li><li>You can still open Chat later and take over</li></ul>
-              <div class="foot"><span>Project default</span><span class="sp" style="flex:1"></span><button class="btn">Deliver</button></div>
+              <div class="foot"><span>The project's pipeline</span><span class="sp" style="flex:1"></span><button class="btn">Roll</button></div>
             </div>
           </div></div>
       </div>
@@ -1063,7 +1063,7 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
         <div class="tool"><svg class="ico ok"><use href="#i-check"/></svg><b>publish</b><code>1 file · +1 −1 · within the 60-line limit</code><span class="d">task branch → <code>b7e20d4</code></span></div>
       </div>
       <div class="turn"><span class="face s40 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span><div><div class="h"><span class="n">Conductor</span><span class="tm">15:50</span></div>
-        <div class="tx">Fixed it myself, one line, nobody else is writing right now. It goes through the next review round with everything else.</div></div></div>
+        <div class="tx">Fixed it myself, one line, nobody else is writing right now. I can't run the tests on my machine, so it goes through the next review round with everything else, and that runs them.</div></div></div>
     </div>
     <div class="composer" style="position:relative">
       <div class="field focus"><span>do 3 here actually, it's small. and </span><span class="mention"><span class="face s16 f-rev"><svg class="ico"><use href="#i-eye"/></svg></span>reviewer-database</span><span>check the migration locks orders for how long</span></div>
@@ -1102,7 +1102,7 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
     <div class="turn"><span class="face s40 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span><div><div class="h"><span class="n">Conductor <small>for Márcio</small></span><span class="tm">16:31</span></div>
       <div class="tx"><p>Ready for a PR. What ran on <code>c07f1b3</code>:</p>
       <ul><li>Review round 2 clean in all four categories. Round-1 findings 1, 2 and 4 fixed, each with a test that fails without the fix. Finding 3 done here, as you asked.</li>
-      <li>Simplifier merged the two plan-interval helpers (−31 lines); I re-ran the reviewers' tests after it.</li>
+      <li>Simplifier merged the two plan-interval helpers (−31 lines); its Run re-ran the suite after it.</li>
       <li>Full suite: 1,184 pass. Screenshots of the plan step and upgrade screen are in Files.</li>
       <li><b>Not verified:</b> the invoice PDF itself. The billing service isn't in this project's repositories.</li></ul></div></div></div>
     <div class="turn q same" style="margin-top:6px"><span class="face s40 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span><div>
@@ -1139,7 +1139,7 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
         <div class="tx">ok make the cap configurable, default 8</div></div></div>
       <div class="turn q"><span class="face s40 f-orch"><svg class="ico"><use href="#i-orch"/></svg></span><div><div class="h"><span class="n">Conductor</span><span class="tm">10:05</span></div>
         <div class="tx">#88 is merged, so this would be a new PR. Should I make it a follow-up task (SDK-32, linked here)?</div>
-        <div class="chips"><button class="chip pick">Yes, new task, talk it through</button><button class="chip">New task, just Deliver</button><button class="chip">No</button></div></div></div>
+        <div class="chips"><button class="chip pick">New task, abide</button><button class="chip">New task, roll</button><button class="chip">No</button></div></div></div>
     </div>
     <div class="composer"><div class="field"><span class="ph">Ask about this task, or ask for a change…</span></div>
       <div class="acts"><span>To <b>Conductor</b> · read-only until you ask for a change</span><span class="sp"></span><kbd>Enter</kbd> send<button class="btn primary">Send</button></div></div></div>
@@ -1204,27 +1204,27 @@ kbd{font-family:var(--ds-font-mono);font-size:11px;padding:1px 4px;border-radius
       <ul><li>The delivery workflow keeps the mechanics: start phase Runs, wait for all of them, advance the branch, open PRs, classify GitHub. With <code>State.Decider = conductor</code>, each decision point parks on a conductor decision instead of applying the policy: after implement, after a review round (triage), after a fix, before the PR, on PR feedback, on an escalation.</li>
       <li>Its tools (<code>agenttools</code>): <code>start_phase</code> (the same <code>CreatePhaseRun</code>), <code>steer</code> (a directive), <code>dude diff</code> (built, #33), <code>findings</code> / <code>dismiss_finding</code>, <code>pull_requests</code>, <code>decide</code>, <code>ask_person</code> (built).</li>
       <li>Policy bounds stay: review iterations, attempts per finding, PR fix rounds. Past one, it must ask you.</li>
-      <li>A lux Run like any agent, with role <code>conductor</code> (the <code>orchestrator</code> enum value, renamed). Warm for <code>conductorWarmMinutes</code> after a turn, then parked (<code>dude_pause='conductor'</code>); a wake resumes it with its conversation.</li></ul>
+      <li>A lux Run like any agent, with role <code>conductor</code> (the <code>orchestrator</code> enum value, renamed) and <b>its own settings</b>: model, effort, machine. Its machine is <b>small</b>: it reads, edits and talks; anything that runs the code is a phase Run.</li>
+      <li>Warm for <code>conductorWarmMinutes</code> after a turn, then parked (<code>dude_pause='conductor'</code>); a wake resumes it with its conversation.</li></ul>
     </div>
     <div>
       <h4>Wakes, and its checkout</h4>
       <ul><li>Woken for a decision or a person; never for an approval, a green check, or one reviewer of four. Wake reasons that land together are <b>one turn</b>.</li>
       <li>El Duderino's note is <b>fixed-size facts and ids</b>, never a diff or a file list: the conductor pulls those with <code>dude diff</code>, files first.</li>
       <li>Its <b>checkout is kept current by lux</b>: on every wake, lux's runner fetches the task's heads and drops a git bundle in; git fast-forwards inside. No credential in the container; lux still never runs git in the checkout.</li>
-      <li>Its edits publish like a phase, one writer at a time, and only <b>small</b> ones (default 60 lines, 3 files; past it, "delegate this"). They go through the next review round.</li></ul>
+      <li>Its edits publish like a phase, one writer at a time, and only <b>small</b> ones (60 lines, 3 files; past it, "delegate this"). It cannot test them, so a conductor edit is never the last thing before the PR: a review or test Run must have run on that head.</li></ul>
     </div>
   </div>
   <h4>Order of work</h4>
   <ol><li><b>Measure</b> a lux resume, end to end.</li>
   <li><b>Read-only Chat</b> on any task: the conductor Run, briefing, <code>dude diff</code>, warm-then-parked, El Duderino's notes.</li>
-  <li><b>Decisions</b>: the decider switch, <code>start_phase</code> / <code>decide</code>, coalesced wakes, Talk it through, taking over, the PR gate.</li>
+  <li><b>Decisions</b>: the decider switch, <code>start_phase</code> / <code>decide</code>, coalesced wakes, Abide, taking over, the PR gate.</li>
   <li><b>Steering</b>: <code>steer</code>, and lux delivering it mid-turn.</li>
   <li><b>GitHub</b>: routing to the conductor, <code>@dude</code>, webhooks when a project's repositories are added.</li>
   <li><b>Edits</b>: lux's incoming bundle, the conductor's publish and its limit.</li></ol>
   <h4>Still open</h4>
-  <ul><li>Talk it through as a project's default, or always Deliver first?</li>
-  <li>The edit limit's numbers.</li>
-  <li>The conductor's model and machine: its own setting per project, or the implementer's?</li></ul>
+  <ul><li>The verbs: Abide / Roll, or another pair?</li>
+  <li>The small machine's numbers (proposed: 0.5 CPU · 1 GiB · 10 GiB).</li></ul>
 </div>
 </div>
 

@@ -41,20 +41,31 @@ Decided (2026-09-30 to 2026-10-02, Márcio):
   size; the conductor reads what it needs with `dude diff`.
 - **The conductor may edit code, for small things.** It has its own
   checkout, kept current by lux, and publishes like a phase. "Small" is
-  enforced when it publishes; past it, it delegates.
+  60 changed lines and 3 files, enforced when it publishes; past it, it
+  delegates.
+- **Starting is a choice, every time.** Two equal buttons, no project
+  default: talk it through, or deliver straight through. Named after the
+  film: **Abide** and **Roll**.
+- **The conductor has its own settings and a small machine.** Its own
+  model, effort and machine size, like any role. Its machine is small: it
+  reads, edits and talks, and never runs the code. Anything that builds or
+  tests is a phase Run.
 
 ## Starting a task
 
-Where a task's "Not started" offers Deliver today, there are two:
+Where a task's "Not started" offers Deliver today, there are two, side by
+side and equal. The person picks each time; no setting picks for them.
 
-- **Talk it through** starts the conductor in Chat. It reads the task and
-  the code, then asks what it needs to (a question card, as `ask_person`
-  makes today) or proposes a plan. The task waits on the person; the
-  conductor is parked while it waits.
-- **Deliver** is today's pipeline, unchanged.
+- **Abide** (talk it through) starts the conductor in Chat. It reads the
+  task and the code, then asks what it needs to (a question card, as
+  `ask_person` makes today) or proposes a plan. The task waits on the
+  person; the conductor is parked while it waits.
+- **Roll** (deliver straight through) is today's pipeline, unchanged. In
+  bowling, the roll is the delivery: let it go and it runs to the end on
+  its own.
 
-A project chooses which is the primary button (`projects.start_mode`:
-`deliver` | `conduct`, default `deliver`).
+The verbs are UI copy only. Internally the workflow, its events and its
+API stay "delivery" and the decider `policy` | `conductor`.
 
 ## Taking over a delivered task
 
@@ -137,10 +148,23 @@ wrote. Nothing else wakes it.
 - **One safety net.** A conductor asleep for long with a Run of its own in
   flight is woken once, to say what it is waiting for. No other polling.
 
-## Its machine
+## Its settings and machine
 
-The conductor is a lux Run, like any agent, on the project's conductor
-machine size. Between turns it is **warm, then parked**:
+- **Its own role settings.** `conductor` is a role in
+  `default_agent_models` and `agent_models` like the others — model,
+  effort, machine size — with its own settings page. It does not follow
+  the implementer.
+- **A small machine.** It reads code, runs `dude diff`, `rg` and `git`,
+  edits and talks; it never builds, installs or runs tests. Every
+  organisation gets a small size for it, **Small: 0.5 CPU · 1 GiB ·
+  10 GiB**, the conductor's default (a migration for existing
+  organisations, the seeding trigger for new ones). Disk is the checkout
+  and nothing else.
+- **What it cannot run, a phase Run does.** "Are the tests green?" is
+  answered by the last implementer, fixer, simplifier or test Run on that
+  head, which it reads. It does not claim what it did not see a Run do.
+
+Between turns it is **warm, then parked**:
 
 - After a turn, it stays running for a grace period, so a person answering
   at their desk gets a live reply (`conductorWarmMinutes`, default 10 —
@@ -169,9 +193,12 @@ machine size. Between turns it is **warm, then parked**:
   its checkout was not current, which says so instead of losing work.
 - **One writer at a time.** It cannot publish while an implementer or fixer
   is running on the task; it waits, or steers that agent instead.
-- **Small, enforced.** A publish past the project's limit (default 60
-  changed lines, 3 files) is refused with "delegate this". Its commits go
-  through the next review round like any other.
+- **Small, enforced.** A publish past the project's limit (60 changed
+  lines, 3 files) is refused with "delegate this".
+- **Never untested at the PR.** It cannot run tests, so its commits go
+  through the next review round like any other, and the PR gate refuses a
+  head whose last commit is the conductor's until a review or test Run
+  has run on it.
 
 ## What it replaces from threadctl and arny
 
@@ -214,12 +241,13 @@ mostly already true of dude:
 ## Order of work
 
 1. **Measure** a lux resume, end to end.
-2. **Read-only Chat** on any task: the conductor role and Run, briefing
+2. **Read-only Chat** on any task: the conductor role, its settings and
+   the Small size, its Run, briefing
    from the task, `dude diff`, `findings`, `pull_requests`, `ask_person`;
    warm-then-parked; El Duderino's notes. No decisions yet.
 3. **Decisions:** `State.Decider`, the decision points parking on
    `SignalConductorDecision`, `start_phase`, `decide`,
-   `dismiss_finding`, coalesced wakes; Talk it through; take-over; the PR
+   `dismiss_finding`, coalesced wakes; Abide and Roll; take-over; the PR
    gate.
 4. **Steering:** `steer`, and lux delivering a steer mid-turn.
 5. **GitHub:** routing to the conductor, @dude, webhooks on project add.
@@ -227,6 +255,5 @@ mostly already true of dude:
 
 ## Open
 
-- Talk it through as the default for a project, or always Deliver first?
-- The edit limit's numbers.
-- A conductor's model and machine size per project, or the implementer's?
+- The verbs: Abide / Roll, or another pair?
+- The Small size's numbers: enough disk for the largest checkout?
