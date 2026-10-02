@@ -370,12 +370,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const dude = dudeName(run.taskId);
   // What a queued steer waits for, and the ways to act on one.
   const activeTool = conversation.activeTool?.name ?? null;
-  const steer: SteerActions | undefined = isLive ? {
+  // A set-aside session is ended to its transcript too, though its Run may
+  // still be recorded as running: no decisions, no Interrupt now or Retry.
+  const steer: SteerActions | undefined = isLive && !readOnly ? {
     wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands),
     resend: resteer,
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
-  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer, shown);
+  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || changed.length > 0;
