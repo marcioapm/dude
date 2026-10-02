@@ -130,10 +130,11 @@ func TestAPersonsResumeOfAParkWakesFromTheirResume(t *testing.T) {
 	}
 }
 
-// The orchestrator's clock is 100ms ahead of the database's. dude parks
-// the Run while it waits on a question, and a person answers it 30ms
-// later: the answer is after the park began, though its database stamp
-// is before the park event's own time. It wakes the resume.
+// The orchestrator's clock is ahead of the database's: its fixed Now is
+// 10s past the database's time. dude parks the Run while it waits on a
+// question, and the question is answered 1s after the park began, on the
+// database's clock: after the park, though before the park event's own
+// time. It wakes the resume.
 func TestAnAnswerJustAfterTheParkWakesItWhateverTheOrchestratorsClock(t *testing.T) {
 	w := newResumeWorld(t)
 	w.exec(`DELETE FROM questions WHERE run_id = $1`, w.run.ID)
@@ -141,26 +142,27 @@ func TestAnAnswerJustAfterTheParkWakesItWhateverTheOrchestratorsClock(t *testing
 		VALUES ('q_'||$1, $1, $2, $3, 'Sorted?', 'open')`, w.run.Org, w.run.TaskID, w.run.ID)
 	w.exec(`UPDATE runs SET status = 'running', lux_state = 'running', dude_pause = NULL, lux_stop_reason = NULL,
 		waiting_since = now() - interval '1 hour' WHERE id = $1`, w.run.ID)
-	w.s.Now = func() time.Time {
-		var db time.Time
-		if err := w.owner.QueryRow(w.ctx, `SELECT clock_timestamp()`).Scan(&db); err != nil {
-			w.t.Fatal(err)
-		}
-		return db.Add(100 * time.Millisecond)
+	var dbNow time.Time
+	if err := w.owner.QueryRow(w.ctx, `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+		t.Fatal(err)
 	}
+	ahead := dbNow.Add(10 * time.Second)
+	w.s.Now = func() time.Time { return ahead }
 	r := w.run
 	r.Status, r.LuxState, r.DudePause = statusRunning, "running", ""
 	if err := w.s.requestPause(w.ctx, r, "person", "parked while it waits for a person"); err != nil {
 		t.Fatal(err)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`); n != 1 {
-		t.Fatalf("%d run.parked", n)
+	var parkedAt, occurredAt time.Time
+	if err := w.owner.QueryRow(w.ctx, `SELECT (payload->>'parkedAt')::timestamptz, occurred_at FROM events
+		WHERE run_id = $1 AND event_type = 'run.parked'`, w.run.ID).Scan(&parkedAt, &occurredAt); err != nil {
+		t.Fatalf("the park's run.parked: %v", err)
 	}
-	time.Sleep(30 * time.Millisecond)
-	var answered time.Time
-	if err := w.owner.QueryRow(w.ctx, `UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now()
-		WHERE run_id = $1 RETURNING answered_at`, w.run.ID).Scan(&answered); err != nil {
-		t.Fatal(err)
+	answered := parkedAt.Add(time.Second)
+	w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = $2 WHERE run_id = $1`, w.run.ID, answered)
+	if !parkedAt.Before(answered) || !answered.Before(occurredAt) {
+		t.Fatalf("not an answer between the park and its event's time: parked %v, answered %v, event %v",
+			parkedAt, answered, occurredAt)
 	}
 	w.exec(`UPDATE runs SET status = 'paused', dude_pause = 'person', control = 'none' WHERE id = $1`, w.run.ID)
 	if cause, got := w.wokenAt(w.run); cause != causeAnswer || !got.Equal(answered) {
