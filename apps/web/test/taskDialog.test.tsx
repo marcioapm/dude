@@ -400,6 +400,13 @@ describe("editing a task whose delivery stopped", () => {
     mounted.push(unmount);
     await until(() => document.querySelector("[data-testid=task-goal]") && document.body.textContent?.includes(PROJECT.name), "the dialog, loaded");
     expect(document.body.textContent).toContain("Its repositories are fixed.");
+    // Its text can change, so its images can too.
+    expect(document.querySelector<HTMLButtonElement>("[data-testid=task-attach]")!.disabled).toBe(false);
+    await act(async () => void fileEvent("dragenter", PNG));
+    const overlay = document.querySelector('[data-testid="drop-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.getAttribute("data-refused")).not.toBe("true");
+    await act(async () => void fileEvent("dragleave", PNG));
     const title = document.querySelector<HTMLInputElement>("[data-testid=task-title]")!;
     expect(title.disabled).toBe(false);
     await set(title, HTMLInputElement.prototype, "Stopped task, reworded");
