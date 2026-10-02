@@ -336,7 +336,11 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
 		WakeTimeout: previewWakeTimeout, ExpireAfter: previewExpireAfter}
-	plain := PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, "")
+	domain := p.PreviewDomain
+	if p.PreviewRelative {
+		domain = ""
+	}
+	plain := PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, "")
 	sv, err := p.adoptOrCreate(ctx, r, body, plain)
 	if le, ok := lux.AsError(err); !ok || le.Code != "hostname_taken" {
 		return sv, err
@@ -347,7 +351,7 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 		return sv, err
 	}
 	p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", plain)
-	return p.adoptOrCreate(ctx, r, body, PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, r.ID))
+	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, r.ID))
 }
 
 func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.CreateServer, hostname string) (lux.TenantServer, error) {
@@ -862,11 +866,11 @@ func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 }
 
 // Wakeable says whether a new preview of the project takes the wakeable
-// path: lux has a preview domain, and the project has a server to start in
+// path: lux supports previews, and the project has a server to start in
 // previews (a preview of none has nothing to wake by URL, and keeps the
 // eager path).
 func (s *Service) wakeable(ctx context.Context, tx pgx.Tx, projectID string) (bool, error) {
-	if s.PreviewDomain == "" {
+	if !s.PreviewRelative && s.PreviewDomain == "" {
 		return false, nil
 	}
 	var some bool

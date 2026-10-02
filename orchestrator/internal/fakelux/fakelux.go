@@ -350,6 +350,8 @@ type Server struct {
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
+	// Previews optionally advertises the relative-naming capability in whoami.
+	Previews *bool
 	// The port in preview URLs, when not the scheme's (a local demo).
 	PreviewPort int
 	// How often idle servers are looked for; zero is 100ms.
