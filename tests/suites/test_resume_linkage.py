@@ -61,3 +61,14 @@ def test_a_fractional_millisecond_is_not_what_the_orchestrator_writes():
     p["phases"]["firstOutput"] = 0.6
     with pytest.raises(AssertionError):
         assert_timed_is_its_row(p, row(600))
+
+
+# Every phase right, only the one total off by a millisecond either way. The
+# first output is 500µs past a whole millisecond, so totalMs is a rounded tie.
+@pytest.mark.parametrize("key,off", [("totalMs", 1), ("totalMs", -1), ("untilBusyMs", 1), ("untilBusyMs", -1)])
+def test_each_total_is_its_row_on_its_own(key, off):
+    assert_timed_is_its_row(payload(1), row(500))
+    p = payload(1)
+    p[key] += off
+    with pytest.raises(AssertionError):
+        assert_timed_is_its_row(p, row(500))
