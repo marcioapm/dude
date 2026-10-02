@@ -207,6 +207,15 @@ describe("a conductor's session, from its URL", () => {
     expect(list).toHaveLength(5);
     expect(tabCount(page, "Sessions")).toBe("5");
   });
+
+  test("Overview picked on a task with a conductor stays picked once the URL says the task alone", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/findings`);
+    await until(() => page.querySelector("[data-testid=attempt-picker]"), "the task page");
+    await openTab(page, "Overview");
+    await until(() => (window.location.hash === `#/task/${TASK_ID}` ? true : null), "the task's own URL");
+    await settle(100);
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
+  });
 });
 
 describe("a conductor's session on an earlier attempt", () => {
