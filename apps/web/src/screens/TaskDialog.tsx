@@ -21,12 +21,13 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip } from "@dude/design-system";
+import { AttachDropZone, AttachmentChip, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, IconButton, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, attachmentWarning } from "@dude/design-system";
 import { TASK_CRITERIA_MAX, TASK_GOAL_MAX } from "@dude/domain";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
+import { limitsHint, useAttachmentLimits, useImageTray, type ImageTray } from "../hooks/useImages.tsx";
 
 const NO_EPIC = "__none__";
 // Read. Reload (Ctrl/⌘+R's family) is not one of the keys a browser keeps from a page, so the dialog takes it.
@@ -75,6 +76,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const [created, setCreated] = useState<string | null>(null);
   const { busy, problem, save } = useSave();
   const [reading, setReading] = useState(false);
+  // Images for the first agent, with the prompt: made now, uploaded once the task exists.
+  const limits = useAttachmentLimits(client);
+  const tray = useImageTray(client, undefined, limits);
+  const withImages = !existing && tray.attachments.length > 0;
+  const imagesReady = tray.attachments.every((a) => a.state === "ready");
 
   useEffect(() => {
     let current = true;
@@ -97,7 +103,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // Reading criteria only strips markers and indentation, so bounding their
   // Markdown source also bounds the total saved by the server.
   const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
-  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !criteriaError && !busy;
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !criteriaError && !busy && imagesReady;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
   function submit(deliver: boolean) {
@@ -120,7 +126,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           id = (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
           setCreated(id);
         }
-        if (deliver) await client.deliver(id);
+        if (deliver) await client.deliver(id, withImages ? await tray.uploadTo(id) : []);
       },
       () => {
         onClose();
@@ -157,7 +163,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic." : undefined}
       submitLabel={existing ? "Save" : "Create"}
       submitTestId="task-save"
-      canSubmit={canSave}
+      // Images go with the prompt, which only a delivery gives.
+      canSubmit={canSave && !withImages}
       onSubmit={() => submit(false)}
       problem={problem ?? loadProblem}
       unsavedWords={unsaved}
@@ -255,7 +262,49 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         notice={criteria.stray && !locked ? "Text outside a list item isn't saved as a criterion" : undefined}
         data-testid="task-criteria"
       />
+      {existing ? null : <PromptImages tray={tray} />}
     </FormDialog>
+  );
+}
+
+/**
+ * Images the first agent is given with the task: a design, a screenshot of
+ * the bug. The composer's tray, outside a composer: the paperclip, paste
+ * and drop, the same chips and the same rules.
+ */
+function PromptImages({ tray }: { tray: ImageTray }) {
+  const [input, setInput] = useState<HTMLInputElement | null>(null);
+  const off = tray.disabledReason !== undefined;
+  return (
+    <AttachDropZone onFiles={tray.add} disabled={off} detail="They go to the first agent with the task.">
+      <Fieldset legend="Images" data-testid="task-images"
+        hint={tray.attachments.length > 0 ? "Given to the first agent with the task: use Create and deliver." : "A design or a screenshot for the first agent. Paste, drop or attach."}
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData?.files ?? []);
+          if (files.length === 0 || off) return;
+          e.preventDefault();
+          tray.add(files);
+        }}>
+        <div className="taskImages">
+          {tray.attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={tray.remove} />)}
+          <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits)} keepOnPress={off}>
+            <span>
+              <IconButton icon="paperclip" label={tray.disabledReason ?? "Attach images"} disabled={off} onClick={() => input?.click()}
+                data-testid="task-attach" />
+            </span>
+          </Tooltip>
+          <input ref={setInput} type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" data-testid="task-attach-input"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              e.target.value = "";
+              if (files.length > 0) tray.add(files);
+            }} />
+        </div>
+        {tray.attachments.some((a) => a.state === "error") ? (
+          <Callout tone="attention">{attachmentWarning(tray.attachments)}</Callout>
+        ) : null}
+      </Fieldset>
+    </AttachDropZone>
   );
 }
 
