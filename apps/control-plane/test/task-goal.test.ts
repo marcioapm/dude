@@ -70,7 +70,8 @@ test("creating a task with no goal, or one under 16 characters trimmed, is refus
   await refusedForTheGoal(await create({ title: "Padded", goal: `  \n ${"a".repeat(15)}\t  ` }));
   // 7 emoji are 14 UTF-16 units, and one more character makes 15.
   await refusedForTheGoal(await create({ title: "Emoji", goal: `${"😀".repeat(7)}a` }));
-  for (const title of ["No goal", "Empty goal", "Fifteen", "Padded", "Emoji"]) expect(await tasksNamed(title)).toBe(0);
+  await refusedForTheGoal(await create({ title: "Blank", goal: " ".repeat(20) }));
+  for (const title of ["No goal", "Empty goal", "Fifteen", "Padded", "Emoji", "Blank"]) expect(await tasksNamed(title)).toBe(0);
   expect(Array.from(await owner`SELECT next_task_number FROM projects WHERE id = ${project}`)).toEqual([{ next_task_number: 1 }]);
 });
 

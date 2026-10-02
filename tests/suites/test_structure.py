@@ -117,11 +117,14 @@ def test_a_task_is_saved_with_a_goal_of_at_least_16_characters(client: ApiClient
     """Creating needs the goal, trimmed, at 16 characters; an edit that sets it does too."""
     project = forge_project["id"]
     message = "a task needs a goal of at least 16 characters: why it matters and what should change"
+    # The whole error, once, as it crosses the HTTP serialiser.
+    error = {"code": "bad_request", "message": message,
+             "details": {"formErrors": [], "fieldErrors": {"goal": [message]}}}
     for goal in (None, "", "g" * 15, "  \n" + "g" * 15 + "\t "):
         body = {"projectId": project, "title": "Too short"} | ({} if goal is None else {"goal": goal})
         resp = client.post("/v1/tasks", body)
         assert resp.status_code == 400, (goal, resp.text)
-        assert resp.json()["error"]["message"] == message
+        assert resp.json()["error"] == error
     created = client.post("/v1/tasks", {"projectId": project, "title": "Enough", "goal": "g" * 16})
     assert created.status_code == 201, created.text
     resp = client.patch(f"/v1/tasks/{created.json()['id']}", {"goal": "g" * 15})

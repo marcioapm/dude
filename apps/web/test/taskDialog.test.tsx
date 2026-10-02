@@ -55,7 +55,8 @@ async function set(el: Element, proto: object, text: string) {
   });
 }
 
-const hint = (n: number) => `${n} more ${n === 1 ? "character" : "characters"} to save`;
+const hint = (n: number) =>
+  `${n} more ${n === 1 ? "character" : "characters"} to save: why it matters and what should change.`;
 
 describe("a new task's goal", () => {
   test("Create and Create and deliver stay disabled below 16 characters and are enabled at 16", async () => {
@@ -79,14 +80,14 @@ describe("a new task's goal", () => {
     expect(d.goalLabel()).toBe("Goal · required");
     expect(d.goalText()).not.toContain("more character");
     await d.goal("Euros");
-    expect(d.goalText()).toContain(hint(11));
+    expect(d.goalText()).toBe(hint(11));
     await d.goal("a".repeat(15));
-    expect(d.goalText()).toContain(hint(1));
+    expect(d.goalText()).toBe(hint(1));
     await d.goal("a".repeat(16));
     expect(d.goalText()).not.toContain("more character");
     // Cleared after typing: still says how much is missing.
     await d.goal("");
-    expect(d.goalText()).toContain(hint(16));
+    expect(d.goalText()).toBe(hint(16));
   });
 });
 
@@ -97,6 +98,7 @@ describe("editing a task saved before the rule", () => {
 
   test("opens without complaint, and saves once its goal is long enough", async () => {
     const d = await open(old(false));
+    expect(d.goalLabel()).toBe("Goal · required");
     expect(d.goalText()).not.toContain("more character");
     expect(d.save().disabled).toBe(true);
     await d.goal("Keep invoices in euros for EU customers.");
