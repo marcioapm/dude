@@ -1,10 +1,69 @@
 package delivery
 
 import (
+	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// The rows packages/domain/test/attachments.test.ts reads too: the two
+// parsers must find the same references in each text.
+func TestImageRefsMatchTheSharedFixture(t *testing.T) {
+	raw, err := os.ReadFile("../../../packages/domain/test/attachment-references.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows [][2]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) < 10 {
+		t.Fatalf("only %d rows", len(rows))
+	}
+	for _, row := range rows {
+		var text string
+		var want []string
+		if err := json.Unmarshal(row[0], &text); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(row[1], &want); err != nil {
+			t.Fatal(err)
+		}
+		got := []string{}
+		for _, r := range ImageRefs(text) {
+			got = append(got, r.ID)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%q: ids %v, want %v", text, got, want)
+		}
+	}
+}
+
+// A reference's title is the dialog's layout (size, wrap): presentation for
+// people. The agent reads the image's place only.
+func TestALayoutTitleNeverReachesTheAgent(t *testing.T) {
+	in := PromptInput{Title: "T", Goal: "Like this ![mock.png](attachment:att_m \"small right\") please.",
+		AcceptanceCriteria: []string{"Matches ![mock.png](<attachment:att_m> '320 left')"},
+		Images:             []PromptImage{{"att_m", "mock.png"}}}
+	if r := ImageRefs(in.Goal); len(r) != 1 || r[0].Title != "small right" {
+		t.Fatalf("refs %+v", r)
+	}
+	for _, phase := range []string{PhaseImplement, PhaseReview} {
+		got := Prompt(phase, in)
+		for _, want := range []string{"Like this [Image 1: mock.png] please.", "- Matches [Image 1: mock.png]"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s prompt lacks %q:\n%s", phase, want, got)
+			}
+		}
+		for _, leak := range []string{"small", "right", "320", "left"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s prompt has %q:\n%s", phase, leak, got)
+			}
+		}
+	}
+}
 
 func TestImageRefsSkipCodeAndReadEveryURLForm(t *testing.T) {
 	text := strings.Join([]string{

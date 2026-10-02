@@ -29,15 +29,20 @@ export const ATTACHMENT_SCHEME = "attachment:";
 export interface AttachmentReference {
   id: string;
   alt: string;
+  /** The title's text, without its quotes: where the task dialog keeps an image's layout. */
+  title?: string;
   /** Offsets of the whole `![…](…)` in the text. */
   from: number;
   to: number;
 }
 
 // `![alt](attachment:id)`, `(<attachment:id>)`, and either with a title. The
-// orchestrator's delivery.attachmentRef is the same expression.
-const REFERENCE = /!\[((?:\\.|[^\]\\\n])*)\]\(\s*<?attachment:(att_[A-Za-z0-9]+)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/g;
+// orchestrator's delivery.attachmentRef is the same expression. Blanks are
+// ASCII space and tab only, and the alt holds no `[`: one meaning in both
+// languages, and a scan that stays linear on a run of `![`.
+const REFERENCE = /!\[((?:\\[^\n]|[^[\]\\\n])*)\]\([ \t]*<?attachment:(att_[A-Za-z0-9]+)>?(?:[ \t]+(?:"([^"\n]*)"|'([^'\n]*)'|\(([^)\n]*)\)))?[ \t]*\)/dg;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const trimBlanks = (s: string) => s.replace(/^[ \t]+|[ \t]+$/g, "");
 
 /**
  * The attachment references in Markdown, in order. Inside a fenced code
@@ -50,13 +55,17 @@ export function attachmentReferences(text: string): AttachmentReference[] {
   for (const line of text.split("\n")) {
     const opener = FENCE.exec(line)?.[1];
     if (fence !== null) {
-      if (opener && opener[0] === fence[0] && opener.length >= fence.length && line.trim() === opener) fence = null;
+      if (opener && opener[0] === fence[0] && opener.length >= fence.length && trimBlanks(line) === opener) fence = null;
     } else if (opener) {
       fence = opener;
     } else {
       const masked = maskCodeSpans(line);
       for (const m of masked.matchAll(REFERENCE)) {
-        out.push({ id: m[2]!, alt: line.slice(m.index + 2, m.index + 2 + m[1]!.length).replace(/\\(.)/g, "$1"), from: offset + m.index, to: offset + m.index + m[0].length });
+        const ref: AttachmentReference = { id: m[2]!, alt: line.slice(m.index + 2, m.index + 2 + m[1]!.length).replace(/\\([^\n])/g, "$1"), from: offset + m.index, to: offset + m.index + m[0].length };
+        // From the line, not the masked copy: a title may hold a code span.
+        const at = m.indices?.[3] ?? m.indices?.[4] ?? m.indices?.[5];
+        if (at) ref.title = line.slice(at[0], at[1]);
+        out.push(ref);
       }
     }
     offset += line.length + 1;

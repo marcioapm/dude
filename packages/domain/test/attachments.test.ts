@@ -1,7 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { attachmentMarkdown, attachmentReferences, taskAttachmentIds } from "../src/attachments.ts";
+import shared from "./attachment-references.json";
 
 const ids = (text: string) => attachmentReferences(text).map((r) => r.id);
+
+// The same rows are read by orchestrator/internal/delivery/references_test.go.
+describe("the fixture both parsers share", () => {
+  for (const [text, want] of shared as Array<[string, string[]]>) {
+    test(JSON.stringify(text), () => expect(ids(text)).toEqual(want));
+  }
+});
+
+test("a layout title is carried without its quotes", () => {
+  expect(attachmentReferences(`![a](attachment:att_a "small right") ![b](attachment:att_b) ![c](<attachment:att_c> '320 left')`).map((r) => r.title))
+    .toEqual(["small right", undefined, "320 left"]);
+});
+
+test("a 64 KiB run of `![` parses in linear time", () => {
+  const text = "![".repeat(32 * 1024);
+  const start = performance.now();
+  expect(ids(text)).toEqual([]);
+  expect(performance.now() - start).toBeLessThan(50);
+});
 
 describe("attachmentReferences", () => {
   test("a plain reference, with its name and place", () => {
