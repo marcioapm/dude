@@ -3,26 +3,29 @@
  *
  * Until anyone has written, the task's history so far in one line and an
  * empty composer under it. The first message starts the conductor, briefed
- * by dude; from then on the Chat is the conductor's transcript (RunScreen's,
- * as a chat), the history above it, and every message goes to the task's
- * conductor — which the orchestrator wakes, or replaces once it ended.
+ * by dude; from then on the Chat is the conductors' transcripts in order
+ * (RunScreen's, as a chat) — each that ended read-only, the latest live —
+ * under the history, and every message goes to the task's conductor, which
+ * the orchestrator wakes, or replaces once it ended.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import { ChatComposer, ChatTranscript, TaskHistory } from "@dude/design-system/components";
 import { Callout } from "@dude/design-system/primitives";
 import { firstName, formatUsd } from "@dude/design-system";
-import type { Finding, PersistedEvent, PullRequest } from "@dude/domain";
+import type { Finding, PersistedEvent, PullRequest, RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/client.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
-import { RunScreen, type ChatVariant } from "./RunScreen.tsx";
+import { EndedConductor, RunScreen, type ChatVariant } from "./RunScreen.tsx";
 
 export interface ChatSectionProps {
   client: ApiClient;
   task: TaskDetail;
   /** The task's conductor, the latest one if it has had several; null before anyone wrote. */
   conductorId: string | null;
+  /** The task's earlier conductors, oldest first: ended, shown read-only above the latest. */
+  earlier?: ReadonlyArray<{ id: string; status: RunStatus }> | undefined;
   findings: readonly Finding[];
   pullRequests: readonly PullRequest[];
   /** The task's ledger, for what its pull requests heard. */
@@ -36,7 +39,7 @@ export interface ChatSectionProps {
   onBack: () => void;
 }
 
-export function ChatSection({ client, task, conductorId, findings, pullRequests, events, owner, version, onSent, onBack }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId, earlier = [], findings, pullRequests, events, owner, version, onSent, onBack }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -72,7 +75,11 @@ export function ChatSection({ client, task, conductorId, findings, pullRequests,
     ...(pullRequests.length > 0 ? [{ label: "PR comments", value: feedback }, { label: "Checks", value: checks }] : []),
   ], [sessions, findings.length, open, pullRequests.length, feedback, checks]);
   // One object while nothing in it changed: the conductor's transcript is not redrawn for each reload here.
-  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith }), [head, send, briefedWith]);
+  const earlierKey = earlier.map((r) => r.id).join(",");
+  const before = useMemo(() => earlier.length === 0 ? null
+    : earlier.map((r) => <EndedConductor key={r.id} client={client} runId={r.id} status={r.status} />),
+  [client, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids
+  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before }), [head, send, briefedWith, before]);
 
   if (conductorId) {
     return (

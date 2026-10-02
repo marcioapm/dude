@@ -399,7 +399,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   notices there name him (`ChatNotice by`): "El Duderino: Parked while
   nobody is writing". A parked conductor is quiet: nothing about it is
   amber, and nothing counts it as needing you; its question is the usual
-  `QuestionCard`, loud as any.
+  `QuestionCard`, loud as any. A task that has had several conductors
+  shows each conversation in order, one after the other in the same
+  transcript: an ended one's turns with nothing to answer, closed by
+  dude's notice that it ended; only the latest has the composer.
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —

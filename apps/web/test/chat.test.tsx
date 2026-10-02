@@ -290,4 +290,44 @@ describe("the Chat tab", () => {
       expect(composer.value).toBe("");
     }
   });
+
+  test("a conductor that ended stays in Chat above the next, read-only; only the latest takes input", async () => {
+    const EARLIER = "run_conductor00";
+    cursor = 100;
+    const ended = [
+      ev("chat.message", { text: "who asked for 8s?" }, MARCIO),
+      ev("conductor.briefed", { text: BRIEFING.replace("why 8s?", "who asked for 8s?") }),
+      ev("agent.message", { text: "Tiago, on the PR." }, { type: "agent", id: EARLIER }),
+      ev("chat.message", { text: "and when?", directiveId: "dir_lost" }, MARCIO),
+      ev("run.directive.failed", { directiveId: "dir_lost", error: `the conductor stopped before reading it; the next conductor, ${CONDUCTOR}, has it` }),
+      ev("run.completed", { status: "completed", reason: "its container stopped" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+    class TwoConductors extends ChatClient {
+      override async getTask(id: string): Promise<TaskDetail> {
+        const task = await super.getTask(id);
+        const first = { ...this.conductorBase(), id: EARLIER, status: "completed" as const, createdAt: "2026-10-02T09:00:00.000Z" };
+        return { ...task, runs: [...task.runs, first] };
+      }
+      protected override ledgerFor(params: LedgerQuery): PersistedEvent[] {
+        if (params.runId === EARLIER) return ended.filter((e) => e.cursor > (params.after ?? 0));
+        return super.ledgerFor(params);
+      }
+    }
+    const page = await chatPage(new TwoConductors({ status: "running" }, conductorEvents()));
+    const earlier = await until(() => page.querySelector("[data-testid=earlier-conductor]"), "the ended conductor's conversation");
+    expect(earlier.getAttribute("data-run")).toBe(EARLIER);
+    await until(() => page.querySelectorAll("[data-testid=conductor-turn]").length === 3 ? page : null, "every answer");
+    const answers = [...page.querySelectorAll("[data-testid=conductor-turn]")].map((a) => a.textContent ?? "");
+    expect(answers[0]).toContain("Tiago, on the PR.");
+    expect(answers[1]).toContain("8s: Tiago asked for it on the PR.");
+    // The message it never read says where it went.
+    expect(earlier.textContent).toContain(`the next conductor, ${CONDUCTOR}, has it`);
+    // In order: the ended conversation, then the next one's briefing.
+    const briefings = [...page.querySelectorAll("[data-testid=chat-briefing]")];
+    expect(briefings.length).toBe(2);
+    expect(earlier.contains(briefings[0]!)).toBe(true);
+    expect(earlier.compareDocumentPosition(briefings[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // One composer, the latest's.
+    expect(page.querySelectorAll("[data-testid=task-chat] textarea").length).toBe(1);
+  });
 });

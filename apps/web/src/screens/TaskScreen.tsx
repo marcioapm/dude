@@ -261,8 +261,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   }
 
   const started = phases.length > 0;
-  // The task's conductor, the latest if one ended and another followed: Chat's.
-  const conductor = [...item.runs].filter(isConductor).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+  // The task's conductors, oldest first: Chat shows each conversation in
+  // turn, and the latest takes the next message.
+  const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const conductor = conductors.at(-1) ?? null;
   const tab = asked ?? (conductor ? "chat" : "overview");
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -352,7 +354,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         </TabList>
 
         <TabPanel value="chat" fill>
-          <ChatSection client={client} task={item} conductorId={conductor?.id ?? null} findings={findings} pullRequests={pullRequests}
+          <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
+            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} findings={findings} pullRequests={pullRequests}
             events={events} owner={sessionTask} version={version} onSent={reload} onBack={onBack} />
         </TabPanel>
 
