@@ -436,7 +436,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, r.Phase); err != nil {
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, delivery.PromptRoleForPhase[r.Phase]); err != nil {
 			return err
 		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {

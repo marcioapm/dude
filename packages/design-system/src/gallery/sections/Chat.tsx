@@ -368,14 +368,14 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="human" name="marcio" intent="prompt" content="Add retry with backoff to the GitHub webhook handler. Cap at 5 attempts, keep the public API unchanged." startedAt={at(0)} />
             <ChatMessage role="system" content="Session started on worker-03 · claude-opus-4" startedAt={at(1_000)} />
             <Label>agent feet: context and output tokens; cost known, unknown, and zero</Label>
-            <ChatMessage role="orchestrator" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={1_240} activity="completed" />
+            <ChatMessage role="conductor" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={1_240} activity="completed" />
             <ChatMessage role="implementer" model="gpt-5-codex" content="Cost not reported by this harness (subscription seat): the foot says so rather than pricing it at zero." startedAt={at(20_000)} endedAt={at(24_000)} costUsd={null} contextTokens={188_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={620} activity="completed" />
             <ChatMessage role="reviewer" model="claude-sonnet-4" content="Context past 80% of the window: the ctx count takes attention ink, the same threshold a cost takes against its budget." startedAt={at(25_000)} endedAt={at(26_000)} costUsd={0} contextTokens={612_000} contextWindowTokens={CONTEXT_WINDOW} outputTokens={90} activity="completed" />
             <ChatMessage role="simplifier" model="claude-sonnet-4" content="Only a total is known: the plain `tok` count, as before." startedAt={at(27_000)} endedAt={at(28_000)} tokens={4_100} activity="completed" />
             <Label>live</Label>
             <ChatMessage role="implementer" model="claude-opus-4" content="Added `isRetryable` and a bounded loop. Running the tests" streaming startedAt={Date.now() - 38_000} costUsd={0.21} contextTokens={48_000} contextWindowTokens={CONTEXT_WINDOW} activity="streaming" activityProps={{ since: Date.now() - 6_000, detail: "312 tokens" }} />
             <ChatMessage role="implementer" model="claude-opus-4" content="Tests are running." continued attachments={<ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 44_000} />} activity="tool" activityProps={{ tool: "bash", since: Date.now() - 44_000 }} startedAt={Date.now() - 61_000} costUsd={0.23} />
-            <ChatMessage role="orchestrator" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
+            <ChatMessage role="conductor" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
             <Label>interventions: answer · steer queued (lands at the next step) · steer read</Label>
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should 4xx responses be retried? The existing code retries everything." content="No — only retry 5xx and network errors." startedAt={at(1_520_000)} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={null} />
@@ -464,7 +464,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>waiting, no choices, a named session — free-text answer only</Label>
             <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} />
             <Label>waiting with onChoose — the chips become one-click replies</Label>
-            <QuestionCard role="orchestrator" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
+            <QuestionCard role="conductor" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
             <Label>waiting on someone else — the note says how to make it yours; the choices are muted, and hovering them says it again</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 90_000} waitingOn="Ana" />
             <Label>answered — calm; the answer is the next turn, not quoted here</Label>
@@ -654,7 +654,7 @@ function PlanDemo() {
           Reset
         </Button>
       </Row>
-      <AgentPlan items={items} meta="orchestrator" />
+      <AgentPlan items={items} meta="conductor" />
       <Label>Collapsed: progress and the current item</Label>
       <AgentPlan items={items} defaultCollapsed />
       <Label>All done</Label>
@@ -819,7 +819,7 @@ function LiveTranscriptDemo() {
           s
             ? {
                 id: "ses_01J9K2",
-                role: "orchestrator",
+                role: "conductor",
                 status: s.status,
                 model: "claude-opus-4",
                 taskKey: "WI-2481",
@@ -832,7 +832,7 @@ function LiveTranscriptDemo() {
                 budgetUsd: 2.5,
                 tokens: s.tokens,
               }
-            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", taskKey: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
+            : { id: "ses_01J9K2", role: "conductor", status: "pending", model: "claude-opus-4", taskKey: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
         }
         headerActions={
           <>
@@ -841,7 +841,7 @@ function LiveTranscriptDemo() {
             <IconButton icon="external" label="Open events" size="sm" />
           </>
         }
-        pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="orchestrator" defaultCollapsed /> : undefined}
+        pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="conductor" defaultCollapsed /> : undefined}
         footer={<ChatComposer question={s?.question ?? undefined} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
         revision={rev}
         live={playing}

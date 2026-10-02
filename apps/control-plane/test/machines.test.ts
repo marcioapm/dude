@@ -106,7 +106,7 @@ beforeAll(async () => {
       }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
-        maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0 });
+        maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5 });
     },
   });
   useConfig(Config.load({ env: { ...process.env,
@@ -136,11 +136,13 @@ async function removeSizes(...names: string[]) {
 }
 
 describe("sizes", () => {
-  test("an organization starts with Standard, its default; everyone reads, only admins change", async () => {
+  test("an organization starts with Standard, its default, and Small, the conductor's; everyone reads, only admins change", async () => {
     const res = await body(await call(memberKey, "GET", "/v1/machines/sizes"));
     expect(res.canEdit).toBe(false);
-    expect(res.sizes).toHaveLength(1);
-    expect(res.sizes[0]).toMatchObject({ name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, poolName: null, isDefault: true, usedBy: [] });
+    expect(res.sizes).toHaveLength(2);
+    expect(res.sizes.find((s: Json) => s.name === "Standard")).toMatchObject({ name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, poolName: null, isDefault: true, usedBy: [] });
+    expect(res.sizes.find((s: Json) => s.name === "Small")).toMatchObject({ cpus: 0.5, memoryMiB: 1024, diskGiB: 10, isDefault: false,
+      usedBy: [{ kind: "organization", role: "conductor", project: null }] });
     expect((await call(memberKey, "POST", "/v1/machines/sizes", LARGE)).status).toBe(403);
     expect((await body(await call(adminKey, "GET", "/v1/machines/sizes"))).canEdit).toBe(true);
   });
@@ -260,7 +262,7 @@ describe("sizes", () => {
 
   test("another organization sees none of it", async () => {
     const large = await byName("Large");
-    expect((await sizes(otherKey)).map((s) => s.name)).toEqual(["Standard"]);
+    expect((await sizes(otherKey)).map((s) => s.name)).toEqual(["Small", "Standard"]);
     expect((await call(otherKey, "PATCH", "/v1/settings/organization", { roles: { reviewer: { machineSize: large.id } } })).status).toBe(400);
   });
 });
@@ -340,7 +342,7 @@ describe("changing a size", () => {
     }
     expect(await byName("Large")).toMatchObject({ name: "Large", cpus: 8, isDefault: false });
     expect((await sizes()).filter((s) => s.isDefault).map((s) => s.name)).toEqual(["Standard"]);
-    expect((await sizes(otherKey)).map((s) => s.name)).toEqual(["Standard"]);
+    expect((await sizes(otherKey)).map((s) => s.name)).toEqual(["Small", "Standard"]);
   });
 });
 
@@ -449,7 +451,7 @@ describe("removing a size in use", () => {
     const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${large.id}`, { replacement: null });
     expect(res.status).toBe(200);
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
-    expect(org.default_agent_models).toEqual({ simplifier: { effort: "low" } });
+    expect(org.default_agent_models).toEqual({ simplifier: { effort: "low" }, conductor: { machineSize: (await byName("Small")).id } });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models).toEqual({});
     expect(p.preview_settings.machineSize).toBeUndefined();

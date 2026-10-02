@@ -45,7 +45,7 @@ behind all of these, reached when something looks off.
    screen; it never takes the text below readable.
 2. **Meaning never lives in hue alone.** Every status has a tone *and* a glyph
    *and* a label. Diffs have background *and* gutter color *and* a sign
-   column. Roles have a hue *and* a glyph *and* (for the orchestrator) a
+   column. Roles have a hue *and* a glyph *and* (for the conductor) a
    shape. Grayscale the gallery and nothing is lost.
 3. **Dark is primary, light is a peer.** The operator spends hours here, often
    at night, on a big monitor. Dark mode gets the most careful contrast work
@@ -168,7 +168,7 @@ gallery for every value.
 | Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
-| Roles | `--ds-role-{orchestrator,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
+| Roles | `--ds-role-{conductor,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
@@ -735,7 +735,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   other.
 - Humans and agents differ on three channels at once: a human is a full
   circle with a ring, shows initials, and takes a muted identity colour;
-  agents are squares (the orchestrator a round glyph), show a glyph, and
+  agents are squares (the conductor a round glyph), show a glyph, and
   take a vivid role colour. Nothing about a person is ever a role colour or
   a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
@@ -1106,7 +1106,7 @@ MarkdownCheatsheet.
 
 - **StatusBadge** — every domain status; badge, small, icon-only and dot
   variants.
-- **AgentAvatar** — orchestrator, investigator, implementer, reviewer,
+- **AgentAvatar** — conductor, investigator, implementer, reviewer,
   simplifier, qa_browser, plus human / system / integration actors.
 - **CostDisplay, TokenCount, Duration** — the three formatters as components,
   with live ticking and budget colouring.
@@ -1114,7 +1114,7 @@ MarkdownCheatsheet.
   `goodDirection`, optional budget bar.
 - **EventRow / EventStream / EventDayDivider** — fixed-column ledger rows with
   expandable detail and a one-shot flash for new rows.
-- **SessionTreeNode / SessionTree** — recursive orchestrator → subagent tree
+- **SessionTreeNode / SessionTree** — recursive conductor → subagent tree
   with guide lines, live activity, and an aligned cost column.
 - **DiffView / DiffFile / parseUnifiedDiff** — per-file unified diffs with
   sticky gutters, kind badges and auto-collapse for large files.

@@ -67,7 +67,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
       problem={null}
       page={page}
       onPage={onPage}
-      scope={{ title: settings?.organization.name ?? "Organisation", subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }}
+      scope={{ title: settings?.organization.name ?? "Organisation", subtitle: "Organisation settings", leading: <AgentAvatar role="conductor" size="lg" /> }}
       items={[
         { id: "members", label: "Members", icon: "human" },
         { id: "general", label: "General", icon: "settings" },

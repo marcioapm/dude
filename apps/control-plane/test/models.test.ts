@@ -63,7 +63,7 @@ beforeAll(async () => {
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
       requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false,
-      parkAfterMinutes: 10, idleNudgeMinutes: 0,
+      parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5,
     });
   } });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${server.port}`;
@@ -131,7 +131,7 @@ test("project update rejects invalid models without changing other fields", asyn
 
 test("project create and update use hierarchy validation, including non-settings roles", async () => {
   for (const model of invalid) {
-    const create = await call("POST", "/v1/projects", { name: "Bad", slug: "bad-model", agentModels: { orchestrator: { model } } });
+    const create = await call("POST", "/v1/projects", { name: "Bad", slug: "bad-model", agentModels: { conductor: { model } } });
     expect(create.status).toBe(400);
     expect((await body(create)).error.message).toContain("llm-openai/<model>");
     const update = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Bad", agentModels: { investigator: { model } } });
@@ -142,7 +142,7 @@ test("project create and update use hierarchy validation, including non-settings
   expect(absent.n).toBe(0);
   expect((await body(await call("GET", `/v1/projects/${PROJECT}`))).name).toBe("Models");
   for (const [i, model] of valid.entries()) {
-    const models = { orchestrator: { model }, investigator: { effort: "high" }, fixer: { model } };
+    const models = { conductor: { model }, investigator: { effort: "high" }, fixer: { model } };
     const create = await call("POST", "/v1/projects", { name: "Good", slug: `good-model-${i}`, agentModels: models });
     expect(create.status).toBe(201);
     expect((await body(create)).agentModels).toEqual(models);
