@@ -5,9 +5,11 @@
  * Server-rendered markup in happy-dom: what is shown and what is a button.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ChatComposer } from "../src/components/ChatComposer.tsx";
+import { ChatComposer, type ComposerSubmission } from "../src/components/ChatComposer.tsx";
 import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { ChatNotice } from "../src/components/ChatNotice.tsx";
 import { TaskHistory } from "../src/components/TaskHistory.tsx";
@@ -61,5 +63,47 @@ describe("the chat composer", () => {
     expect(plain(h)).not.toContain("Sent as");
     expect(plain(h)).not.toContain("interrupt now");
     expect([...h.matchAll(/<button\b[^>]*type="submit"[^>]*>([\s\S]*?)<\/button>/g)].map((m) => plain(m[1]!))).toEqual(["Send"]);
+  });
+});
+
+describe("a sent message leaves the composer only once it went", () => {
+  let root: Root | null = null;
+  let host: HTMLElement | null = null;
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    host?.remove();
+    root = host = null;
+  });
+
+  // Mounts a chat composer, types `words` and presses Enter; returns the text left in it.
+  async function send(onSubmit: (s: ComposerSubmission) => void | boolean | Promise<void | boolean>, words = "why 8s?") {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => root!.render(<ChatComposer mode="chat" onSubmit={onSubmit} />));
+    const area = host.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, words);
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    return area.value;
+  }
+
+  test("accepted: cleared", async () => {
+    const got: string[] = [];
+    expect(await send(async (s) => void got.push(s.text))).toBe("");
+    expect(got).toEqual(["why 8s?"]);
+  });
+
+  test("refused (false): the words stay, to send again", async () => {
+    expect(await send(async () => false)).toBe("why 8s?");
+  });
+
+  test("failed (a rejection): the words stay, and the failure is the caller's to show", async () => {
+    expect(await send(() => Promise.reject(new Error("offline")))).toBe("why 8s?");
   });
 });

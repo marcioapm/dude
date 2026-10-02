@@ -17,6 +17,7 @@ import { project } from "../src/api/conversation.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
 import type { ChatSent, RunDetail, TaskDetail } from "../src/api/client.ts";
+import { ApiError } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -150,8 +151,25 @@ class ChatClient extends FixtureClient {
   }
   override async chat(taskId: string, text: string): Promise<ChatSent> {
     this.sent.push(`${taskId}:${text}`);
+    if (this.refuse) throw this.refuse;
     return this.reply ?? { runId: CONDUCTOR, taskId, created: this.conductor === null };
   }
+  /** What the next sends fail with; null: they go. */
+  refuse: Error | null = null;
+}
+
+/** Types `text` into the task Chat's composer and presses Enter; returns the composer. */
+async function write(page: HTMLElement, text: string): Promise<HTMLTextAreaElement> {
+  const composer = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea"), "the composer");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, text);
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await settle();
+  return composer;
 }
 
 async function chatPage(client: ChatClient, props: Partial<Parameters<typeof TaskScreen>[0]> = {}) {
@@ -245,5 +263,26 @@ describe("the Chat tab", () => {
     const page = await chatPage(new ChatClient({ status: "paused", dudePause: "conductor" }, conductorEvents()), { runId: CONDUCTOR });
     const list = await until(() => page.querySelector("[data-testid=sessions]"), "the sessions");
     expect(list.querySelector("li")?.textContent).toStartWith("Conductor");
+  });
+
+  test("a send that fails keeps the words and says why; sent again, it goes and the composer clears", async () => {
+    for (const conductor of [null, { status: "running" as const }]) {
+      const client = new ChatClient(conductor, conductor ? conductorEvents() : []);
+      client.refuse = new ApiError(500, "internal", "the orchestrator is down");
+      const page = await chatPage(client, conductor ? {} : { tab: "chat" });
+      if (conductor) await until(() => page.querySelector("[data-testid=chat-briefing]"), "the briefing");
+      const composer = await write(page, "and the tests?");
+      expect(client.sent).toEqual([`${TASK_ID}:and the tests?`]);
+      expect(composer.value).toBe("and the tests?");
+      expect(page.textContent).toContain("Could not send the message: the orchestrator is down");
+
+      client.refuse = null;
+      await act(async () => {
+        composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      });
+      await settle();
+      expect(client.sent).toEqual([`${TASK_ID}:and the tests?`, `${TASK_ID}:and the tests?`]);
+      expect(composer.value).toBe("");
+    }
   });
 });

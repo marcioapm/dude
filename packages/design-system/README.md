@@ -1248,7 +1248,9 @@ MarkdownCheatsheet.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (lands at the agent's next step; `landsHint` says where;
   interrupt now is a tick) vs prompt vs chat (a task's conductor; `to`),
-  visibly different.
+  visibly different. The words leave the field only once `onSubmit`
+  confirms them: resolving `false`, or rejecting, keeps them to send again
+  (the caller shows why). A person's draft is never lost to a failed send.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
