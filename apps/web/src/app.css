@@ -169,6 +169,11 @@ body {
   min-height: 0;
   display: flex;
 }
+/* The conversation, as the drop target for images: it takes the transcript's place. */
+.runDrop {
+  flex: 1;
+  min-width: 0;
+}
 .runRail {
   flex: none;
   width: 260px;
@@ -242,6 +247,14 @@ body {
   justify-content: space-between;
   gap: var(--ds-space-12);
   min-height: var(--ds-size-row-default);
+}
+
+/* The images given with a task's prompt: chips, then the paperclip. */
+.taskImages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
 }
 
 /* A task's owner, labelled inline among its header's actions. */
