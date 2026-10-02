@@ -786,7 +786,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and "asked again · approved before" — attention, their earlier word
   muted — for one asked again after a verdict. Faces are GitHub's.
 - **Checks dude cannot read are said plainly**: "GitHub won't show dude
-  this repository's checks", what the token lacks beneath, and a link to
+  this repository's checks", beneath it that a fine-grained token cannot
+  read check runs and which token can, and a link to
   where it is fixed (`diagnosticAction`). Never a bare "CI unavailable".
 - A page's own note: a settings page with its own audience (Memory: who
   may add, who may change) renders its own `SettingsNote`; the frame's

@@ -210,7 +210,8 @@ func Ready(s Status) bool { return len(Blockers(s)) == 0 }
 
 // A 403 without rate-limit markers is also what SSO enforcement and pending
 // organization token approval answer, so this advises rather than diagnoses.
-const checkRunsForbiddenBlocker = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"
+// GitHub offers fine-grained tokens no permission that reads check runs.
+const checkRunsForbiddenBlocker = "GitHub refused the check-runs read; a fine-grained token cannot read check runs, so use a classic token with the repo scope (or a GitHub App once supported), and check SSO authorization, organization token approval and the token's repository access"
 
 // Blockers says, in a person's words, what keeps a pull request from
 // being merged: nothing, when it is ready.
