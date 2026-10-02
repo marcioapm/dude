@@ -239,6 +239,22 @@ describe("roles name a tier", () => {
       { kind: "project", role: "reviewer", project: { id: PROJECT, name: "Docs site", imageUrl: null }, effort: "low" },
     ]);
   });
+
+  test("a project's fixer following the project's implementer is listed as using its tier", async () => {
+    const cheap = await byName("Cheap");
+    const before = await projectModels();
+    try {
+      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: cheap.id, effort: "medium" } } });
+      const project = { id: PROJECT, name: "Docs site", imageUrl: null };
+      expect((await byName("Cheap")).usedBy.filter((u: Json) => u.kind === "project")).toEqual([
+        { kind: "project", role: "reviewer", project, effort: "low" },
+        { kind: "project", role: "implementer", project, effort: "medium" },
+        { kind: "project", role: "fixer", project, inherited: true, effort: "medium" },
+      ]);
+    } finally {
+      await owner`UPDATE projects SET agent_models = ${before}::jsonb WHERE id = ${PROJECT}`;
+    }
+  });
 });
 
 describe("a test message", () => {
