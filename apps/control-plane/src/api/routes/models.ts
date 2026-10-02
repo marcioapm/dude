@@ -241,7 +241,7 @@ async function removeTier(ctx: RequestContext): Promise<Response> {
       SELECT id, agent_models AS models FROM projects
       WHERE EXISTS (SELECT 1 FROM jsonb_each(agent_models) r WHERE r.value->>'tier' = ${id})
       FOR UPDATE`) as Array<{ id: string; models: AgentModels }>;
-    const orgNamesIt = replaceTier(org!.models, id, id) !== org!.models;
+    const orgNamesIt = Object.values(org!.models as Record<string, { tier?: string } | undefined>).some((config) => config?.tier === id);
     if ((orgNamesIt || projects.length > 0) && replacement === null) {
       throw new HttpError(409, "this tier is in use: choose the tier its agents move to", "in_use");
     }
