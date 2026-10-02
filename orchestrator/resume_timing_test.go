@@ -40,16 +40,9 @@ func (w *world) resumes(runID string) []resumeRow {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer rows.Close()
-	var out []resumeRow
-	for rows.Next() {
-		var r resumeRow
-		if err := rows.Scan(&r.Epoch, &r.Cause, &r.Woken, &r.Requested, &r.Assigned, &r.ImageReady, &r.Restored,
-			&r.ContainerStarted, &r.Workload, &r.HostName, &r.StoppedHost, &r.StopRequested, &r.Exited, &r.SnapshotDone,
-			&r.Uploaded, &r.SnapshotBytes, &r.Moved, &r.Running, &r.Busy, &r.FirstOutput); err != nil {
-			w.t.Fatal(err)
-		}
-		out = append(out, r)
+	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[resumeRow])
+	if err != nil {
+		w.t.Fatal(err)
 	}
 	return out
 }
@@ -62,16 +55,9 @@ func (w *world) timedEvents(runID string) []map[string]any {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var raw []byte
-		var p map[string]any
-		if err := rows.Scan(&raw); err != nil {
-			w.t.Fatal(err)
-		}
-		_ = json.Unmarshal(raw, &p)
-		out = append(out, p)
+	out, err := pgx.CollectRows(rows, pgx.RowTo[map[string]any])
+	if err != nil {
+		w.t.Fatal(err)
 	}
 	return out
 }
@@ -216,11 +202,7 @@ func TestAResumeForAnApprovedRepositoryIsTimedFromTheApproval(t *testing.T) {
 	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
-	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
-	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	runID := w.working(wi)
 	_, body := w.callTool(w.syncer.Agent.ToolsURL, string(w.lux.Runs()[0].Spec), "request_repository",
 		`{"repository":"web","reason":"the client"}`)
 	var req struct{ RequestID string }
@@ -240,22 +222,14 @@ func TestAPersonsResumeIsTimedFromTheirResume(t *testing.T) {
 	}
 	wi := w.task()
 	w.deliver(wi)
-	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
-	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	runID := w.working(wi)
 	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
 	w.until("lux to report it stopped", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
-	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
-		t.Fatalf("resume: %d %v", status, body)
-	}
-	asked := w.stamp(`SELECT control_requested_at FROM runs WHERE id = $1`, runID)
-	w.oneTimedResume(runID, "person", asked, false)
+	w.oneTimedResume(runID, "person", w.resumedByPerson(runID), false)
 }
 
 // A person resuming an idle park: its own cause, due from their Resume;
@@ -275,12 +249,26 @@ func TestAPersonsResumeOfAnIdleParkIsTimedAndAMoveIsSaid(t *testing.T) {
 			AND dude_pause = 'idle' AND lux_state = 'stopped'`, wi).Scan(&runID)
 		return runID != ""
 	})
-	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
-		t.Fatalf("resume: %d %v", status, body)
-	}
-	asked := w.stamp(`SELECT control_requested_at FROM runs WHERE id = $1`, runID)
-	r := w.oneTimedResume(runID, "idle", asked, true)
+	r := w.oneTimedResume(runID, "idle", w.resumedByPerson(runID), true)
 	if *r.HostName == *r.StoppedHost {
 		t.Errorf("moved, but on %s both times", *r.HostName)
 	}
+}
+
+// working waits for the task's one Run to be running on lux, and is its id.
+func (w *world) working(taskID string) string {
+	w.t.Helper()
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, taskID) == 1
+	})
+	return w.runOf(taskID)
+}
+
+// resumedByPerson resumes the Run as a person does, and is when they asked.
+func (w *world) resumedByPerson(runID string) time.Time {
+	w.t.Helper()
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		w.t.Fatalf("resume: %d %v", status, body)
+	}
+	return w.stamp(`SELECT control_requested_at FROM runs WHERE id = $1`, runID)
 }

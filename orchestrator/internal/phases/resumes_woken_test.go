@@ -18,13 +18,6 @@ func wokenWorld(t *testing.T, base time.Time) *resumeWorld {
 	return w
 }
 
-func (w *resumeWorld) exec(sql string, args ...any) {
-	w.t.Helper()
-	if _, err := w.owner.Exec(w.ctx, sql, args...); err != nil {
-		w.t.Fatal(err)
-	}
-}
-
 // question is an answered question on w's Run, answered at.
 func (w *resumeWorld) question(id string, at time.Time) {
 	w.t.Helper()

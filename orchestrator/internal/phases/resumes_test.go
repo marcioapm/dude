@@ -132,9 +132,20 @@ func (w *resumeWorld) accepted(foreseen int, resumed lux.Run) {
 }
 
 // The frames lux sends a resumed Run, in the order it sends them: the
-// agent's records, then lux's running state.
-func busy(epoch int) lux.Frame   { return record(epoch, "lux.activity", map[string]any{"activity": "busy"}) }
-func spoke(epoch int) lux.Frame  { return record(epoch, "acp.agent_message_chunk", map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "On it."}}) }
+// shim's session record, the agent's records, then lux's running state.
+func session(epoch int) lux.Frame {
+	return record(epoch, "lux.session", map[string]any{"sessionId": "s1"})
+}
+
+func busy(epoch int) lux.Frame {
+	return record(epoch, "lux.activity", map[string]any{"activity": "busy"})
+}
+
+func spoke(epoch int) lux.Frame {
+	return record(epoch, "acp.agent_message_chunk", map[string]any{"sessionUpdate": "agent_message_chunk",
+		"content": map[string]any{"type": "text", "text": "On it."}})
+}
+
 func running(epoch int) lux.Frame { return luxState(epoch, "running") }
 
 func record(epoch int, typ string, data map[string]any) lux.Frame {
@@ -197,17 +208,48 @@ func (w *resumeWorld) timed() []map[string]any {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	raws, err := pgx.CollectRows(rows, pgx.RowTo[[]byte])
+	out, err := pgx.CollectRows(rows, pgx.RowTo[map[string]any])
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	var out []map[string]any
-	for _, raw := range raws {
-		var p map[string]any
-		_ = json.Unmarshal(raw, &p)
-		out = append(out, p)
-	}
 	return out
+}
+
+// untilTimed waits up to 5s for the Run's first run.resume.timed.
+func (w *resumeWorld) untilTimed() {
+	for deadline := time.Now().Add(5 * time.Second); len(w.timed()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// runState is what the Run's own stream recorded: lux's state and the
+// agent's first busy.
+func (w *resumeWorld) runState() (luxState string, busyAt *time.Time) {
+	w.t.Helper()
+	_ = w.owner.QueryRow(w.ctx, `SELECT lux_state, agent_busy_at FROM runs WHERE id = $1`, w.run.ID).Scan(&luxState, &busyAt)
+	return luxState, busyAt
+}
+
+// sessionOn records the agent's session as established on epoch.
+func (w *resumeWorld) sessionOn(epoch int) {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET agent_session_epoch = $2 WHERE id = $1`, w.run.ID, epoch)
+}
+
+func (w *resumeWorld) exec(sql string, args ...any) {
+	w.t.Helper()
+	if _, err := w.owner.Exec(w.ctx, sql, args...); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *resumeWorld) count(sql string) int {
+	w.t.Helper()
+	var n int
+	if err := w.owner.QueryRow(w.ctx, sql, w.run.ID).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
 }
 
 // A resume's row is written once: replaying the stream from the start, a
@@ -257,10 +299,7 @@ func TestAReplayOrARepeatedStepMovesNoRecordedTimestamp(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	// The sync step that resumed it, run again on a Run still paused (its
 	// transaction's answer lost), records the same resume.
-	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET status = 'paused', control = 'resume', control_requested_at = now()
-		WHERE id = $1`, w.run.ID); err != nil {
-		t.Fatal(err)
-	}
+	w.exec(`UPDATE runs SET status = 'paused', control = 'resume', control_requested_at = now() WHERE id = $1`, w.run.ID)
 	w.resume(stoppedOnHost1(later))
 	w.follow(busy(2), spoke(2), running(2), busy(2), spoke(2))
 	if err := w.s.timeResumes(w.ctx, w.run, 0); err != nil {
@@ -280,21 +319,17 @@ func TestAReplayOrARepeatedStepMovesNoRecordedTimestamp(t *testing.T) {
 func TestTheTimedEventCarriesEachPhaseInMilliseconds(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
-	if _, err := w.owner.Exec(w.ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
 		assigned_at, image_ready_at, volumes_restored_at, container_started_at, workload_started_at, host_name, stopped_host_name,
 		moved, running_at, busy_at, first_output_at)
 		VALUES ($1, $2, 2, 'answer', $3, $4, $5, $6, $7, $8, $9, 'host-b', 'host-a', true, $10, $11, $12)`,
 		w.run.ID, w.run.Org, base, at(base, 120), at(base, 420), at(base, 1420), at(base, 2620), at(base, 3000), at(base, 3420),
-		at(base, 5520), at(base, 5920), at(base, 7520)); err != nil {
-		t.Fatal(err)
-	}
+		at(base, 5520), at(base, 5920), at(base, 7520))
 	// A second resume lux said less about: no image, no restore.
-	if _, err := w.owner.Exec(w.ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
 		assigned_at, workload_started_at, running_at, busy_at, first_output_at)
 		VALUES ($1, $2, 3, 'person', $3, $4, $5, $6, $7, NULL, $8)`,
-		w.run.ID, w.run.Org, base, at(base, 50), at(base, 150), at(base, 950), at(base, 1950), at(base, 2950)); err != nil {
-		t.Fatal(err)
-	}
+		w.run.ID, w.run.Org, base, at(base, 50), at(base, 150), at(base, 950), at(base, 1950), at(base, 2950))
 	if err := w.s.timeResumes(w.ctx, w.run, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -365,10 +400,7 @@ func TestWhatLuxDoesNotSayStaysUnknownAndTheRunGoesOn(t *testing.T) {
 	if row["assigned_at"] != nil || row["first_output_at"] == nil || row["busy_at"] == nil {
 		t.Errorf("with lux down: %v", row)
 	}
-	var luxState string
-	var busyAt *time.Time
-	_ = w2.owner.QueryRow(w2.ctx, `SELECT lux_state, agent_busy_at FROM runs WHERE id = $1`, w2.run.ID).Scan(&luxState, &busyAt)
-	if luxState != "running" || busyAt == nil {
+	if luxState, busyAt := w2.runState(); luxState != "running" || busyAt == nil {
 		t.Errorf("the Run's stream was held up: lux_state %s, busy %v", luxState, busyAt)
 	}
 }
@@ -380,14 +412,9 @@ func TestATimingWriteThatFailsDoesNotFailTheRun(t *testing.T) {
 	w.resume(stoppedOnHost1(time.Now()))
 	w.lux.set(runningAgain(time.Now(), "host-a"), nil)
 	// Every write to the table now fails.
-	if _, err := w.owner.Exec(w.ctx, `REVOKE UPDATE ON run_resumes FROM dude_app`); err != nil {
-		t.Fatal(err)
-	}
+	w.exec(`REVOKE UPDATE ON run_resumes FROM dude_app`)
 	w.follow(running(2), busy(2), spoke(2))
-	var luxState string
-	var busyAt *time.Time
-	_ = w.owner.QueryRow(w.ctx, `SELECT lux_state, agent_busy_at FROM runs WHERE id = $1`, w.run.ID).Scan(&luxState, &busyAt)
-	if luxState != "running" || busyAt == nil {
+	if luxState, busyAt := w.runState(); luxState != "running" || busyAt == nil {
 		t.Errorf("a failed timing write failed the Run's batch: lux_state %s, busy %v", luxState, busyAt)
 	}
 }

@@ -2,7 +2,6 @@ package phases
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -50,9 +49,7 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 		t.Run(map[int]string{0: "the first Get answers first", 1: "the second Get answers first"}[order[0]], func(t *testing.T) {
 			w := newResumeWorld(t)
 			base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-			if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
-				t.Fatal(err)
-			}
+			w.sessionOn(1)
 			w.resume(stoppedOnHost1(base))
 			// lux has yet to report the image when the stream reaches the
 			// first output, so the first output reads again.
@@ -65,7 +62,7 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 			gated := &gatedLux{streamLux: st, entered: make(chan int, 4)}
 			w.s.Lux = gated
 
-			st.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+			st.frames <- session(2)
 			st.frames <- cursorFrame(running(2), "c1")
 			first := waitEntered(t, gated)
 			st.frames <- busy(2)
@@ -133,11 +130,9 @@ func TestEarlierEpochsReplayedNeverStampTheCurrentResume(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Hour).UTC()
 	w.lux.set(runningAgain(base, "host-a"), nil)
-	if _, err := w.owner.Exec(w.ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at,
 		running_at, busy_at, first_output_at, timed_at) VALUES ($1, $2, 2, 'person', $3, $3, $3, $3, $3, $3)`,
-		w.run.ID, w.run.Org, base); err != nil {
-		t.Fatal(err)
-	}
+		w.run.ID, w.run.Org, base)
 	w.resume(lux.Run{ID: "lrun_1", State: "stopped", Epoch: 2, Placements: []lux.Placement{{Epoch: 2, HostName: "host-a",
 		State: "exited", ExitedAt: &base}}})
 	if w.row(3)["requested_at"] == nil {
@@ -146,7 +141,7 @@ func TestEarlierEpochsReplayedNeverStampTheCurrentResume(t *testing.T) {
 	before2 := w.row(2)
 	var replay []lux.Frame
 	for _, e := range []int{1, 2} {
-		replay = append(replay, record(e, "lux.session", map[string]any{"sessionId": "s1"}), busy(e), spoke(e),
+		replay = append(replay, session(e), busy(e), spoke(e),
 			record(e, "acp.tool_call", map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t", "title": "ls"}), running(e))
 	}
 	w.follow(replay...)
@@ -159,7 +154,7 @@ func TestEarlierEpochsReplayedNeverStampTheCurrentResume(t *testing.T) {
 	if after2 := w.row(2); after2["first_output_at"] != before2["first_output_at"] || after2["busy_at"] != before2["busy_at"] {
 		t.Errorf("the replay moved epoch 2's stamps")
 	}
-	w.follow(record(3, "lux.session", map[string]any{"sessionId": "s1"}), busy(3), spoke(3))
+	w.follow(session(3), busy(3), spoke(3))
 	row = w.row(3)
 	for _, col := range []string{"running_at", "busy_at", "first_output_at"} {
 		if row[col] == nil {
@@ -198,10 +193,7 @@ func TestWhatEndsAResumesTimingIsTheAgentSayingOrDoingSomething(t *testing.T) {
 			if row := w.row(2); row["first_output_at"] != nil {
 				t.Fatalf("a plan, usage or commands list ended the timing")
 			}
-			raw, _ := json.Marshal(update(kind, data))
-			var m map[string]any
-			_ = json.Unmarshal(raw, &m)
-			w.follow(record(2, "acp."+kind, m))
+			w.follow(record(2, "acp."+kind, update(kind, data)))
 			if row := w.row(2); row["first_output_at"] == nil {
 				t.Errorf("%s did not end the timing", kind)
 			}
