@@ -65,6 +65,9 @@ RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
 # only give OpenCode their context and output limits and reasoning flag. Not in
 # /etc/opencode/: OpenCode merges that directory above OPENCODE_CONFIG_CONTENT.
 # See docs/operations.md, "Agent image contract".
+# The directory first: BuildKit gives a directory COPY --chmod creates the
+# file mode too (0644), and the agent user cannot then reach its config.
+RUN install -d -m 0755 /usr/local/share/dude
 COPY --chmod=0644 opencode.json /usr/local/share/dude/opencode.json
 ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json
 # dude's CLI: the work the agent is part of, and dude's tools, from the shell.
