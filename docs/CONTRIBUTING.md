@@ -81,8 +81,10 @@ page shows one attempt at a time, picked in its header when there is more
 than one: the branch, pull requests, pipeline, time and cost
 (`/v1/tasks/:id/metrics?attempt=N`), findings, sessions and files are that
 attempt's, and an earlier one is read-only. A finding, file or pull request
-belongs to the attempt of the Run that made it; one whose Run is unknown,
-to the current attempt (`apps/web/src/attempts.ts`). Activity and Servers
+belongs to the attempt of the Run that made it. A pull request whose Run is
+unknown goes to the attempt its branch names (`dude/<task>/attempt-N`), else
+the current one; a finding or file whose Run is unknown, to the current
+attempt (`apps/web/src/attempts.ts`). Activity and Servers
 are the whole task's. The URL names the attempt (`?attempt=1`) only when it
 is not the current one.
 
