@@ -136,6 +136,54 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
                message="the preview's Run was never cancelled")
 
 
+def _asleep_preview(client: ApiClient, project_id: str, title: str) -> tuple[dict, dict, dict]:
+    """A declared preview of `web`, asleep: its task, its run and its server."""
+    assert client.put(f"/v1/projects/{project_id}/servers/web", WEB).status_code == 200
+    task = client.create_task(project_id, title)
+    started = client.post(f"/v1/tasks/{task['id']}/preview")
+    assert started.status_code == 201, started.text
+    asleep = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"].get("asleep") and s,
+                        timeout=60, message="the preview never went to sleep")
+    return task, asleep["run"], asleep["servers"][0]
+
+
+def test_a_preview_whose_resumed_run_fails_to_start_wakes_on_a_new_run(client: ApiClient, forge_project: dict, env):
+    task, run, web = _asleep_preview(client, forge_project["id"], "Recover my preview")
+    servers = lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()  # noqa: E731
+    lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
+    first = wait_until(lambda: (s := servers())["run"]["previewStage"] == "ready" and s["run"]["luxRunId"],
+                       timeout=60, message="the preview never woke")
+    assert lux_fake(env, f"/fake/servers/{web['id']}/idle")["idle"] is True
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first}")["state"] == "stopped" and servers()["run"].get("asleep"),
+               timeout=60, message="the idle preview was never put to sleep")
+
+    # lux accepts the resume; the Run then fails before it runs. One request,
+    # and it serves on a new Run; the failed one is cancelled.
+    lux_fake(env, f"/fake/fail-starts?label=dude.preview%3D{run['id']}&n=1")
+    lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
+    again = wait_until(lambda: (s := servers())["run"]["previewStage"] == "ready" and s["run"],
+                       timeout=60, message="the preview never recovered from the failed start")
+    assert again["luxRunId"] != first and again.get("error") is None, again
+    assert lux_get(env, f"/v1/runs/{first}")["state"] == "cancelled"
+    assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is True
+
+
+def test_a_preview_whose_run_never_starts_stops_trying_and_says_why(client: ApiClient, forge_project: dict, env):
+    task, run, web = _asleep_preview(client, forge_project["id"], "Never starts")
+    lux_fake(env, f"/fake/fail-starts?label=dude.preview%3D{run['id']}&n=100")
+    try:
+        lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
+        given_up = wait_until(lambda: (r := client.get(f"/v1/tasks/{task['id']}/servers").json()["run"]).get("asleep")
+                              and "3 times in a row" in (r.get("error") or "") and r,
+                              timeout=60, message="dude never stopped trying, or never said why")
+        assert given_up["previewStage"] is None and "failed to start" in given_up["error"], given_up
+        # The Run it holds is the last one tried, failed in lux; the bound's
+        # count of Runs is pinned by the Go tests, which see every lux Run.
+        assert lux_get(env, f"/v1/runs/{given_up['luxRunId']}")["state"] == "failed"
+    finally:
+        lux_fake(env, f"/fake/fail-starts?label=dude.preview%3D{run['id']}&n=0")
+
+
 def lux_get(env, path: str) -> dict:
     res = requests.get(env.lux_url + path, headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
     res.raise_for_status()
