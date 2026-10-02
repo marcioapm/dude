@@ -42,7 +42,7 @@ func TestASaltedServerWhoseCreateWasLostIsAdopted(t *testing.T) {
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task := w.task()
-	taken := servers.PreviewHostname(previewDomain, "web", task, w.project, "")
+	taken := servers.PreviewHostname(previewDomain, "web", w.previewOf(task), "")
 	if _, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 1, Hostname: taken}); err != nil {
 		t.Fatal(err)
 	}

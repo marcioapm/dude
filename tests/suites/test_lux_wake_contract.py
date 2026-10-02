@@ -115,8 +115,8 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     domain = lux_api(env, "GET", "/v1/whoami").json()["previewDomain"]
     sv = lux_api(env, "GET", f"/v1/servers/{web['id']}").json()
     label, _, under = sv["hostname"].partition(".")
-    # One label under lux's domain: <server>-<task>-<project>, '_' made '-'.
-    want = f"web-{task['id']}-{project['id']}".replace("_", "-").lower()
+    # One label under lux's domain: <server>-<task key>-<project slug>.
+    want = f"web-{task['key']}-{project['slug']}".lower()
     assert under == domain and label == want and len(label) <= 63, (sv["hostname"], want)
     assert sv["state"] == "asleep" and sv["runId"] is None and sv["labels"]["dude.task"] == task["id"], sv
     assert web["url"] == sv["url"]
