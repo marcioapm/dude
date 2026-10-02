@@ -1,5 +1,6 @@
 /**
- * Settings → GitHub, below the connection: whether GitHub's webhooks reach
+ * Settings → GitHub, below the connection: what Verify found the token may
+ * do on each repository, whether GitHub's webhooks reach
  * dude (and registering them, or the secret to do it by hand), and how dude
  * behaves on GitHub — how pull requests open and merge, who may wake a
  * fixer, what happens when main moves ahead, and the fix budget.
@@ -9,7 +10,7 @@ import { useEffect, useState } from "react";
 import { formatTimestamp } from "@dude/design-system";
 import { Segmented, SettingRow, SettingsSection } from "@dude/design-system/components";
 import { Badge, Button, Callout, Input, Select, Spinner } from "@dude/design-system/primitives";
-import type { ApiClient, GithubSettings, WebhookHealth } from "../api/client.ts";
+import type { ApiClient, ForgePermission, ForgeVerification, GithubSettings, WebhookHealth } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { ReviewerPicker } from "./ReviewerPicker.tsx";
 
@@ -23,6 +24,60 @@ export function webhookSummary(h: WebhookHealth): { ok: boolean; text: string } 
   parts.push(`${h.failedToday} failed today`);
   const ok = registered === h.repositories.length && h.lastDeliveryAt !== null && h.failedToday === 0 && h.retrying === 0;
   return { ok, text: parts.join(" · ") };
+}
+
+/** Verify's verdict in one line: who the token is, and whether delivery has what it needs. */
+export function verificationSummary(v: ForgeVerification): { ok: boolean; text: string } {
+  if ("reason" in v) return { ok: false, text: v.reason };
+  const who = `Connected as ${v.login ?? "an unnamed account"}${v.scopes ? ` · scopes: ${v.scopes}` : ""}`;
+  if (v.ok) return { ok: true, text: who };
+  const repos = v.repositories.filter((r) => r.permissions.some((p) => p.level === "required" && p.outcome === "missing")).length;
+  return { ok: false, text: `${who} · a required permission is missing on ${repos} repositor${repos === 1 ? "y" : "ies"}` };
+}
+
+/**
+ * Under the verdict, each repository's permissions that are not plainly
+ * granted — missing first, then untested — each with why. A repository
+ * with everything granted is one line.
+ */
+export function ForgePermissionList({ verification }: { verification: ForgeVerification }) {
+  if ("reason" in verification || verification.repositories.length === 0) return null;
+  const rank = (p: ForgePermission) => (p.outcome === "missing" ? (p.level === "required" ? 0 : 1) : 2);
+  return (
+    <ul className="webhookRepos forgePermissions" data-testid="forge-permissions">
+      {verification.repositories.map((r) => {
+        const open = r.permissions.filter((p) => p.outcome !== "ok").sort((a, b) => rank(a) - rank(b));
+        const failing = open.some((p) => p.level === "required" && p.outcome === "missing");
+        return (
+          <li key={r.id} data-testid="forge-permission-repo">
+            <div className="forgePermissionRepo">
+              <Badge size="sm" tone={r.error ? "neutral" : failing ? "danger" : "success"} icon={r.error ? "circle" : failing ? "cross" : "check"}>
+                {r.error ? "Not tested" : failing ? "Missing" : "Ready"}
+              </Badge>
+              <span className="ds-mono">{r.projectName} / {r.name}</span>
+              {r.error ? <span className="muted">{r.error}</span> : null}
+            </div>
+            {open.length ? (
+              <ul className="forgePermissionRows">
+                {open.map((p) => (
+                  <li key={p.permission} data-testid="forge-permission" data-outcome={p.outcome}>
+                    <Badge size="sm" tone={p.outcome === "missing" ? (p.level === "required" ? "danger" : "attention") : "neutral"}>
+                      {p.outcome === "missing" ? "Missing" : "Untested"}
+                    </Badge>
+                    <span>
+                      <strong>{p.permission}</strong>
+                      {p.level === "optional" ? <span className="muted"> (optional)</span> : null}
+                      {" "}<span className="muted">{p.reason}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 export function WebhookCard({ client, health, onChanged, admin }: { client: ApiClient; health: WebhookHealth; onChanged: () => void; admin: boolean }) {
