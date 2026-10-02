@@ -347,11 +347,13 @@ func TestARunningSeenBeforeTheWakeCommitsIsNotAFailedStart(t *testing.T) {
 	w.until("woken", func() bool {
 		return r.Resumed == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL AND status <> 'paused'`, runID) == 1
 	})
+	w.open(web) // it serves: lux's wake is answered
 	w.lux.Crash(r.ID)
-	w.until("asleep after the crash", func() bool {
+	w.untilPreview(runID, "asleep after the crash", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
-	w.open(web)
+	w.lux.RequestServer(web, "/")
+	w.untilPreview(runID, "the crashed Run serving again", func() bool { return w.lux.RequestServer(web, "/") })
 	if n := len(w.luxRuns()); n != 1 || r.Resumed != 2 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") {
 		t.Fatalf("%d lux runs, resumed %d, calls %v; want the crashed Run resumed, not replaced", n, r.Resumed, w.lux.CallsOf(r.ID))
 	}

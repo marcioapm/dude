@@ -490,12 +490,13 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 			return nil
 		}
 		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			// A Run the preview has let go of (retireRun), whose stream
-			// is still draining: a wake that replaced it cancels it, and
-			// what it reports is not the preview's.
+			// Skipped: an event of a Run the preview has let go of
+			// (retireRun), whose stream is still draining; and one already
+			// applied, by this orchestrator's drain or another's follower.
 			var current bool
-			if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2 FROM runs WHERE id = $1 FOR UPDATE`,
-				r.ID, r.LuxRunID).Scan(&current); err != nil || !current {
+			var applied int64
+			if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, lux_after_event FROM runs WHERE id = $1 FOR UPDATE`,
+				r.ID, r.LuxRunID).Scan(&current, &applied); err != nil || !current || f.EventID <= applied {
 				return err
 			}
 			if err := p.luxEvent(ctx, tx, r, f); err != nil {
@@ -515,20 +516,17 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 	case f.EventType == "state":
 		// A move is not an end: lux resumes it (lux.Recorded).
 		state := lux.Recorded(str("state"), str("reason"))
-		var status string
-		var wakeable, ours bool
+		var wakeable, ran bool
 		var failures int
-		if err := tx.QueryRow(ctx, `SELECT status::text, wakeable, lux_stop_reason IS NULL, start_failures FROM runs WHERE id = $1`,
-			r.ID).Scan(&status, &wakeable, &ours, &failures); err != nil {
-			return err
-		}
 		// Running is a start: what its idle time counts from. A preview dude
 		// did not stop that ends has failed (a clone, its image); one it
 		// stopped is parked or finished, as dude already recorded. A
 		// wakeable one goes back to sleep instead, its error kept: lux can
 		// resume a Run that crashed, and the next request wakes it. One
-		// that ended before it ran is a failed start (startFailed).
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
+		// whose current start never ran (no running since the event that
+		// began it: a resuming, or a new Run's first) is a failed start
+		// (startFailed), whatever dude's status says meanwhile.
+		if err := tx.QueryRow(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			active_since = CASE WHEN $2 = 'running' THEN now() ELSE active_since END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status
@@ -541,13 +539,17 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2)
 			             WHEN $2 = 'running' AND start_failures > 0 THEN NULL ELSE error END,
 			start_failures = CASE WHEN $2 = 'running' THEN 0 ELSE start_failures END,
+			lux_start_event = CASE WHEN $2 = 'resuming' OR lux_start_event = 0 THEN GREATEST(lux_start_event, $5) ELSE lux_start_event END,
+			lux_ran_event = CASE WHEN $2 = 'running' THEN GREATEST(lux_ran_event, $5) ELSE lux_ran_event END,
 			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND NOT wakeable
 			                THEN now() ELSE ended_at END
-			WHERE id = $1`, r.ID, state, lux.Terminal(state), str("reason")); err != nil {
+			WHERE id = $1
+			RETURNING wakeable, lux_ran_event >= lux_start_event, start_failures`, r.ID, state, lux.Terminal(state), str("reason"), f.EventID).
+			Scan(&wakeable, &ran, &failures); err != nil {
 			return err
 		}
 		change := map[string]any{"change": "state", "luxState": state}
-		if wakeable && ours && (status == "scheduled" || status == "starting") && (state == "failed" || state == "lost") {
+		if wakeable && !ran && (state == "failed" || state == "lost") {
 			why, err := p.startFailed(ctx, tx, r, failures+1, cmp.Or(str("reason"), state))
 			if err != nil {
 				return err
