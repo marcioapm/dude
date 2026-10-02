@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // resumeRow is a run_resumes row, as the tests read it.
@@ -173,6 +174,7 @@ func TestAResumeAnAnswerWokeIsTimedFromTheAnswer(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1 &&
 			w.lux.Runs()[0].State == "stopped"
 	})
+	w.stoppedWithSnapshot(runID)
 	qid := w.questionID(wi)
 	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
 		t.Fatalf("answer: %d %v", status, body)
@@ -194,6 +196,7 @@ func TestAResumeAnAnswerWokeIsTimedFromTheAnswer(t *testing.T) {
 func TestAResumeForAnApprovedRepositoryIsTimedFromTheApproval(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
+	w.syncer.Lux = snapshotFirst{w.syncer.Lux}
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
@@ -226,9 +229,7 @@ func TestAPersonsResumeIsTimedFromTheirResume(t *testing.T) {
 	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
-	w.until("lux to report it stopped", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
-	})
+	w.stoppedWithSnapshot(runID)
 	w.oneTimedResume(runID, "person", w.resumedByPerson(runID), false)
 }
 
@@ -249,10 +250,51 @@ func TestAPersonsResumeOfAnIdleParkIsTimedAndAMoveIsSaid(t *testing.T) {
 			AND dude_pause = 'idle' AND lux_state = 'stopped'`, wi).Scan(&runID)
 		return runID != ""
 	})
+	w.stoppedWithSnapshot(runID)
 	r := w.oneTimedResume(runID, "idle", w.resumedByPerson(runID), true)
 	if *r.HostName == *r.StoppedHost {
 		t.Errorf("moved, but on %s both times", *r.HostName)
 	}
+}
+
+// snapshotReported says whether lux's Get reports the Run's latest
+// placement exited with its snapshot taken, uploaded and sized. fakelux
+// reports those from a worker of its own after the exit, so a Run lux
+// reports stopped may not have them yet.
+func snapshotReported(ctx context.Context, c lux.Client, luxRunID string) bool {
+	r, err := c.Get(ctx, luxRunID)
+	if err != nil || len(r.Placements) == 0 {
+		return false
+	}
+	p := r.Placements[len(r.Placements)-1]
+	return p.ExitedAt != nil && p.SnapshotDoneAt != nil && p.UploadedAt != nil && p.SnapshotBytes != nil && *p.SnapshotBytes > 0
+}
+
+// stoppedWithSnapshot waits for the paused Run to be reported stopped by
+// lux, its snapshot with it: the resume's placement reads then find it.
+func (w *world) stoppedWithSnapshot(runID string) {
+	w.t.Helper()
+	w.until("lux to report it stopped, its snapshot reported", func() bool {
+		var luxRunID string
+		_ = w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1 AND status = 'paused'
+			AND lux_state = 'stopped'`, runID).Scan(&luxRunID)
+		return luxRunID != "" && snapshotReported(context.Background(), w.syncer.Lux, luxRunID)
+	})
+}
+
+// snapshotFirst is lux whose Resume waits for the stopped placement's
+// snapshot to be reported, for a resume dude makes on its own.
+type snapshotFirst struct{ lux.Client }
+
+func (s snapshotFirst) Resume(ctx context.Context, runID string, in lux.ResumeInput) (lux.Run, error) {
+	for !snapshotReported(ctx, s.Client, runID) {
+		select {
+		case <-ctx.Done():
+			return lux.Run{}, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return s.Client.Resume(ctx, runID, in)
 }
 
 // working waits for the task's one Run to be running on lux, and is its id.
