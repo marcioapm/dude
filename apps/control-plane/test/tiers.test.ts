@@ -392,11 +392,11 @@ describe("the upgrade's notes", () => {
 });
 
 /**
- * A removal and a settings patch naming the same tier, interleaved. A third
- * transaction holds the organization's row, so each request stops at the
- * first lock it cannot take; which one queued on the row first decides the
- * order. Whatever the order: no deadlock, and nothing left naming a tier
- * that is gone.
+ * Requests that lock the same rows, interleaved. A third transaction holds
+ * a row (the organization's, unless a test says another), so each request
+ * stops at the first lock it cannot take; which one queued first decides
+ * the order. Whatever the order: no deadlock, and nothing left naming a
+ * tier that is gone.
  */
 describe("removing a tier while a project's role is set to it", () => {
   // Backends of the app role waiting on a lock they have not been granted.
@@ -411,12 +411,17 @@ describe("removing a tier while a project's role is set to it", () => {
     }
   }
 
-  /** Runs `first`, then `second`, each once the one before is queued on a lock, with the organization's row held. */
-  async function interleaved(first: () => Promise<Response>, second: () => Promise<Response>) {
+  type Hold = (tx: SQL) => Promise<unknown>;
+  const holdOrganization: Hold = (tx) => tx`SELECT 1 FROM organizations WHERE id = ${ORG} FOR UPDATE`;
+  const holdTier = (id: string): Hold => (tx) => tx`SELECT 1 FROM model_tiers WHERE id = ${id} FOR SHARE`;
+  const holdProject: Hold = (tx) => tx`SELECT 1 FROM projects WHERE id = ${PROJECT} FOR UPDATE`;
+
+  /** Runs `first`, then `second`, each once the one before is queued on a lock, with `hold` taken. */
+  async function interleaved(first: () => Promise<Response>, second: () => Promise<Response>, hold = holdOrganization) {
     const held = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const holder = owner.begin(async (tx) => {
-      await tx`SELECT 1 FROM organizations WHERE id = ${ORG} FOR UPDATE`;
+      await hold(tx);
       held.resolve();
       await release.promise;
     });
@@ -466,4 +471,68 @@ describe("removing a tier while a project's role is set to it", () => {
     expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id } });
     expect((await tiers()).map((t) => t.id)).not.toContain(gone);
   });
+
+  // The epic takes the project row, then its insert needs the organization's
+  // row FOR KEY SHARE; the removal holds that row by then, and wants the
+  // project's next. Only a lock on the organization that lets KEY SHARE
+  // through (NO KEY UPDATE) keeps the two from deadlocking.
+  test("an epic added to a project naming the tier while it is removed: both complete", async () => {
+    const [thinker] = await tiers();
+    const gone = await freshTier("Racing F");
+    await owner`UPDATE projects SET agent_models = ${{ reviewer: { tier: gone } }}::jsonb WHERE id = ${PROJECT}`;
+    const [epic, removal] = await interleaved(
+      () => call(adminKey, "POST", `/v1/projects/${PROJECT}/epics`, { title: "Racing" }),
+      () => call(adminKey, "DELETE", `/v1/models/tiers/${gone}`, { replacement: thinker.id }),
+      holdProject,
+    );
+    expect([epic.status, removal.status]).toEqual([201, 200]);
+    expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id } });
+  }, 15_000);
+
+  /**
+   * Three new tiers, ids a < b < c, written to the table in the opposite
+   * order: locked in id order they are taken a, b, c; in table order (no
+   * ORDER BY) c, b, a. The test checks the table order it relies on.
+   */
+  async function threeTiers(tag: string): Promise<[string, string, string]> {
+    const ids = ["a", "b", "c"].map((x) => `mtr_racing_${tag}_${x}`);
+    for (const id of [...ids].reverse()) {
+      await owner`INSERT INTO model_tiers (id, organization_id, name, position)
+        VALUES (${id}, ${ORG}, ${`Racing ${tag} ${id.slice(-1)}`}, (SELECT max(position) + 1 FROM model_tiers WHERE organization_id = ${ORG}))`;
+    }
+    const inTable = (await owner`SELECT id FROM model_tiers WHERE id IN ${owner(ids)} ORDER BY ctid`).map((r: Json) => r.id);
+    expect(inTable).toEqual([...ids].reverse());
+    return ids as [string, string, string];
+  }
+
+  // Each reorder test holds tier b, and the other request locks c, then a.
+  // In id order (a, b, c) for every statement, the reorder takes a and
+  // queues on b, and the other request queues on a. If the reorder locks in
+  // table order (c, b, a) it holds c, or if the other request locks c before
+  // a, it holds c; either way once b is free each waits on the other: 40P01.
+  test("a removal while the tiers are reordered: both complete", async () => {
+    const [a, b, c] = await threeTiers("d");
+    const order = (await tiers()).map((t) => t.id).reverse();
+    const [reorder, removal] = await interleaved(
+      () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
+      () => call(adminKey, "DELETE", `/v1/models/tiers/${c}`, { replacement: a }),
+      holdTier(b),
+    );
+    expect([reorder.status, removal.status]).toEqual([200, 200]);
+    expect((await tiers()).map((t) => t.id)).toEqual(order.filter((id) => id !== c));
+  }, 15_000);
+
+  test("a patch naming two tiers while the tiers are reordered: both complete", async () => {
+    const [a, b, c] = await threeTiers("e");
+    await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+    const order = (await tiers()).map((t) => t.id).reverse();
+    const [reorder, patch] = await interleaved(
+      () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
+      () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: c }, implementer: { tier: a } } }),
+      holdTier(b),
+    );
+    expect([reorder.status, patch.status]).toEqual([200, 200]);
+    expect(await projectModels()).toEqual({ reviewer: { tier: c }, implementer: { tier: a } });
+    expect((await tiers()).map((t) => t.id)).toEqual(order);
+  }, 15_000);
 });

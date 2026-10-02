@@ -46,7 +46,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { listSizes, requireSize } from "./machines.ts";
+import { checkSizes, listSizes } from "./machines.ts";
 import { checkTiers, listTiers } from "./models.ts";
 
 type Json = Record<string, unknown>;
@@ -296,9 +296,7 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
 
 /** Every machine size and model tier a patch names must be the organization's. */
 async function checkSizesAndTiers(scope: OrgScope, patch: SettingsPatch) {
-  for (const change of Object.values(patch.roles ?? {})) {
-    if (change?.machineSize) await requireSize(scope, change.machineSize);
-  }
+  await checkSizes(scope, Object.values(patch.roles ?? {}).flatMap((change) => (change?.machineSize ? [change.machineSize] : [])));
   await checkTiers(scope, patch.roles ?? {});
 }
 
