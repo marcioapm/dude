@@ -1,7 +1,8 @@
 -- 066_run_resumes.sql — how long each resume of a Run took, end to end.
 --
 -- One row per lux resume dude makes of a Run, keyed by the epoch of the
--- placement it resumed into, inserted when lux accepts the resume. Every
+-- placement it resumed into, inserted just before dude asks lux for it
+-- (and deleted if lux refuses it for good). Every
 -- timestamp is written once (COALESCE), from what dude already handles:
 -- its own resume, lux's state events and the agent's records on the Run's
 -- stream, and lux's placements read with GET /v1/runs/{id} when the Run is
@@ -11,8 +12,13 @@
 -- Timestamps from lux (the placements) are lux's clock; the others are
 -- dude's. A phase that spans the two carries their skew.
 
+-- A resume names its Run with the Run's organization, so a row can only
+-- be about a Run of the organization it belongs to (as 057 does for
+-- people).
+CREATE UNIQUE INDEX runs_organization_identity_idx ON runs (organization_id, id);
+
 CREATE TABLE run_resumes (
-  run_id               text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  run_id               text NOT NULL,
   organization_id      text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   -- The new placement's epoch.
   epoch                integer NOT NULL,
@@ -23,7 +29,7 @@ CREATE TABLE run_resumes (
   -- When the resume became due: the person's Resume, the answer, the
   -- approval.
   woken_at             timestamptz,
-  -- When lux accepted dude's resume.
+  -- When dude asked lux to resume it.
   requested_at         timestamptz,
   -- The new placement, as lux reports it.
   assigned_at          timestamptz,
@@ -52,7 +58,8 @@ CREATE TABLE run_resumes (
   -- run.resume.timed was written for it: once, whatever replays.
   timed_at             timestamptz,
   created_at           timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (run_id, epoch)
+  PRIMARY KEY (run_id, epoch),
+  FOREIGN KEY (organization_id, run_id) REFERENCES runs (organization_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX run_resumes_org_idx ON run_resumes (organization_id, created_at DESC);
