@@ -46,7 +46,9 @@ type Builder struct {
 
 // BeatEvery is how often a running builder writes its heartbeat. One not
 // heard from for Offline is offline: the Images page and waiting Runs say
-// so, and a Run that has waited GiveUp of that time fails.
+// so, and a Run that has waited GiveUp of that time fails. Offline and
+// GiveUp are @dude/domain's BUILDER_OFFLINE_SECONDS and
+// BUILDER_GIVE_UP_MINUTES too (tests/fixtures/images/builder.json).
 const (
 	BeatEvery = 30 * time.Second
 	Offline   = 2 * time.Minute

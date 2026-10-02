@@ -16,6 +16,7 @@
  */
 
 import {
+  BUILDER_OFFLINE_SECONDS,
   EventTypes,
   firstFrom,
   imageCycle,
@@ -55,7 +56,7 @@ export async function builderInfo(scope: OrgScope): Promise<ImageBuilderInfo> {
   const layer = c.string("DUDE_LAYER_IMAGE") ?? null;
   const memory = c.string("DUDE_BUILDER_MEMORY") ?? "1536m";
   const [beat] = (await scope.sql`
-    SELECT seen_at AS "seenAt", seen_at < now() - interval '2 minutes' AS stale FROM image_builder`) as Array<{ seenAt: string; stale: boolean }>;
+    SELECT seen_at AS "seenAt", seen_at < now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS}) AS stale FROM image_builder`) as Array<{ seenAt: string; stale: boolean }>;
   return {
     available: layer !== null, layer, cpus: c.float("DUDE_BUILDER_CPUS"), memoryMiB: mebibytes(memory),
     lastSeenAt: beat?.seenAt ?? null, offline: layer !== null && (beat?.stale ?? true),

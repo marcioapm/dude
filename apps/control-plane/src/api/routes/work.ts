@@ -9,11 +9,11 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput,
-  taskGoalInput, taskGoalShortBy,
+  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel,
+  taskCriteriaInput, taskGoalInput, taskGoalShortBy,
 } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
-import { withOrg, withoutTenant } from "../../db/client.ts";
+import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -28,7 +28,9 @@ const TASK_SELECT = `
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
-const RUN_SELECT = `
+// A Run's columns, as a fragment of `sql`: the builder's offline threshold
+// is a parameter.
+const runSelect = (sql: OrgScope["sql"]) => sql`
   id, organization_id AS "organizationId", project_id AS "projectId",
   task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
@@ -36,8 +38,8 @@ const RUN_SELECT = `
   branch, harness, model, dude_pause AS "dudePause", machine, image,
   -- Waiting for its image: the job it waits on is still queued or running,
   -- and it has no lux Run yet (a phase Run pending, a woken preview paused).
-  (SELECT json_build_object('buildId', b.id, 'state', b.state, 'imageName', i.name, 'version', v.number,
-      'builderOfflineSince', CASE WHEN ib.seen_at IS NULL OR ib.seen_at < now() - interval '2 minutes'
+  (SELECT json_build_object('buildId', b.id, 'state', b.state, 'kind', b.kind, 'imageName', i.name, 'version', v.number,
+      'builderOfflineSince', CASE WHEN ib.seen_at IS NULL OR ib.seen_at < now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS})
         THEN COALESCE(ib.seen_at, runs.image_waiting_since) END)
    FROM image_builds b JOIN image_versions v ON v.id = b.image_version_id JOIN images i ON i.id = v.image_id
    LEFT JOIN image_builder ib ON true
@@ -197,7 +199,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     >;
     if (!rows[0]) return null;
     const runs = await scope.sql`
-      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE task_id = ${id}
+      SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
       ORDER BY attempt DESC`;
     return { ...rows[0], runs };
   });
@@ -240,7 +242,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     const rows = (await scope.sql`
       INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status)
       VALUES (${runId}, ${organizationId}, ${task.project_id}, ${taskId}, ${attempt}, 'pending')
-      RETURNING ${scope.sql.unsafe(RUN_SELECT)}`) as Array<Record<string, unknown>>;
+      RETURNING ${runSelect(scope.sql)}`) as Array<Record<string, unknown>>;
 
     await scope.sql`UPDATE tasks SET status = 'queued' WHERE id = ${taskId}`;
 
@@ -274,7 +276,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const run = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE id = ${id}`) as Array<Record<string, unknown>>;
+      SELECT ${runSelect(scope.sql)} FROM runs WHERE id = ${id}`) as Array<Record<string, unknown>>;
     if (!rows[0]) return null;
     const sessions = await scope.sql`
       SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE run_id = ${id}

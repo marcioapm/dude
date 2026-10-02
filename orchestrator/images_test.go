@@ -278,6 +278,32 @@ func TestARunWaitingOnAnOfflineBuilderGivesUp(t *testing.T) {
 	if n := len(w.lux.Runs()); n != 0 {
 		t.Errorf("%d lux Runs", n)
 	}
+
+	// A builder that never reported in (no image_builder row): offline for
+	// the whole wait.
+	mustExec(t, w.owner, `DELETE FROM image_builder`)
+	never := w.task()
+	w.deliver(never)
+	w.until("the second implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL AND image_waiting_since IS NOT NULL`, never) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '29 minutes' WHERE task_id = $1`, never)
+	w.look(never)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, never); n != 1 {
+		t.Fatalf("gave up on a never-seen builder after 29 minutes")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '31 minutes' WHERE task_id = $1`, never)
+	w.look(never)
+	w.until("the second implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, never) == 1
+	})
+	if got := w.runError(never, "implement"); got != "cannot start: image builder offline: it has never reported in" {
+		t.Errorf("error = %q", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
+	}
 }
 
 // With no final for the current layer, the Run waits — pending, no lux Run —

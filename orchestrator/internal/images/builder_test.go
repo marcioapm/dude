@@ -571,6 +571,31 @@ func TestTheRowKeepsTheLastLogMaxOfALongLog(t *testing.T) {
 	}
 }
 
+func TestAnIdleBuilderKeepsWritingItsHeartbeat(t *testing.T) {
+	f := setup(t)
+	f.b.Beat, f.b.Poll = 10*time.Millisecond, 10*time.Millisecond
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- f.b.Run(ctx) }()
+	wait := func(what, sql string) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); f.str(sql) != "true"; time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				stop()
+				t.Fatalf("never saw %s", what)
+			}
+		}
+	}
+	wait("the first heartbeat", `SELECT count(*) = 1 FROM image_builder`)
+	// No job: only the ticker writes it now.
+	f.exec(`UPDATE image_builder SET seen_at = now() - interval '1 hour'`)
+	wait("a heartbeat from the ticker", `SELECT seen_at > now() - interval '1 minute' FROM image_builder`)
+	stop()
+	if err := <-done; err != nil {
+		t.Errorf("Run = %v", err)
+	}
+}
+
 func TestTheHeartbeatSaysWhenTheBuilderWasLastSeen(t *testing.T) {
 	f := setup(t)
 	f.b.Version = "1.2.3"

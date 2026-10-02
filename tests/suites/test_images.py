@@ -321,22 +321,25 @@ def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page,
     base = _publish_first(client, owner_dsn, "acme-base", final=False)
     client.post(f"/v1/images/default/{base['image']['id']}")
     execute(owner_dsn, "INSERT INTO image_builder (seen_at) VALUES ('2026-10-01T08:00:00Z') ON CONFLICT (id) DO UPDATE SET seen_at = EXCLUDED.seen_at")
-    listed = client.get("/v1/images").json()["builder"]
-    assert listed["offline"] is True
-    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
-    task = client.create_task(project["id"], "Say hello")
-    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
-                     timeout=60, message="the implementer never waited on its image")
-    assert client.get_run(run["id"])["preparingImage"]["builderOfflineSince"] is not None
-    sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/org/settings/images")
-    expect(page.get_by_test_id("builder-offline")).to_contain_text("Image builder offline since")
-    _shoot(page, "images-builder-offline")
-    page.goto(f"{web_url}#/session/{run['id']}")
-    expect(page.get_by_test_id("preparing-image")).to_contain_text("image builder offline since")
-    _shoot(page, "run-preparing-image-offline")
-    execute(owner_dsn, BUILDER_ALIVE)
+    # image_builder is one row the whole session shares: alive again whatever happens here.
+    try:
+        listed = client.get("/v1/images").json()["builder"]
+        assert listed["offline"] is True
+        project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+        task = client.create_task(project["id"], "Say hello")
+        assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+        run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
+                         timeout=60, message="the implementer never waited on its image")
+        assert client.get_run(run["id"])["preparingImage"]["builderOfflineSince"] is not None
+        sign_in(page, web_url, org["api_key"])
+        page.goto(f"{web_url}#/org/settings/images")
+        expect(page.get_by_test_id("builder-offline")).to_contain_text("Image builder offline since")
+        _shoot(page, "images-builder-offline")
+        page.goto(f"{web_url}#/session/{run['id']}")
+        expect(page.get_by_test_id("preparing-image")).to_contain_text("image builder offline since")
+        _shoot(page, "run-preparing-image-offline")
+    finally:
+        execute(owner_dsn, BUILDER_ALIVE)
     assert all("409" in e for e in console_errors), console_errors
 
 

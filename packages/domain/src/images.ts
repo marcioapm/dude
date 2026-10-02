@@ -172,7 +172,7 @@ export interface ImageBuilderInfo {
   memoryMiB: number;
   /** dude-image-builder's last heartbeat (every 30 s), null if it never ran. */
   lastSeenAt: string | null;
-  /** Builds are on, and the builder has not been heard from for 2 minutes. */
+  /** Builds are on, and the builder has not been heard from for BUILDER_OFFLINE_SECONDS. */
   offline: boolean;
 }
 
@@ -450,10 +450,17 @@ export const COMMON_BASES: ReadonlyArray<string> = [
   "mcr.microsoft.com/playwright:v1.55.0-noble",
 ];
 
+// Go's images.Offline and images.GiveUp; tests/fixtures/images/builder.json
+// holds the values, and both suites check their constants against it.
+/** A builder not heard from for this long is offline. */
+export const BUILDER_OFFLINE_SECONDS = 120;
+/** A Run that has waited this long for its image while the builder was offline fails. */
+export const BUILDER_GIVE_UP_MINUTES = 30;
+
 /**
  * What a waiting Run, a preview or the Images page says of a builder not
  * heard from: since its last heartbeat (the same words the orchestrator
- * fails a Run with after 30 minutes of it).
+ * fails a Run with after BUILDER_GIVE_UP_MINUTES of it).
  */
 export function builderOffline(lastSeenAt: string | null, format: (iso: string) => string): string {
   return lastSeenAt ? `image builder offline since ${format(lastSeenAt)}` : "image builder offline: it has never reported in";
