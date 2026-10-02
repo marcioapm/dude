@@ -8,6 +8,8 @@ branch, Request review, Merge — off, with why, until it is ready.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -67,10 +69,16 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     # The failure woke a fixer too: its fix lands before anything is merged.
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=90, message="the CI fix did not land")
 
+    # Asking for a review: GitHub's suggestions first, then anyone by name.
     page.get_by_test_id("pr-request-review").click()
-    page.get_by_test_id("pr-review-logins").fill("bo")
+    picker = page.get_by_role("combobox", name="Who to ask for a review")
+    expect(page.get_by_role("option", name=re.compile("Tom Okafor"))).to_contain_text("Commented on this pull request")
+    picker.fill("lind")
+    page.get_by_role("option", name=re.compile("Bo Lindqvist")).click()
+    expect(page.get_by_test_id("reviewer-picks")).to_contain_text("Bo Lindqvist")
     page.get_by_test_id("pr-review-send").click()
     expect(panel).to_contain_text("bo · review requested", timeout=30_000)
+    assert fake_github.review_requests[-1] == (n, ["bo"])
 
     # Everything seen to on GitHub: ready, and merged from here.
     fake_github.set_check(n, "unit", conclusion="success")
@@ -104,8 +112,15 @@ def test_settings_show_webhook_health_and_save_how_dude_behaves_on_github(
 
     page.get_by_test_id("setting-merge-method").get_by_text("Rebase").click()
     page.get_by_test_id("setting-fix-rounds").fill("3")
+    # Who every pull request asks: found by name, as on a pull request.
+    page.get_by_role("group", name="Request review from").get_by_role("button", name="These people").click()
+    page.get_by_role("combobox", name="Who to ask for a review").fill("okafor")
+    page.get_by_role("option", name=re.compile("Tom Okafor")).click()
+    expect(page.get_by_test_id("reviewer-picks")).to_contain_text("tom")
     page.get_by_test_id("github-save").click()
     wait_until(lambda: client.get("/v1/forge/settings").json()["mergeMethod"] == "rebase", timeout=10,
                message="the merge method was not saved")
-    assert client.get("/v1/forge/settings").json()["fixRoundsPerPr"] == 3
+    saved = client.get("/v1/forge/settings").json()
+    assert saved["fixRoundsPerPr"] == 3
+    assert (saved["requestReviewFrom"], saved["reviewLogins"]) == ("logins", ["tom"])
     assert console_errors == []

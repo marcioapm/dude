@@ -528,16 +528,23 @@ body {
   align-items: center;
   gap: var(--ds-space-2);
 }
-.prAskForm {
-  display: inline-flex;
+.prAskFoot {
+  display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-8);
 }
 .prProblem {
   color: var(--ds-tone-danger-fg);
 }
 
 /* -- settings: GitHub -------------------------------------------------- */
+
+.settingsReviewers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin-top: var(--ds-space-8);
+}
 
 .webhookRepos {
   list-style: none;

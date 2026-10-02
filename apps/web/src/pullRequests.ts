@@ -8,31 +8,8 @@
  */
 
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { CHECK_RUNS_FORBIDDEN, prCheckDiagnostic, prCheckFailed } from "@dude/domain";
+import { prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, reviewWords } from "@dude/domain";
 import { plural } from "@dude/design-system";
-
-/** GitHub logins as a person types them: "@cy, bo". */
-export function parseLogins(text: string): string[] {
-  return text.split(/[\s,]+/).map((l) => l.replace(/^@/, "")).filter(Boolean);
-}
-
-/** A reviewer's latest word, in a person's words. */
-export function reviewWords(state: string): string {
-  switch (state.toUpperCase()) {
-    case "APPROVED":
-      return "approved";
-    case "COMMENTED":
-      return "commented";
-    case "CHANGES_REQUESTED":
-      return "requested changes";
-    case "REQUESTED":
-      return "review requested";
-    case "DISMISSED":
-      return "review dismissed";
-    default:
-      return state.toLowerCase().replaceAll("_", " ");
-  }
-}
 
 /** Why the Merge button is off, in a person's words; null when it is on. */
 export function mergeBlockedBy(pr: PullRequest): string | null {
@@ -42,8 +19,7 @@ export function mergeBlockedBy(pr: PullRequest): string | null {
   const failing = pr.checks.filter(prCheckFailed).map((c) => c.name);
   const unreadable = prCheckDiagnostic(pr.checks);
   if (pr.checkState === "failing") why.push(failing.length ? `${failing.join(", ")} failing` : "checks failing");
-  if (unreadable === CHECK_RUNS_FORBIDDEN) why.push("GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
-  else if (unreadable) why.push("some checks cannot be read");
+  if (unreadable) why.push(prCheckDiagnosticReason(unreadable));
   else if (pr.checkState === "pending") why.push("checks pending");
   if (pr.review === "changes_requested") why.push("changes requested");
   if (pr.review === "pending") why.push("nobody has approved it");
@@ -101,7 +77,7 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       // Losing or regaining read access is its own line; a verdict that
       // changed with it is said after it.
       const access = p.diagnostic && p.diagnostic !== p.fromDiagnostic
-        ? `GitHub refused the check-runs read on ${pr}`
+        ? `GitHub won't show dude the checks on ${pr}`
         : p.fromDiagnostic && !p.diagnostic ? `GitHub check runs on ${pr} can be read again` : null;
       const verdict = p.to === p.from ? null
         : p.to === "failing" ? `CI ${failing.length ? `${failing.join(", ")} ` : ""}failed on ${pr}`

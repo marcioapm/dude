@@ -49,9 +49,10 @@ var tools = []tool{
 		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
 		"or told it was declined.",
 		nil, requestRepository).limit(requestsPerRun),
-	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
+	define("create_task", fmt.Sprintf("Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. Say what and why in the goal.", creators, createTask).limit(createsPerRun),
+		"and decides. The goal is required (at least %d characters): say why it matters and what should change.",
+		GoalMin), creators, createTask).limit(createsPerRun),
 	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
 		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
 		"Search before you investigate something that may already be known, and before you remember something.",
@@ -62,6 +63,10 @@ var tools = []tool{
 		"a fact that holds (\"the billing API paginates by cursor\"), a procedure that works, a trap and its way "+
 		"around. It is live at once, and marked as yours. Search first so you do not save it twice; do not save "+
 		"what the code or the task already says.", nil, remember).limit(remembersPerRun),
+	define("run_diff", "What a Run of your task changed: this Run's checkout, uncommitted work included, against "+
+		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
+		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
+		"With paths, those files' changes as unified diff text, at most 2,000 lines in all.", nil, runDiff),
 }
 
 // ---- list_tasks --------------------------------------------------------------
@@ -115,7 +120,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 
 type createTaskIn struct {
 	Title              string   `json:"title" jsonschema:"what should change, in one line"`
-	Goal               string   `json:"goal" jsonschema:"why, and any detail another agent or a person needs"`
+	Goal               string   `json:"goal" jsonschema:"required: why it matters, what should change, and any detail another agent or a person needs; see the tool's description for the minimum"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
 	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
 }
@@ -125,8 +130,12 @@ type createTaskOut struct {
 }
 
 // The control plane's task limits, in UTF-16 code units as its `.length`
-// counts them: a goal, and all the criteria together.
+// counts them: a goal, and all the criteria together. GoalMin is counted on
+// the goal trimmed, and must agree with TASK_GOAL_MIN in
+// packages/domain/src/hierarchy.ts: a task an agent makes is one a person
+// could save.
 const (
+	GoalMin     = 16
 	GoalMax     = 65_536
 	CriteriaMax = 16_384
 )
@@ -137,6 +146,18 @@ func utf16Len(s string) int {
 		n += utf16.RuneLen(r)
 	}
 	return n
+}
+
+// isJSSpace is ECMAScript's WhiteSpace and LineTerminator set, what the
+// control plane's String.prototype.trim() strips. It differs from
+// unicode.IsSpace: it includes U+FEFF and excludes U+0085.
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f',
+		'\u3000', '\ufeff':
+		return true
+	}
+	return r >= '\u2000' && r <= '\u200a'
 }
 
 func criteriaLength(criteria []string) int {
@@ -152,6 +173,9 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	switch {
 	case title == "":
 		return createTaskOut{}, refuse("a title is required")
+	case utf16Len(strings.TrimFunc(in.Goal, isJSSpace)) < GoalMin:
+		return createTaskOut{}, refuse("a task needs a goal of at least %d characters: say why it matters and what should "+
+			"change, so a person can decide on it without asking you", GoalMin)
 	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
 		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
 	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:
