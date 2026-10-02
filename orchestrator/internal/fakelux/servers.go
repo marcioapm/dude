@@ -291,6 +291,9 @@ func (s *Server) Migrate(id string) {
 	s.setState(run, "stopping")
 	s.setStateWith(run, "stopped", "migrate")
 	run.Epoch++
+	run.moveNext = true
+	accepted := time.Now()
+	run.acceptedAt = &accepted
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)

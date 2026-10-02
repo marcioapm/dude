@@ -71,6 +71,12 @@ type translator struct {
 	// Tool calls started and not yet finished, by id, written with the
 	// cursor: an agent in a long command is working, however quiet.
 	openCalls map[string]bool
+	// The epochs whose first busy and first output were looked for, so
+	// each is looked for once per placement and not on every chunk.
+	busyEpoch, outputEpoch int
+	// Resumes to follow up once the batch commits, by epoch: true to read
+	// lux's placements first (resumes.go).
+	resumes map[int]bool
 }
 
 // runUsage is the Run's usage as the agent reported it. Context is the
@@ -182,6 +188,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
 		}
+		if state == "running" {
+			t.resumeRunning(ctx, tx, s, f.Epoch)
+		}
 		if state == "running" && t.run.Status == statusScheduled {
 			t.run.Status = statusRunning
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
@@ -257,7 +266,7 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	case "lux.session":
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
 	case "lux.activity":
-		return t.activity(ctx, tx, s, str("activity"))
+		return t.activity(ctx, tx, s, str("activity"), epoch)
 	case lux.RecordInputConsumed, lux.RecordInputFailed:
 		if str("requestId") == promptRequestID {
 			return nil
@@ -440,7 +449,7 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 // activity tracks the agent's turn. Busy means it took its task; idle after
 // busy means it finished. Idle before busy is the agent waiting for its
 // first input, and means nothing.
-func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string) error {
+func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string, epoch int) error {
 	switch activity {
 	case "busy":
 		// Working again: no longer waiting, and whatever it was waiting on
@@ -448,6 +457,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// quiet is counted from its start — but only the model doing
 		// something answers a nudge, not a turn the nudge itself started.
 		clear(t.openCalls)
+		t.resumeBusy(ctx, tx, s, epoch)
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL,
 			waiting_since = NULL, agent_active_at = now() WHERE id = $1`, t.run.ID)
 		return err
@@ -541,6 +551,11 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	// What the model says, thinks or does is activity; a usage report or a
 	// turn ending (a nudge cancels one) is not.
 	t.active = t.active || slices.Contains([]string{"agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"}, typ)
+	// The first thing it says or does after a resume ends the resume's
+	// timing.
+	if slices.Contains([]string{"agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"}, typ) {
+		t.resumeOutput(ctx, tx, s, f.Epoch)
+	}
 
 	switch typ {
 	case "agent_message_chunk":
