@@ -18,6 +18,10 @@ describe("layout words", () => {
     expect(parseLayout("full right")).toEqual({ size: "full", align: "center" });
     expect(parseLayout("40")).toEqual({ size: 120, align: "center" });
   });
+  test("parse: the last size and the last alignment win", () => {
+    expect(parseLayout("small full left right")).toEqual({ size: "full", align: "center" });
+    expect(parseLayout("320 small left right")).toEqual({ size: "small", align: "right" });
+  });
   test("serialise drops defaults", () => {
     expect(layoutTitle({ size: "medium", align: "center" })).toBeUndefined();
     expect(layoutTitle({ size: "small", align: "right" })).toBe("small right");
