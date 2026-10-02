@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { outline as buildOutline, parseMarkdown, type Block, type Inline } from "../util/markdown.ts";
@@ -371,6 +371,7 @@ export function ImageFigure({ layout, width, className, style, children, ...rest
   readonly layout: ImageLayout;
   /** A width being dragged, in px, in place of the layout's. */
   readonly width?: number | undefined;
+  readonly ref?: Ref<HTMLSpanElement> | undefined;
 }) {
   return (
     <span className={cx(styles["figure"], className)} data-align={layout.align} data-size={String(layout.size)}
