@@ -62,6 +62,8 @@ type Server struct {
 		Health() memory.Health
 		Resume()
 	}
+	// GitHub's answers to who could review, kept a minute.
+	candidates candidateCache
 }
 
 func (s *Server) Handler() http.Handler {

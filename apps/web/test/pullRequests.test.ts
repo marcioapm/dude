@@ -15,7 +15,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   display: "ready", createdAt: "", updatedAt: "", ...over,
 });
 const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
-const refused = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)";
+const refused = "GitHub won't show dude this repository's checks";
 
 const event = (eventType: string, payload: Record<string, unknown>, actorId = "workflow"): PersistedEvent => ({
   eventId: "e", eventType, occurredAt: "2026-09-28T10:00:00Z", organizationId: "o", projectId: null, taskId: "t", runId: null,
@@ -68,7 +68,7 @@ describe("activity", () => {
   test("checks pending is not checks started; losing and regaining read access say so", () => {
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "passing", to: "pending" }), false)?.text).toBe("Checks pending on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", diagnostic: "check_runs_forbidden" }), false)?.text)
-      .toBe("GitHub refused the check-runs read on #41");
+      .toBe("GitHub won't show dude the checks on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", fromDiagnostic: "check_runs_forbidden" }), false)?.text)
       .toBe("GitHub check runs on #41 can be read again");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "passing", fromDiagnostic: "check_runs_forbidden" }), false)?.text)

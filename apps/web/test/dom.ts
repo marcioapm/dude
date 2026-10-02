@@ -50,6 +50,14 @@ export async function click(el: Element): Promise<void> {
   });
 }
 
+/** Type into a field as a person would: React reads the value through the prototype's setter. */
+export async function type(el: Element, text: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, text);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 export { act };
 
 /** An event on the fixture Run's stream, as the backend sends one, and what it causes settled. */
