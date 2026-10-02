@@ -45,7 +45,7 @@ function overBy(value: string, max: number): string | undefined {
 }
 
 /** Under the shortest goal a task is saved with: how much more to write. */
-function goalShortBy(goal: string): string | undefined {
+function shortGoalText(goal: string): string | undefined {
   const short = taskGoalShortBy(goal);
   return short > 0 ? `${short} more ${short === 1 ? "character" : "characters"} to save: why it matters and what should change.` : undefined;
 }
@@ -106,12 +106,12 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const criteria = useMemo(() => criteriaFromMarkdown(criteriaSource), [criteriaSource]);
   // Too short says how much more only once the person has typed in the goal:
   // before that, an empty or old short goal only says "required".
-  const goalShort = locked ? undefined : goalShortBy(goal);
-  const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX) ?? (goalTyped ? goalShort : undefined);
+  const goalShortText = locked ? undefined : shortGoalText(goal);
+  const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX) ?? (goalTyped ? goalShortText : undefined);
   // Reading criteria only strips markers and indentation, so bounding their
   // Markdown source also bounds the total saved by the server.
   const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
-  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShort && !criteriaError && !busy;
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
   function submit(deliver: boolean) {
