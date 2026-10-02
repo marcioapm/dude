@@ -631,6 +631,65 @@ describe("an agent that asks", () => {
   });
 });
 
+describe("how long a resume took", () => {
+  const timed = (payload: Record<string, unknown>) => ev(EventTypes.RunResumeTimed, payload);
+  const phases = { react: 120, schedule: 300, image: 1000, restore: 1200, start: 800, reload: 2100, take: 400, firstOutput: 1600 };
+
+  test("a park's return says how long it took, and its phases in order on hover", () => {
+    const { turns } = project([
+      ev("run.parked", { reason: "person" }),
+      ev("run.unparked", { reason: "person" }),
+      ev(EventTypes.AgentMessage, { text: "On it." }),
+      timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, untilBusyMs: 4800, phases }),
+    ]);
+    const notices = turns.filter((t) => t.kind === "notice");
+    expect(notices.map((t) => t.text)).toEqual([expect.stringContaining("Parked"), "Taken back up in 6.4s."]);
+    expect(notices[1]!.title).toBe([
+      "dude asked lux 120ms", "lux placed it 300ms", "image ready 1.0s", "restored 1.2s", "started 800ms",
+      "agent reloaded 2.1s", "took its input 400ms", "first words 1.6s",
+    ].join("\n"));
+  });
+
+  test("one placed on another host says so, and a phase it does not know is left out", () => {
+    const { turns } = project([
+      ev("run.unparked", { reason: "repository" }),
+      timed({ epoch: 3, cause: "repository", moved: true, totalMs: 12_300, phases: { react: 50, reload: 3000 } }),
+    ]);
+    expect(turns).toEqual([expect.objectContaining({
+      kind: "notice", notice: "unparked", text: "Taken back up in 12s, on another host.",
+      title: "dude asked lux 50ms\nagent reloaded 3.0s",
+    })]);
+  });
+
+  test("a person's resume of their own pause gets a notice of its own", () => {
+    const { turns } = project([
+      ev(EventTypes.RunPaused, { requested: true }),
+      ev(EventTypes.RunResumed, {}),
+      timed({ epoch: 2, cause: "person", moved: false, totalMs: 6400, phases }),
+    ]);
+    expect(turns).toEqual([expect.objectContaining({ kind: "notice", notice: "unparked", text: "Resumed in 6.4s." })]);
+  });
+
+  test("a park's return never takes a later resume's numbers", () => {
+    const { turns } = project([
+      ev("run.unparked", { reason: "person" }),
+      ev(EventTypes.RunPaused, { requested: true }),
+      timed({ epoch: 3, cause: "person", moved: false, totalMs: 2000, phases: {} }),
+    ]);
+    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual(["Taken back up where it left off.", "Resumed in 2.0s."]);
+  });
+
+  test("folded one event at a time, the notice is the same", () => {
+    const events = [
+      ev("run.unparked", { reason: "person" }),
+      timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases }),
+    ];
+    const state = emptyProjection();
+    for (const e of events) apply(state, [e]);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+  });
+});
+
 describe("how a run ended", () => {
   test("a failure says why, and ends whatever the agent was doing", () => {
     const conversation = project([
