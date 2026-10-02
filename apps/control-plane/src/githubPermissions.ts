@@ -202,10 +202,10 @@ function judgeRead(permission: string, a: Answer, what: string, missing: string)
 }
 
 /** An invalid POST's verdict: 422 means the permission check passed. */
-function judgeInvalidPost(permission: string, a: Answer, what: string, missing: string): PermissionResult {
+function judgeInvalidPost(permission: string, a: Answer, what: string, missing: string, granted: string): PermissionResult {
   const unknown = inconclusive(a, what);
   if (unknown) return result(permission, "untested", unknown);
-  if (a.status === 422) return result(permission, "ok", `GitHub validated ${what}, which it does only for a token allowed to make it.`);
+  if (a.status === 422) return result(permission, "ok", granted);
   if (refused(a)) return result(permission, "missing", `${missing}${wants(a)}.`);
   return result(permission, "untested", `Could not test: GitHub answered ${a.status} to ${what}.`);
 }
@@ -267,8 +267,8 @@ async function verifyRepository(fetcher: Fetch, token: TokenUnderTest, repo: Rep
     out.push(repoScope ? result(PERMISSIONS.pulls, "ok", "Pull requests list, and the classic token's repo scope lets it open them.") : result(PERMISSIONS.pulls, "missing", noRepoScope));
   } else {
     // No head or base: GitHub refuses it as invalid once the token may open pull requests.
-    const write = judgeInvalidPost(PERMISSIONS.pulls, await postInvalid("/pulls", {}), "an empty pull request", "GitHub refused to open a pull request");
-    out.push(write.outcome === "ok" ? { ...write, reason: "Pull requests list, and GitHub validated an empty one (base and head missing), which it does only for a token allowed to open them." } : write);
+    out.push(judgeInvalidPost(PERMISSIONS.pulls, await postInvalid("/pulls", {}), "an empty pull request", "GitHub refused to open a pull request",
+      "Pull requests list, and GitHub validated an empty one (base and head missing), which it does only for a token allowed to open them."));
   }
 
   const heads = Array.isArray(pulls.body) ? (pulls.body as Array<{ head?: { sha?: string } }>).map((p) => p.head?.sha).filter((s): s is string => Boolean(s)) : [];
@@ -289,8 +289,8 @@ async function verifyRepository(fetcher: Fetch, token: TokenUnderTest, repo: Rep
       : result(PERMISSIONS.hooks, "missing", "The classic token has neither repo nor admin:repo_hook."));
   } else {
     // A hook with no URL: invalid, so nothing is registered.
-    const write = judgeInvalidPost(PERMISSIONS.hooks, await postInvalid("/hooks", { config: {} }), "a webhook with no URL", "GitHub refused to register a webhook");
-    out.push(write.outcome === "ok" ? { ...write, reason: "Webhooks list, and GitHub validated one with no URL, which it does only for a token allowed to register them." } : write);
+    out.push(judgeInvalidPost(PERMISSIONS.hooks, await postInvalid("/hooks", { config: {} }), "a webhook with no URL", "GitHub refused to register a webhook",
+      "Webhooks list, and GitHub validated one with no URL, which it does only for a token allowed to register them."));
   }
 
   if (classic) {
