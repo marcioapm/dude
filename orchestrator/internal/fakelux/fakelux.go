@@ -322,6 +322,7 @@ type event struct {
 	Epoch int
 	Type  string
 	Data  map[string]any
+	Time  time.Time
 }
 
 type Server struct {
@@ -406,6 +407,7 @@ type Server struct {
 	beforeEvent func(runID string, eventID int64, typ string)
 	beforeStart func(runID string)
 	cutStream   func(runID string, eventID int64, typ string) StreamCut
+	eventPages  func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -576,6 +578,18 @@ func (s *Server) CutStreams(fn func(runID string, eventID int64, typ string) Str
 	s.cutStream = fn
 }
 
+// PageEvents has every GET /v1/runs/{id}/events ask fn, without the fake's
+// lock, how many of the events past after (ids, at most lux's page of
+// eventsPage) its page carries: fewer is a short page, one that blocks is a
+// slow request, a negative answer fails it (503). An empty page while there
+// are events past after is lux recording them after the page's query. nil
+// clears it.
+func (s *Server) PageEvents(fn func(runID string, after int64, ids []int64) int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventPages = fn
+}
+
 // EventState is the state a Run's state event reported; "" for another.
 func (s *Server) EventState(runID string, eventID int64) string {
 	s.mu.Lock()
@@ -684,6 +698,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs", s.submit)
 	mux.HandleFunc("GET /v1/runs/{id}", s.get)
 	mux.HandleFunc("GET /v1/runs/{id}/output", s.output)
+	mux.HandleFunc("GET /v1/runs/{id}/events", s.events)
 	mux.HandleFunc("POST /v1/runs/{id}/input", s.input)
 	mux.HandleFunc("POST /v1/runs/{id}/push", s.push)
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.stop)
@@ -1747,6 +1762,50 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 		}
 		run.cond.Wait()
 	}
+}
+
+// eventsPage is how many events lux's GET /v1/runs/{id}/events returns at
+// most.
+const eventsPage = 1000
+
+// events is GET /v1/runs/{id}/events: the Run's lifecycle events after an
+// id, in id order, a page at a time, as lux lists them.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	var after int64
+	fmt.Sscan(r.URL.Query().Get("after"), &after)
+	page := func() []event {
+		var out []event
+		for _, e := range run.events {
+			if e.ID > after && len(out) < eventsPage {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	s.mu.Lock()
+	out, pages := page(), s.eventPages
+	s.mu.Unlock()
+	if pages != nil {
+		ids := make([]int64, len(out))
+		for i, e := range out {
+			ids[i] = e.ID
+		}
+		n := pages(run.ID, after, ids)
+		if n < 0 {
+			writeErr(w, 503, "unavailable", "events unavailable")
+			return
+		}
+		out = out[:min(n, len(out))]
+	}
+	list := make([]map[string]any, 0, len(out))
+	for _, e := range out {
+		list = append(list, map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data, "time": e.Time})
+	}
+	writeJSON(w, 200, map[string]any{"events": list})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

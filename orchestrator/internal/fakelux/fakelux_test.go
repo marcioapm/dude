@@ -234,3 +234,57 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 		}
 	}
 }
+
+// GET /v1/runs/{id}/events is lux's listEvents: the Run's lifecycle events
+// after an id, in id order, at most 1000 a page; PageEvents shortens or
+// fails a page.
+func TestEventsAreListedAfterAnIdAPageAtATime(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	ctx := context.Background()
+	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range eventsPage + 5 {
+		fake.Crash(run.ID)
+	}
+	var all []int64
+	for after := int64(0); ; {
+		page, err := client.Events(ctx, run.ID, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) > eventsPage {
+			t.Fatalf("a page of %d events", len(page))
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, f := range page {
+			if f.Kind != "lux" || f.EventID <= after || f.EventType == "" {
+				t.Fatalf("event %+v after %d", f, after)
+			}
+			after = f.EventID
+			all = append(all, f.EventID)
+		}
+	}
+	if len(all) < eventsPage+5 || !slices.IsSorted(all) {
+		t.Fatalf("%d events, sorted %v", len(all), slices.IsSorted(all))
+	}
+	fake.PageEvents(func(_ string, _ int64, ids []int64) int { return 1 })
+	if page, err := client.Events(ctx, run.ID, all[2]); err != nil || len(page) != 1 || page[0].EventID != all[3] {
+		t.Fatalf("a short page after %d: %+v %v", all[2], page, err)
+	}
+	fake.PageEvents(func(string, int64, []int64) int { return -1 })
+	if _, err := client.Events(ctx, run.ID, 0); err == nil {
+		t.Fatal("a failed page answered")
+	}
+	fake.PageEvents(nil)
+	if _, err := client.Events(ctx, "lrun_404", 0); !lux.IsNotFound(err) {
+		t.Fatalf("unknown Run: %v", err)
+	}
+}
