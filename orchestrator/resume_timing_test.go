@@ -8,8 +8,13 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -74,9 +79,12 @@ func (w *world) timedEvents(runID string) []map[string]any {
 // oneTimedResume checks the Run was resumed once, with cause, due at
 // woken, every stamp present and each clock's in order, and timed once.
 // dude's stamps are Postgres's clock and lux's the fake's: each sequence
-// is compared within its own clock.
+// is compared within its own clock. A stamp out of order says whether
+// Postgres's wall clock was stepped back meanwhile (a VM's time sync
+// does), which puts any two stamps out of order.
 func (w *world) oneTimedResume(runID, cause string, woken time.Time, moved bool) resumeRow {
 	w.t.Helper()
+	steps := w.watchClock()
 	w.until("the resume to be timed", func() bool { return len(w.timedEvents(runID)) > 0 })
 	rows := w.resumes(runID)
 	if len(rows) != 1 {
@@ -96,7 +104,8 @@ func (w *world) oneTimedResume(runID, cause string, woken time.Time, moved bool)
 				return
 			}
 			if i > 0 && s.Before(*stamps[i-1]) {
-				w.t.Errorf("%s stamps out of order at %d: %v before %v", clock, i, s, stamps[i-1])
+				w.t.Errorf("%s stamps out of order at %d: %v before %v; Postgres's clock stepped back meanwhile: %v",
+					clock, i, s, stamps[i-1], steps())
 			}
 		}
 	}
@@ -120,6 +129,44 @@ func (w *world) oneTimedResume(runID, cause string, woken time.Time, moved bool)
 		w.t.Errorf("run.resume.timed = %v", e)
 	}
 	return r
+}
+
+// watchClock reads Postgres's clock_timestamp() every few milliseconds
+// until the test ends, on a connection of its own; the returned func
+// lists each step back seen so far.
+func (w *world) watchClock() func() []string {
+	w.t.Helper()
+	conn, err := pgx.Connect(context.Background(), w.owner.Config().ConnString())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	var steps []string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var prev time.Time
+		for ctx.Err() == nil {
+			var now time.Time
+			if conn.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now) != nil {
+				return
+			}
+			if now.Before(prev) {
+				mu.Lock()
+				steps = append(steps, fmt.Sprintf("%s back at %s", prev.Sub(now), now.Format("15:04:05.000000")))
+				mu.Unlock()
+			}
+			prev = now
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	w.t.Cleanup(func() { cancel(); <-done; conn.Close(context.Background()) })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(steps)
+	}
 }
 
 func (w *world) stamp(sql string, args ...any) time.Time {

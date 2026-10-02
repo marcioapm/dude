@@ -97,19 +97,61 @@ const woken = `CASE $3
 	ELSE GREATEST((SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id),
 		(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id)) END`
 
-// recordResume inserts the row for a resume lux has just accepted, in the
-// transaction that moves the Run back to running. before is the Run as lux
-// reported it just before the resume.
-func (s *Syncer) recordResume(ctx context.Context, tx pgx.Tx, r phaseRun, before lux.Run) {
+// resumeAsked inserts the row for a resume dude is about to ask lux for,
+// in a transaction of its own, before lux is asked: lux may stream the
+// new placement's first frames before its answer is back, and those
+// frames have the row to stamp. requested_at is now, as dude asks. A
+// second attempt, after a refusal that may pass, moves it to that
+// attempt if lux still reports the Run stopped (the first did not take);
+// if lux is already resuming it, the first attempt's answer was lost and
+// its requested_at stands. before is the Run as lux reported it just
+// before. Returns the epoch foreseen.
+func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) int {
 	epoch := nextEpoch(before)
 	_, prev := placementsAround(before.Placements, epoch)
-	s.bestEffort(ctx, tx, r, "resume", func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at)
-			SELECT r.id, r.organization_id, $2, $3, `+woken+`, clock_timestamp() FROM runs r WHERE r.id = $1 AND r.status = 'paused'
-			ON CONFLICT (run_id, epoch) DO NOTHING`, r.ID, epoch, resumeCause(r)); err != nil {
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		s.bestEffort(ctx, tx, r, "resume", func(ctx context.Context, tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at)
+				SELECT r.id, r.organization_id, $2, $3, `+woken+`, clock_timestamp() FROM runs r WHERE r.id = $1 AND r.status = 'paused'
+				ON CONFLICT (run_id, epoch) DO UPDATE SET requested_at = EXCLUDED.requested_at
+				WHERE run_resumes.running_at IS NULL AND $4`, r.ID, epoch, resumeCause(r), lux.Terminal(before.State)); err != nil {
+				return err
+			}
+			return writePlacements(ctx, tx, r.ID, epoch, lux.Placement{}, prev)
+		})
+		return nil
+	}); err != nil {
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "resume", "error", err)
+	}
+	return epoch
+}
+
+// resumeRefused deletes the row of a resume lux refused for good: there
+// was no such resume.
+func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		s.bestEffort(ctx, tx, r, "refused", func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `DELETE FROM run_resumes WHERE run_id = $1 AND epoch = $2 AND running_at IS NULL`, r.ID, epoch)
 			return err
-		}
-		return writePlacements(ctx, tx, r.ID, epoch, lux.Placement{}, prev)
+		})
+		return nil
+	}); err != nil {
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "refused", "error", err)
+	}
+}
+
+// resumeAccepted moves the row of a resume lux accepted to the epoch lux
+// says it is for, when that is not the one foreseen; in the transaction
+// that takes the Run out of paused. lux's answer with no epoch (a resume
+// already under way, a 409) leaves it.
+func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) {
+	if resumed.Epoch == 0 || resumed.Epoch == foreseen {
+		return
+	}
+	s.bestEffort(ctx, tx, r, "accepted", func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE run_resumes SET epoch = $3 WHERE run_id = $1 AND epoch = $2
+			AND NOT EXISTS (SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $3)`, r.ID, foreseen, resumed.Epoch)
+		return err
 	})
 }
 
@@ -136,62 +178,82 @@ func writePlacements(ctx context.Context, tx pgx.Tx, runID string, epoch int, cu
 // the last.
 const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_resumes WHERE run_id = $1) ELSE $2 END`
 
+// stamp writes col (a stamp of dude's own) once on the resume a frame of
+// epoch is about. It says which resume it stamped, if any, whether lux
+// had yet to report some of that resume's new placement, and whether the
+// epoch is settled: its row is there, or none will ever be. The row of a
+// resume is in before lux is asked for it (resumeAsked), so a frame of an
+// epoch with no row is settled unless the row is still to come or to move
+// to it: while the Run is paused (lux's answer not in yet) and the epoch
+// is newer than every row. The first placement (epoch 1) is no resume.
+func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string, epoch int) (stamped *int, missing, settled bool) {
+	s.bestEffort(ctx, tx, t.run, col, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `WITH target AS (SELECT epoch FROM run_resumes WHERE run_id = $1 AND `+latestResume+`),
+			stamped AS (UPDATE run_resumes SET `+col+` = clock_timestamp()
+				WHERE run_id = $1 AND epoch IN (SELECT epoch FROM target) AND `+col+` IS NULL
+				RETURNING epoch, assigned_at IS NULL OR image_ready_at IS NULL OR volumes_restored_at IS NULL
+					OR container_started_at IS NULL OR workload_started_at IS NULL OR host_name IS NULL AS missing)
+			SELECT (SELECT epoch FROM stamped), COALESCE((SELECT missing FROM stamped), false),
+				EXISTS (SELECT 1 FROM target) OR $2 = 1
+				OR COALESCE($2 < (SELECT max(epoch) FROM run_resumes WHERE run_id = $1), false)
+				OR (SELECT status FROM runs WHERE id = $1) <> 'paused'`, t.run.ID, epoch).
+			Scan(&stamped, &missing, &settled)
+	})
+	return stamped, missing, settled
+}
+
 // resumeRunning records lux reporting the Run running again, and has its
 // placements read once the batch commits.
 func (t *translator) resumeRunning(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
-	s.bestEffort(ctx, tx, t.run, "running", func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE run_resumes SET running_at = clock_timestamp()
-			WHERE run_id = $1 AND running_at IS NULL AND `+latestResume+` RETURNING epoch`, t.run.ID, epoch)
-		if err != nil {
-			return err
-		}
-		got, err := pgx.CollectRows(rows, pgx.RowTo[int])
-		for _, e := range got {
-			t.afterBatch(e, true)
-		}
-		return err
-	})
+	if e, _, _ := t.stamp(ctx, tx, s, "running_at", epoch); e != nil {
+		t.afterBatch(*e, true)
+	}
 }
 
 // resumeBusy records the agent's first busy after a resume: it took its
-// input.
+// input. Looked for once per settled epoch, at most once a batch before.
 func (t *translator) resumeBusy(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
-	if epoch != 0 && epoch == t.busyEpoch {
+	if epoch != 0 && (epoch == t.busyEpoch || t.unsettled[unsettledKey{"busy", epoch}]) {
 		return
 	}
-	t.busyEpoch = epoch
-	s.bestEffort(ctx, tx, t.run, "busy", func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE run_resumes SET busy_at = clock_timestamp()
-			WHERE run_id = $1 AND busy_at IS NULL AND `+latestResume, t.run.ID, epoch)
-		return err
-	})
+	if _, _, settled := t.stamp(ctx, tx, s, "busy_at", epoch); settled {
+		t.busyEpoch = epoch
+	} else {
+		t.unsettle("busy", epoch)
+	}
 }
 
 // resumeOutput records the agent's first output after a resume; its
 // timing is written once the batch commits, its placements read again
-// first if lux had not reported all of them.
+// first if lux had not reported all of them. Looked for once per settled
+// epoch, at most once a batch before.
 func (t *translator) resumeOutput(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
-	if epoch == t.outputEpoch {
+	if epoch == t.outputEpoch || t.unsettled[unsettledKey{"output", epoch}] {
 		return
 	}
-	t.outputEpoch = epoch
-	s.bestEffort(ctx, tx, t.run, "first output", func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE run_resumes SET first_output_at = clock_timestamp()
-			WHERE run_id = $1 AND first_output_at IS NULL AND `+latestResume+`
-			RETURNING epoch, assigned_at IS NULL OR image_ready_at IS NULL OR volumes_restored_at IS NULL
-				OR container_started_at IS NULL OR workload_started_at IS NULL OR host_name IS NULL`, t.run.ID, epoch)
-		if err != nil {
-			return err
-		}
-		got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-			Epoch   int
-			Missing bool
-		}])
-		for _, g := range got {
-			t.afterBatch(g.Epoch, g.Missing)
-		}
-		return err
-	})
+	e, missing, settled := t.stamp(ctx, tx, s, "first_output_at", epoch)
+	if e != nil {
+		t.afterBatch(*e, missing)
+	}
+	if settled {
+		t.outputEpoch = epoch
+	} else {
+		t.unsettle("output", epoch)
+	}
+}
+
+// unsettledKey is a stamp looked for in this batch on an epoch not
+// settled yet.
+type unsettledKey struct {
+	what  string
+	epoch int
+}
+
+func (t *translator) unsettle(what string, epoch int) {
+	if t.unsettled == nil {
+		t.unsettled = map[unsettledKey]bool{}
+	}
+	t.unsettled[unsettledKey{what, epoch}] = true
 }
 
 // afterBatch notes a resume to follow up once the batch commits: its

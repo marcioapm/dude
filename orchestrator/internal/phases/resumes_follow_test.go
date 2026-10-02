@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -161,6 +162,174 @@ func TestALockedResumeRowDoesNotHoldUpTheRunsStream(t *testing.T) {
 	if w.row(2)["first_output_at"] == nil {
 		t.Errorf("the later batch's first output was not recorded")
 	}
+}
+
+// lux streams a resumed placement's first frames before its answer to the
+// resume is back: dude's resume has the row in before it asks, so they
+// are timed.
+func TestFramesStreamedBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	st := w.following()
+	eager := &eagerLux{streamLux: st, w: w}
+	w.s.Lux = eager
+	if _, _, err := w.s.resume(w.ctx, w.run, ""); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	row := w.row(2)
+	for _, col := range []string{"requested_at", "running_at", "busy_at", "first_output_at"} {
+		if row[col] == nil {
+			t.Errorf("%s not recorded from frames lux streamed before its answer", col)
+		}
+	}
+}
+
+// eagerLux streams the resumed placement's session, busy and first words,
+// and has them committed, before it answers the resume.
+type eagerLux struct {
+	*streamLux
+	w *resumeWorld
+}
+
+func (f *eagerLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+	f.frames <- cursorFrame(busy(2), "e1")
+	f.w.committed("e1", 5*time.Second)
+	f.frames <- cursorFrame(spoke(2), "e2")
+	f.w.committed("e2", 5*time.Second)
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 2}, nil
+}
+
+// The resume's row is in before lux is asked, so the new placement's
+// first frames, streamed before lux's answer is back, are timed.
+func TestFramesBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.lux.set(runningAgain(base, "host-a"), nil)
+	// The agent's session was established on epoch 1.
+	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	st := w.following()
+	w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base))
+	asked := w.row(2)["requested_at"]
+	if asked == nil {
+		t.Fatal("no requested_at once lux was asked")
+	}
+	// lux's answer is not in yet: the Run is still paused.
+	st.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+	st.frames <- cursorFrame(busy(2), "c1")
+	w.committed("c1", 5*time.Second)
+	st.frames <- cursorFrame(spoke(2), "c2")
+	w.committed("c2", 5*time.Second)
+	w.resumeAnswered(stoppedOnHost1(base), lux.Run{})
+	row := w.row(2)
+	for _, col := range []string{"running_at", "busy_at", "first_output_at"} {
+		if row[col] == nil {
+			t.Errorf("%s not recorded from a frame lux streamed before its answer", col)
+		}
+	}
+	if !row["requested_at"].(time.Time).Before(row["running_at"].(time.Time)) {
+		t.Errorf("requested_at %v is not before running_at %v", row["requested_at"], row["running_at"])
+	}
+}
+
+// lux resuming into another epoch than dude foresaw: the row moves to
+// lux's epoch, and the frames of that epoch streamed before it moved do
+// not keep the later ones from being timed.
+func TestAResumeIntoAnotherEpochIsTimedOnceItsRowMoves(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	st := w.following()
+	foreseen := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base))
+	if foreseen != 2 {
+		t.Fatalf("foreseen epoch %d, want 2", foreseen)
+	}
+	// Epoch 3's first frames, while the row is still under epoch 2.
+	st.frames <- cursorFrame(busy(3), "c1")
+	st.frames <- cursorFrame(spoke(3), "c1b")
+	w.committed("c1b", 5*time.Second)
+	w.resumeAnswered(stoppedOnHost1(base), lux.Run{Epoch: 3, State: "resuming"})
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1 AND epoch = 2`); n != 0 {
+		t.Errorf("the row stayed under the foreseen epoch")
+	}
+	st.frames <- cursorFrame(busy(3), "c2")
+	st.frames <- cursorFrame(spoke(3), "c3")
+	w.committed("c3", 5*time.Second)
+	row := w.row(3)
+	if row["busy_at"] == nil || row["first_output_at"] == nil {
+		t.Errorf("epoch 3's later frames were not timed: busy %v, first output %v", row["busy_at"], row["first_output_at"])
+	}
+}
+
+// A resume lux refuses for good leaves no row, and the Run fails; one it
+// may take later keeps its row, with the attempt it takes as
+// requested_at.
+func TestARefusedResumeLeavesNoRowAndARetriedOneIsTimedFromTheAttemptLuxTook(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resumable()
+	refusing := &refusingLux{placementLux: w.lux, err: &lux.Error{Status: 503, Code: "unavailable"}}
+	w.s.Lux = refusing
+	w.lux.set(stoppedOnHost1(base), nil)
+	r := w.run
+	r.Resumable = true
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	first := w.row(2)["requested_at"].(time.Time)
+	time.Sleep(20 * time.Millisecond)
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if again := w.row(2)["requested_at"].(time.Time); !again.After(first) {
+		t.Errorf("a retry after lux kept the Run stopped left requested_at at the first attempt: %v", again)
+	}
+
+	refusing.err = &lux.Error{Status: 400, Code: "invalid", Message: "no"}
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 0 {
+		t.Errorf("%d rows for a resume lux refused for good", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`); n != 1 {
+		t.Errorf("the Run lux refused to resume did not fail")
+	}
+}
+
+// resumable makes w's Run one whilePaused resumes: a model to build its
+// spec, and no forge.
+func (w *resumeWorld) resumable() {
+	w.t.Helper()
+	if _, err := w.owner.Exec(w.ctx, `UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb
+		WHERE id = $1`, w.run.ProjectID); err != nil {
+		w.t.Fatal(err)
+	}
+	w.s.Forges = forge.Resolver{DB: w.s.DB}
+}
+
+// refusingLux refuses every resume with err.
+type refusingLux struct {
+	*placementLux
+	err error
+}
+
+func (f *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) { return lux.Run{}, f.err }
+func (f *refusingLux) Cancel(context.Context, string) error                              { return nil }
+
+func (w *resumeWorld) count(sql string) int {
+	w.t.Helper()
+	var n int
+	if err := w.owner.QueryRow(w.ctx, sql, w.run.ID).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
 }
 
 // A timing statement waiting on a lock while the Run's batch has a short

@@ -1016,7 +1016,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if !r.HasDirectives && !r.Waiting {
 		nudge = resumeNudge
 	}
-	lr, before, err := s.resume(ctx, r, nudge)
+	lr, foreseen, err := s.resume(ctx, r, nudge)
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
 	if errors.As(err, &noLogin) {
@@ -1035,6 +1035,10 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		lr.State = "resuming"
 	}
 	if err != nil {
+		if le, ok := lux.AsError(err); ok && !le.Retryable() && foreseen != 0 {
+			// Refused for good: there is no such resume to time.
+			s.resumeRefused(ctx, r, foreseen)
+		}
 		return true, s.retryOrFail(ctx, r, err, "lux refused to resume the run")
 	}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -1043,9 +1047,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// the stream to report it running. A resumed lux Run's cost is no
 		// longer final, so it goes back on the cost work list; the stored
 		// amounts stand until the next read replaces them.
-		// Timed from here (resumes.go); first, while control_requested_at
-		// still says when a person's Resume made it due.
-		s.recordResume(ctx, tx, r, before)
+		s.resumeAccepted(ctx, tx, r, foreseen, lr)
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
 			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
@@ -1088,30 +1090,32 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 // resume is the one call to lux's resume. lux keeps no secret (every resume
 // supplies all of them again, lux internal/server/api.go resumeRun), so
 // the secrets come from s.spec, fresh: a Run parked for a day needs a new
-// registry login and forge token, not the ones it started with. Also
-// returns the Run as lux reported it just before, for the resume's timing.
-func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run, lux.Run, error) {
+// registry login and forge token, not the ones it started with. Its
+// timing's row is in before lux is asked (resumeAsked); foreseen is the
+// epoch it is under, 0 when lux was not asked.
+func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed lux.Run, foreseen int, err error) {
 	// lux's copy says whether the Run was started with a login, whatever
 	// this orchestrator is configured with now (the runs row does not
 	// record it), and the image lux stored at submit is the one it pulls.
 	lr, err := s.Lux.Get(ctx, r.LuxRunID)
 	if err != nil {
-		return lux.Run{}, lux.Run{}, err
+		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
 	spec, _, err := s.spec(ctx, r, &lr.Spec)
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
-		return lux.Run{}, lr, err
+		return lux.Run{}, 0, err
 	}
 	if err != nil {
-		return lux.Run{}, lr, errCannotResume{err}
+		return lux.Run{}, 0, errCannotResume{err}
 	}
 	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
 	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
-		return lux.Run{}, lr, err
+		return lux.Run{}, 0, err
 	}
-	resumed, err := s.Lux.Resume(ctx, r.LuxRunID, in)
-	return resumed, lr, err
+	foreseen = s.resumeAsked(ctx, r, lr)
+	resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	return resumed, foreseen, err
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
