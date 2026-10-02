@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ImageViewer, MarkdownImage } from "@dude/design-system";
-import { attachmentMarkdown, attachmentReferences } from "@dude/domain";
+import { attachmentReferences } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 
 /** A local stand-in id for an image held in the browser until its task exists. */
@@ -105,7 +105,9 @@ export const uploadingMarkdown = (name: string) => `![Uploading ${name.replace(/
 
 /**
  * The text with each reference to a local stand-in id rewritten to the
- * attachment it was uploaded as (`ids`); others are left as they are.
+ * attachment it was uploaded as (`ids`). Only the id changes: the alt as
+ * escaped, angle brackets and the title (the image's layout) stay byte for
+ * byte. Other references are left as they are.
  */
 export function withUploadedIds(text: string, ids: ReadonlyMap<string, string>): string {
   let out = "";
@@ -113,8 +115,16 @@ export function withUploadedIds(text: string, ids: ReadonlyMap<string, string>):
   for (const r of attachmentReferences(text)) {
     const real = ids.get(r.id);
     if (!real) continue;
-    out += text.slice(at, r.from) + attachmentMarkdown(r.alt, real);
-    at = r.to;
+    const idAt = r.from + urlStart(text.slice(r.from, r.to)) + "attachment:".length;
+    out += text.slice(at, idAt) + real;
+    at = idAt + r.id.length;
   }
   return out + text.slice(at);
+}
+
+/** Where `attachment:` starts in one reference: past the alt's closing `]`, which an escape never is. */
+function urlStart(span: string): number {
+  let i = 2;
+  while (span[i] !== "]") i += span[i] === "\\" ? 2 : 1;
+  return span.indexOf("attachment:", i);
 }
