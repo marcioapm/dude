@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
 // What one message — a steer, an answer, the task's prompt — may carry,
@@ -22,7 +24,8 @@ type AttachmentError struct{ Message string }
 
 func (e AttachmentError) Error() string { return e.Message }
 
-// AttachmentInfo is an attachment as events and the API carry it.
+// attachmentJSON (SQL, over attachments a) is an attachment as events and
+// the API carry it: the domain's AttachmentInfo.
 const attachmentJSON = `json_build_object('id', a.id, 'name', a.name, 'contentType', a.content_type,
 	'width', a.width, 'height', a.height, 'bytes', a.bytes,
 	'original', json_build_object('contentType', a.original_content_type, 'width', a.original_width,
@@ -48,15 +51,15 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		}
 		seen[id] = true
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id, a.task_id, a.attached_at IS NOT NULL, a.bytes FROM attachments a
+	rows, err := tx.Query(ctx, `SELECT a.id, a.task_id, a.attached_at IS NOT NULL, a.for_prompt, a.bytes FROM attachments a
 		WHERE a.id = ANY($1) FOR UPDATE`, ids)
 	if err != nil {
 		return nil, err
 	}
 	type row struct {
-		ID, TaskID string
-		Sent       bool
-		Bytes      int64
+		ID, TaskID      string
+		Sent, ForPrompt bool
+		Bytes           int64
 	}
 	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
 	if err != nil {
@@ -70,7 +73,9 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		if i < 0 || found[i].TaskID != taskID {
 			return nil, AttachmentError{fmt.Sprintf("image %s is not one of this task's", id)}
 		}
-		if found[i].Sent {
+		// Given with the prompt already: a delivery asked again (its first
+		// start failed) names it again.
+		if found[i].Sent && !(directiveID == "" && found[i].ForPrompt) {
 			return nil, AttachmentError{fmt.Sprintf("image %s was already sent", id)}
 		}
 		total += found[i].Bytes
@@ -82,20 +87,13 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 	for pos, id := range ids {
 		var info json.RawMessage
 		if err := tx.QueryRow(ctx, `UPDATE attachments a SET directive_id = $2, for_prompt = $2::text IS NULL,
-			position = $3, attached_at = now() WHERE a.id = $1 RETURNING `+attachmentJSON,
-			id, nullable(directiveID), pos).Scan(&info); err != nil {
+			position = $3, attached_at = COALESCE(a.attached_at, now()) WHERE a.id = $1 RETURNING `+attachmentJSON,
+			id, db.Nullable(directiveID), pos).Scan(&info); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
 	}
 	return out, nil
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 // SentAttachment is one image as it is sent to the agent: its name, type
@@ -126,15 +124,19 @@ func DirectiveAttachments(ctx context.Context, tx pgx.Tx, directiveID string) ([
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[SentAttachment])
 }
 
-// PromptAttachments are the images given with the task's prompt, for its
-// first agent Run only: later phases are told what was decided, not shown
-// the pictures again.
+// promptAttachments selects (SQL, $1 a Run id, then columns) the images
+// given with the Run's task's prompt, when the Run's prompt is the task
+// ($2: TaskPromptPhases).
+const promptAttachments = `FROM runs r JOIN attachments a ON a.task_id = r.task_id AND a.for_prompt
+	WHERE r.id = $1 AND r.kind = 'agent' AND r.phase::text = ANY($2)
+	ORDER BY a.position`
+
+// PromptAttachments are the images given with the task's prompt, for a
+// Run whose prompt is the task (TaskPromptPhases): its first Run and any
+// retry of it. Phases told about the work done are not shown them again.
 func PromptAttachments(ctx context.Context, tx pgx.Tx, runID string) ([]SentAttachment, error) {
-	rows, err := tx.Query(ctx, `SELECT a.name, a.content_type, a.object_key, a.bytes
-		FROM runs r JOIN attachments a ON a.task_id = r.task_id AND a.for_prompt
-		WHERE r.id = $1 AND NOT EXISTS (SELECT 1 FROM runs o WHERE o.task_id = r.task_id AND o.kind = 'agent'
-		  AND o.id <> r.id AND (o.created_at, o.id) < (r.created_at, r.id))
-		ORDER BY a.position`, runID)
+	rows, err := tx.Query(ctx, `SELECT a.name, a.content_type, a.object_key, a.bytes `+promptAttachments,
+		runID, TaskPromptPhases)
 	if err != nil {
 		return nil, err
 	}
@@ -144,11 +146,7 @@ func PromptAttachments(ctx context.Context, tx pgx.Tx, runID string) ([]SentAtta
 // PromptAttachmentInfo is the metadata of the images the Run was given
 // with its prompt (PromptAttachments), for the transcript's prompt turn.
 func PromptAttachmentInfo(ctx context.Context, tx pgx.Tx, runID string) ([]json.RawMessage, error) {
-	rows, err := tx.Query(ctx, `SELECT `+attachmentJSON+`
-		FROM runs r JOIN attachments a ON a.task_id = r.task_id AND a.for_prompt
-		WHERE r.id = $1 AND NOT EXISTS (SELECT 1 FROM runs o WHERE o.task_id = r.task_id AND o.kind = 'agent'
-		  AND o.id <> r.id AND (o.created_at, o.id) < (r.created_at, r.id))
-		ORDER BY a.position`, runID)
+	rows, err := tx.Query(ctx, `SELECT `+attachmentJSON+` `+promptAttachments, runID, TaskPromptPhases)
 	if err != nil {
 		return nil, err
 	}

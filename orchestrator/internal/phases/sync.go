@@ -358,7 +358,8 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
-	// The images given with the task's prompt, for its first agent.
+	// The images given with the task's prompt, when this Run's prompt is
+	// the task (delivery.TaskPromptPhases).
 	var sent []delivery.SentAttachment
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error

@@ -253,7 +253,8 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	var body struct {
 		Policy  json.RawMessage `json:"policy"`
 		ActorID string          `json:"actorId"`
-		// Images given with the task's prompt: its first agent sees them.
+		// Images given with the task's prompt: every Run given the task as
+		// its prompt sees them (delivery.TaskPromptPhases).
 		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
