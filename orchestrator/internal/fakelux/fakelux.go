@@ -118,6 +118,8 @@ type Run struct {
 	// sent (every field of each descriptor).
 	ResumeSecrets    [][]lux.Secret
 	ResumeSecretsRaw []json.RawMessage
+	// The input text each accepted resume carried, in order: "" for none.
+	ResumeInputs []string
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
 	// What was asked of it, in order: "exec", "stop", "cancel".
@@ -495,6 +497,26 @@ func (s *Server) CallsOf(id string) []string {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		return slices.Clone(run.Calls)
+	}
+	return nil
+}
+
+// ResumeInputs is the input text each accepted resume of a Run carried.
+func (s *Server) ResumeInputs(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.ResumeInputs)
+	}
+	return nil
+}
+
+// InputBodies is each body POSTed to a Run's /input with requestID.
+func (s *Server) InputBodies(id, requestID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.InputBodies[requestID])
 	}
 	return nil
 }
@@ -1610,6 +1632,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.pendingSync = in.Sync
 	run.Calls = append(run.Calls, "resume")
 	run.Epoch++
+	resumeInput := ""
+	if in.Input != nil {
+		resumeInput = in.Input.Text
+	}
+	run.ResumeInputs = append(run.ResumeInputs, resumeInput)
 	if in.Input != nil {
 		// Delivered once the agent is back, as lux does: it is the input the
 		// resumed agent was waiting for.

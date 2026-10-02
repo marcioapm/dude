@@ -340,9 +340,11 @@ func TestASupersedingSteerWithNewWordsCarriesNoImages(t *testing.T) {
 	}
 }
 
-// A steer with an image queued while the Run is paused waits — /resume
-// carries no images — and goes through /input once the Run runs again.
-func TestAnImageSteerQueuedWhilePausedIsDeliveredAfterResume(t *testing.T) {
+// A steer with an image is not sent while the Run is paused or still
+// resuming (lux_state "resuming"), and goes through /input once it runs.
+// The whole pause → steer → resume path through the API is the root
+// package's TestAnImageSteerToAPausedRunGoesAfterTheResume.
+func TestAnImageSteerWaitsWhileTheRunIsPausedOrResuming(t *testing.T) {
 	w := newImageWorld(t, "acp")
 	w.steer("dir_paused", "", "att_b")
 	paused := w.run
