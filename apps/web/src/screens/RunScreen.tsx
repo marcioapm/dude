@@ -387,8 +387,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   // The terminal, while the Run is running: in the rail, and in the header
   // only where the rail is not (a narrow session, or a view other than the
-  // conversation), so it is always one click away and never shown twice.
-  const terminal = run.status === "running" ? terminalUrl : null;
+  // conversation), so it is always one click away and never shown twice. A
+  // set-aside session offers none: a shell there could push to its branch.
+  const terminal = run.status === "running" && !readOnly ? terminalUrl : null;
   // A branch preview has no agent to pause or abort: only its terminal.
   const actions = isLive && !readOnly ? (
     <>
