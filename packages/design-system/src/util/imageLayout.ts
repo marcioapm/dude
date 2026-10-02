@@ -12,6 +12,7 @@
  */
 
 import { attachmentReferences } from "@dude/domain";
+import { criteriaLines, type CriteriaItem } from "./criteria.ts";
 import { parseMarkdown } from "./markdown.ts";
 
 export type ImageSize = "small" | "medium" | "full" | number;
@@ -119,34 +120,26 @@ function blockStarts(text: string): number[] {
   return lines;
 }
 
-const MARKER = /^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)/;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /**
- * The criteria's items, as `criteria.ts` reads them: a list marker short of
- * the current item's content column starts the next; `last` is the item's
- * last non-blank line, `column` where a continuation line is indented to.
+ * The criteria's items as `criteriaLines` reads them (the rule the saved
+ * criteria follow), one per drawn `li`: `last` is the item's last non-blank
+ * line, `column` where a continuation line is indented to.
  */
-export function criteriaItems(text: string): Array<{ first: number; last: number; column: number }> {
-  const out: Array<{ first: number; last: number; column: number }> = [];
-  let fence: string | null = null;
-  text.split("\n").forEach((line, i) => {
-    const cur = out[out.length - 1];
-    const f = FENCE.exec(line)?.[1];
-    if (fence !== null) {
-      if (f && f[0] === fence[0] && f.length >= fence.length && line.trim() === f) fence = null;
-      if (cur) cur.last = i;
-      return;
-    }
-    if (f) fence = f;
-    if (blank(line)) return;
-    const m = MARKER.exec(line);
-    const indent = m ? m[1]!.replace(/\t/g, "    ").length : 0;
-    if (m && !f && indent <= 3 && (!cur || indent < Math.min(cur.column, 4))) {
-      out.push({ first: i, last: i, column: indent + m[2]!.length + 1 });
-    } else if (cur) cur.last = i;
-  });
-  return out;
+export function criteriaItems(text: string): CriteriaItem[] {
+  return [...criteriaLines(text).items];
+}
+
+/**
+ * The item's last line an image can follow: its last non-blank line, or,
+ * when a fence opened in it runs to its end, the last one before that fence
+ * (after it, the image would be code).
+ */
+function itemEnd(item: CriteriaItem, lines: readonly string[]): number {
+  if (item.fenceLine === null) return item.last;
+  let at = item.fenceLine - 1;
+  while (at > item.first && blank(lines[at])) at--;
+  return Math.max(item.first, at);
 }
 
 export type FieldKind = "goal" | "criteria";
@@ -192,7 +185,7 @@ export function insertReference(text: string, ref: string, slot: number, kind: F
       const joined = lines.join("\n");
       return { text: joined, at: joined.length - ref.length };
     }
-    at = item.last + 1;
+    at = itemEnd(item, lines) + 1;
     lines.splice(at, 0, " ".repeat(item.column) + ref);
   }
   const joined = lines.join("\n");
@@ -218,8 +211,9 @@ function placeOf(text: string, n: number, kind: FieldKind): { slot: number; own:
   let i = 0;
   while (i + 1 < items.length && items[i + 1]!.first <= line) i++;
   const lines = text.split("\n");
-  const itemEnd = lines.slice(0, (items[i]?.last ?? 0) + 1).join("\n").length;
-  return { slot: i, own: text.slice(r.to, itemEnd).trim() === "" };
+  const item = items[i];
+  const end = lines.slice(0, (item ? itemEnd(item, lines) : 0) + 1).join("\n").length;
+  return { slot: i, own: text.slice(r.to, end).trim() === "" };
 }
 
 /** The reference's index in `text` at offset `at`. */
