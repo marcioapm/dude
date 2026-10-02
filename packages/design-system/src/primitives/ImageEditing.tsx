@@ -97,12 +97,13 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     for (const [k, f] of fields) if (k !== key) f.select(null);
   }, [selected, key]);
 
-  // Esc deselects before the dialog sees it (Radix listens on the document,
-  // in capture); a press outside the selected image deselects too.
+  // Esc inside this preview panel deselects before the dialog sees it (Radix
+  // listens on the document, in capture); Esc anywhere else is left alone.
+  // A press outside the selected image deselects too.
   useEffect(() => {
     if (selected === null) return;
     const esc = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || !(e.target instanceof Node && preview.current?.contains(e.target))) return;
       e.stopPropagation();
       e.preventDefault();
       setSelected(null);
@@ -118,7 +119,7 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
       window.removeEventListener("keydown", esc, true);
       document.removeEventListener("pointerdown", outside, true);
     };
-  }, [selected, key]);
+  }, [selected, key, preview]);
 
   // A move remounts the figure, which drops focus to the body: the moved
   // figure takes it back when focus was in this panel, or the move was a drop.
@@ -230,7 +231,7 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
 
   const frame = on && kind ? (f: AttachmentFrameProps) => (
     <EditableImage key={`${f.n}:${f.id}`} {...f} fieldKey={key} selected={selected === f.n}
-      onSelect={() => setSelected(f.n)} onLayout={(l) => relayout(f.n, l)} onMove={(d) => move(f.n, d)} onRemove={() => remove(f.n)}
+      onSelect={() => setSelected(f.n)} onDeselect={() => setSelected(null)} onLayout={(l) => relayout(f.n, l)} onMove={(d) => move(f.n, d)} onRemove={() => remove(f.n)}
       canMove={(d) => moveReference(text(), f.n, d, kind) !== null} takeFocus={takeFocus} />
   ) : undefined;
 
@@ -255,10 +256,11 @@ function sizeName(size: ImageSize): string {
   return size === "full" ? "Full" : size === "small" ? "Small" : size === "medium" ? "Medium" : `${size} px`;
 }
 
-function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onLayout, onMove, onRemove, canMove, takeFocus }: AttachmentFrameProps & {
+function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onDeselect, onLayout, onMove, onRemove, canMove, takeFocus }: AttachmentFrameProps & {
   fieldKey: string;
   selected: boolean;
   onSelect: () => void;
+  onDeselect: () => void;
   onLayout: (l: ImageLayout) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
@@ -389,7 +391,11 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
             <Tool icon="arrow-up" label="Move up" shortcut={["Alt", "↑"]} disabled={!canMove(-1)} onClick={() => onMove(-1)} />
             <Tool icon="arrow-down" label="Move down" shortcut={["Alt", "↓"]} disabled={!canMove(1)} onClick={() => onMove(1)} />
             <span className={styles["sep"]} aria-hidden />
-            <Tool icon="external" label="Open" onClick={open} />
+            <Tool icon="external" label="Open" onClick={() => {
+              open();
+              // The viewer takes the next Esc, not this selection.
+              onDeselect();
+            }} />
             <Tool icon="close" label="Remove" shortcut="Del" onClick={onRemove} />
           </span>
           <span className={cx(styles["handle"], styles["handleLeft"])} onPointerDown={startResize(-1)} draggable={false} aria-hidden data-testid="image-resize-left" />

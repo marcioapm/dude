@@ -27,11 +27,11 @@ class EpicsClient extends FixtureClient {
   }
 }
 
-async function open(existing?: ExistingTask, client: FixtureClient = new EpicsClient("a")) {
+async function open(existing?: ExistingTask, client: FixtureClient = new EpicsClient("a"), onClose: () => void = () => {}) {
   const { unmount } = await mount(
     <TooltipProvider>
       <ToastProvider>
-        <TaskDialog client={client} projectId={PROJECT.id} existing={existing} onClose={() => {}} onSaved={() => {}} />
+        <TaskDialog client={client} projectId={PROJECT.id} existing={existing} onClose={onClose} onSaved={() => {}} />
       </ToastProvider>
     </TooltipProvider>,
   );
@@ -258,6 +258,38 @@ describe("laying out a task's images in Preview", () => {
     expect(parsed.items).toEqual(["One", `Two\n${IMG}`, "Three"]);
     expect(parsed.stray).toBe(false);
     expect(document.querySelector("[data-testid=task-criteria-count]")!.textContent).toBe("3 criteria");
+  });
+
+  test("Esc on a selected image deselects it, and the dialog stays open", async () => {
+    let closed = 0;
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`), new EpicsClient("a"), () => closed++);
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    expect(document.querySelector("[data-image-toolbar]")).not.toBeNull();
+    await act(async () => void figure("task-goal")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
+    expect(closed).toBe(0);
+    expect(document.querySelector("[role=alertdialog]")).toBeNull();
+    expect(document.querySelector("[data-testid=task-goal]")).not.toBeNull();
+  });
+
+  test("Open shows the viewer, and one Esc closes it", async () => {
+    let closed = 0;
+    class WithImage extends EpicsClient {
+      override attachment(): Promise<Blob> {
+        return Promise.resolve(new Blob([PNG], { type: "image/png" }));
+      }
+    }
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`), new WithImage("a"), () => closed++);
+    await preview("task-goal");
+    await until(() => figure("task-goal")?.querySelector("[data-testid=markdown-image]"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Open");
+    const viewer = await until(() => document.querySelector<HTMLElement>("[data-testid=image-viewer]"), "the viewer");
+    await act(async () => void (document.activeElement ?? viewer).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await until(() => !document.querySelector("[data-testid=image-viewer]"), "the viewer closed");
+    expect(closed).toBe(0);
   });
 
   test("while delivery runs: no toolbar, no handles, and a click does not select", async () => {

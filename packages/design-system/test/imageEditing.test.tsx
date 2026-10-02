@@ -132,9 +132,14 @@ test("keys: Alt+↑ moves, Delete removes, Esc deselects; Open opens the viewer"
   await f.select("goal");
   await f.press("Open");
   expect(f.opened).toEqual(["att_a"]);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
   await f.key(f.figure("goal")!, "ArrowUp", { altKey: true });
   expect(f.value("goal")).toBe(`${A}\n\nOne.\n\nTwo.`);
-  await f.key(window as unknown as Element, "Escape");
+  await f.select("goal");
+  // Esc from outside the panel is not this field's.
+  await f.key(document.body, "Escape");
+  expect(f.container.querySelector("[data-image-toolbar]")).not.toBeNull();
+  await f.key(f.figure("goal")!, "Escape");
   expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
   await f.select("goal");
   await f.key(f.figure("goal")!, "Delete");
