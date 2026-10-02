@@ -53,6 +53,7 @@ import { errorText, useSave } from "../hooks/useSave.tsx";
 import { deliveryPatch, deliveryValues, effortLabel, TIME_LIMITS, timeLimitLabel } from "../settings.ts";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { INHERIT_TIER, tierOption } from "./ModelsSettings.tsx";
+import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
 
 /** Where these settings are: an organization's, or a project's over it. */
 export interface SettingsScope {
@@ -85,7 +86,7 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 
 const NONE = "__none__";
 
-export function RolePage({ scope, role, sizes, tiers, tiersProblem, onOpenRun, onManageSizes, onManageTiers }: {
+export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOpenRun, onManageSizes, onManageTiers, onManageImages }: {
   scope: SettingsScope;
   role: SettingsRole;
   /** The organisation's sizes, as the settings screen loaded them; null while loading. */
@@ -94,11 +95,15 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, onOpenRun, o
   tiers: readonly ModelTier[] | null;
   /** Why the tiers could not be loaded. */
   tiersProblem?: string | null | undefined;
+  /** The organisation's images, as the settings screen loaded them. */
+  images?: ImageChoices | undefined;
   onOpenRun?: ((runId: string) => void) | undefined;
   /** Open the organisation's Machines page (its admins). */
   onManageSizes?: (() => void) | undefined;
   /** Open the organisation's Models page (its admins). */
   onManageTiers?: (() => void) | undefined;
+  /** Open the organisation's Images page (its admins). */
+  onManageImages?: (() => void) | undefined;
 }) {
   const { settings } = scope;
   const r = settings.roles[role];
@@ -163,8 +168,9 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, onOpenRun, o
         </SettingField>
         <MachineField scope={scope} role={role} sizes={sizes} onManageSizes={onManageSizes} />
       </SettingFields>
+      {images ? <RoleImageField scope={scope} role={role} images={images} onManageImages={onManageImages} /> : null}
       {role === "fixer" ? (
-        <SettingsNote icon="info">The fixer runs on the implementer’s tier, effort, time limit and machine unless you give it its own.</SettingsNote>
+        <SettingsNote icon="info">The fixer runs on the implementer’s tier, effort, time limit, machine and image unless you give it its own.</SettingsNote>
       ) : null}
       <PromptSection scope={scope} role={role} onHistory={() => setHistory(true)} />
       {history ? (
@@ -277,6 +283,39 @@ function MachineField({ scope, role, sizes, onManageSizes }: { scope: SettingsSc
         <Select aria-label="Machine" disabled options={[{ value: "loading", label: "Loading…" }]} value="loading" />
       )}
     </SettingField>
+  );
+}
+
+/**
+ * The image a role's sessions run in, over the project's image: a project
+ * stores only its override, naming none follows the organisation's (for
+ * the fixer, the implementer's), and none anywhere is the project's own
+ * runtime image, then the organisation's default base.
+ */
+function RoleImageField({ scope, role, images, onManageImages }: { scope: SettingsScope; role: SettingsRole; images: ImageChoices; onManageImages?: (() => void) | undefined }) {
+  const { settings } = scope;
+  const img = settings.roles[role].image;
+  const project = isProject(settings);
+  const orgName = settings.organization.name;
+  const fixer = role === "fixer";
+  const own = project ? (img.source === "project" ? img.value : null) : img.followsImplementer ? null : img.value;
+  const inherited = img.followsImplementer ? imageWords(images.images, img.value) : project ? imageWords(images.images, img.organization ?? null) : null;
+  const noneLabel = fixer && inherited ? `The implementer’s · ${inherited}` : inherited ? `From ${orgName} · ${inherited}` : "The project’s runtime image";
+  const set = (image: string | null, done: string) => void scope.patch({ roles: { [role]: { image } } }, done);
+  return (
+    <SettingsSection title="Image">
+      <SettingRow label={`${SETTINGS_ROLE_LABEL[role]}’s image`} help={project ? `${SETTINGS_ROLE_LABEL[role]}, on this project. Without one, ${orgName}’s choice for it.` : "What this role works in, over each project’s runtime image. Without one, the project’s."}
+        data-testid="role-image-row"
+        source={project ? (
+          <SettingSource source={img.source} from={orgName} inherited={img.source === "project" ? imageWords(images.images, img.organization ?? null) ?? "the project’s" : undefined}
+            onReset={settings.canEdit ? () => set(null, "Image reset") : undefined} />
+        ) : null}>
+        <ImageField testId="role-image" label={`${SETTINGS_ROLE_LABEL[role]}’s image`} images={images.images} value={own} orgName={orgName}
+          allowNone={fixer ? "The implementer’s" : project ? `From ${orgName}` : "The project’s runtime image"} noneLabel={noneLabel}
+          disabled={!settings.canEdit} onManage={onManageImages}
+          onChange={(id) => set(id, id ? "Image saved" : "Image reset")} />
+      </SettingRow>
+    </SettingsSection>
   );
 }
 

@@ -90,8 +90,13 @@ export function egressProblem(entry: string): string | null {
 
 /** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
 export const previewSettingsSchema = z.object({
-  /** null: the project's runtime image. */
+  /**
+   * An image typed by hand before the image library; kept only as stored:
+   * the API takes it as null (clear) or unchanged. imageId wins over it.
+   */
   image: z.string().trim().min(1).max(500).nullable().default(null),
+  /** The library image previews run in; null: the project's runtime image. */
+  imageId: z.string().min(1).max(100).nullable().default(null),
   /** Hosts (or addresses, CIDR ranges) a preview may reach; "*" for anywhere. */
   egress: z
     .array(z.string().trim().min(1).max(253).superRefine((e, ctx) => {

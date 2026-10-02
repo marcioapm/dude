@@ -32,6 +32,9 @@ export const ID_PREFIXES = {
   memory: "mem",
   machineSize: "msz",
   modelTier: "mtr",
+  image: "img",
+  imageVersion: "imv",
+  imageBuild: "imb",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

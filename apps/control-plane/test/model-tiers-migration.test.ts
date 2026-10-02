@@ -1,5 +1,5 @@
 /**
- * Migration 068, model tiers: organizations there before it get Thinker,
+ * Migration 069, model tiers: organizations there before it get Thinker,
  * Coder and Fast, each asking for the model most of its roles already
  * named; their roles name tiers instead of models; a project's override
  * keeps the model it named, on a tier that asks for it (one made for it
@@ -7,8 +7,8 @@
  * a model afterwards. Organizations made after it get the same three tiers,
  * naming no model yet. The database refuses a tier the API would.
  *
- * Applies the migrations before 068 to a database of its own, seeds
- * organizations and projects as they were, then applies 068.
+ * Applies the migrations before 069 to a database of its own, seeds
+ * organizations and projects as they were, then applies 069.
  *
  * Requires DATABASE_URL: a role that can create databases (the owner).
  */
@@ -49,7 +49,7 @@ beforeAll(async () => {
   const files = await listMigrationFiles();
   await db`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL, checksum text NOT NULL,
            applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const f of files.filter((f) => f.version < "068")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version < "069")) await db.unsafe(await f.contents());
 
   const organization = (id: string, name: string, models: unknown = {}) =>
     db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES (${id}, ${name}, ${name.toLowerCase()}, ${models}::jsonb)`;
@@ -83,7 +83,7 @@ beforeAll(async () => {
   // A project on the scripted agent, in an organization whose tiers ask for it.
   await project("prj_fake", "org_fake", { implementer: { model: "fake/scripted" } });
 
-  for (const f of files.filter((f) => f.version >= "068")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version >= "069")) await db.unsafe(await f.contents());
 }, 120_000);
 
 afterAll(async () => {

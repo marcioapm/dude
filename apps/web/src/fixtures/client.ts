@@ -93,7 +93,7 @@ export class FixtureClient extends ApiClient {
     this.#servers = serversFor(scenario);
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
-    this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
+    this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
     this.#task = taskFor(scenario);
     this.#events = eventsFor(scenario);
     const as = localStorage.getItem("dude.fixtures.run");
@@ -199,6 +199,14 @@ export class FixtureClient extends ApiClient {
   }
   override machineSizes() {
     return Promise.resolve({ sizes: MACHINE_SIZES, canEdit: true });
+  }
+  // The image library is empty in the fixtures: the real backend's browser
+  // tests show it full. Builds are off (no dude layer), as on a dude without one.
+  override imageChoices() {
+    return Promise.resolve({ images: [], defaultImageId: null });
+  }
+  override images() {
+    return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536, lastSeenAt: null, offline: false }, canEdit: true });
   }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });

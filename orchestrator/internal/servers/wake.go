@@ -98,8 +98,9 @@ type wakeRun struct {
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
 const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
-		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures
+		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures, image_build_id
 	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at, r.start_failures,
+			COALESCE(r.image_build_id, '') AS image_build_id,
 			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
 			t.status IN ('done', 'failed', 'aborted') AS task_ended,
 			r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories, ps.live, ps.idle,
@@ -164,7 +165,7 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 			var r wakeRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
 				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue,
-				&r.StartFailures)
+				&r.StartFailures, &r.ImageBuildID)
 		})
 		return err
 	}); err != nil {
@@ -747,9 +748,23 @@ func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 // submitWoken submits the preview's Run (a servers-only spec: its servers
 // are lux's own, attached) and attaches every server to it.
 func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
-	spec, branch, machine, err := p.spec(ctx, r.previewRun)
+	spec, branch, machine, got, err := p.spec(ctx, r.previewRun)
 	if phases.IsLoginUnavailable(err) {
 		return p.releaseWake(ctx, r, phases.LoginRetry)
+	}
+	// Its image not ready yet: the wake stays wanted, unclaimed, and is
+	// taken up again once the image is (lux answers the request that woke
+	// it "no answer" if that takes past its wake timeout; the next one
+	// finds it running).
+	if done, err := p.imageOutcome(ctx, r.previewRun, err, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET wake_claimed_at = NULL, next_attempt_at = now() + make_interval(secs => $2)
+			WHERE id = $1`, r.ID, phases.ImagePoll.Seconds())
+		return err
+	}); done {
+		if err != nil {
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+		}
+		return err
 	}
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
@@ -782,8 +797,8 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		// is a failed start; StartBefore 0 makes every event of it newer
 		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
+			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got)
 		return err
 	}); err != nil {
 		return err

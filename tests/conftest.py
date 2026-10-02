@@ -150,7 +150,6 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
-        runtimeImage="dude-runtime:test",
         agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")}),
         repositories=[
             {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}

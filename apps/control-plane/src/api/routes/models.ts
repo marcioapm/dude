@@ -2,7 +2,7 @@
  * Models: the organization's model tiers, the models its LLM proxy lists,
  * and a test message to one.
  *
- * Tiers are the organization's (model_tiers, migration 068); anyone in it
+ * Tiers are the organization's (model_tiers, migration 069); anyone in it
  * reads them, only its admins change them. Every agent role names one in
  * its settings (settings.ts); a tier names the model dude requests from the
  * proxy. What the proxy serves for it is the proxy's business: dude neither

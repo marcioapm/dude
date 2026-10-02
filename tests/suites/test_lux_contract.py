@@ -40,7 +40,7 @@ def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url})
     assert resp.status_code == 200, resp.text
     project = client.create_project(
-        name="On lux", slug=f"lux-{os.urandom(3).hex()}", runtimeImage=FAKE_IMAGE,
+        name="On lux", slug=f"lux-{os.urandom(3).hex()}",
         agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
         repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
     )

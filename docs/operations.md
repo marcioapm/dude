@@ -35,6 +35,7 @@ without the file, or without the word, does not support the feature.
 | Feature | What it promises |
 | --- | --- |
 | `validate` | `dude-orchestrator validate` and `dude-backend validate` exist ([Validating a configuration](#validating-a-configuration)). Check it first: an older `dude-orchestrator` ignores the argument and **starts the service**. |
+| `image-builder` | `bin/dude-image-builder` exists, migration 068 creates the `dude_builder` role it connects as, and the `[images]` and `[builder]` settings are known ([design](design/images.md)). Run the builder only for a release that declares it. It exits non-zero at start unless `podman info` reports the `cpu` and `memory` cgroup controllers for its user, and writes a heartbeat every 30 s that the Images page reads. |
 
 A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
 any registry lux's runners can pull from, pinned by digest
@@ -579,7 +580,7 @@ Run as the secrets `opencode_auth` and `opencode_config`
   refs to `opencode_auth` and `opencode_config`, answers 422
   `secrets_required` when they are not supplied, and the Run fails. Finish or
   cancel parked real-model Runs before upgrading, or accept that they fail.
-- Role models are tiers since migration 068, which made each organization's
+- Role models are tiers since migration 069, which made each organization's
   tiers from the models its roles named (see
   [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
 - A Run keeps the URL, model and effort it started with; only the key is
