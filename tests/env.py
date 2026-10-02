@@ -348,6 +348,8 @@ class TestEnvironment:
         `web_url` looks for it: vite's own default host is localhost, which
         on macOS resolves to ::1 first.
         """
+        # On 127.0.0.1, where web_url looks: vite's default, localhost, is
+        # only ::1 on macOS, so the app came up where nothing looked.
         self.web_proc = subprocess.Popen(
             ["bunx", "vite", "preview", "--host", "127.0.0.1"],
             cwd=REPO_ROOT / "apps" / "web",
