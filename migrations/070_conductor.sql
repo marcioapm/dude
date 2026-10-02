@@ -25,6 +25,10 @@ WHERE agent_models ? 'orchestrator';
 UPDATE events SET payload = jsonb_set(payload, '{role}', '"conductor"')
 WHERE payload->>'role' = 'orchestrator';
 
+-- 069's notes on what the tier upgrade changed name a role the Models page
+-- shows; it is the conductor now.
+UPDATE model_tier_upgrade_notes SET role = 'conductor' WHERE role = 'orchestrator';
+
 -- What dude briefs a conductor with: its first prompt, written when it is
 -- created and kept, since a resume rebuilds the rest of its spec.
 ALTER TABLE runs ADD COLUMN prompt text;
@@ -67,6 +71,8 @@ BEGIN
     COALESCE(default_agent_models->'conductor', '{}'::jsonb) || jsonb_build_object('machineSize', small))
   WHERE id = org AND NOT COALESCE(default_agent_models->'conductor' ? 'machineSize', false);
 END $$;
+-- Any organisation's: the trigger's and this migration's alone to call.
+REVOKE ALL ON FUNCTION seed_conductor_size(text) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION seed_machine_size() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
