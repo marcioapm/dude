@@ -5,7 +5,7 @@ needs.
 Pure checks with fixed cycles and a stubbed API; they need no environment
 and no lux:
 
-    uv run --project tests --directory tests pytest suites/test_measure_resume.py
+    uv run --directory tests pytest suites/test_measure_resume.py
 """
 import json
 
