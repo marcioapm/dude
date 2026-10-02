@@ -234,3 +234,91 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 		}
 	}
 }
+
+// A Run cancelled, or stopped, while lux is still starting it is placed no
+// further: no host assigned after it ended, no start stamped after its
+// exit, and it never runs.
+func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// when, in fifths of the start, the Run is ended
+		at  int
+		end func(client *lux.HTTPClient, id string) error
+	}{
+		{"cancelled before a host", 0, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
+		{"cancelled once placed", 2, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
+		{"resumed, then cancelled while resuming", -1, func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+			fake.StartAfter = 500 * time.Millisecond
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(srv.Close)
+			client := lux.New(srv.URL, "k")
+			run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
+				Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "k-"+c.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.at < 0 {
+				// Run, stopped, resumed; ended two fifths into the resume.
+				waitState(t, client, run.ID, "running")
+				if err := client.Stop(context.Background(), run.ID); err != nil {
+					t.Fatal(err)
+				}
+				waitState(t, client, run.ID, "stopped")
+				if _, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{}); err != nil {
+					t.Fatal(err)
+				}
+				c.at = 2
+			}
+			time.Sleep(time.Duration(c.at)*fake.StartAfter/5 + fake.StartAfter/10)
+			if err := c.end(client, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			ended, _ := client.Get(context.Background(), run.ID)
+			time.Sleep(fake.StartAfter + 100*time.Millisecond)
+			got, err := client.Get(context.Background(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != "cancelled" {
+				t.Errorf("state %s after the start delay, want cancelled", got.State)
+			}
+			if len(got.Placements) != len(ended.Placements) {
+				t.Fatalf("placements %d after it ended, %d when it did", len(got.Placements), len(ended.Placements))
+			}
+			for i, p := range got.Placements {
+				was := ended.Placements[i]
+				if !slices.Equal(stamps(p), stamps(was)) || p.State != was.State {
+					t.Errorf("placement %d moved on after the Run ended:\nwhen it ended %+v\nafter        %+v", p.Epoch, was, p)
+				}
+				if p.Epoch == ended.Epoch && p.WorkloadStartedAt != nil {
+					t.Errorf("placement %d started its workload", p.Epoch)
+				}
+			}
+		})
+	}
+}
+
+func waitState(t *testing.T, c *lux.HTTPClient, id, state string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if r, err := c.Get(context.Background(), id); err == nil && r.State == state {
+			return
+		}
+	}
+	t.Fatalf("the Run never got %s", state)
+}
+
+func stamps(p lux.Placement) []string {
+	var out []string
+	for _, t := range []*time.Time{p.AssignedAt, p.ImageReadyAt, p.VolumesRestoredAt, p.ContainerStartedAt, p.WorkloadStartedAt, p.ExitedAt} {
+		if t == nil {
+			out = append(out, "")
+		} else {
+			out = append(out, t.Format(time.RFC3339Nano))
+		}
+	}
+	return out
+}

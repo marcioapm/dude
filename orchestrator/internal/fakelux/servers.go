@@ -297,8 +297,9 @@ func (s *Server) Migrate(id string) {
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	epoch := run.Epoch
 	s.mu.Unlock()
-	go s.play(run, spec, true)
+	go s.play(run, epoch, spec, true)
 }
 
 // ServerStates is each of a Run's servers' state, by name.

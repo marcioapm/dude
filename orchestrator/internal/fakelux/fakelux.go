@@ -324,14 +324,20 @@ func (run *Run) currentPlacement() *placement {
 	return nil
 }
 
-// placing is lux starting the Run's next placement, over after: a host
+// placing is lux starting the Run's placement of epoch, over after: a host
 // assigned, its image ready, its volumes restored, its container started,
 // each a moment after the last, as a runner reports them. The workload
-// starts when the Run is running (setStateWith).
-func (s *Server) placing(run *Run, after time.Duration) {
+// starts when the Run is running (setStateWith). It stops, and says so
+// (false), once that start is over: the Run ended (cancelled, stopped)
+// or moved on to another epoch meanwhile.
+func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
 	step := after / 5
 	time.Sleep(step)
 	s.mu.Lock()
+	if !run.starting(epoch) {
+		s.mu.Unlock()
+		return false
+	}
 	p := run.currentPlacement()
 	if p == nil {
 		p = s.newPlacement(run)
@@ -340,11 +346,22 @@ func (s *Server) placing(run *Run, after time.Duration) {
 	for _, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ContainerStartedAt} {
 		time.Sleep(step)
 		s.mu.Lock()
+		if !run.starting(epoch) {
+			s.mu.Unlock()
+			return false
+		}
 		now := time.Now()
 		*stamp, p.State = &now, "starting"
 		s.mu.Unlock()
 	}
 	time.Sleep(step)
+	return true
+}
+
+// starting says the Run's start into epoch is still under way. Callers
+// hold s.mu.
+func (run *Run) starting(epoch int) bool {
+	return run.Epoch == epoch && !lux.Terminal(run.State)
 }
 
 // stopRequested stamps the current placement asked to stop. Callers hold
@@ -722,25 +739,27 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		s.byKey[k] = run.ID
 	}
 	s.mu.Unlock()
-	go s.play(run, spec, false)
+	go s.play(run, 1, spec, false)
 	writeJSON(w, 201, s.view(run))
 }
 
 // play is the agent's life: start, check out, take the task, work, go idle.
-func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
+func (s *Server) play(run *Run, epoch int, spec map[string]any, resumed bool) {
 	after := s.StartAfter
 	if after <= 0 {
 		after = 20 * time.Millisecond
 	}
-	s.placing(run, after)
+	if !s.placing(run, epoch, after) {
+		return // cancelled, stopped or moved on before it started
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !run.starting(epoch) {
+		return
+	}
 	if run.behavior.FailToStart {
 		s.setState(run, "failed")
 		return
-	}
-	if run.State == "cancelled" {
-		return // cancelled before it started
 	}
 	s.setState(run, "running")
 	if !resumed {
@@ -1611,8 +1630,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.setState(run, "resuming")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	epoch := run.Epoch
 	s.mu.Unlock()
-	go s.play(run, spec, true)
+	go s.play(run, epoch, spec, true)
 	writeJSON(w, 202, s.view(run))
 }
 
