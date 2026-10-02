@@ -7,6 +7,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { ModelTiersResponse, SettingsResponse } from "@dude/domain";
 import { act, click, mount, until } from "./dom.ts";
@@ -40,16 +41,19 @@ class TestingClient extends FixtureClient {
 
 const TIERS: ModelTiersResponse = { tiers: MODEL_TIERS, canEdit: true, upgrade: [] };
 
-async function page(client = new TestingClient("a"), tiers = TIERS) {
+/** Mounts a screen inside the providers the app gives it, unmounted after the test. */
+async function show(screen: ReactNode) {
   const { container, unmount } = await mount(
     <TooltipProvider>
-      <ToastProvider>
-        <ModelsPage client={client} orgName="Acme" tiers={tiers} problem={null} setTiers={() => {}} />
-      </ToastProvider>
+      <ToastProvider>{screen}</ToastProvider>
     </TooltipProvider>,
   );
   mounted.push(unmount);
   return container;
+}
+
+function page(client = new TestingClient("a"), tiers = TIERS) {
+  return show(<ModelsPage client={client} orgName="Acme" tiers={tiers} problem={null} setTiers={() => {}} />);
 }
 
 async function menuItem(container: HTMLElement, tier: string, label: string) {
@@ -176,17 +180,11 @@ describe("a role's tier", () => {
       return Promise.reject(new Error("the backend answered 503"));
     }
   }
-  async function projectRole(admin: boolean, client = new FixtureClient("a"), onOrganization: (page: string) => void = () => {}) {
-    const { container, unmount } = await mount(
-      <TooltipProvider>
-        <ToastProvider>
-          <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin={admin} page="reviewer"
-            onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={onOrganization} />
-        </ToastProvider>
-      </TooltipProvider>,
+  function projectRole(admin: boolean, client = new FixtureClient("a"), onOrganization: (page: string) => void = () => {}) {
+    return show(
+      <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin={admin} page="reviewer"
+        onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={onOrganization} />,
     );
-    mounted.push(unmount);
-    return container;
   }
   const openOptions = async (container: HTMLElement) => {
     await press(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=role-tier]"), "the Model select"));
@@ -226,15 +224,10 @@ describe("a role's tier", () => {
 
   async function organizationRole(me: Member, client: FixtureClient = new OrganizationClient("a")) {
     const pages: string[] = [];
-    const { container, unmount } = await mount(
-      <TooltipProvider>
-        <ToastProvider>
-          <OrganizationSettingsScreen client={client} me={me} people={PEOPLE} onPeopleChanged={() => {}} projects={[]}
-            page="reviewer" onPage={(p) => pages.push(p)} />
-        </ToastProvider>
-      </TooltipProvider>,
+    const container = await show(
+      <OrganizationSettingsScreen client={client} me={me} people={PEOPLE} onPeopleChanged={() => {}} projects={[]}
+        page="reviewer" onPage={(p) => pages.push(p)} />,
     );
-    mounted.push(unmount);
     return { container, pages };
   }
   const ADMIN = PEOPLE.find((p) => p.role === "admin")!;
