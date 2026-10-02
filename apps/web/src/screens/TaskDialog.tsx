@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { AttachDropZone, AttachmentChip, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, IconButton, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, attachmentWarning } from "@dude/design-system";
+import { AttachDropZone, AttachmentChip, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, attachmentWarning } from "@dude/design-system";
 import { TASK_CRITERIA_MAX, TASK_GOAL_MAX } from "@dude/domain";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
@@ -92,6 +92,21 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       current = false;
     };
   }, [client, projectId]);
+
+  // A file dropped on the backdrop, outside the dialog's zone, would have the browser open it and lose the draft.
+  useEffect(() => {
+    const keep = (e: DragEvent) => {
+      if (e.defaultPrevented || !Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+      e.preventDefault();
+      if (e.type === "dragover" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", keep);
+    window.addEventListener("drop", keep);
+    return () => {
+      window.removeEventListener("dragover", keep);
+      window.removeEventListener("drop", keep);
+    };
+  }, []);
 
   const locked = existing?.delivering ?? false;
   const repositories = choices?.repositories ?? [];
@@ -192,6 +207,13 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       }}
       // Over the task, the confirmation takes the key from the browser (a hard reload loses the draft) and does nothing.
       onConfirmKeyDown={(e) => isReadKey(e) && e.preventDefault()}
+      // The whole dialog takes a dropped or pasted image, wherever the person is writing.
+      wrapContent={existing ? undefined : (content) => (
+        <AttachDropZone className="taskDrop" onFiles={tray.add} takePaste disabledReason={tray.disabledReason}
+          detail="They go to the first agent with the task.">
+          {content}
+        </AttachDropZone>
+      )}
       footerStart={
         <>
           <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
@@ -269,42 +291,36 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
 
 /**
  * Images the first agent is given with the task: a design, a screenshot of
- * the bug. The composer's tray, outside a composer: the paperclip, paste
- * and drop, the same chips and the same rules.
+ * the bug. The composer's tray, outside a composer: the chips and the
+ * attach button. Paste and drop are the whole dialog's (`wrapContent`).
  */
 function PromptImages({ tray }: { tray: ImageTray }) {
   const [input, setInput] = useState<HTMLInputElement | null>(null);
   const off = tray.disabledReason !== undefined;
   return (
-    <AttachDropZone onFiles={tray.add} disabled={off} detail="They go to the first agent with the task.">
-      <Fieldset legend="Images" data-testid="task-images"
-        hint={tray.attachments.length > 0 ? "Given to the first agent with the task: use Create and deliver." : "A design or a screenshot for the first agent. Paste, drop or attach."}
-        onPaste={(e) => {
-          const files = Array.from(e.clipboardData?.files ?? []);
-          if (files.length === 0 || off) return;
-          e.preventDefault();
-          tray.add(files);
-        }}>
-        <div className="taskImages">
-          {tray.attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={tray.remove} />)}
-          <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits)} keepOnPress={off}>
-            <span>
-              <IconButton icon="paperclip" label={tray.disabledReason ?? "Attach images"} disabled={off} onClick={() => input?.click()}
-                data-testid="task-attach" />
-            </span>
-          </Tooltip>
-          <input ref={setInput} type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" data-testid="task-attach-input"
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              e.target.value = "";
-              if (files.length > 0) tray.add(files);
-            }} />
-        </div>
-        {tray.attachments.some((a) => a.state === "error") ? (
-          <Callout tone="attention">{attachmentWarning(tray.attachments)}</Callout>
-        ) : null}
-      </Fieldset>
-    </AttachDropZone>
+    <Fieldset legend="Images" data-testid="task-images"
+      hint={tray.attachments.length > 0 ? "Given to the first agent with the task: use Create and deliver." : "A design or a screenshot for the first agent. Paste, drop or attach."}>
+      <div className="taskImages">
+        {tray.attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={tray.remove} />)}
+        <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits)} keepOnPress={off}>
+          <span>
+            <Button variant="secondary" size="sm" leadingIcon="paperclip" disabled={off} onClick={() => input?.click()}
+              data-testid="task-attach">
+              Attach images
+            </Button>
+          </span>
+        </Tooltip>
+        <input ref={setInput} type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" data-testid="task-attach-input"
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = "";
+            if (files.length > 0) tray.add(files);
+          }} />
+      </div>
+      {tray.attachments.some((a) => a.state === "error") ? (
+        <Callout tone="attention">{attachmentWarning(tray.attachments)}</Callout>
+      ) : null}
+    </Fieldset>
   );
 }
 

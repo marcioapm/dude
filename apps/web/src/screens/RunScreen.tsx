@@ -400,6 +400,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   return (
     <div className="runScreen" data-view={view} data-testid="run-screen">
+      {/* The whole session takes a dropped image, header and rail included, on the conversation. */}
+      <AttachDropZone className="runDrop" onFiles={tray.add}
+        disabled={view !== "chat" || !composerOpen}
+        disabledReason={tray.disabledReason}
+        detail={<>They go with your next {conversation.openQuestion ? "answer" : "steer"} to <b>{runLabel(run)}</b>.{" "}
+          {conversation.openQuestion ? "It reads them with your answer." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
       <SessionHeader session={session} actions={actions} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
           focus; Changes draws its own controls into the slot after it. */}
@@ -431,10 +437,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           </div>
         ) : (
           <div className="runChat">
-            <AttachDropZone className="runDrop" onFiles={tray.add}
-              disabled={!composerOpen || tray.disabledReason !== undefined}
-              detail={<>They go with your next {conversation.openQuestion ? "answer" : "steer"} to <b>{runLabel(run)}</b>.{" "}
-                {conversation.openQuestion ? "It reads them with your answer." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
             <ChatTranscript
               fill
               live={isLive}
@@ -506,7 +508,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 />
               ) : null}
             </ChatTranscript>
-            </AttachDropZone>
             {viewing ? (
               <ImageViewer
                 images={viewing.turn.attachments.map(images.sent)}
@@ -546,6 +547,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           </div>
         )}
       </div>
+      </AttachDropZone>
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">

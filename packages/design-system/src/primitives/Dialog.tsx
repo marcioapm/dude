@@ -69,6 +69,12 @@ export interface DialogProps {
    * controlled dialog); call `preventDefault()` to place it yourself.
    */
   readonly onCloseAutoFocus?: ((event: Event) => void) | undefined;
+  /**
+   * Puts the header, the body and the footer inside an element of the app's
+   * (an `AttachDropZone` for the whole dialog). Give it `flex: 1` and a flex
+   * column, as the dialog lays them out.
+   */
+  readonly wrapContent?: ((content: ReactNode) => ReactNode) | undefined;
 }
 
 /**
@@ -102,6 +108,7 @@ export function Dialog({
   onEscapeKeyDown,
   onOpenAutoFocus,
   onCloseAutoFocus,
+  wrapContent,
 }: DialogProps) {
   // Radix returns focus only to its own Trigger; a dialog opened from a
   // menu item or a button elsewhere would leave it on <body>.
@@ -152,27 +159,8 @@ export function Dialog({
     </div>
   ) : null;
 
-  return (
-    <RadixDialog.Root {...compact({ open, defaultOpen, onOpenChange })}>
-      {trigger ? <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger> : null}
-      <RadixDialog.Portal>
-        <RadixDialog.Overlay className={styles["overlay"]} />
-        <RadixDialog.Content
-          className={cx(styles["content"], size !== "md" && styles[size], className)}
-          onOpenAutoFocus={(e) => {
-            opener.current = focusedElement();
-            onOpenAutoFocus?.(e);
-          }}
-          onCloseAutoFocus={closeAutoFocus(() => opener.current, onCloseAutoFocus)}
-          {...(onKeyDown ? { onKeyDown } : {})}
-          onEscapeKeyDown={(e) => {
-            onEscapeKeyDown?.(e);
-            if (e.defaultPrevented || !isReading || !onCloseReading) return;
-            // Reading is a view of the dialog, not a layer over it: Escape leaves it, and only it.
-            e.preventDefault();
-            onCloseReading();
-          }}
-        >
+  const content = (
+    <>
           <div className={styles["header"]}>
             {tone ? (
               <span
@@ -218,6 +206,31 @@ export function Dialog({
               {footer}
             </div>
           ) : null}
+    </>
+  );
+
+  return (
+    <RadixDialog.Root {...compact({ open, defaultOpen, onOpenChange })}>
+      {trigger ? <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger> : null}
+      <RadixDialog.Portal>
+        <RadixDialog.Overlay className={styles["overlay"]} />
+        <RadixDialog.Content
+          className={cx(styles["content"], size !== "md" && styles[size], className)}
+          onOpenAutoFocus={(e) => {
+            opener.current = focusedElement();
+            onOpenAutoFocus?.(e);
+          }}
+          onCloseAutoFocus={closeAutoFocus(() => opener.current, onCloseAutoFocus)}
+          {...(onKeyDown ? { onKeyDown } : {})}
+          onEscapeKeyDown={(e) => {
+            onEscapeKeyDown?.(e);
+            if (e.defaultPrevented || !isReading || !onCloseReading) return;
+            // Reading is a view of the dialog, not a layer over it: Escape leaves it, and only it.
+            e.preventDefault();
+            onCloseReading();
+          }}
+        >
+          {wrapContent ? wrapContent(content) : content}
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

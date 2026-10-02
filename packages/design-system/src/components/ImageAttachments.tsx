@@ -1,5 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent, type ReactNode, type RefObject } from "react";
 import { cx } from "../util/cx.ts";
 import { formatBytes } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
@@ -89,12 +89,20 @@ export function attachmentWarning(attachments: ReadonlyArray<ComposerAttachment>
 // -------------------------------------------------------------------------
 
 export interface AttachDropZoneProps {
-  /** Files dropped on it. */
+  /** Files dropped or pasted on it. */
   readonly onFiles: (files: File[]) => void;
-  /** Off: no overlay, nothing taken (no storage, a finished session). */
+  /** Off: no overlay, nothing taken, drags left to the browser (a finished session, another view). */
   readonly disabled?: boolean | undefined;
+  /**
+   * Why nothing can be attached ("Image storage isn't set up"). Unlike
+   * `disabled`, a file dragged over still shows the overlay, saying this,
+   * and its drop is swallowed so the browser does not open the file.
+   */
+  readonly disabledReason?: ReactNode;
   /** Who gets them and when: "They go with your next steer to Implement. It reads them after the current tool." */
   readonly detail?: ReactNode;
+  /** Also take images pasted anywhere inside it, unless a field already took them. */
+  readonly takePaste?: boolean | undefined;
   readonly className?: string | undefined;
   readonly children: ReactNode;
 }
@@ -102,11 +110,29 @@ export interface AttachDropZoneProps {
 const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
 /**
- * The whole conversation as the drop target, so a dropped image is never
+ * Takes a paste's files for `onFiles`. The paste's text, when it has some
+ * (an app copying an image puts its name or URL there too), is left to go
+ * into the field; a paste of files alone is claimed. True when it took any.
+ */
+export function takePastedFiles(e: ReactClipboardEvent, onFiles: (files: File[]) => void): boolean {
+  // A paste with text is not default-prevented, so an enclosing zone knows a field took it from here.
+  if (taken.has(e.nativeEvent)) return false;
+  const files = Array.from(e.clipboardData?.files ?? []);
+  if (files.length === 0) return false;
+  taken.add(e.nativeEvent);
+  if (!Array.from(e.clipboardData?.types ?? []).includes("text/plain")) e.preventDefault();
+  onFiles(files);
+  return true;
+}
+const taken = new WeakSet<Event>();
+
+/**
+ * The drop target for images, put around everything a person may drop on
+ * (a whole conversation, a whole dialog) so a dropped image is never
  * missed. While files are dragged over it an overlay says how many, who
  * gets them and when — the steer's own "lands" words.
  */
-export function AttachDropZone({ onFiles, disabled, detail, className, children }: AttachDropZoneProps) {
+export function AttachDropZone({ onFiles, disabled, disabledReason, detail, takePaste, className, children }: AttachDropZoneProps) {
   const [count, setCount] = useState<number | null>(null);
   // dragenter/dragleave fire for every child crossed; count the depth.
   const depth = useRef(0);
@@ -114,6 +140,7 @@ export function AttachDropZone({ onFiles, disabled, detail, className, children 
     depth.current = 0;
     setCount(null);
   };
+  const refused = disabledReason !== undefined && disabledReason !== null && disabledReason !== false;
   return (
     <div
       className={cx(styles["dropZone"], className)}
@@ -126,7 +153,7 @@ export function AttachDropZone({ onFiles, disabled, detail, className, children 
       onDragOver={(e) => {
         if (disabled || !hasFiles(e)) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
+        e.dataTransfer.dropEffect = refused ? "none" : "copy";
       }}
       onDragLeave={(e) => {
         if (disabled || !hasFiles(e)) return;
@@ -135,21 +162,28 @@ export function AttachDropZone({ onFiles, disabled, detail, className, children 
       }}
       onDrop={(e) => {
         if (disabled || !hasFiles(e)) return;
+        // Claimed even when refused: unclaimed, the browser opens the file in place of the page.
         e.preventDefault();
         reset();
         const files = Array.from(e.dataTransfer.files);
-        if (files.length > 0) onFiles(files);
+        if (!refused && files.length > 0) onFiles(files);
       }}
+      onPaste={takePaste ? (e) => {
+        if (disabled || refused) return;
+        takePastedFiles(e, onFiles);
+      } : undefined}
     >
       {children}
       {count !== null ? (
-        <div className={styles["dropOverlay"]} data-testid="drop-overlay" aria-live="polite">
+        <div className={styles["dropOverlay"]} data-testid="drop-overlay" data-refused={refused ? "true" : undefined} aria-live="polite">
           <div className={styles["dropMessage"]}>
-            <Icon name="upload" size={28} />
+            <Icon name={refused ? "warning" : "upload"} size={28} />
             <span className={styles["dropTitle"]}>
-              {count > 1 ? `Drop to attach ${count} images` : count === 1 ? "Drop to attach the image" : "Drop to attach"}
+              {refused ? "Can't attach images here"
+                : count > 1 ? `Drop to attach ${count} images` : count === 1 ? "Drop to attach the image" : "Drop to attach"}
             </span>
-            {detail ? <small className={styles["dropDetail"]}>{detail}</small> : null}
+            {refused ? <small className={styles["dropDetail"]}>{disabledReason}</small>
+              : detail ? <small className={styles["dropDetail"]}>{detail}</small> : null}
           </div>
         </div>
       ) : null}
