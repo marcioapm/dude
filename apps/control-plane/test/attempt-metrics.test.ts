@@ -101,6 +101,62 @@ beforeAll(async () => {
               FROM (VALUES (1, 'aborted', interval '3 hours'), (2, 'running', interval '2 hours'),
                            (3, 'review', interval '90 minutes'), (4, 'done', interval '30 minutes')) AS v(n, s, at)
               ORDER BY n`;
+
+  // Done after its second attempt, which was itself aborted and then tried
+  // again (same attempt) before it went to review and finished.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
+              VALUES ('wi_3', ${ORG}, ${PROJECT}, 3, 'Tried again, then done', 'done', now() - interval '6 hours')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
+              VALUES ('run_c1', ${ORG}, ${PROJECT}, 'wi_3', 1,
+                      now() - interval '5 hours', now() - interval '5 hours', now() - interval '4 hours', 'aborted'),
+                     ('run_c2', ${ORG}, ${PROJECT}, 'wi_3', 2,
+                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '150 minutes', 'aborted'),
+                     ('run_c3', ${ORG}, ${PROJECT}, 'wi_3', 2,
+                      now() - interval '2 hours', now() - interval '2 hours', now() - interval '90 minutes', 'completed')`;
+  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+              SELECT 'evt_c' || n, ${ORG}, 'task.status_changed', 'wi_3', 'system', 'orchestrator', 'orchestrator',
+                     jsonb_build_object('status', s), now() - at
+              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
+                           (3, 'aborted', interval '150 minutes'), (4, 'running', interval '2 hours'),
+                           (5, 'review', interval '90 minutes'), (6, 'done', interval '30 minutes')) AS v(n, s, at)
+              ORDER BY n`;
+
+  // Its second attempt was aborted two hours ago and resumed an hour ago;
+  // it is running now.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
+              VALUES ('wi_4', ${ORG}, ${PROJECT}, 4, 'Resumed', 'running', now() - interval '6 hours')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
+              VALUES ('run_d1', ${ORG}, ${PROJECT}, 'wi_4', 1,
+                      now() - interval '5 hours', now() - interval '5 hours', now() - interval '4 hours', 'aborted'),
+                     ('run_d2', ${ORG}, ${PROJECT}, 'wi_4', 2,
+                      now() - interval '3 hours', now() - interval '3 hours', NULL, 'running')`;
+  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+              SELECT 'evt_d' || n, ${ORG}, 'task.status_changed', 'wi_4', 'system', 'orchestrator', 'orchestrator',
+                     jsonb_build_object('status', s), now() - at
+              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
+                           (3, 'aborted', interval '2 hours'), (4, 'running', interval '1 hour')) AS v(n, s, at)
+              ORDER BY n`;
+
+  // Attempt 2 is working, with a question asked 15 minutes ago and a
+  // repository asked for 5 minutes ago, both still waiting on a person;
+  // it was in review 50 to 40 minutes ago, then ready to merge until 20.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
+              VALUES ('wi_5', ${ORG}, ${PROJECT}, 5, 'Waiting', 'running', now() - interval '4 hours')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
+              VALUES ('run_e1', ${ORG}, ${PROJECT}, 'wi_5', 1,
+                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '2 hours', 'aborted'),
+                     ('run_e2', ${ORG}, ${PROJECT}, 'wi_5', 2,
+                      now() - interval '1 hour', now() - interval '1 hour', NULL, 'running')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, asked_at)
+              VALUES ('q_e2', ${ORG}, 'wi_5', 'run_e2', 'Which font?', 'open', now() - interval '15 minutes')`;
+  await owner`INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, reason, status, created_at)
+              VALUES ('rr_e2', ${ORG}, 'wi_5', 'run_e2', 'repo_att', 'needs the api', 'pending', now() - interval '5 minutes')`;
+  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+              SELECT 'evt_e' || n, ${ORG}, 'task.status_changed', 'wi_5', 'system', 'orchestrator', 'orchestrator',
+                     jsonb_build_object('status', s), now() - at
+              FROM (VALUES (1, 'review', interval '50 minutes'), (2, 'ready_to_merge', interval '40 minutes'),
+                           (3, 'running', interval '20 minutes')) AS v(n, s, at)
+              ORDER BY n`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
@@ -187,6 +243,25 @@ test("the latest attempt of a finished task ends when the task did, not at an ea
   expect(one.reviewMs).toBe(0);
 });
 
+test("an attempt aborted, tried again and then done ends when it was done", async () => {
+  // Attempt 2 began 3 h ago and was done 30 minutes ago, in review for the last hour of it.
+  const two = await get("/v1/tasks/wi_3/metrics?attempt=2");
+  near(two.leadMs, 150 * MINUTE);
+  near(two.reviewMs, HOUR);
+});
+
+test("an attempt aborted and resumed, running now, runs until now", async () => {
+  near((await get("/v1/tasks/wi_4/metrics?attempt=2")).leadMs, 3 * HOUR);
+});
+
+test("a question or a repository request still waiting on a person counts until now", async () => {
+  near((await get("/v1/tasks/wi_5/metrics?attempt=2")).humanWaitMs, 20 * MINUTE);
+});
+
+test("ready to merge is time in review", async () => {
+  near((await get("/v1/tasks/wi_5/metrics?attempt=2")).reviewMs, 30 * MINUTE);
+});
+
 test("without an attempt, the whole task as before", async () => {
   const all = await get("/v1/tasks/wi_1/metrics");
   expect(all.runs.map((r) => r.id)).toEqual(["run_a1_impl", "run_a1_rev", "run_a2_impl"]);
@@ -204,11 +279,15 @@ test("an attempt with no Runs has nothing to count", async () => {
 });
 
 test("an attempt that is not a positive whole number is refused", async () => {
-  for (const bad of ["0", "-1", "1.5", "two", "9999999999"]) {
+  for (const bad of ["0", "-1", "1.5", "two", "2147483648", "9999999999"]) {
     const res = await call(`/v1/tasks/wi_1/metrics?attempt=${bad}`);
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("bad_request");
   }
+});
+
+test("the largest attempt runs.attempt can hold is taken, and has no Runs", async () => {
+  expect((await get("/v1/tasks/wi_1/metrics?attempt=2147483647")).runs).toEqual([]);
 });
 
 test("an empty attempt is the whole task, as for any number parameter", async () => {
