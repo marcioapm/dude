@@ -172,5 +172,21 @@ describe("a branch preview on the Servers tab", () => {
     expect(panel.textContent).not.toContain("parks after");
     expect(panel.textContent).toContain("opening one wakes it on the branch’s latest commit");
     expect(button(page, "add-server")?.disabled).toBe(true);
+    expect(page.querySelector("[data-testid=preview-error]")).toBe(null);
+  });
+
+  test("a wakeable preview whose Run failed to start says why", async () => {
+    const why = "the preview's Run failed to start (start-failed) 3 times in a row; starting a server, or opening a URL once lux stops waiting, tries a new Run";
+    class FailedPreview extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({
+          ...d,
+          run: d.run ? { ...d.run, state: "paused" as const, wakeable: true, asleep: true, previewStage: null, error: why } : null,
+        }));
+      }
+    }
+    const page = await taskPage(new FailedPreview("e"), { tab: "servers" });
+    const callout = await until(() => page.querySelector<HTMLElement>("[data-testid=preview-error]"), "the preview's error");
+    expect(callout.textContent).toContain(why);
   });
 });

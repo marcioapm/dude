@@ -160,6 +160,12 @@ export interface TaskServers {
     wakeable?: boolean;
     /** A wakeable preview nothing serves and no wake is due. */
     asleep?: boolean;
+    /**
+     * A wakeable preview's last failure: its Run failed to start (and
+     * whether a new one is on its way), or stopped on its own. null once a
+     * start runs.
+     */
+    error?: string | null;
     /** The memory limit lux gave its container, in bytes, when lux reports one. */
     memoryLimit?: number | null;
   };
