@@ -57,14 +57,27 @@ type Placement struct {
 	// assigned, starting, running, stopping; then exited, or lost with its
 	// host.
 	State string `json:"state"`
+	// How far its start got, each nil until reached: lux assigned it a
+	// host, the image was ready there, its volumes were restored (from the
+	// snapshot, for a resume), its container started.
+	AssignedAt         *time.Time `json:"assignedAt,omitempty"`
+	ImageReadyAt       *time.Time `json:"imageReadyAt,omitempty"`
+	VolumesRestoredAt  *time.Time `json:"volumesRestoredAt,omitempty"`
+	ContainerStartedAt *time.Time `json:"containerStartedAt,omitempty"`
 	// When the agent's process started; nil for a placement that never got
 	// that far, and so never published anything.
 	WorkloadStartedAt *time.Time `json:"workloadStartedAt,omitempty"`
+	// When it was asked to stop; nil for one that was not.
+	StopRequestedAt *time.Time `json:"stopRequestedAt,omitempty"`
 	// When its container exited; nil while it runs.
 	ExitedAt *time.Time `json:"exitedAt,omitempty"`
 	// When the host reported what it kept at exit — the snapshot, and the
 	// artifacts with it. Nil while it is still running or uploading.
 	SnapshotDoneAt *time.Time `json:"snapshotDoneAt,omitempty"`
+	// When its snapshot reached object storage, where another host can
+	// restore it from, and its size.
+	UploadedAt    *time.Time `json:"uploadedAt,omitempty"`
+	SnapshotBytes *int64     `json:"snapshotBytes,omitempty"`
 	// The memory limit its container was given, in bytes: what the Run
 	// asked for less the host's share (a newer lux; nil from one that does
 	// not say).

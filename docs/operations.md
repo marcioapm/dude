@@ -579,7 +579,7 @@ Run as the secrets `opencode_auth` and `opencode_config`
   refs to `opencode_auth` and `opencode_config`, answers 422
   `secrets_required` when they are not supplied, and the Run fails. Finish or
   cancel parked real-model Runs before upgrading, or accept that they fail.
-- Role models are tiers since migration 067, which made each organization's
+- Role models are tiers since migration 068, which made each organization's
   tiers from the models its roles named (see
   [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
 - A Run keeps the URL, model and effort it started with; only the key is

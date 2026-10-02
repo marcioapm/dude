@@ -189,6 +189,67 @@ class ApiClient:
 
 
 # ---------------------------------------------------------------------------
+# Resume timing (run_resumes and run.resume.timed)
+# ---------------------------------------------------------------------------
+
+# Each phase of run.resume.timed, in order, and the row's stamps it spans.
+RESUME_PHASE_PAIRS = (
+    ("react", "woken_at", "requested_at"),
+    ("schedule", "requested_at", "assigned_at"),
+    ("image", "assigned_at", "image_ready_at"),
+    ("restore", "image_ready_at", "volumes_restored_at"),
+    ("start", "volumes_restored_at", "workload_started_at"),
+    ("reload", "workload_started_at", "running_at"),
+    ("take", "running_at", "busy_at"),
+    ("firstOutput", "busy_at", "first_output_at"),
+)
+
+# The columns of a run_resumes row lux fills, by placement, as lux names
+# each field: the new placement's start and host, the stopped one's end.
+RESUME_STARTED = (("assigned_at", "assignedAt"), ("image_ready_at", "imageReadyAt"),
+                  ("volumes_restored_at", "volumesRestoredAt"), ("container_started_at", "containerStartedAt"),
+                  ("workload_started_at", "workloadStartedAt"), ("host_name", "hostName"))
+RESUME_STOPPED = (("stop_requested_at", "stopRequestedAt"), ("exited_at", "exitedAt"),
+                  ("snapshot_done_at", "snapshotDoneAt"), ("uploaded_at", "uploadedAt"),
+                  ("snapshot_bytes", "snapshotBytes"), ("stopped_host_name", "hostName"))
+
+
+def whole_ms(start, end) -> int:
+    """end − start in whole milliseconds as the orchestrator rounds it
+    (Go's math.Round: half away from zero), from integer microseconds."""
+    delta = end - start
+    us = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+    ms = (abs(us) + 500) // 1000
+    return -ms if us < 0 else ms
+
+
+def assert_timed_is_its_row(payload: dict, row: dict) -> None:
+    """A run.resume.timed says what its run_resumes row says: its epoch,
+    cause, move and host, and every phase and total exactly the difference
+    of the two stamps it spans, rounded as the orchestrator rounds it. A
+    phase across two clocks (schedule, reload) may be negative; one whose
+    stamps are not both known is absent."""
+    assert (payload["epoch"], payload["cause"], payload["moved"], payload["hostName"]) == (
+        row["epoch"], row["cause"], row["moved"], row["host_name"]), (payload, row)
+    phases = payload["phases"]
+    for name, start, end in RESUME_PHASE_PAIRS:
+        if row[start] is None or row[end] is None:
+            assert name not in phases, (name, phases, row)
+            continue
+        assert phases[name] == whole_ms(row[start], row[end]), (name, phases[name], row[start], row[end])
+    for key, end in (("totalMs", "first_output_at"), ("untilBusyMs", "busy_at")):
+        assert payload[key] == whole_ms(row["woken_at"], row[end]), (key, payload[key], row)
+
+
+def lux_stamp(value: str | None):
+    """A lux timestamp as Postgres stores it: to the microsecond, below
+    which it is dropped."""
+    from datetime import datetime
+
+    return None if value is None else datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------------------
 # Waiting
 # ---------------------------------------------------------------------------
 

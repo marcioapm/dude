@@ -449,7 +449,7 @@ describe("removing a size in use", () => {
     const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${large.id}`, { replacement: null });
     expect(res.status).toBe(200);
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
-    // Every role keeps the tier the organization was seeded with (migration 067).
+    // Every role keeps the tier the organization was seeded with (migration 068).
     const sizesNamed = Object.values(org.default_agent_models as Record<string, Json>).filter((r) => "machineSize" in r);
     expect(sizesNamed).toEqual([]);
     expect(org.default_agent_models.simplifier).toEqual({ effort: "low", tier: expect.any(String) });

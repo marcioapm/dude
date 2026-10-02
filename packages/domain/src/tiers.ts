@@ -9,7 +9,7 @@ import { TEST_HARNESS_MODELS, type AgentModels } from "./hierarchy.ts";
  * its effort); no role names a model. What the proxy then serves — that
  * model, or a fallback from its own config — dude does not see.
  *
- * The database holds the same bounds (migration 067).
+ * The database holds the same bounds (migration 068).
  */
 
 export const TIER_NAME_MAX = 24;

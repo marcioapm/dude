@@ -67,6 +67,12 @@ type Syncer struct {
 	// much earlier, so a retry a minute out is exercised without the wait.
 	// Zero outside tests.
 	RetryAhead time.Duration
+	// For tests: the orchestrator's clock, as its events' occurred_at
+	// (ledger.Event.OccurredAt); nil is the ledger's time.Now.
+	Now func() time.Time
+	// For tests: called as each resume follow-up finishes, its placements
+	// recorded and its timing published.
+	followedUp func()
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -672,6 +678,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 	}); err != nil {
 		return err
 	}
+	s.timeResumesLater(r)
 
 	frames := make(chan lux.Frame, 256)
 	read := make(chan error, 1)
@@ -719,7 +726,12 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		}); err != nil {
 			// What was read but not recorded is read again from the saved
 			// cursor by the next follower.
+			t.resumes = nil
 			return err
+		}
+		if t.resumes != nil {
+			go s.resumeFollowUp(r, t.resumes)
+			t.resumes = nil
 		}
 	}
 	return <-read
@@ -793,7 +805,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	if len(heads) > 0 {
 		branch = delivery.BranchFor(r.TaskID, r.Attempt)
 	}
-	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	completed := false
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
 			heads = $3::jsonb, branch = COALESCE(NULLIF($4, ''), branch)
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`,
@@ -801,6 +814,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
+		completed = true
 		// What the agent never read, it never will: said so, not left queued.
 		rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
 			WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`,
@@ -819,7 +833,14 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			}
 		}
 		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
-	})
+	}); err != nil {
+		return true, err
+	}
+	if completed {
+		// Ended: no follower will time a resume whose first output is in.
+		s.timeResumesLater(r)
+	}
+	return true, nil
 }
 
 // publish moves the task's branch in each repository this Run changed
@@ -973,10 +994,15 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 			return err
 		}
 	}
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	// Ended: no follower will time a resume whose first output is in.
+	s.timeResumesLater(r)
+	return nil
 }
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
@@ -1029,7 +1055,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if !r.HasDirectives && !r.Waiting {
 		nudge = resumeNudge
 	}
-	lr, err := s.resume(ctx, r, nudge)
+	lr, foreseen, err := s.resume(ctx, r, nudge)
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
 	if errors.As(err, &noLogin) {
@@ -1048,9 +1074,20 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		lr.State = "resuming"
 	}
 	if err != nil {
+		if le, ok := lux.AsError(err); ok && !le.Retryable() && foreseen != 0 {
+			// Refused for good: there is no such resume to time.
+			s.resumeRefused(ctx, r, foreseen)
+		}
 		return true, s.retryOrFail(ctx, r, err, "lux refused to resume the run")
 	}
+	missed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// The Run's row first, held against the stream's batches until this
+		// commits: the resume's timing reads what they committed of it.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+			return err
+		}
+		missed = s.resumeAccepted(ctx, tx, r, foreseen, lr)
 		// The agent is starting a new turn; the old "done" no longer holds.
 		// lux_state is what lux says now ("resuming"), so directives wait for
 		// the stream to report it running. A resumed lux Run's cost is no
@@ -1085,9 +1122,15 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 				return err
 			}
 		}
-		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason})
+		// The epoch it resumed into, its timing's (resumeAccepted).
+		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem,
+			map[string]any{"reason": reason, "epoch": resumedEpoch(foreseen, lr)})
 	}); err != nil {
 		return true, err
+	}
+	if missed {
+		// No frame of its epoch is left to stamp it: timed as it stands.
+		go s.resumeFollowUp(r, map[int]bool{resumedEpoch(foreseen, lr): true})
 	}
 	// Directives given while it was paused are sent by the usual path once
 	// lux reports the resumed Run running, each on its own so each is
@@ -1098,28 +1141,32 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 // resume is the one call to lux's resume. lux keeps no secret (every resume
 // supplies all of them again, lux internal/server/api.go resumeRun), so
 // the secrets come from s.spec, fresh: a Run parked for a day needs a new
-// registry login and forge token, not the ones it started with.
-func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run, error) {
+// registry login and forge token, not the ones it started with. Its
+// timing's row is in before lux is asked (resumeAsked); foreseen is the
+// epoch it is under, 0 when lux was not asked.
+func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed lux.Run, foreseen int, err error) {
 	// lux's copy says whether the Run was started with a login, whatever
 	// this orchestrator is configured with now (the runs row does not
 	// record it), and the image lux stored at submit is the one it pulls.
 	lr, err := s.Lux.Get(ctx, r.LuxRunID)
 	if err != nil {
-		return lux.Run{}, err
+		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
 	spec, _, err := s.spec(ctx, r, &lr.Spec)
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
-		return lux.Run{}, err
+		return lux.Run{}, 0, err
 	}
 	if err != nil {
-		return lux.Run{}, errCannotResume{err}
+		return lux.Run{}, 0, errCannotResume{err}
 	}
 	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
 	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
-		return lux.Run{}, err
+		return lux.Run{}, 0, err
 	}
-	return s.Lux.Resume(ctx, r.LuxRunID, in)
+	foreseen = s.resumeAsked(ctx, r, lr)
+	resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	return resumed, foreseen, err
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
@@ -1133,13 +1180,20 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 // since — so an answer or a word from the agent in between wins.
 func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+		// parkedAt: when the park began, on the database's clock, as the
+		// answers and decisions that end it are stamped.
+		var parkedAt time.Time
+		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
 			dude_pause = $3
 			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
-			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))`, r.ID, why, kind, r.QuietSince)
-		if err != nil || tag.RowsAffected() == 0 || kind == "repository" {
+			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
+			RETURNING r.control_requested_at`, r.ID, why, kind, r.QuietSince).Scan(&parkedAt)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		if err != nil || kind == "repository" {
 			return err
 		}
 		var taskStatus string
@@ -1155,7 +1209,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			}
 		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
-			map[string]any{"reason": kind, "message": why, "taskStatus": db.Nullable(taskStatus)})
+			map[string]any{"reason": kind, "message": why, "taskStatus": db.Nullable(taskStatus), "parkedAt": parkedAt})
 	})
 }
 
@@ -1519,8 +1573,12 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 }
 
 func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor string, payload map[string]any) error {
+	var at time.Time
+	if s.Now != nil {
+		at = s.Now()
+	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
+		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, OccurredAt: at,
 		ActorType: actor, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID, Payload: payload,
 	})
 	return err
