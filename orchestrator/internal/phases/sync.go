@@ -268,20 +268,27 @@ func scan(row pgx.Row) (phaseRun, error) {
 	return r, err
 }
 
-// Sweep takes one pass over every phase Run dude still has something to do
-// for, advancing each as far as it can. Cross-tenant, because finding the
-// Runs that need attention is the job; each is then handled in its own
-// organization's scope.
-func (s *Syncer) Sweep(ctx context.Context) (int, error) {
-	if err := s.handOverUnheard(ctx); err != nil {
-		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
-	}
+// sweepBatch is how many Runs one sweep takes up.
+const sweepBatch = 1000
+
+// actionable (SQL, over runFrom): a Run the sweep has something to do for
+// now, sorted ahead of those it only follows. A finished phase is
+// collected. A conductor's finished turn is work only when something is
+// queued for it, its warm period is over, or its container stopped: a
+// warm, quiet conductor waits for a person, and a thousand of them must
+// not keep a newer pending Run out of the batch.
+const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
+	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
+		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost'))))`
+
+// due is what one sweep takes up: every live Run, not the oldest N — a Run
+// with nothing to do still needs its stream followed, and a paused, idle
+// or quiet Run must not crowd out a newer one that is waiting to be
+// submitted. Runs with something to do sort first (actionable).
+func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 	var runs []phaseRun
 	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		// Every live Run, not the oldest N: a Run with nothing to do still
-		// needs its stream followed, and a paused or idle Run must not
-		// crowd out a newer one that is waiting to be submitted. Runs with
-		// something to do sort first.
 		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM `+runFrom+`
 			WHERE `+sweptRuns+`
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -291,14 +298,26 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
-			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
-			LIMIT 1000`, append(s.limits(), s.RetryAhead.Seconds())...)
+			ORDER BY `+actionable+` DESC, r.created_at
+			LIMIT $5`, append(s.limits(), s.RetryAhead.Seconds(), sweepBatch)...)
 		if err != nil {
 			return err
 		}
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
 		return err
 	})
+	return runs, err
+}
+
+// Sweep takes one pass over every phase Run dude still has something to do
+// for, advancing each as far as it can. Cross-tenant, because finding the
+// Runs that need attention is the job; each is then handled in its own
+// organization's scope.
+func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+	if err := s.handOverUnheard(ctx); err != nil {
+		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+	}
+	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
 	}
