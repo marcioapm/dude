@@ -15,7 +15,7 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 
 | tool | what it does | who may |
 |---|---|---|
-| `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides | implementer, investigator |
+| `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides. The goal is required, at least 16 characters trimmed, as a person's is (`GoalMin`, `TASK_GOAL_MIN`) | implementer, investigator |
 | `create_epic` | a new epic in the project | investigator |
 | `list_tasks` | the project's epics and tasks, with status and keys | all |
 | `search_memory` | search the project's history: tasks, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
