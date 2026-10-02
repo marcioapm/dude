@@ -688,6 +688,39 @@ describe("how long a resume took", () => {
     for (const e of events) apply(state, [e]);
     expect(snapshot(state).turns).toEqual(project(events).turns);
   });
+
+  // Two parks, each resume's timing arriving late: each goes to its own
+  // notice, in whichever order they arrive.
+  for (const order of ["in order", "the later first"] as const) {
+    test(`two parks' delayed timings, ${order}, each say their own resume's numbers`, () => {
+      const parks = [
+        ev("run.parked", { reason: "person" }),
+        ev("run.unparked", { reason: "person", epoch: 2 }),
+        ev("run.parked", { reason: "person" }),
+        ev("run.unparked", { reason: "person", epoch: 3 }),
+      ];
+      const timing = (epoch: number) => epoch === 2
+        ? timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases: { react: 120 } })
+        : timed({ epoch: 3, cause: "answer", moved: true, totalMs: 2000, phases: { react: 50 } });
+      const late = order === "in order" ? [timing(2), timing(3)] : [timing(3), timing(2)];
+      const { turns } = project([...parks, ...late]);
+      expect(turns.filter((t) => t.kind === "notice" && t.notice === "unparked")).toEqual([
+        expect.objectContaining({ text: "Taken back up in 6.4s.", title: "dude asked lux 120ms" }),
+        expect.objectContaining({ text: "Taken back up in 2.0s, on another host.", title: "dude asked lux 50ms" }),
+      ]);
+    });
+  }
+
+  test("a timing no notice is waiting for is a resume of its own", () => {
+    const { turns } = project([
+      ev("run.unparked", { reason: "person", epoch: 2 }),
+      timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases: {} }),
+      ev(EventTypes.RunPaused, { requested: true }),
+      ev(EventTypes.RunResumed, {}),
+      timed({ epoch: 3, cause: "person", moved: false, totalMs: 1500, phases: {} }),
+    ]);
+    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual(["Taken back up in 6.4s.", "Resumed in 1.5s."]);
+  });
 });
 
 describe("how a run ended", () => {
