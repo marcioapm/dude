@@ -161,12 +161,13 @@ class ApiClient:
 
     def tier_for(self, model: str) -> str:
         """The id of a tier of the organization's that requests `model`, made
-        for it (named after it) when none does. Needs an admin's key."""
+        for it when none does, named `T <model>` (cut to a tier name's 24
+        characters) so that its name is never its model. Needs an admin's key."""
         tiers = self.get("/v1/models/tiers").json()["tiers"]
         for tier in tiers:
             if tier["model"] == model:
                 return tier["id"]
-        resp = self.post("/v1/models/tiers", {"name": model[:24], "model": model})
+        resp = self.post("/v1/models/tiers", {"name": f"T {model}"[:24], "model": model})
         assert resp.status_code == 201, f"add tier failed: {resp.status_code} {resp.text}"
         return next(t["id"] for t in resp.json()["tiers"] if t["model"] == model)
 
