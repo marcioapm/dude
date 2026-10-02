@@ -513,41 +513,50 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 	return id, err
 }
 
-// EndConductorWait takes the task off waiting on a person once a
-// conductor's question is answered, back to the status it had — only when
-// that question is what put it there and nothing has moved it since (its
-// waitCursor is still the task's latest status change), and nothing else
-// waits on a person: no other open question, no blocking repository
-// request, no escalation. A conductor changes nothing about the task, so
-// it never ends a wait it does not own.
-func EndConductorWait(ctx context.Context, tx pgx.Tx, r RunRef, questionID string) error {
+// EndConductorWait puts the task back to the status it had before a
+// conductor's question made it wait on a person, once nothing waits on a
+// person any more. Called wherever something a person settles may be the
+// last of what the task waits on: an answer, a repository decision, a
+// resume. The candidate is a conductor's question.asked whose waitCursor is
+// still the task's latest status change: a newer wait, or delivery moving
+// the task on, is never undone. Blockers (waitBlocked) keep it waiting; the
+// candidate stays in the ledger for the next settlement to reconsider.
+func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID string) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+		return err
+	}
 	var before string
-	var mark *int64
-	err := tx.QueryRow(ctx, `SELECT COALESCE(payload->>'taskStatus', ''), (payload->>'waitCursor')::bigint FROM events
-		WHERE run_id = $1 AND event_type = $2 AND payload->>'questionId' = $3 LIMIT 1`,
-		r.RunID, EvQuestionAsked, questionID).Scan(&before, &mark)
-	if db.IsNotFound(err) || err == nil && (before == "" || mark == nil) {
+	// The question's event follows its status change in the same
+	// transaction, so only the task's events after that change are read.
+	err := tx.QueryRow(ctx, `SELECT e.payload->>'taskStatus' FROM tasks t
+		CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
+		JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
+			AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
+		JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
+		WHERE t.id = $1 AND t.status = 'awaiting_input' AND NOT `+waitBlocked+`
+		ORDER BY e.cursor LIMIT 1`, taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	var own bool
-	if err := tx.QueryRow(ctx, `SELECT t.status = 'awaiting_input'
-			AND (SELECT max(e.cursor) FROM events e WHERE e.task_id = t.id AND e.event_type = $3) = $2
-			AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open' AND q.id <> $4)
-			AND NOT EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
-			AND NOT EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
-				AND wf.state ? 'escalation')
-		FROM tasks t WHERE t.id = $1 FOR UPDATE OF t`, r.TaskID, *mark, EvTaskStatusChanged, questionID).Scan(&own); err != nil {
-		return err
-	}
-	if !own {
-		return nil
-	}
-	_, err = SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", before, "a person answered the conductor")
+	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before, "nothing waits on a person any more")
 	return err
 }
+
+// waitBlocked (SQL, over tasks t): something on the task still waits on a
+// person — an open question, a pending blocking repository request, an
+// undecided escalation in its live workflow, or a phase Run parked as idle
+// or paused by a person, or with a person's pause or resume still pending
+// (dude's own control requests set dude_pause).
+const waitBlocked = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open')
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
+	OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
+		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided')
+	OR EXISTS (SELECT 1 FROM runs p WHERE p.task_id = t.id AND p.phase IS NOT NULL
+		AND p.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+		AND (p.dude_pause = 'idle' OR p.dude_pause IS NULL AND (p.status = 'paused' OR p.control <> 'none'))))`
 
 // RecordDecisionTx records something a person decided about the task, as
 // an answered question: every phase from then on is told it (Decisions).

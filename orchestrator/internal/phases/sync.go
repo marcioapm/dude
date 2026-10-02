@@ -1414,20 +1414,29 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// Taken back up from a park — whoever resumes it: a person may have
 		// made dude's park their own pause meanwhile.
 		var last, reason, taskStatus string
-		if err := tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'taskStatus', '')
+		err = tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'taskStatus', '')
 			FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1`,
-			r.ID, evParked, evUnparked).Scan(&last, &reason, &taskStatus); err != nil || last != evParked {
-			if db.IsNotFound(err) {
-				return nil
-			}
+			r.ID, evParked, evUnparked).Scan(&last, &reason, &taskStatus)
+		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		if taskStatus != "" {
+		parked := err == nil && last == evParked
+		if parked && taskStatus != "" {
 			// The flag its idle park raised, lowered.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,
 				"a person resumed the agent"); err != nil {
 				return err
 			}
+		}
+		// A phase agent taken back up, from a park or a person's pause, may
+		// have been the last thing the task waited on a person for.
+		if !r.conductor() {
+			if err := delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID); err != nil {
+				return err
+			}
+		}
+		if !parked {
+			return nil
 		}
 		// The epoch it resumed into, its timing's (resumeAccepted).
 		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem,
