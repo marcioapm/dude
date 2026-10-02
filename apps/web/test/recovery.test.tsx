@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
-import { ORG, ORPHAN_FINDING, PROJECT, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
+import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
 import type { RecoverAction } from "../src/api/client.ts";
 import type { PersistedEvent } from "@dude/domain";
@@ -225,10 +225,12 @@ describe("a task started over", () => {
     expect(options.map((o) => o.getAttribute("data-value"))).toEqual(["2", "1"]);
     expect(options[0]!.textContent).toContain("Started");
     expect(options[0]!.textContent).toContain("PR #483 open");
+    expect(options[0]!.textContent).not.toContain("#478");
     expect(options[1]!.textContent).toContain("Set aside");
     expect(options[1]!.textContent).toContain("stopped at Fix, aborted by Ana");
     expect(options[1]!.textContent).toContain("dude/task_wc214/attempt-1");
     expect(options[1]!.textContent).toContain("PR #478 closed");
+    expect(options[1]!.textContent).not.toContain("#483");
     expect(options[1]!.textContent).toContain("$13.40");
     expect(document.body.textContent).toContain("Activity always shows every attempt.");
   });
@@ -333,6 +335,8 @@ describe("a task started over", () => {
     expect(count(panel, "[data-testid=pr-merge]")).toBe(0);
     expect(count(panel, "[data-testid=pr-request-review]")).toBe(0);
     expect(panel.textContent).toContain("Open on GitHub");
+    // Still open: nothing says it was closed.
+    expect(panel.textContent).not.toContain("Closed");
   });
 
   test("on attempt 2 the open pull request has Merge and the servers are beside it", async () => {
@@ -409,8 +413,7 @@ describe("a task started over", () => {
   });
 
   /** The restarted task's ledger as `change` makes it. */
-  function restartedWithEvents(change: (events: PersistedEvent[]) => PersistedEvent[]) {
-    const client = restarted();
+  function restartedWithEvents(change: (events: PersistedEvent[]) => PersistedEvent[], client = restarted()) {
     const events = client.events.bind(client);
     client.events = async (params) => {
       const r = await events(params);
@@ -418,6 +421,52 @@ describe("a task started over", () => {
     };
     return client;
   }
+
+  test("an attempt 1 whose fixer failed says failed, in the header and in the picker", async () => {
+    const page = await taskPage(restartedAs((t) => ({ ...t,
+      runs: t.runs.map((r) => (r.id === "run_a1_fix" ? { ...r, status: "failed" as const, error: "host lost" } : r)) })));
+    await until(() => picker(page), "the attempt picker");
+    await pick(page, 1);
+    expect(page.querySelector("[data-testid=header-status]")?.getAttribute("data-status")).toBe("failed");
+    expect(picker(page)?.textContent).toBe("FailedAttempt 1set aside");
+    await press(picker(page)!);
+    const option = await until(() => document.querySelector<HTMLElement>('[role=option][data-value="1"]'), "attempt 1 in the picker");
+    expect(option.textContent).toContain("stopped at Fix, failed");
+  });
+
+  test("a branch preview that failed after attempt 1's fixer is not where attempt 1 stopped", async () => {
+    const preview = { ...RESTARTED_RUNS.find((r) => r.id === "run_a1_fix")!, id: "run_a1_preview", kind: "preview" as const, phase: null, role: null,
+      status: "failed" as const, error: "the preview's server never started", createdAt: at(105), startedAt: at(105), endedAt: at(96) };
+    const page = await taskPage(restartedAs((t) => ({ ...t, runs: [...t.runs, preview] })));
+    await until(() => picker(page), "the attempt picker");
+    await pick(page, 1);
+    expect(page.querySelector("[data-testid=header-status]")?.getAttribute("data-status")).toBe("aborted");
+    const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the earlier-attempt bar");
+    expect(bar.textContent).toContain("It had stopped at Fix, aborted by Ana.");
+  });
+
+  test("with three attempts, each earlier one's bar says who started the next one over, and why", async () => {
+    // Attempt 2's fixer aborted 8 minutes ago; Ana started over as attempt 3 six minutes ago.
+    const client = restartedAs((t) => ({ ...t,
+      runs: [
+        { ...t.runs.find((r) => r.id === "run_attempt2")!, id: "run_a3_impl", attempt: 3, status: "running" as const, branch: "dude/task_wc214/attempt-3",
+          createdAt: at(5), startedAt: at(5), endedAt: null },
+        ...t.runs.map((r) => (r.id === "run_a2_fix" ? { ...r, status: "aborted" as const, endedAt: at(8) } : r)),
+      ] }));
+    const page = await taskPage(restartedWithEvents((events) => [...events, { ...events.find((e) => e.eventType === "task.recovered")!,
+      eventId: "evt_restart_3", cursor: 20_000, occurredAt: at(6), actor: { type: "human", id: "u_ana" },
+      payload: { action: "restart", attempt: 3, note: "Start from main again." } }], client));
+    await until(() => (shown(page) === "3" ? true : null), "attempt 3, the current one");
+    await pick(page, 2);
+    const two = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "attempt 2's bar");
+    expect(two.textContent).toContain("Attempt 2 was set aside 6m ago, when Ana Ribeiro started over: “Start from main again.”");
+    expect(two.textContent).not.toContain(RESTART.note);
+    await pick(page, 1);
+    await until(() => (page.querySelector("[data-testid=earlier-bar]")?.textContent?.includes("Attempt 1") ? true : null), "attempt 1's bar");
+    const one = page.querySelector<HTMLElement>("[data-testid=earlier-bar]")!;
+    expect(one.textContent).toContain(`when Márcio Martins started over: “${RESTART.note}”`);
+    expect(one.textContent).not.toContain("Start from main again.");
+  });
   const movedClose = (min: number, actor?: PersistedEvent["actor"]) => (events: PersistedEvent[]) =>
     events.map((e) => (e.eventType === "pull_request.closed" ? { ...e, occurredAt: at(min), ...(actor ? { actor } : {}) } : e));
 
@@ -444,6 +493,34 @@ describe("a task started over", () => {
     const page = await taskPage(restartedWithEvents(movedClose(20)), { tab: "activity" });
     const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
       .find((l) => l.textContent?.includes("#478 was closed")), "the close's line");
+    expect(line.getAttribute("data-attempt")).toBe("1");
+  });
+
+  test("a person's act on no Run is marked with the attempt under way when they did it", async () => {
+    const page = await taskPage(restarted(), { tab: "activity" });
+    const line = (text: string) => until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
+      .find((l) => l.textContent?.includes(text)), text);
+    // Decided 112 minutes ago, while attempt 1 was at work; handed over 50 minutes ago, in attempt 2.
+    expect((await line("decided how delivery goes on")).getAttribute("data-attempt")).toBe("1");
+    expect((await line("handed the task to")).getAttribute("data-attempt")).toBe("2");
+  });
+
+  test("a branch preview does not say when its attempt began", async () => {
+    // A preview recorded on attempt 2 before attempt 2's first agent: the decision 112 minutes ago is still attempt 1's.
+    const preview = { ...RESTARTED_RUNS.find((r) => r.id === "run_attempt2")!, id: "run_a2_preview", kind: "preview" as const, phase: null, role: null,
+      status: "completed" as const, createdAt: at(115), startedAt: at(115), endedAt: at(100) };
+    const page = await taskPage(restartedAs((t) => ({ ...t, runs: [...t.runs, preview] })), { tab: "activity" });
+    const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
+      .find((l) => l.textContent?.includes("decided how delivery goes on")), "the decision's line");
+    expect(line.getAttribute("data-attempt")).toBe("1");
+  });
+
+  test("what attempt 1's Run recorded after attempt 2 began is still attempt 1's", async () => {
+    const late = (events: PersistedEvent[]) => events.map((e) => (e.eventType === "artifact.created" && e.payload.artifactId === "art_a1_notes"
+      ? { ...e, occurredAt: at(20) } : e));
+    const page = await taskPage(restartedWithEvents(late), { tab: "activity" });
+    const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
+      .find((l) => l.textContent?.includes("saved notes/routing.md")), "attempt 1's file's line");
     expect(line.getAttribute("data-attempt")).toBe("1");
   });
 
@@ -515,6 +592,40 @@ describe("a task started over", () => {
     const option = await until(() => document.querySelector<HTMLElement>('[role=option][data-value="1"]'), "attempt 1 in the picker");
     await until(() => (option.textContent?.includes("$13.40") ? true : null), "attempt 1's cost");
     expect(reads).toEqual([2, 2, undefined]);
+    // Closing the list reads nothing.
+    await click(document.querySelector<HTMLElement>('[role=option][data-value="2"]')!);
+    await until(() => (document.querySelector("[role=option]") ? null : true), "the list closed");
+    await settle(100);
+    expect(reads).toEqual([2, 2, undefined]);
+  });
+
+  test("a cost read that answers late does not replace the one that answered after it", async () => {
+    const client = restarted();
+    const metrics = client.taskMetrics.bind(client);
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let wholeTask = 0;
+    client.taskMetrics = async (id, attempt) => {
+      if (attempt !== undefined) return metrics(id, attempt);
+      // The first read of the whole task is held, and then says every Run cost $10.
+      if (++wholeTask > 1) return metrics(id);
+      await held;
+      const m = await metrics(id);
+      return { ...m, runs: m.runs.map((r) => ({ ...r, cost: { ...r.cost, totalUsd: 10 } })) };
+    };
+    const page = await taskPage(client);
+    await until(() => picker(page), "the attempt picker");
+    const one = () => document.querySelector<HTMLElement>('[role=option][data-value="1"]');
+    await press(picker(page)!);
+    await until(one, "attempt 1 in the picker");
+    await click(document.querySelector<HTMLElement>('[role=option][data-value="2"]')!);
+    await until(() => (one() ? null : true), "the list closed");
+    await press(picker(page)!);
+    await until(() => (one()?.textContent?.includes("$13.40") ? true : null), "attempt 1's cost from the second read");
+    release();
+    await settle(100);
+    expect(one()?.textContent).toContain("$13.40");
+    expect(one()?.textContent).not.toContain("$40.00");
   });
 
   test("a session of attempt 1 is read-only: no Pause, Abort or composer, and its strip leads to attempt 2", async () => {
