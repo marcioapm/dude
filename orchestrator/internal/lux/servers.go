@@ -126,8 +126,7 @@ type Servers interface {
 	// event lux has), calling fn for each, until ctx ends, the stream does,
 	// or fn fails.
 	Feed(ctx context.Context, after int64, fn func(FeedEvent) error) error
-	// PreviewDomain is lux's preview domain (whoami), "" when off.
-	PreviewDomain(ctx context.Context) (string, error)
+	PreviewDomain(ctx context.Context) (PreviewConfig, error)
 }
 
 func (c *HTTPClient) CreateServer(ctx context.Context, in CreateServer) (TenantServer, error) {
@@ -176,16 +175,25 @@ func (c *HTTPClient) SyncRun(ctx context.Context, runID, requestID string, sync 
 		map[string]any{"requestId": requestID, "sync": sync}, nil, nil)
 }
 
-// PreviewDomain is lux's, normalised as previews.domain is: lowercase, no
-// leading or trailing dot.
-func (c *HTTPClient) PreviewDomain(ctx context.Context) (string, error) {
+type PreviewConfig struct {
+	Domain string
+	// Nil identifies lux versions that require full hostnames.
+	Previews *bool
+}
+
+func (c *HTTPClient) PreviewDomain(ctx context.Context) (PreviewConfig, error) {
 	var w struct {
 		PreviewDomain *string `json:"previewDomain"`
+		Previews      *bool   `json:"previews"`
 	}
-	if err := c.do(ctx, "GET", "/v1/whoami", nil, nil, &w); err != nil || w.PreviewDomain == nil {
-		return "", err
+	if err := c.do(ctx, "GET", "/v1/whoami", nil, nil, &w); err != nil {
+		return PreviewConfig{}, err
 	}
-	return NormalDomain(*w.PreviewDomain), nil
+	out := PreviewConfig{Previews: w.Previews}
+	if w.PreviewDomain != nil {
+		out.Domain = NormalDomain(*w.PreviewDomain)
+	}
+	return out, nil
 }
 
 // NormalDomain is a domain as dude compares and joins it: lowercase, no

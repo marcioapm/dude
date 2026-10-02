@@ -134,14 +134,16 @@ func run(log *slog.Logger) error {
 		return runtime.Signal(ctx, org, wf, name, payload, key)
 	}
 	luxClient := lux.New(set.LuxURL, set.LuxKey)
-	previewDomain, err := previewDomainOf(ctx, luxClient, set.PreviewDomain, log, time.Second)
+	preview, err := previewModeOf(ctx, luxClient, set.PreviewDomain, log, time.Second)
 	if err != nil {
 		return err
 	}
-	if previewDomain == "" {
-		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset")
+	if !preview.Relative && preview.Domain == "" {
+		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
+	} else if preview.Relative {
+		log.Info("branch previews wake on request", "mode", "relative")
 	} else {
-		log.Info("branch previews wake on request", "domain", previewDomain)
+		log.Info("branch previews wake on request", "mode", "full-name", "domain", preview.Domain)
 	}
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
@@ -150,7 +152,7 @@ func run(log *slog.Logger) error {
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
-	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL, PreviewDomain: previewDomain}
+	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL, PreviewDomain: preview.Domain, PreviewRelative: preview.Relative}
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
 		Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
@@ -257,46 +259,55 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-// previewDomainOf checks that lux has the server resource dude's previews
-// need (lux#41) and settles the preview domain: previews.domain must be
-// lux's own when both are set (lux refuses hostnames outside it); unset,
-// lux's is used. A lux without the resource, or a mismatch, stops startup;
-// a lux not answering is asked again, every retry up to a minute apart,
-// until ctx ends, rather than the process exiting and restarting.
-func previewDomainOf(ctx context.Context, c *lux.HTTPClient, configured string, log *slog.Logger, retry time.Duration) (string, error) {
+type previewMode struct {
+	Domain   string
+	Relative bool
+}
+
+func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, log *slog.Logger, retry time.Duration) (previewMode, error) {
 	for {
-		luxDomain, err := luxPreviewDomain(ctx, c)
+		capability, err := luxPreviewDomain(ctx, c)
 		if err == nil {
+			luxDomain := capability.Domain
+			if capability.Previews != nil && !*capability.Previews {
+				return previewMode{}, nil
+			}
 			if configured != "" && luxDomain != "" && configured != luxDomain {
-				return "", fmt.Errorf("previews.domain (DUDE_PREVIEW_DOMAIN) is %s but lux serves previews under %s", configured, luxDomain)
+				return previewMode{}, fmt.Errorf("previews.domain (DUDE_PREVIEW_DOMAIN) is %s but lux serves previews under %s", configured, luxDomain)
+			}
+			if capability.Previews != nil {
+				if configured != "" && luxDomain == "" {
+					log.Info("DUDE_PREVIEW_DOMAIN ignored for naming: lux accepts relative preview hostnames")
+				}
+				return previewMode{Relative: true}, nil
 			}
 			if configured != "" {
-				return configured, nil
+				return previewMode{Domain: configured}, nil
 			}
-			return luxDomain, nil
+			return previewMode{Domain: luxDomain}, nil
 		}
 		if errors.Is(err, lux.ErrNoServers) {
-			return "", fmt.Errorf("lux at startup: %w", err)
+			return previewMode{}, fmt.Errorf("lux at startup: %w", err)
 		}
 		log.Warn("lux at startup: not answering; asking again", "in", retry, "error", err)
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("lux at startup: %w", err)
+			return previewMode{}, fmt.Errorf("lux at startup: %w", err)
 		case <-time.After(retry):
 		}
 		retry = min(2*retry, time.Minute)
 	}
 }
 
-func luxPreviewDomain(ctx context.Context, c *lux.HTTPClient) (string, error) {
+func luxPreviewDomain(ctx context.Context, c *lux.HTTPClient) (lux.PreviewConfig, error) {
 	check, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := lux.RequireServers(check, c); err != nil {
-		return "", err
+		return lux.PreviewConfig{}, err
 	}
 	d, err := c.PreviewDomain(check)
 	if err != nil {
-		return "", fmt.Errorf("whoami: %w", err)
+		return lux.PreviewConfig{}, fmt.Errorf("whoami: %w", err)
 	}
 	return d, nil
 }
