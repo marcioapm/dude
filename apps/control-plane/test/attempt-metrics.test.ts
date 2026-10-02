@@ -37,6 +37,27 @@ let app: SQL;
 let router: Router;
 let key: string;
 
+/** A Run: id, attempt, created (= started) and ended so many minutes ago (ended null: still going), status. */
+type RunRow = [id: string, attempt: number, startedMin: number, endedMin: number | null, status: string];
+/** A `task.status_changed`: the status, so many minutes ago. Written in the order given, which is cursor order. */
+type StatusRow = [status: string, min: number];
+
+/** A task of agent Runs and the statuses it went through, all on its own clock. */
+async function taskWith(id: string, number: number, title: string, status: string, createdMin: number, runs: RunRow[], statuses: StatusRow[]) {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
+              VALUES (${id}, ${ORG}, ${PROJECT}, ${number}, ${title}, ${status}::task_status, now() - make_interval(mins => ${createdMin}))`;
+  for (const [run, attempt, startedMin, endedMin, runStatus] of runs) {
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
+                VALUES (${run}, ${ORG}, ${PROJECT}, ${id}, ${attempt}, now() - make_interval(mins => ${startedMin}),
+                        now() - make_interval(mins => ${startedMin}), now() - make_interval(mins => ${endedMin}::int), ${runStatus}::run_status)`;
+  }
+  for (const [n, [to, min]] of statuses.entries()) {
+    await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+                VALUES (${`evt_${id}_${n + 1}`}, ${ORG}, 'task.status_changed', ${id}, 'system', 'orchestrator', 'orchestrator',
+                        jsonb_build_object('status', ${to}::text), now() - make_interval(mins => ${min}))`;
+  }
+}
+
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
   await admin.unsafe(`CREATE DATABASE "${NAME}"`);
@@ -88,90 +109,37 @@ beforeAll(async () => {
                       '{"status": "running"}', now() - interval '30 minutes')`;
 
   // A task done after its second attempt; its first was aborted earlier.
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
-              VALUES ('wi_2', ${ORG}, ${PROJECT}, 2, 'Done on the second go', 'done', now() - interval '5 hours')`;
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
-              VALUES ('run_b1', ${ORG}, ${PROJECT}, 'wi_2', 1,
-                      now() - interval '4 hours', now() - interval '4 hours', now() - interval '3 hours', 'aborted'),
-                     ('run_b2', ${ORG}, ${PROJECT}, 'wi_2', 2,
-                      now() - interval '2 hours', now() - interval '2 hours', now() - interval '90 minutes', 'completed')`;
-  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
-              SELECT 'evt_b' || n, ${ORG}, 'task.status_changed', 'wi_2', 'system', 'orchestrator', 'orchestrator',
-                     jsonb_build_object('status', s), now() - at
-              FROM (VALUES (1, 'aborted', interval '3 hours'), (2, 'running', interval '2 hours'),
-                           (3, 'review', interval '90 minutes'), (4, 'done', interval '30 minutes')) AS v(n, s, at)
-              ORDER BY n`;
+  await taskWith("wi_2", 2, "Done on the second go", "done", 300,
+    [["run_b1", 1, 240, 180, "aborted"], ["run_b2", 2, 120, 90, "completed"]],
+    [["aborted", 180], ["running", 120], ["review", 90], ["done", 30]]);
 
   // Done after its second attempt, which was itself aborted and then tried
   // again (same attempt) before it went to review and finished.
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
-              VALUES ('wi_3', ${ORG}, ${PROJECT}, 3, 'Tried again, then done', 'done', now() - interval '6 hours')`;
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
-              VALUES ('run_c1', ${ORG}, ${PROJECT}, 'wi_3', 1,
-                      now() - interval '5 hours', now() - interval '5 hours', now() - interval '4 hours', 'aborted'),
-                     ('run_c2', ${ORG}, ${PROJECT}, 'wi_3', 2,
-                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '150 minutes', 'aborted'),
-                     ('run_c3', ${ORG}, ${PROJECT}, 'wi_3', 2,
-                      now() - interval '2 hours', now() - interval '2 hours', now() - interval '90 minutes', 'completed')`;
-  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
-              SELECT 'evt_c' || n, ${ORG}, 'task.status_changed', 'wi_3', 'system', 'orchestrator', 'orchestrator',
-                     jsonb_build_object('status', s), now() - at
-              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
-                           (3, 'aborted', interval '150 minutes'), (4, 'running', interval '2 hours'),
-                           (5, 'review', interval '90 minutes'), (6, 'done', interval '30 minutes')) AS v(n, s, at)
-              ORDER BY n`;
+  await taskWith("wi_3", 3, "Tried again, then done", "done", 360,
+    [["run_c1", 1, 300, 240, "aborted"], ["run_c2", 2, 180, 150, "aborted"], ["run_c3", 2, 120, 90, "completed"]],
+    [["aborted", 240], ["running", 180], ["aborted", 150], ["running", 120], ["review", 90], ["done", 30]]);
 
   // Its second attempt was aborted two hours ago and resumed an hour ago;
   // it is running now.
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
-              VALUES ('wi_4', ${ORG}, ${PROJECT}, 4, 'Resumed', 'running', now() - interval '6 hours')`;
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
-              VALUES ('run_d1', ${ORG}, ${PROJECT}, 'wi_4', 1,
-                      now() - interval '5 hours', now() - interval '5 hours', now() - interval '4 hours', 'aborted'),
-                     ('run_d2', ${ORG}, ${PROJECT}, 'wi_4', 2,
-                      now() - interval '3 hours', now() - interval '3 hours', NULL, 'running')`;
-  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
-              SELECT 'evt_d' || n, ${ORG}, 'task.status_changed', 'wi_4', 'system', 'orchestrator', 'orchestrator',
-                     jsonb_build_object('status', s), now() - at
-              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
-                           (3, 'aborted', interval '2 hours'), (4, 'running', interval '1 hour')) AS v(n, s, at)
-              ORDER BY n`;
+  await taskWith("wi_4", 4, "Resumed", "running", 360,
+    [["run_d1", 1, 300, 240, "aborted"], ["run_d2", 2, 180, null, "running"]],
+    [["aborted", 240], ["running", 180], ["aborted", 120], ["running", 60]]);
 
   // Attempt 2 is working, with a question asked 15 minutes ago and a
   // repository asked for 5 minutes ago, both still waiting on a person;
   // it was in review 50 to 40 minutes ago, then ready to merge until 20.
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
-              VALUES ('wi_5', ${ORG}, ${PROJECT}, 5, 'Waiting', 'running', now() - interval '4 hours')`;
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
-              VALUES ('run_e1', ${ORG}, ${PROJECT}, 'wi_5', 1,
-                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '2 hours', 'aborted'),
-                     ('run_e2', ${ORG}, ${PROJECT}, 'wi_5', 2,
-                      now() - interval '1 hour', now() - interval '1 hour', NULL, 'running')`;
+  await taskWith("wi_5", 5, "Waiting", "running", 240,
+    [["run_e1", 1, 180, 120, "aborted"], ["run_e2", 2, 60, null, "running"]],
+    [["review", 50], ["ready_to_merge", 40], ["running", 20]]);
   await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, asked_at)
               VALUES ('q_e2', ${ORG}, 'wi_5', 'run_e2', 'Which font?', 'open', now() - interval '15 minutes')`;
   await owner`INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, reason, status, created_at)
               VALUES ('rr_e2', ${ORG}, 'wi_5', 'run_e2', 'repo_att', 'needs the api', 'pending', now() - interval '5 minutes')`;
-  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
-              SELECT 'evt_e' || n, ${ORG}, 'task.status_changed', 'wi_5', 'system', 'orchestrator', 'orchestrator',
-                     jsonb_build_object('status', s), now() - at
-              FROM (VALUES (1, 'review', interval '50 minutes'), (2, 'ready_to_merge', interval '40 minutes'),
-                           (3, 'running', interval '20 minutes')) AS v(n, s, at)
-              ORDER BY n`;
 
   // Aborted for good an hour ago, during its second attempt, after an hour in review.
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
-              VALUES ('wi_6', ${ORG}, ${PROJECT}, 6, 'Aborted', 'aborted', now() - interval '5 hours')`;
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
-              VALUES ('run_f1', ${ORG}, ${PROJECT}, 'wi_6', 1,
-                      now() - interval '4 hours', now() - interval '4 hours', now() - interval '3 hours', 'aborted'),
-                     ('run_f2', ${ORG}, ${PROJECT}, 'wi_6', 2,
-                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '1 hour', 'aborted')`;
-  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
-              SELECT 'evt_f' || n, ${ORG}, 'task.status_changed', 'wi_6', 'system', 'orchestrator', 'orchestrator',
-                     jsonb_build_object('status', s), now() - at
-              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
-                           (3, 'review', interval '2 hours'), (4, 'aborted', interval '1 hour')) AS v(n, s, at)
-              ORDER BY n`;
+  await taskWith("wi_6", 6, "Aborted", "aborted", 300,
+    [["run_f1", 1, 240, 180, "aborted"], ["run_f2", 2, 180, 60, "aborted"]],
+    [["aborted", 240], ["running", 180], ["review", 120], ["aborted", 60]]);
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
@@ -216,11 +184,9 @@ test("an attempt's figures are its Runs' alone", async () => {
   expect(one.runs.map((r) => r.id)).toEqual(["run_a1_impl", "run_a1_rev"]);
   expect(one.costUsd).toBeCloseTo(1.75, 9);
   expect(one.tokens).toEqual({ input: 1400, output: 140 });
-  expect(one.activeMs).toBeGreaterThan(HOUR - 5000);
-  expect(one.activeMs).toBeLessThan(HOUR + 5000);
+  near(one.activeMs, HOUR);
   // From its first Run until attempt 2 began: two hours.
-  expect(one.leadMs).toBeGreaterThan(2 * HOUR - 5000);
-  expect(one.leadMs).toBeLessThan(2 * HOUR + 5000);
+  near(one.leadMs, 2 * HOUR);
 
   const two = await get("/v1/tasks/wi_1/metrics?attempt=2");
   expect(two.runs.map((r) => r.id)).toEqual(["run_a2_impl"]);
