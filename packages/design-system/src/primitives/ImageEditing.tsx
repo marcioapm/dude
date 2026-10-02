@@ -84,7 +84,6 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     write(next);
   }, [text, write]);
 
-  // A drag between fields changes two texts: it is not an undo step in either.
   useEffect(() => {
     if (!on || !kind) return;
     fields.set(key, { kind, text, setText, select: setSelected });
@@ -100,30 +99,7 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     if (selected === null) return;
     for (const [k, f] of fields) if (k !== key) f.select(null);
   }, [selected, key]);
-
-  // Esc inside this preview panel deselects before the dialog sees it (Radix
-  // listens on the document, in capture); Esc anywhere else is left alone.
-  // A press outside the selected image deselects too.
-  useEffect(() => {
-    if (selected === null) return;
-    const esc = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape" || !(e.target instanceof Node && preview.current?.contains(e.target))) return;
-      e.stopPropagation();
-      e.preventDefault();
-      setSelected(null);
-    };
-    const outside = (e: globalThis.PointerEvent) => {
-      const t = e.target as Element | null;
-      if (t && (t.closest?.(`[data-image-key="${CSS.escape(key)}"][data-image-n="${selected}"]`) || t.closest?.("[data-radix-popper-content-wrapper]"))) return;
-      setSelected(null);
-    };
-    window.addEventListener("keydown", esc, true);
-    document.addEventListener("pointerdown", outside, true);
-    return () => {
-      window.removeEventListener("keydown", esc, true);
-      document.removeEventListener("pointerdown", outside, true);
-    };
-  }, [selected, key, preview]);
+  useDeselectOutside(selected, key, preview, setSelected);
 
   // A move remounts the figure, which drops focus to the body. The moved
   // figure takes it back when focus was in this panel or the move was a drop;
@@ -156,38 +132,14 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
 
   const relayout = useCallback((n: number, layout: ImageLayout) => edit(withLayout(text(), n, layout)), [text, edit]);
 
-  /** The slot nearest the pointer, and where its line is drawn, from the rendered blocks. */
-  const slotAt = (clientY: number): { n: number; y: number } | null => {
-    const panel = preview.current;
-    const root = panel?.querySelector<HTMLElement>(":scope > div");
-    if (!panel || !root || !kind) return null;
-    const top = panel.getBoundingClientRect().top - panel.scrollTop;
-    const edges: number[] = [];
-    if (kind === "goal") {
-      const blocks = [...root.children] as HTMLElement[];
-      blocks.forEach((b) => edges.push(b.getBoundingClientRect().top));
-      const last = blocks[blocks.length - 1];
-      edges.push(last ? last.getBoundingClientRect().bottom : top);
-    } else {
-      // Under each criterion: its bottom edge.
-      root.querySelectorAll<HTMLElement>(":scope > ul > li, :scope > ol > li").forEach((li) => edges.push(li.getBoundingClientRect().bottom));
-      if (edges.length === 0) edges.push(root.getBoundingClientRect().bottom);
-    }
-    let best = 0;
-    edges.forEach((y, i) => {
-      if (Math.abs(y - clientY) < Math.abs((edges[best] ?? 0) - clientY)) best = i;
-    });
-    return { n: best, y: (edges[best] ?? top) - top };
-  };
-
-  const panel: ImageEditing["panel"] = on ? {
+  const panel: ImageEditing["panel"] = on && kind ? {
     onDragOver: (e) => {
       if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "move";
       // dragover repeats while the pointer rests: an unchanged slot sets no state, so nothing renders.
-      const next = slotAt(e.clientY);
+      const next = slotAt(preview.current, kind, e.clientY);
       const s = slotNow.current;
       if (s === next || (s && next && s.n === next.n && s.y === next.y)) return;
       showSlot(next);
@@ -196,10 +148,10 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
       if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) showSlot(null);
     },
     onDrop: (e) => {
-      if (!e.dataTransfer.types.includes(DRAG_TYPE) || !kind) return;
+      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
       e.preventDefault();
       e.stopPropagation();
-      const target = slotAt(e.clientY);
+      const target = slotAt(preview.current, kind, e.clientY);
       showSlot(null);
       let from: { key: string; n: number };
       try {
@@ -221,6 +173,7 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
       const cut = cutReference(source.text(), from.n);
       if (!cut) return;
       const put = insertReference(text(), cut.ref, target.n, kind);
+      // A drag between fields changes two texts: it is not an undo step in either, so neither goes through `edit`.
       source.setText(cut.text);
       source.select(null);
       claim.current = true;
@@ -257,6 +210,57 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
 
   const slotLine = slot ? <span className={styles["slot"]} style={{ top: slot.y }} data-testid="image-slot" data-slot={slot.n} aria-hidden /> : null;
   return { frame, panel, slotLine };
+}
+
+/**
+ * Esc inside this preview panel deselects before the dialog sees it (Radix
+ * listens on the document, in capture); Esc anywhere else is left alone. A
+ * press outside the selected image (Tooltip portals aside) deselects too.
+ */
+function useDeselectOutside(selected: number | null, key: string, preview: RefObject<HTMLDivElement | null>, select: (n: null) => void) {
+  useEffect(() => {
+    if (selected === null) return;
+    const esc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || !(e.target instanceof Node && preview.current?.contains(e.target))) return;
+      e.stopPropagation();
+      e.preventDefault();
+      select(null);
+    };
+    const outside = (e: globalThis.PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t && (t.closest?.(`[data-image-key="${CSS.escape(key)}"][data-image-n="${selected}"]`) || t.closest?.("[data-radix-popper-content-wrapper]"))) return;
+      select(null);
+    };
+    window.addEventListener("keydown", esc, true);
+    document.addEventListener("pointerdown", outside, true);
+    return () => {
+      window.removeEventListener("keydown", esc, true);
+      document.removeEventListener("pointerdown", outside, true);
+    };
+  }, [selected, key, preview, select]);
+}
+
+/** The slot nearest the pointer, and where its line is drawn, from the rendered blocks. */
+function slotAt(panel: HTMLDivElement | null, kind: FieldKind, clientY: number): { n: number; y: number } | null {
+  const root = panel?.querySelector<HTMLElement>(":scope > div");
+  if (!panel || !root) return null;
+  const top = panel.getBoundingClientRect().top - panel.scrollTop;
+  const edges: number[] = [];
+  if (kind === "goal") {
+    const blocks = [...root.children] as HTMLElement[];
+    blocks.forEach((b) => edges.push(b.getBoundingClientRect().top));
+    const last = blocks[blocks.length - 1];
+    edges.push(last ? last.getBoundingClientRect().bottom : top);
+  } else {
+    // Under each criterion: its bottom edge.
+    root.querySelectorAll<HTMLElement>(":scope > ul > li, :scope > ol > li").forEach((li) => edges.push(li.getBoundingClientRect().bottom));
+    if (edges.length === 0) edges.push(root.getBoundingClientRect().bottom);
+  }
+  let best = 0;
+  edges.forEach((y, i) => {
+    if (Math.abs(y - clientY) < Math.abs((edges[best] ?? 0) - clientY)) best = i;
+  });
+  return { n: best, y: (edges[best] ?? top) - top };
 }
 
 const SIZES: ReadonlyArray<{ size: "small" | "medium" | "full"; icon: IconName; label: string }> = [
@@ -366,7 +370,6 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
     handle.addEventListener("pointercancel", done);
   };
 
-  const full = layout.size === "full";
   return (
     <ImageFigure layout={layout} width={drag?.width}
       ref={ref}
@@ -399,34 +402,51 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
       {children}
       {selected ? (
         <>
-          <span className={cx(styles["toolbar"], layout.align === "right" && styles["toolbarRight"], below && styles["toolbarBelow"])} role="toolbar" aria-label="Image layout" data-image-toolbar
-            onKeyDown={(e) => e.stopPropagation()}>
-            {SIZES.map((s) => (
-              <Tool key={s.size} icon={s.icon} label={s.label} pressed={layout.size === s.size}
-                onClick={() => onLayout({ size: s.size, align: s.size === "full" ? "center" : layout.align })} />
-            ))}
-            <span className={styles["sep"]} aria-hidden />
-            {ALIGNS.map((a) => (
-              <Tool key={a.align} icon={a.icon} label={a.label} pressed={layout.align === a.align} disabled={full && a.align !== "center"}
-                onClick={() => onLayout({ size: layout.size, align: a.align })} />
-            ))}
-            <span className={styles["sep"]} aria-hidden />
-            <Tool icon="arrow-up" label="Move up" shortcut={["Alt", "↑"]} disabled={!canUp} onClick={() => onMove(-1)} />
-            <Tool icon="arrow-down" label="Move down" shortcut={["Alt", "↓"]} disabled={!canDown} onClick={() => onMove(1)} />
-            <span className={styles["sep"]} aria-hidden />
-            <Tool icon="external" label="Open" onClick={() => {
+          <ImageToolbar layout={layout} below={below} canUp={canUp} canDown={canDown} onLayout={onLayout} onMove={onMove} onRemove={onRemove}
+            onOpen={() => {
               open();
               // The viewer takes the next Esc, not this selection.
               onDeselect();
             }} />
-            <Tool icon="close" label="Remove" shortcut="Del" onClick={onRemove} />
-          </span>
           <span className={cx(styles["handle"], styles["handleLeft"])} onPointerDown={startResize(-1)} draggable={false} aria-hidden data-testid="image-resize-left" />
           <span className={cx(styles["handle"], styles["handleRight"])} onPointerDown={startResize(1)} draggable={false} aria-hidden data-testid="image-resize-right" />
           {drag ? <span className={styles["sizeTip"]} data-testid="image-size-tip">{drag.label}</span> : null}
         </>
       ) : null}
     </ImageFigure>
+  );
+}
+
+function ImageToolbar({ layout, below, canUp, canDown, onLayout, onMove, onOpen, onRemove }: {
+  layout: ImageLayout;
+  below: boolean;
+  canUp: boolean;
+  canDown: boolean;
+  onLayout: (l: ImageLayout) => void;
+  onMove: (dir: -1 | 1) => void;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const full = layout.size === "full";
+  return (
+    <span className={cx(styles["toolbar"], layout.align === "right" && styles["toolbarRight"], below && styles["toolbarBelow"])} role="toolbar" aria-label="Image layout" data-image-toolbar
+      onKeyDown={(e) => e.stopPropagation()}>
+      {SIZES.map((s) => (
+        <Tool key={s.size} icon={s.icon} label={s.label} pressed={layout.size === s.size}
+          onClick={() => onLayout({ size: s.size, align: s.size === "full" ? "center" : layout.align })} />
+      ))}
+      <span className={styles["sep"]} aria-hidden />
+      {ALIGNS.map((a) => (
+        <Tool key={a.align} icon={a.icon} label={a.label} pressed={layout.align === a.align} disabled={full && a.align !== "center"}
+          onClick={() => onLayout({ size: layout.size, align: a.align })} />
+      ))}
+      <span className={styles["sep"]} aria-hidden />
+      <Tool icon="arrow-up" label="Move up" shortcut={["Alt", "↑"]} disabled={!canUp} onClick={() => onMove(-1)} />
+      <Tool icon="arrow-down" label="Move down" shortcut={["Alt", "↓"]} disabled={!canDown} onClick={() => onMove(1)} />
+      <span className={styles["sep"]} aria-hidden />
+      <Tool icon="external" label="Open" onClick={onOpen} />
+      <Tool icon="close" label="Remove" shortcut="Del" onClick={onRemove} />
+    </span>
   );
 }
 
