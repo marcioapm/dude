@@ -48,12 +48,16 @@ export function ForgePermissionList({ verification }: { verification: ForgeVerif
       {verification.repositories.map((r) => {
         const open = r.permissions.filter((p) => p.outcome !== "ok").sort((a, b) => rank(a) - rank(b));
         const failing = open.some((p) => p.level === "required" && p.outcome === "missing");
+        // Ready only when every required permission was shown granted.
+        const unproven = open.some((p) => p.level === "required" && p.outcome === "untested");
+        const [tone, icon, label] = r.error ? ["neutral", "circle", "Not tested"] as const
+          : failing ? ["danger", "cross", "Missing"] as const
+          : unproven ? ["neutral", "circle", "Not fully tested"] as const
+          : ["success", "check", "Ready"] as const;
         return (
           <li key={r.id} data-testid="forge-permission-repo">
             <div className="forgePermissionRepo">
-              <Badge size="sm" tone={r.error ? "neutral" : failing ? "danger" : "success"} icon={r.error ? "circle" : failing ? "cross" : "check"}>
-                {r.error ? "Not tested" : failing ? "Missing" : "Ready"}
-              </Badge>
+              <Badge size="sm" tone={tone} icon={icon}>{label}</Badge>
               <span className="ds-mono">{r.projectName} / {r.name}</span>
               {r.error ? <span className="muted">{r.error}</span> : null}
             </div>

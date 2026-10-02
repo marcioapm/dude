@@ -47,6 +47,31 @@ const permissionsOf = async (fetcher: (input: string, init: RequestInit) => Prom
     .permissions.map((p) => [p.permission, p]));
 
 describe("verifyRepositories", () => {
+  test("several repositories each get their own results, in the order given, whichever answers first", async () => {
+    const blocked: RepositoryRow = { ...repo, id: "repo_2", name: "blocked", url: "https://github.com/acme/blocked.git" };
+    let release!: () => void;
+    const secondAnswered = new Promise<void>((r) => (release = r));
+    const fetcher = async (input: string, init: RequestInit) => {
+      const path = input.replace(/^https:\/\/(api\.)?github\.com/, "");
+      if (path === "/repos/acme/blocked") {
+        release();
+        return Response.json({ message: "Not Found" }, { status: 404 });
+      }
+      if (path === "/repos/acme/app") {
+        await secondAnswered; // the first repository finishes last
+        return ok({ private: true, default_branch: "main", owner: { type: "Organization" } });
+      }
+      if (path.startsWith("/acme/app.git/info/refs")) return new Response("", { headers: { "content-type": "application/x-git-receive-pack-advertisement" } });
+      if (init.method === "POST") return Response.json({ message: "Validation Failed" }, { status: 422 });
+      return ok([]);
+    };
+    const results = await verifyRepositories(fetcher, { secret: "github_pat_x", apiBaseUrl: "https://api.github.com", kind: "fine_grained", scopes: [] }, [repo, blocked]);
+    const outcome = (i: number, permission: string) => results[i]!.permissions.find((p) => p.permission === permission)?.outcome;
+    expect(results.map((r) => [r.id, r.slug])).toEqual([["repo_1", "acme/app"], ["repo_2", "acme/blocked"]]);
+    expect([outcome(0, "Metadata: Read"), outcome(0, "Pull requests: Read and write")]).toEqual(["ok", "ok"]);
+    expect([outcome(1, "Metadata: Read"), outcome(1, "Pull requests: Read and write")]).toEqual(["missing", "untested"]);
+  });
+
   test("a secondary rate limit (Retry-After) on check runs is untested, not missing", async () => {
     const { fetcher } = github((method, path) => {
       if (path === "/repos/acme/app") return ok({ private: true, default_branch: "main", owner: { type: "Organization" } });
