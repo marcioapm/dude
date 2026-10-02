@@ -351,6 +351,26 @@ body {
   min-width: 0;
 }
 
+/* A tier naming no model yet: its Requests cell, in the attention tone. */
+.tierUnset {
+  color: var(--ds-tone-attention-fg);
+}
+/* An upgrade note whose role now asks for another model than before. */
+.tierChanged {
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-tone-attention-fg);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+/* A tier in a picker: its mark before its name. */
+.tierOption {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+
 /* -- The task page -------------------------------------------------- */
 
 .taskScreen {

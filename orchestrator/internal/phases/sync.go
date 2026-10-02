@@ -373,6 +373,10 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
+	var noModel errNoModel
+	if errors.As(err, &noModel) {
+		return s.fail(ctx, r, string(noModel))
+	}
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
@@ -402,16 +406,18 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 				}
 			}
 		}
-		// machine and image: what it runs on and in, recorded with the lux
-		// Run it runs as, so a later edit of the size or a new version of
-		// the image leaves this Run's record — and its resumes — alone.
+		// machine, model_tier and image: what it runs on, the tier it
+		// requested and what it runs in, recorded with the lux Run it runs
+		// as, so a later edit or removal of the size or tier, or a new
+		// version of the image, leaves this Run's record — and its resumes —
+		// alone.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
-			machine = $10::jsonb, image = $11::jsonb, image_waiting_since = NULL,
+			machine = $10::jsonb, model_tier = NULLIF($11, ''), image = $12::jsonb, image_waiting_since = NULL,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, got)
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -498,6 +504,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var tier delivery.Tier
+	var noTier string
+	settingsRole := delivery.PromptRoleForPhase[r.Phase]
+	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -508,6 +518,17 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
+		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
+		if stored != nil {
+			// A resume goes on with what the Run was submitted with, whatever
+			// its tier says now: lux keeps the spec's env, model and all.
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, '') FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name); err != nil {
+				return fmt.Errorf("load run model: %w", err)
+			}
+		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, settings); err != nil || noTier != "" {
+			return err
+		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
@@ -547,11 +568,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	if err != nil {
 		return lux.Spec{}, nil, err
 	}
-	role := delivery.RoleForPhase[r.Phase]
-	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
-	if settings.Model == "" {
-		return lux.Spec{}, nil, fmt.Errorf("no model is configured for the %s role", role)
+	if noTier != "" {
+		return lux.Spec{}, nil, errNoModel(noTier)
 	}
+	role := delivery.RoleForPhase[r.Phase]
 
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
@@ -567,7 +587,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
+	in.Model, in.ModelTier, in.Effort, in.TimeLimitMinutes = tier.Model, tier.Name, settings.Effort, settings.TimeLimitMinutes
 	if m, ok := sizes.ForRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels); ok {
 		in.Machine = &m
 	}
@@ -1545,6 +1565,12 @@ func (e errRegistry) Error() string {
 	return "logging in to the agent image's registry: " + e.err.Error()
 }
 func (e errRegistry) Unwrap() error { return e.err }
+
+// errNoModel: the Run's role names no tier, or one that names no model; it
+// is the reason the Run fails, in words, as it is.
+type errNoModel string
+
+func (e errNoModel) Error() string { return string(e) }
 
 // passing: err is a credential that could not be had now, and may be later.
 func passing(err error) bool {

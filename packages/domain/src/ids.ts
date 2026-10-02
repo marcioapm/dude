@@ -31,6 +31,7 @@ export const ID_PREFIXES = {
   promptVersion: "pv",
   memory: "mem",
   machineSize: "msz",
+  modelTier: "mtr",
   image: "img",
   imageVersion: "imv",
   imageBuild: "imb",

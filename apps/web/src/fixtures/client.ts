@@ -17,7 +17,7 @@ import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, R
 import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type ReviewerCandidate, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 
@@ -210,6 +210,12 @@ export class FixtureClient extends ApiClient {
   }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
+  }
+  override modelTiers() {
+    return Promise.resolve({ tiers: MODEL_TIERS, canEdit: true, upgrade: [] });
+  }
+  override proxyModels() {
+    return Promise.resolve({ models: ["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"], source: "llm.example/v1", problem: null });
   }
 
   // -- servers --------------------------------------------------------------

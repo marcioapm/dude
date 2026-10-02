@@ -156,12 +156,15 @@ and only `fake/` models can run; a real model's Run fails at its first model
 call. Every Run gets both, the key as a lux secret; memory's
 embeddings use them too unless `DUDE_EMBEDDINGS_*` say otherwise. Provider
 definitions live in the agent image (`images/runtime/opencode.json`; see
-"Agent image contract" in [`docs/operations.md`](docs/operations.md)). Set a
-role's model in the project's `agentModels` as `<provider>/<model>` for a
-provider the image defines, `llm-anthropic` or `llm-openai` (e.g.
-`{"implementer": {"model": "llm-anthropic/claude-sonnet-5"}}`);
+"Agent image contract" in [`docs/operations.md`](docs/operations.md)). Agents
+pick a model tier, never a model: every organisation starts with Thinker,
+Coder and Fast, and an admin sets the model each one requests from the proxy
+— exactly as the proxy names it, e.g. `claude-opus-5-5` — in Organisation ›
+Models (`PUT /v1/models/tiers/:id`). A role names its tier in Agents or a
+project (`{"implementer": {"tier": "<tier id>"}}`). A tier requesting
 `fake/scripted` runs the whole pipeline without a model — deterministic,
-free, and what the tests use.
+free, and what the tests use. Design:
+[`docs/design/model-tiers.md`](docs/design/model-tiers.md).
 
 To have delivery open real pull requests, store a GitHub token for the
 organization and point a project at a repository you own:

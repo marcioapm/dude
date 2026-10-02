@@ -85,7 +85,7 @@ def preview_project(client: ApiClient, env, org: dict):
     assert client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url}).status_code == 200
     project = client.create_project(
         name="Previews on lux", slug=f"pv-{os.urandom(3).hex()}", runtimeImage=FAKE_IMAGE,
-        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
         repositories=[{"name": "app", "url": gh.clone_url, "defaultBranch": "main"}],
     )
     # lux-fake's app: the checkout's message.txt and commit, a visit counter

@@ -3,6 +3,7 @@ import {
   ALL_AGENT_ROLES,
   agentModelConfigSchema,
   resolveAgentModel,
+  ROLE_MODEL_REMOVED,
   taskGoalShortBy,
   type AgentModels,
   type Organization,
@@ -17,31 +18,31 @@ describe("resolveAgentModel", () => {
   test("prefers the project binding over the organization default", () => {
     const resolved = resolveAgentModel(
       "orchestrator",
-      project({ orchestrator: { model: "project-model" } }),
-      org({ orchestrator: { model: "org-model" } }),
+      project({ orchestrator: { tier: "project-tier" } }),
+      org({ orchestrator: { tier: "org-tier" } }),
     );
-    expect(resolved?.model).toBe("project-model");
+    expect(resolved?.tier).toBe("project-tier");
   });
 
   test("falls back to the organization default when the project is silent", () => {
-    const resolved = resolveAgentModel("reviewer", project({}), org({ reviewer: { model: "org-model" } }));
-    expect(resolved?.model).toBe("org-model");
+    const resolved = resolveAgentModel("reviewer", project({}), org({ reviewer: { tier: "org-tier" } }));
+    expect(resolved?.tier).toBe("org-tier");
   });
 
   test("falls back to system defaults last", () => {
     const resolved = resolveAgentModel("simplifier", project({}), org({}), {
-      simplifier: { model: "system-model" },
+      simplifier: { tier: "system-tier" },
     });
-    expect(resolved?.model).toBe("system-model");
+    expect(resolved?.tier).toBe("system-tier");
   });
 
-  test("resolves field by field: a project's effort keeps the organization's model", () => {
+  test("resolves field by field: a project's effort keeps the organization's tier", () => {
     const resolved = resolveAgentModel(
       "reviewer",
       project({ reviewer: { effort: "low" } }),
-      org({ reviewer: { model: "org-model", effort: "high", timeLimitMinutes: 20 } }),
+      org({ reviewer: { tier: "org-tier", effort: "high", timeLimitMinutes: 20 } }),
     );
-    expect(resolved).toEqual({ model: "org-model", effort: "low", timeLimitMinutes: 20 });
+    expect(resolved).toEqual({ tier: "org-tier", effort: "low", timeLimitMinutes: 20 });
   });
 
   test("returns null when no layer configures the role", () => {
@@ -51,34 +52,40 @@ describe("resolveAgentModel", () => {
   test("resolves each role independently", () => {
     const resolved = resolveAgentModel(
       "implementer",
-      project({ orchestrator: { model: "project-orchestrator" } }),
-      org({ implementer: { model: "org-implementer" } }),
+      project({ orchestrator: { tier: "project-orchestrator" } }),
+      org({ implementer: { tier: "org-implementer" } }),
     );
     // The project configures a *different* role, so it must not shadow this one.
-    expect(resolved?.model).toBe("org-implementer");
+    expect(resolved?.tier).toBe("org-implementer");
   });
 
   test("every declared role is resolvable", () => {
     const models = Object.fromEntries(
-      ALL_AGENT_ROLES.map((role) => [role, { model: `model-${role}` }]),
+      ALL_AGENT_ROLES.map((role) => [role, { tier: `tier-${role}` }]),
     ) as AgentModels;
     for (const role of ALL_AGENT_ROLES) {
-      expect(resolveAgentModel(role, project(models), org({}))?.model).toBe(`model-${role}`);
+      expect(resolveAgentModel(role, project(models), org({}))?.tier).toBe(`tier-${role}`);
     }
   });
 });
 
 describe("agentModelConfigSchema", () => {
-  test("a model, when given, is not empty — and a layer may give none", () => {
-    expect(agentModelConfigSchema.safeParse({ model: "" }).success).toBe(false);
+  test("a tier, when given, is not empty — and a layer may give none", () => {
+    expect(agentModelConfigSchema.safeParse({ tier: "" }).success).toBe(false);
     expect(agentModelConfigSchema.safeParse({}).success).toBe(true);
     expect(agentModelConfigSchema.safeParse({ effort: "high" }).success).toBe(true);
     expect(agentModelConfigSchema.safeParse({ effort: "extreme" }).success).toBe(false);
   });
 
+  test("a role names a tier, never a model: a model is refused, saying so", () => {
+    const parsed = agentModelConfigSchema.safeParse({ model: "llm-anthropic/claude-opus-5-5", tier: "mtr_x" });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toBe(ROLE_MODEL_REMOVED);
+  });
+
   test("accepts optional tuning and cost fields", () => {
     const parsed = agentModelConfigSchema.parse({
-      model: "llm-openai/gpt-test",
+      tier: "mtr_x",
       harness: "opencode",
       maxTokens: 1000,
       temperature: 0.2,
@@ -89,9 +96,9 @@ describe("agentModelConfigSchema", () => {
   });
 
   test("rejects out-of-range tuning values", () => {
-    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", temperature: 3 }).success).toBe(false);
-    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", maxTokens: 0 }).success).toBe(false);
-    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", costLimitUsd: -1 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ tier: "mtr_x", temperature: 3 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ tier: "mtr_x", maxTokens: 0 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ tier: "mtr_x", costLimitUsd: -1 }).success).toBe(false);
   });
 });
 

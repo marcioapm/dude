@@ -64,6 +64,17 @@ export async function requireSize(scope: OrgScope, id: string): Promise<void> {
   }
 }
 
+/** requireSize for several sizes at once, locked in id order, as every multi-row lock is. */
+export async function checkSizes(scope: OrgScope, ids: readonly string[]): Promise<void> {
+  const distinct = [...new Set(ids)];
+  if (distinct.length === 0) return;
+  const found = (await scope.sql`
+    SELECT id FROM machine_sizes WHERE id = ANY(${scope.sql.array(distinct, "text")}::text[]) ORDER BY id FOR SHARE`)
+    .map((r: { id: string }) => r.id) as string[];
+  const missing = distinct.find((id) => !found.includes(id));
+  if (missing) throw badRequest(`there is no machine size ${missing}`);
+}
+
 /**
  * Who names each size: the organization's roles, each project's overrides,
  * and each project's previews. A fixer that names none of its own runs on
