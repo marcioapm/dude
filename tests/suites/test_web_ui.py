@@ -1001,6 +1001,13 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
 
     page.get_by_test_id("forge-verify").click()
     expect(page.get_by_test_id("forge-verdict")).to_have_text("Connected as dude-bot")
+    # Under it, each repository's permissions that are not plainly granted, with why.
+    repo = page.get_by_test_id("forge-permission-repo")
+    expect(repo).to_have_count(1)
+    expect(repo).to_contain_text("Greeter / greeter")
+    expect(repo.locator('[data-outcome="untested"]', has_text="Checks: Read")).to_contain_text(
+        "Could not test: no recent commit has check runs")
+    expect(repo.locator('[data-outcome="missing"]')).to_have_count(0)
 
     # A wrong token is caught here, not by an agent failing to open a PR.
     api_base = client.get("/v1/forge/credential").json()["apiBaseUrl"]
