@@ -46,7 +46,7 @@ import {
 } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -61,6 +61,8 @@ import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
+import { ChatSection } from "./ChatSection.tsx";
+import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
@@ -117,9 +119,11 @@ const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open, on its attempt; the
-  // task's URL names the tab (none: Overview) and the attempt when it is
-  // not the current one. A tab or attempt picked here is written back.
-  const [chosenTab, setTab] = useState<string>(openTab ?? "overview");
+  // task's URL names the tab and the attempt when it is not the current
+  // one. A tab or attempt picked here is written back. A URL naming no tab
+  // opens on Chat once someone has written in it, Overview until then
+  // (null: that default).
+  const [chosenTab, setTab] = useState<string | null>(openTab ?? null);
   // The attempt picked, null for the current one. Kept on Activity and
   // Servers, whose URLs never name one: back on a tab that shows one
   // attempt, it is still the one shown.
@@ -127,16 +131,20 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A session left here before the URL says so (or with no URL to say it).
   const [leftRun, setLeftRun] = useState<string | undefined>(undefined);
   const [lastPlace, setLastPlace] = useState({ runId, openTab, urlAttempt });
+  // Where this page last sent the URL: arriving there keeps the tab picked,
+  // Overview too, which the URL does not name.
+  const [sent, setSent] = useState<{ tab: TaskTab | undefined; attempt: number | undefined } | null>(null);
   if (lastPlace.runId !== runId || lastPlace.openTab !== openTab || lastPlace.urlAttempt !== urlAttempt) {
     setLastPlace({ runId, openTab, urlAttempt });
     setLeftRun(undefined);
+    setSent(null);
     if (!runId) {
-      setTab(openTab ?? "overview");
+      if (sent === null || sent.tab !== openTab || sent.attempt !== urlAttempt) setTab(openTab ?? null);
       if (attemptScoped(openTab)) setChosenAttempt(urlAttempt ?? null);
     }
   }
   const openedRun = runId && runId !== leftRun ? runId : undefined;
-  const tab = openedRun ? "sessions" : chosenTab;
+  const asked = openedRun ? "sessions" : chosenTab;
   // For the open session, which is memoised: one function each for the page's life.
   const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {} });
   const openServers = useCallback(() => latest.current.pickTab("servers"), []);
@@ -153,6 +161,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const ledger = useRef<PersistedEvent[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
+  // The task's ended conductors' ledgers, read once while its page is open.
+  const endedLedgers = useMemo(() => new EndedLedgers(client), [client, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- one per task
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
   const people = usePeople();
@@ -208,6 +218,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   useEffect(() => {
     void load();
   }, [load]);
+  const reload = useCallback(() => void load(), [load]);
 
   // What an agent says and does as it works changes nothing on this page
   // but the open session, which has its own stream: no re-read for those.
@@ -288,8 +299,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         const theirs = ofAttempt(n);
         return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
       }),
-      // Newest first.
-      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      // Newest first, the task's conductor above them all.
+      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown)
+        .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, artifacts, allPrs, item, byId, attempts, current, shown]);
 
@@ -344,13 +356,22 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
   }
 
+  // The task's conductors, oldest first: Chat shows each conversation in
+  // turn, and the latest takes the next message.
+  const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const conductor = conductors.at(-1) ?? null;
+  const tab = asked ?? (conductor ? "chat" : "overview");
+
   // Leaves any open session; the URL is replaced only for a tab change with none open.
   const show = (onTab: string, n: number, replace: boolean) => {
     const next = n === current ? null : n;
     setChosenAttempt(next);
     setTab(onTab);
     if (openedRun) setLeftRun(openedRun);
-    onNavigate?.(urlTab(onTab), next !== null && attemptScoped(urlTab(onTab)) ? next : undefined, replace);
+    const to = { tab: urlTab(onTab), attempt: next !== null && attemptScoped(urlTab(onTab)) ? next : undefined };
+    // Only a move the URL will make: a stale one would keep a later visit's tab.
+    if (openedRun || to.tab !== openTab || to.attempt !== urlAttempt) setSent(to);
+    onNavigate?.(to.tab, to.attempt, replace);
   };
   /** Show attempt `n`: picked in the header, from an empty tab, or the way back to the current one. */
   const pickAttempt = (n: number, onTab: string = tab) => show(onTab, n, false);
@@ -383,7 +404,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
-    <div className={tab === "sessions" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
+    <div className={tab === "sessions" || tab === "chat" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
@@ -467,6 +488,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <Tabs value={tab} onValueChange={pickTab} fill>
         <TabList aria-label="Task" className="tabsInset">
+          <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
@@ -477,6 +499,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
           <Tab value="activity" tooltip={many ? "Every attempt" : undefined}>Activity</Tab>
         </TabList>
+
+        <TabPanel value="chat" fill>
+          <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
+            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
+            findings={findings} pullRequests={pullRequests}
+            events={events} owner={sessionTask} version={version} onSent={reload} onBack={onBack} />
+        </TabPanel>
 
         <TabPanel value="overview" className="taskPane">
           <div className="taskOverview">

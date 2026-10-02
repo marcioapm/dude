@@ -1,0 +1,41 @@
+/*
+ * TaskHistory: one line on the raised shade, square, with no rule: what a
+ * task's Chat stands on before anyone has written in it, and above the
+ * conversation after.
+ */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-comfortable);
+  padding: var(--ds-space-6) var(--ds-space-chat-pad-x);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.icon {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.line {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  line-height: var(--ds-leading-prose);
+}
+.lead {
+  color: var(--ds-color-text-primary);
+}
+.dot,
+.arrow {
+  color: var(--ds-color-text-muted);
+}
+.steps,
+.step,
+.fact {
+  font-variant-numeric: tabular-nums;
+}
+.action {
+  flex-shrink: 0;
+}

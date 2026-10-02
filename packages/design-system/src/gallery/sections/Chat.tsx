@@ -14,6 +14,7 @@ import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { TaskHistory } from "../../components/TaskHistory.tsx";
 import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
@@ -369,19 +370,42 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="human" name="marcio" intent="prompt" content="Add retry with backoff to the GitHub webhook handler. Cap at 5 attempts, keep the public API unchanged." startedAt={at(0)} />
             <ChatMessage role="system" content="Session started on worker-03 · claude-opus-4" startedAt={at(1_000)} />
             <Label>agent feet: context and output tokens; cost known, unknown, and zero</Label>
-            <ChatMessage role="orchestrator" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={1_240} activity="completed" />
+            <ChatMessage role="conductor" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={1_240} activity="completed" />
             <ChatMessage role="implementer" model="gpt-5-codex" content="Cost not reported by this harness (subscription seat): the foot says so rather than pricing it at zero." startedAt={at(20_000)} endedAt={at(24_000)} costUsd={null} contextTokens={188_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={620} activity="completed" />
             <ChatMessage role="reviewer" model="claude-sonnet-4" content="Context past 80% of the window: the ctx count takes attention ink, the same threshold a cost takes against its budget." startedAt={at(25_000)} endedAt={at(26_000)} costUsd={0} contextTokens={612_000} contextWindowTokens={CONTEXT_WINDOW} outputTokens={90} activity="completed" />
             <ChatMessage role="simplifier" model="claude-sonnet-4" content="Only a total is known: the plain `tok` count, as before." startedAt={at(27_000)} endedAt={at(28_000)} tokens={4_100} activity="completed" />
             <Label>live</Label>
             <ChatMessage role="implementer" model="claude-opus-4" content="Added `isRetryable` and a bounded loop. Running the tests" streaming startedAt={Date.now() - 38_000} costUsd={0.21} contextTokens={48_000} contextWindowTokens={CONTEXT_WINDOW} activity="streaming" activityProps={{ since: Date.now() - 6_000, detail: "312 tokens" }} />
             <ChatMessage role="implementer" model="claude-opus-4" content="Tests are running." continued attachments={<ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 44_000} />} activity="tool" activityProps={{ tool: "bash", since: Date.now() - 44_000 }} startedAt={Date.now() - 61_000} costUsd={0.23} />
-            <ChatMessage role="orchestrator" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
+            <ChatMessage role="conductor" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
             <Label>interventions: answer · steer queued (lands at the next step) · steer read</Label>
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should 4xx responses be retried? The existing code retries everything." content="No — only retry 5xx and network errors." startedAt={at(1_520_000)} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={null} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} read />
             <ChatMessage role="reviewer" model="claude-opus-4" content="Backoff jitter uses `Math.random`; consider seeding for tests (minor)." startedAt={at(1_640_000)} endedAt={at(1_650_000)} costUsd={0.03} activity="failed" activityProps={{ detail: "upstream 500 after 5 attempts" }} />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-conductor"
+        title="A task's Chat"
+        note="Talking with a task's conductor. TaskHistory heads it: how the task went, what ran (a fan-out folded, ×3), what it came to — the whole line before anyone has written. The first message is the person's own turn (intent message: signed, no tint — talking, not intervening); dude's briefing follows, a framed prompt tagged Briefing and signed with the task's dude name. The conductor answers with its own face (round, violet). dude's notices in Chat say who says them. The composer is chat: Send, accent focus, no interrupt, and 'To Conductor · read-only' where 'Sent as' would be."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <TaskHistory lead="Delivered automatically, merged" steps={["implementer", "reviewers ×3", "fixer", "reviewers ×3", "simplifier", "PR #88"]}
+              facts={["5 findings, all settled", "$9.80"]} />
+            <ChatMessage role="human" name="Márcio" intent="message" content="why is the max backoff 8s and not something like 30? and does this retry POSTs?" startedAt={at(0)} />
+            <ChatMessage role="system" name="El Duderino" intent="briefing" startedAt={at(1_000)}
+              content={"Conductor, Márcio wrote in the Chat of SDK-31, \"Retry on 429 with backoff\". You are this task's conductor: answer them.\n\n## The task\n\nSDK-31 · status done\n\n## Runs (8)\n\n- run_… · implement · implementer · completed · Implemented it.\n- run_… · review · correctness · reviewer · completed · One problem."} />
+            <ChatAside><ToolCallCard name="bash" status="completed" args={{ command: "rg -n \"maxBackoff|idempot\" src/" }} durationMs={200} /></ChatAside>
+            <ChatMessage role="conductor" model="claude-sonnet-4.5" startedAt={at(9_000)} endedAt={at(16_000)} costUsd={0.02}
+              content={"**8s**: Tiago asked for it on the PR — *\"browser tab will look hung past ~10s, cap it\"*. The first implementer had 30s; the PR-fix Run changed it to 8s.\n\n**POSTs**: only when the request carries an `Idempotency-Key` (`src/http/retry.ts:41`)."} />
+            <ChatNotice kind="parked" by="El Duderino" text="Parked while nobody is writing — nothing is held; your next message resumes it." at={at(320_000)} />
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b> · read-only</>} onSubmit={() => undefined} />
+            </div>
           </Col>
         </Panes>
       </Block>
@@ -465,7 +489,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>waiting, no choices, a named session — free-text answer only</Label>
             <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} />
             <Label>waiting with onChoose — the chips become one-click replies</Label>
-            <QuestionCard role="orchestrator" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
+            <QuestionCard role="conductor" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
             <Label>waiting on someone else — the note says how to make it yours; the choices are muted, and hovering them says it again</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 90_000} waitingOn="Ana" />
             <Label>answered — calm; the answer is the next turn, not quoted here</Label>
@@ -488,7 +512,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-composer"
         title="ChatComposer"
-        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick."
+        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick. The text is cleared only once onSubmit confirms it: one that resolves false or rejects keeps the words."
       >
         <Panes mode={mode} surface>
           <Col>
@@ -507,6 +531,11 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>disabled — terminal session</Label>
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
               <ChatComposer disabled disabledReason="This session completed. Start a new run to continue." onSubmit={() => undefined} />
+            </div>
+            <Label>a send that fails — the words stay to send again</Label>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
+              <ChatComposer mode="chat" to={<>To <b>Conductor</b> · read-only</>} defaultValue="and does it retry POSTs?"
+                onSubmit={() => new Promise<boolean>((done) => setTimeout(() => done(false), 600))} />
             </div>
           </Col>
         </Panes>
@@ -657,7 +686,7 @@ function PlanDemo() {
           Reset
         </Button>
       </Row>
-      <AgentPlan items={items} meta="orchestrator" />
+      <AgentPlan items={items} meta="conductor" />
       <Label>Collapsed: progress and the current item</Label>
       <AgentPlan items={items} defaultCollapsed />
       <Label>All done</Label>
@@ -822,7 +851,7 @@ function LiveTranscriptDemo() {
           s
             ? {
                 id: "ses_01J9K2",
-                role: "orchestrator",
+                role: "conductor",
                 status: s.status,
                 model: "claude-opus-4",
                 taskKey: "WI-2481",
@@ -835,7 +864,7 @@ function LiveTranscriptDemo() {
                 budgetUsd: 2.5,
                 tokens: s.tokens,
               }
-            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", taskKey: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
+            : { id: "ses_01J9K2", role: "conductor", status: "pending", model: "claude-opus-4", taskKey: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
         }
         headerActions={
           <>
@@ -844,7 +873,7 @@ function LiveTranscriptDemo() {
             <IconButton icon="external" label="Open events" size="sm" />
           </>
         }
-        pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="orchestrator" defaultCollapsed /> : undefined}
+        pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="conductor" defaultCollapsed /> : undefined}
         footer={<ChatComposer question={s?.question ?? undefined} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
         revision={rev}
         live={playing}

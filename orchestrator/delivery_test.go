@@ -293,7 +293,8 @@ func (w *world) until(what string, cond func() bool) {
 }
 
 func (w *world) describeRuns() string {
-	rows, _ := w.owner.Query(context.Background(), `SELECT phase::text, status::text, COALESCE(error, ''), COALESCE(lux_state, ''),
+	rows, _ := w.owner.Query(context.Background(), `SELECT COALESCE(phase::text, role::text, ''), status::text,
+		COALESCE(error, '') || COALESCE(' next ' || next_attempt_at::text, ''), COALESCE(lux_state, ''),
 		turn_done_at IS NOT NULL FROM runs WHERE organization_id = $1 ORDER BY created_at`, w.org)
 	defer rows.Close()
 	var b strings.Builder
@@ -3840,7 +3841,7 @@ func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
 	me := w.person("owner")
 	code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{})
 	msg, _ := body["error"].(map[string]any)["message"].(string)
-	if want := "not ready to merge: GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"; code != 409 || msg != want {
+	if want := "not ready to merge: GitHub refused the check-runs read; a fine-grained token cannot read check runs, so use a classic token with the repo scope (or a GitHub App once supported), and check SSO authorization, organization token approval and the token's repository access"; code != 409 || msg != want {
 		t.Fatalf("merging with check runs unreadable: %d %v, want 409 %q", code, body, want)
 	}
 	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/rerun-failed", map[string]any{}); code != 409 {

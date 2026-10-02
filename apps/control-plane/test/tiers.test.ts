@@ -138,7 +138,7 @@ describe("tiers", () => {
     expect(res.upgrade).toEqual([]);
     expect(res.tiers.map((t: Json) => [t.name, t.model])).toEqual([["Thinker", null], ["Coder", null], ["Fast", null]]);
     const thinker = res.tiers[0];
-    expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["investigator", "qa_browser", "reviewer", "simplifier"]);
+    expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["conductor", "investigator", "qa_browser", "reviewer", "simplifier"]);
     expect(res.tiers[1].usedBy).toEqual([
       { kind: "organization", role: "implementer", project: null, effort: null },
       { kind: "organization", role: "fixer", project: null, inherited: true, effort: null },
@@ -231,11 +231,11 @@ describe("roles name a tier", () => {
       expect(res.status).toBe(400);
       expect((await body(res)).error.message).toContain("roles.implementer.model: a role names a model tier");
     }
-    const create = await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { orchestrator: { model: "fake/scripted" } } });
+    const create = await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { conductor: { model: "fake/scripted" } } });
     expect(create.status).toBe(400);
-    expect((await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { orchestrator: { tier: "mtr_nope" } } })).status).toBe(400);
+    expect((await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { conductor: { tier: "mtr_nope" } } })).status).toBe(400);
     expect((await owner`SELECT count(*)::int AS n FROM projects WHERE slug = 'bad'`)[0].n).toBe(0);
-    expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}`, { agentModels: { orchestrator: { tier: "mtr_nope" } } })).status).toBe(400);
+    expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}`, { agentModels: { conductor: { tier: "mtr_nope" } } })).status).toBe(400);
   });
 
   test("the tiers say who uses them, at which effort", async () => {

@@ -41,19 +41,19 @@ describe("QuestionCard choices", () => {
   const options = ["Yes", "No"];
 
   test("waiting without onChoose: choices are left to the composer", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} />);
+    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} />);
     expect(h).not.toContain(">Yes<");
     expect(buttons(h)).toEqual([]);
   });
 
   test("waiting with onChoose: one numbered button per choice", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} />);
+    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} />);
     expect(buttons(h).map((b) => b.text)).toEqual(["1Yes", "2No"]);
   });
 
   test("answered and dismissed: choices are listed, not clickable", () => {
     for (const props of [{ answeredAt: "2026-09-24T10:05:00Z" }, { dismissed: true }]) {
-      const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} askedAt="2026-09-24T10:00:00Z" {...props} />);
+      const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} askedAt="2026-09-24T10:00:00Z" {...props} />);
       expect(buttons(h)).toEqual([]);
       expect(h).toContain("Yes</span>");
       expect(h).toContain('aria-label="Choices offered"');
@@ -61,7 +61,7 @@ describe("QuestionCard choices", () => {
   });
 
   test("waiting on someone else: says who, lists the choices, offers none", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
+    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
     // Whom it waits on, and how to make it yours, in words everyone sees.
     expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to answer · Take over this task to answer");
@@ -71,18 +71,18 @@ describe("QuestionCard choices", () => {
   });
 
   test("a question with no choices still says how to make it yours", () => {
-    expect(html(<QuestionCard role="orchestrator" text="Which locale?" onChoose={noop} waitingOn="Ana" />)).toContain("Take over this task to answer");
+    expect(html(<QuestionCard role="conductor" text="Which locale?" onChoose={noop} waitingOn="Ana" />)).toContain("Take over this task to answer");
   });
 
   test("a request waiting on someone else is theirs to decide", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" kind="request" />);
+    const h = html(<QuestionCard role="conductor" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" kind="request" />);
     expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to decide · Take over this task to decide");
     expect(h).toContain("asks for a repository and is waiting for Ana to decide");
     expect(h).toContain("Blocked until Ana decides.");
   });
 
   test("waiting announces once in a status region", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Ship it?" />);
+    const h = html(<QuestionCard role="conductor" text="Ship it?" />);
     expect(h).toMatch(/<span role="status"[^>]*>Needs you\. Blocked until you answer\.<\/span>/);
   });
 });

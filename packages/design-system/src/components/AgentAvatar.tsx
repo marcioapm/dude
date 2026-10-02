@@ -8,7 +8,7 @@ import styles from "./AgentAvatar.module.css";
 export type AvatarKind = AgentRoleName | Exclude<ActorType, "agent">;
 
 export const ROLE_LABEL: Record<AvatarKind, string> = {
-  orchestrator: "Orchestrator",
+  conductor: "Conductor",
   investigator: "Investigator",
   implementer: "Implementer",
   reviewer: "Reviewer",
@@ -21,7 +21,7 @@ export const ROLE_LABEL: Record<AvatarKind, string> = {
 
 /** Each kind's glyph: an agent always carries its role's, never a letter. */
 export const ROLE_ICON: Record<AvatarKind, IconName> = {
-  orchestrator: "orchestrator",
+  conductor: "conductor",
   investigator: "investigator",
   implementer: "implementer",
   reviewer: "reviewer",
@@ -54,7 +54,7 @@ export interface AgentAvatarProps extends HTMLAttributes<HTMLSpanElement> {
 
 /**
  * Identifies *who* did something. Roles are distinguished by glyph shape,
- * hue, and — for the orchestrator — a round mask, so identity survives
+ * hue, and — for the conductor — a round mask, so identity survives
  * colorblindness and monochrome. Humans are round with a ring; system is
  * hollow; integrations are outlined squares.
  */

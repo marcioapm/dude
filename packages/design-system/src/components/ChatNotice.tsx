@@ -14,6 +14,8 @@ export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
   /** One sentence: what happened and what ends it. */
   readonly text: string;
   readonly at: string | number | Date;
+  /** Who says it, when that is not plain from where it is: dude's name for the task, in a task's Chat. */
+  readonly by?: string | undefined;
 }
 
 /**
@@ -21,16 +23,16 @@ export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
  * was parked while it waits for a person (its container stopped, nothing
  * held), taken back up, or nudged after going quiet. A centred muted line
  * between turns — no avatar, no frame — so it reads as the transcript's
- * margin note, never as a message.
+ * margin note, never as a message. `by` signs it, its name in primary ink.
  */
-export function ChatNotice({ kind, text, at, className, ...rest }: ChatNoticeProps) {
+export function ChatNotice({ kind, text, at, by, className, ...rest }: ChatNoticeProps) {
   const when = new Date(at);
   return (
     <div role="note" className={cx(styles["root"], className)} data-kind={kind} {...rest}>
       <span className={styles["rule"]} aria-hidden />
       <span className={styles["body"]}>
         <Icon name={GLYPH[kind]} size={12} className={styles["glyph"]} />
-        <span className={styles["text"]}>{text}</span>
+        <span className={styles["text"]}>{by ? <><b className={styles["by"]}>{by}</b>{": "}</> : null}{text}</span>
         <time className={styles["time"]} dateTime={Number.isNaN(when.getTime()) ? undefined : when.toISOString()} title={when.toLocaleString()}>
           {formatTimestamp(at, "time")}
         </time>

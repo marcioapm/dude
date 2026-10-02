@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prCheckDiagnosticReason, type PrDisplayState } from "@dude/domain";
+import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prCheckDiagnosticFix, prCheckDiagnosticReason, type PrDisplayState } from "@dude/domain";
 import { AgentPlan, PlanMeter } from "../src/components/AgentPlan.tsx";
 import { Cost, costWords } from "../src/components/Cost.tsx";
 import { MarkdownDocument, applyFormat, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
@@ -164,16 +164,18 @@ describe("checks that cannot be read", () => {
     expect(h).not.toMatch(/All \d+ checks passing/);
     const none = seen(<PullRequestPanel pr={pr([denied], "ci_running")} />);
     expect(none).toContain("No checks could be read");
-    expect(none).toContain("Checks: Read");
+    expect(none).toContain(prCheckDiagnosticFix(CHECK_RUNS_FORBIDDEN)!);
+    // Never the permission GitHub does not offer fine-grained tokens.
+    expect(none).not.toContain("Checks: Read");
     const failing = seen(<PullRequestPanel pr={pr([lint, denied], "ci_red")} />);
     expect(failing).toContain("1 of 1 checks failing");
-    expect(failing).toContain("Checks: Read");
+    expect(failing).toContain(prCheckDiagnosticFix(CHECK_RUNS_FORBIDDEN)!);
   });
 
   test("without a diagnostic the panel is as before", () => {
     const h = seen(<PullRequestPanel pr={pr([codeRabbit], "ready")} />);
     expect(h).toContain("All 1 checks passing");
-    expect(h).not.toContain("Checks: Read");
+    expect(h).not.toContain("classic token");
   });
 });
 

@@ -20,8 +20,8 @@ export type Place =
   | { view: "inbox" };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
-export type TaskTab = "findings" | "sessions" | "files" | "servers" | "activity";
-const TASK_TABS: ReadonlyArray<TaskTab> = ["findings", "sessions", "files", "servers", "activity"];
+export type TaskTab = "chat" | "findings" | "sessions" | "files" | "servers" | "activity";
+const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "files", "servers", "activity"];
 
 /** Tabs whose content is one attempt's: the others show the whole task, whatever attempt is picked. */
 export const attemptScoped = (tab: TaskTab | undefined): boolean => tab !== "servers" && tab !== "activity";

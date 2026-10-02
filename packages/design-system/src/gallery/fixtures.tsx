@@ -37,7 +37,7 @@ export const events: EventFixture[] = [
   {
     id: "e3",
     occurredAt: at(1_830),
-    actor: { type: "agent", role: "orchestrator" },
+    actor: { type: "agent", role: "conductor" },
     eventType: "session.started",
     summary: "Orchestrator session started on worker-03 (claude-opus-4)",
     meta: [
@@ -45,7 +45,7 @@ export const events: EventFixture[] = [
       ["harness", "claude-code 2.1"],
     ],
   },
-  { id: "e4", occurredAt: at(2_101), actor: { type: "agent", role: "orchestrator" }, eventType: "session.subagent.spawned", summary: "Spawned investigator: map webhook handler and existing retry patterns" },
+  { id: "e4", occurredAt: at(2_101), actor: { type: "agent", role: "conductor" }, eventType: "session.subagent.spawned", summary: "Spawned investigator: map webhook handler and existing retry patterns" },
   {
     id: "e5",
     occurredAt: at(2_155),
@@ -64,13 +64,13 @@ apps/control-plane/src/integrations/github/client.ts:7
   },
   { id: "e6", occurredAt: at(6_440), actor: { type: "agent", role: "investigator" }, eventType: "tool.call.completed", summary: <><code>read</code> apps/control-plane/src/integrations/github/client.ts</>, trailing: "41ms" },
   { id: "e7", occurredAt: at(19_002), actor: { type: "agent", role: "investigator" }, eventType: "session.completed", summary: "Investigation complete: 3 findings, 1 risk", severity: "success", trailing: "$0.084" },
-  { id: "e8", occurredAt: at(19_310), actor: { type: "agent", role: "orchestrator" }, eventType: "session.subagent.spawned", summary: "Spawned implementer: add exponential backoff (max 5 attempts) to GithubClient.post" },
+  { id: "e8", occurredAt: at(19_310), actor: { type: "agent", role: "conductor" }, eventType: "session.subagent.spawned", summary: "Spawned implementer: add exponential backoff (max 5 attempts) to GithubClient.post" },
   { id: "e9", occurredAt: at(44_870), actor: { type: "agent", role: "implementer" }, eventType: "tool.call.completed", summary: <><code>edit</code> apps/control-plane/src/integrations/github/client.ts (+38 −6)</>, trailing: "12ms" },
   { id: "e10", occurredAt: at(61_240), actor: { type: "agent", role: "implementer" }, eventType: "tool.call.failed", summary: <><code>bash</code> bun test — 1 failing: retries when response is 502</>, severity: "danger", trailing: "4.2s", detail: <pre>{`FAIL  src/integrations/github/client.test.ts
   ✗ retries when response is 502  (12ms)
     expected 5 calls, received 1`}</pre> },
   { id: "e11", occurredAt: at(88_003), actor: { type: "agent", role: "implementer" }, eventType: "tool.call.completed", summary: <><code>bash</code> bun test — 42 passing</>, severity: "success", trailing: "3.9s" },
-  { id: "e12", occurredAt: at(90_110), actor: { type: "agent", role: "orchestrator" }, eventType: "question.asked", summary: "Should 4xx responses be retried? The existing code retries everything.", severity: "attention", meta: [["question", <code key="q">q_44a1</code>], ["blocking", "yes"]] },
+  { id: "e12", occurredAt: at(90_110), actor: { type: "agent", role: "conductor" }, eventType: "question.asked", summary: "Should 4xx responses be retried? The existing code retries everything.", severity: "attention", meta: [["question", <code key="q">q_44a1</code>], ["blocking", "yes"]] },
   { id: "e13", occurredAt: at(90_200), actor: { type: "system" }, eventType: "workflow.transition", summary: "running → awaiting_input", severity: "attention" },
   { id: "e14", occurredAt: at(1_520_000), actor: { type: "human", name: "marcio" }, eventType: "question.answered", summary: "No — only retry 5xx and network errors." },
   { id: "e15", occurredAt: at(1_521_000), actor: { type: "system" }, eventType: "workflow.transition", summary: "awaiting_input → running" },
@@ -83,7 +83,7 @@ apps/control-plane/src/integrations/github/client.ts:7
 
 export const sessionTree: SessionNodeData = {
   id: "ses_01J9K2",
-  role: "orchestrator",
+  role: "conductor",
   status: "running",
   model: "claude-opus-4",
   activity: "Waiting for reviewer…",
@@ -110,7 +110,7 @@ export const sessionTree: SessionNodeData = {
 
 export const sessionTreeWaiting: SessionNodeData = {
   id: "ses_02A",
-  role: "orchestrator",
+  role: "conductor",
   status: "awaiting_input",
   model: "claude-opus-4",
   activity: "Asked: retry 4xx?",

@@ -8,6 +8,7 @@
 import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
+import { SETTINGS_ROLES } from "@dude/domain";
 import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
@@ -226,7 +227,7 @@ export function navigationFor(scenario: ServerScenario): NavProject[] {
     id: task.runs[0]!.id,
     attempt: 1,
     status: inReview ? ("completed" as const) : ("running" as const),
-    sessions: task.runs.map((r) => ({ id: r.id, role: r.role ?? "orchestrator", status: r.status === "running" ? ("running" as const) : ("completed" as const), title: r.phase === "review" ? "Review" : r.phase ? r.phase[0]!.toUpperCase() + r.phase.slice(1) : "Agent", ...(r.status === "running" ? { activity: "Running npm test" } : {}) })),
+    sessions: task.runs.map((r) => ({ id: r.id, role: r.role ?? "conductor", status: r.status === "running" ? ("running" as const) : ("completed" as const), title: r.phase === "review" ? "Review" : r.phase ? r.phase[0]!.toUpperCase() + r.phase.slice(1) : "Agent", ...(r.status === "running" ? { activity: "Running npm test" } : {}) })),
   };
   const P = Object.fromEntries(PEOPLE.map((p) => [p.id, { id: p.id, name: p.name, online: p.online }]));
   return [
@@ -277,7 +278,7 @@ export const METRICS: TaskMetrics = {
 export const SETTINGS: SettingsResponse = {
   organization: ORG,
   project: { id: PROJECT.id, name: PROJECT.name },
-  roles: Object.fromEntries((["investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const).map((role) => [role, {
+  roles: Object.fromEntries(SETTINGS_ROLES.map((role) => [role, {
     tier: { value: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", source: "organization", organization: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", ...(role === "fixer" ? { followsImplementer: true } : {}) },
     effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
@@ -296,6 +297,7 @@ export const SETTINGS: SettingsResponse = {
     test: { value: false, source: "organization" },
     parkAfterMinutes: { value: 10, source: "organization" },
     idleNudgeMinutes: { value: 0, source: "organization" },
+    conductorWarmMinutes: { value: 5, source: "organization" },
   },
   canEdit: true,
 };
