@@ -58,8 +58,12 @@ func PreviewLabel(server, task, project, salt string) string {
 	return label + "-" + suffix
 }
 
-// PreviewHostname is PreviewLabel under the preview domain (normalised:
-// settings and the lux client hand it over so).
+// PreviewHostname is PreviewLabel under the normalised preview domain,
+// or the bare label when lux resolves the domain itself.
 func PreviewHostname(domain, server, task, project, salt string) string {
-	return PreviewLabel(server, task, project, salt) + "." + domain
+	label := PreviewLabel(server, task, project, salt)
+	if domain == "" {
+		return label
+	}
+	return label + "." + domain
 }

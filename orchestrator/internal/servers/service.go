@@ -29,11 +29,11 @@ type Service struct {
 	// Where lux's console is, for the terminal link (LUX_CONSOLE_URL; lux's
 	// API base URL by default).
 	ConsoleURL string
-	// The domain lux serves previews under: new previews wake on request
-	// at <server>-<task>-<project>.<PreviewDomain>. "" keeps the old path
-	// (a Run with its servers in its spec, parked by dude).
+	// PreviewDomain keeps full-name requests for lux versions that require them.
 	PreviewDomain string
-	Log           *slog.Logger
+	// PreviewRelative sends bare labels for lux to resolve under its domain.
+	PreviewRelative bool
+	Log             *slog.Logger
 	// Wakes the loops after a change, so a preview starts or stops now.
 	Kick func()
 }

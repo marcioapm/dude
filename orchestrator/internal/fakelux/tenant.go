@@ -90,7 +90,7 @@ func (s *Server) hostnameOf(host string) *string {
 	if s.PreviewDomain == "" || host == "" {
 		return nil
 	}
-	h := host + "." + s.PreviewDomain
+	h := host + "." + lux.NormalDomain(s.PreviewDomain)
 	return &h
 }
 
@@ -301,14 +301,20 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 	s.feedInit()
 	host := ""
 	if in.Hostname != "" {
-		domain := strings.ToLower(strings.TrimSuffix(s.PreviewDomain, "."))
+		domain := lux.NormalDomain(s.PreviewDomain)
 		if domain == "" {
 			writeErr(w, 422, "invalid_server", "hostname: previews are not configured on this lux (preview.domain)")
 			return
 		}
 		h := strings.ToLower(strings.TrimSuffix(in.Hostname, "."))
-		rel, ok := strings.CutSuffix(h, "."+domain)
-		if !ok || rel == "" || len(h) > 253 {
+		rel := h
+		if strings.HasSuffix(h, "."+domain) {
+			rel = strings.TrimSuffix(h, "."+domain)
+		} else if s.Previews == nil || !*s.Previews {
+			writeErr(w, 422, "invalid_server", fmt.Sprintf("hostname: %q is not under the preview domain %s", in.Hostname, domain))
+			return
+		}
+		if rel == "" || len(rel)+1+len(domain) > 253 {
 			writeErr(w, 422, "invalid_server", fmt.Sprintf("hostname: %q is not under the preview domain %s", in.Hostname, domain))
 			return
 		}
@@ -427,7 +433,7 @@ func (s *Server) listTenantServers(w http.ResponseWriter, r *http.Request) {
 	host := strings.TrimSuffix(strings.ToLower(q.Get("hostname")), ".")
 	for _, t := range list {
 		if host != "" {
-			if h := s.hostnameOf(t.Host); h == nil || *h != host {
+			if h := s.hostnameOf(t.Host); h == nil || (*h != host && t.Host != host) {
 				continue
 			}
 		}
@@ -732,6 +738,9 @@ func (s *Server) whoami(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := map[string]any{"name": "dude", "keyId": "key_fake", "operator": false, "previewDomain": domain,
 		"previewScheme": s.previewScheme(), "scopes": []string{"read", "run"}}
+	if s.Previews != nil {
+		out["previews"] = *s.Previews
+	}
 	if s.PreviewPort > 0 {
 		out["previewPort"] = s.PreviewPort
 	}
