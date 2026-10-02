@@ -1,7 +1,7 @@
 /**
  * The drop zone's overlay is for files from outside the page: an image
  * repositioned in Preview never raises it, though Chrome lists its drag as
- * "Files" too.
+ * "Files" too, and once raised it goes however the drag ends.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -90,6 +90,38 @@ test("while an image drag runs, a drag listing only Files raises no overlay", as
   await act(async () => void z.figure().dispatchEvent(new Event("dragend", { bubbles: true })));
   await act(async () => fire(z.panel, "dragenter", ["Files"]));
   expect(z.overlay()).not.toBeNull();
+});
+
+test("a file from the desktop raises the overlay, and a dragend with no drop takes it down", async () => {
+  const z = await mount();
+  await act(async () => fire(z.zone, "dragenter", ["Files"]));
+  await act(async () => fire(z.panel, "dragenter", ["Files"]));
+  expect(z.overlay()?.textContent).toContain("Drop to attach");
+  await act(async () => void window.dispatchEvent(new Event("dragend")));
+  expect(z.overlay()).toBeNull();
+});
+
+test("a file dragged out of the window takes the overlay down; a leave to nothing inside it does not", async () => {
+  const z = await mount();
+  await act(async () => fire(z.zone, "dragenter", ["Files"]));
+  await act(async () => fire(z.panel, "dragenter", ["Files"]));
+  expect(z.overlay()).not.toBeNull();
+  await act(async () => fire(z.panel, "dragleave", ["Files"], { relatedTarget: null, clientX: 50, clientY: 50 }));
+  expect(z.overlay()).not.toBeNull();
+  // Leaving the window: one dragleave, from the innermost element, to nothing, at the edge.
+  await act(async () => fire(z.panel, "dragleave", ["Files"], { relatedTarget: null, clientX: 0, clientY: 0 }));
+  expect(z.overlay()).toBeNull();
+});
+
+test("a file drop taken lower down (stopPropagation) still takes the overlay down", async () => {
+  const z = await mount();
+  await act(async () => fire(z.panel, "dragenter", ["Files"]));
+  expect(z.overlay()).not.toBeNull();
+  const stop = (e: Event) => e.stopPropagation();
+  z.panel.addEventListener("drop", stop);
+  cleanups.push(() => z.panel.removeEventListener("drop", stop));
+  await act(async () => fire(z.panel, "drop", ["Files"]));
+  expect(z.overlay()).toBeNull();
 });
 
 test("a file dropped on the zone still uploads", async () => {
