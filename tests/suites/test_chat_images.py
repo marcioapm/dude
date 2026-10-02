@@ -129,13 +129,14 @@ def _shoot(page: Page, name: str) -> None:
         page.screenshot(path=str(SHOTS / f"{name}-{theme}.png"))
 
 
-def _files(page: Page, files: list[tuple[str, bytes, str]]):
-    """A DataTransfer holding files, in the page."""
-    return page.evaluate_handle("""(files) => {
+def _files(page: Page, files: list[tuple[str, bytes, str]], text: str | None = None):
+    """A DataTransfer holding files, and `text` as text/plain, in the page."""
+    return page.evaluate_handle("""([files, text]) => {
       const dt = new DataTransfer();
       for (const [name, bytes, type] of files) dt.items.add(new File([new Uint8Array(bytes)], name, { type }));
+      if (text !== null) dt.setData('text/plain', text);
       return dt;
-    }""", [[n, list(b), t] for n, b, t in files])
+    }""", [[[n, list(b), t] for n, b, t in files], text])
 
 
 def _paste(page: Page, files: list[tuple[str, bytes, str]]) -> None:
@@ -428,8 +429,7 @@ def test_an_image_dropped_on_the_title_goes_to_the_tray(page: Page, web_url: str
     expect(chips).to_have_count(1)
     expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
     # A text drag is left to the field: no overlay, nothing claimed.
-    text = page.evaluate_handle("() => { const dt = new DataTransfer(); dt.setData('text/plain', 'words'); return dt; }")
-    assert not _drag(page.get_by_test_id("task-title"), "dragenter", text)
+    assert not _drag(page.get_by_test_id("task-title"), "dragenter", _files(page, [], "words"))
     expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
     assert console_errors == []
 
@@ -440,8 +440,7 @@ def test_an_image_pasted_in_the_title_goes_to_the_tray_and_text_does_not(page: P
     title = page.get_by_test_id("task-title")
     title.fill("Summary")
     # Text alone: left to the field.
-    text = page.evaluate_handle("() => { const dt = new DataTransfer(); dt.setData('text/plain', ' page'); return dt; }")
-    assert not _paste_into(title, text)
+    assert not _paste_into(title, _files(page, [], " page"))
     expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
     expect(title).to_have_value("Summary")
     # An image: to the tray, the paste claimed so nothing lands in the title.
@@ -451,14 +450,11 @@ def test_an_image_pasted_in_the_title_goes_to_the_tray_and_text_does_not(page: P
     expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
     expect(title).to_have_value("Summary")
     # An image with a caption beside it: the image is taken, the caption let through.
-    both = _files(page, [("both.png", png(200, 200), "image/png")])
-    both.evaluate("dt => dt.setData('text/plain', 'see the header')")
-    assert not _paste_into(page.get_by_test_id("task-goal"), both)
+    goal = page.get_by_test_id("task-goal")
+    assert not _paste_into(goal, _files(page, [("both.png", png(200, 200), "image/png")], "see the header"))
     expect(chips).to_have_count(2)
     # A file copied in a file manager carries its own name as text: that is not text, and the paste is claimed.
-    copied = _files(page, [("copied.png", png(200, 200), "image/png")])
-    copied.evaluate("dt => dt.setData('text/plain', 'copied.png')")
-    assert _paste_into(page.get_by_test_id("task-goal"), copied)
+    assert _paste_into(goal, _files(page, [("copied.png", png(200, 200), "image/png")], "copied.png"))
     expect(chips).to_have_count(3)
     assert console_errors == []
 
@@ -522,9 +518,7 @@ def test_the_composer_takes_images_dropped_anywhere_on_the_session(
         assert _drop_on(place, _files(page, [(f"drop-{i}.png", png(120, 80), "image/png")]), page=page)
         expect(chips).to_have_count(i + 1)
     # A caption pasted with an image goes into the field; the image to the tray.
-    both = _files(page, [("both.png", png(200, 200), "image/png")])
-    both.evaluate("dt => dt.setData('text/plain', 'the total is cut off')")
-    assert not _paste_into(field, both)
+    assert not _paste_into(field, _files(page, [("both.png", png(200, 200), "image/png")], "the total is cut off"))
     expect(chips).to_have_count(4)
     _paste(page, [("pasted.png", png(90, 90), "image/png")])
     expect(chips).to_have_count(5)

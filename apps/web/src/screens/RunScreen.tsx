@@ -401,9 +401,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   return (
     <div className="runScreen" data-view={view} data-testid="run-screen">
       {/* The whole session takes a dropped image, header and rail included, on the conversation. */}
-      <AttachDropZone className="runDrop" onFiles={tray.add}
-        disabled={view !== "chat" || !composerOpen}
-        disabledReason={tray.disabledReason}
+      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || !composerOpen} disabledReason={tray.disabledReason}
         detail={<>They go with your next {conversation.openQuestion ? "answer" : "steer"} to <b>{runLabel(run)}</b>.{" "}
           {conversation.openQuestion ? "It reads them with your answer." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
       <SessionHeader session={session} actions={actions} />
