@@ -302,7 +302,7 @@ function PromptImages({ tray }: { tray: ImageTray }) {
       hint={tray.attachments.length > 0 ? "Given to the first agent with the task: use Create and deliver." : "A design or a screenshot for the first agent. Paste, drop or attach."}>
       <div className="taskImages">
         {tray.attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={tray.remove} />)}
-        <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits)} keepOnPress={off}>
+        <Tooltip content={tray.disabledReason ?? limitsHint(tray.limits, "this task")} keepOnPress={off}>
           <span>
             <Button variant="secondary" size="sm" leadingIcon="paperclip" disabled={off} onClick={() => input?.click()}
               data-testid="task-attach">
