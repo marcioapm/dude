@@ -107,6 +107,9 @@ export class FixtureClient extends ApiClient {
     }
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
     this.#nav = navigationFor(scenario);
+    // The tree and the board say what the task's page does.
+    if (this.#task.status !== taskFor(scenario).status) this.#nav = this.#nav.map((p) => ({ ...p,
+      epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, status: this.#task.status, runs: undefined } : t)) })) }));
     ledger = (params) => this.#ledger(params);
   }
 

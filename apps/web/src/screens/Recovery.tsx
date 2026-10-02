@@ -13,9 +13,9 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
-import { Duration } from "@dude/design-system/components";
+import { Duration, ROLE_LABEL } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, runLabel, type PersistedEvent } from "@dude/domain";
+import { runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, RecoverAction, RecoveryOptions, Run, TaskDetail } from "../api/client.ts";
 import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -193,8 +193,8 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => setAction(initial), [initial]);
-  const role = (stop.run ? runLabel(stop.run) : "agent").toLowerCase();
-  const roleName = stop.run?.role ?? DEFAULT_RUN_ROLE;
+  // Who it was — the implementer, the reviewer — not what it did: "Resume the implementer".
+  const role = stop.run?.role ? ROLE_LABEL[stop.run.role].toLowerCase() : "agent";
   const head = Object.values(stop.run?.heads ?? {}).map((sha) => shortId(sha, 7))[0] ?? null;
   const branch = stop.run?.branch ?? task.runs.find((r) => r.branch)?.branch ?? "its branch";
   const open = new Set(options.actions);
@@ -228,7 +228,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
         <>
           <Button variant="quiet" onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={busy} disabled={busy || !open.has(action)} onClick={() => void go()} data-testid="recover-confirm">
-            {GO[action](roleName === DEFAULT_RUN_ROLE ? "agent" : role, options.attempt)}
+            {GO[action](role, options.attempt)}
           </Button>
         </>
       }>

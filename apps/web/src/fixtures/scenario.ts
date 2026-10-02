@@ -9,15 +9,24 @@ export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";
 
-/** The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API. */
+/**
+ * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
+ * `?run=aborted` (failed, restarted, paused, preview; `off` forgets) puts the task's run in that state, remembered too.
+ */
 export function fixtureScenario(): FixtureScenario | null {
-  const asked = new URLSearchParams(window.location.search).get("fixtures");
-  if (asked !== null) {
-    if (asked === "" || asked === "off") localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, asked);
-    // The parameter has done its work; the hash is the app's own.
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
-  }
+  const params = new URLSearchParams(window.location.search);
+  const remember = (name: string, key: string) => {
+    const asked = params.get(name);
+    if (asked === null) return false;
+    if (asked === "" || asked === "off") localStorage.removeItem(key);
+    else localStorage.setItem(key, asked);
+    return true;
+  };
+  // Both read before either is taken off the address.
+  const fixtures = remember("fixtures", KEY);
+  const run = remember("run", `${KEY}.run`);
+  // The parameters have done their work; the hash is the app's own.
+  if (fixtures || run) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);
   return stored && (SCENARIOS as readonly string[]).includes(stored) ? (stored as FixtureScenario) : null;
 }
