@@ -104,4 +104,11 @@ describe("taskGoalShortBy", () => {
     expect(taskGoalShortBy(`${"😀".repeat(7)}a`)).toBe(1);
     expect(taskGoalShortBy("😀".repeat(8))).toBe(0);
   });
+
+  // The agents' create_task trims the same set; these are where it differs from Go's TrimSpace.
+  test("trims ECMAScript whitespace: a BOM is trimmed, a NEL is counted", () => {
+    expect(taskGoalShortBy(`\uFEFF${"a".repeat(15)}\uFEFF`)).toBe(1);
+    expect(taskGoalShortBy(" ".repeat(20))).toBe(16);
+    expect(taskGoalShortBy(`\u0085${"a".repeat(15)}`)).toBe(0);
+  });
 });
