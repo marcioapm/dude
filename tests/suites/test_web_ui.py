@@ -1145,15 +1145,55 @@ def test_a_parked_agent_is_answered_from_its_chat(
     page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the answer did not resume the parked agent")
-    # Once timed, its return says how long it took, its phases on hover.
+    # Once timed, its return says how long it took, its phases on hover:
+    # exactly the numbers of its run.resume.timed.
+    timed = wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "run.resume.timed"],
+                       timeout=30, message="the resume was never timed")
+    assert len(timed) == 1, timed
+    text, title = _resume_notice(timed[0]["payload"], "Taken back up")
     back = page.get_by_test_id("chat-notice").filter(has_text="Taken back up")
     expect(back).to_have_count(1)
-    expect(back).to_contain_text(re.compile(r"Taken back up in [\d.]+(ms|s)\."))
-    title = back.get_attribute("title") or ""
-    assert [line.rsplit(" ", 1)[0] for line in title.split("\n")] == [
-        "dude asked lux", "lux placed it", "image ready", "restored", "started", "agent reloaded",
-        "took its input", "first words"], title
+    expect(back).to_contain_text(text)
+    expect(back).to_have_attribute("title", title)
     assert console_errors == []
+
+
+# A resume's phases, in order, as the notice's hover names them.
+_RESUME_LABELS = (("react", "dude asked lux"), ("schedule", "lux placed it"), ("image", "image ready"),
+                  ("restore", "restored"), ("start", "started"), ("reload", "agent reloaded"),
+                  ("take", "took its input"), ("firstOutput", "first words"))
+
+
+def _duration(ms: float) -> str:
+    """The design system's formatDuration, short style, as far as a resume
+    reaches (under a day): JavaScript's rounding, half away from zero."""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    if ms < 0:
+        return "—"
+    if ms == 0:
+        return "0s"
+    if ms < 0.5:
+        return "<1ms"
+    if ms < 999.5:
+        return f"{int(Decimal(ms).quantize(Decimal(1), ROUND_HALF_UP))}ms"
+    s = ms / 1000
+    if s < 60:
+        return f"{Decimal(s).quantize(Decimal('0.1'), ROUND_HALF_UP)}s" if s < 10 else \
+            f"{int(Decimal(s).quantize(Decimal(1), ROUND_HALF_UP))}s"
+    m = int(s // 60)
+    if m < 60:
+        return f"{m}m {int(s % 60):02d}s"
+    return f"{m // 60}h {m % 60:02d}m"
+
+
+def _resume_notice(payload: dict, lead: str) -> tuple[str, str]:
+    """The notice a run.resume.timed gives: its sentence and its hover."""
+    where = ", on another host" if payload["moved"] is True else ""
+    text = f"{lead} in {_duration(payload['totalMs'])}{where}."
+    title = "\n".join(f"{label} {_duration(payload['phases'][key])}"
+                      for key, label in _RESUME_LABELS if key in payload["phases"])
+    return text, title
 
 
 def test_a_persons_resume_says_how_long_it_took(
@@ -1175,10 +1215,14 @@ def test_a_persons_resume_says_how_long_it_took(
     wait_until(lambda: any(e["eventType"] == "run.paused" and e["payload"].get("confirmed")
                            for e in client.events(runId=run["id"])), timeout=30, message="the run never paused")
     assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+    timed = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.resume.timed"],
+                       timeout=30, message="the resume was never timed")
+    assert len(timed) == 1, timed
+    text, title = _resume_notice(timed[0]["payload"], "Resumed")
     resumed = page.get_by_test_id("chat-notice").filter(has_text="Resumed in")
     expect(resumed).to_have_count(1, timeout=30_000)
-    expect(resumed).to_contain_text(re.compile(r"^.*Resumed in [\d.]+(ms|s)\."))
-    assert "agent reloaded" in (resumed.get_attribute("title") or "")
+    expect(resumed).to_contain_text(text)
+    expect(resumed).to_have_attribute("title", title)
     assert console_errors == []
 
 
