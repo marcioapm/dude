@@ -3,10 +3,12 @@
 A delivered task's first message in Chat starts its conductor, briefed by
 dude; the scripted conductor (fakeagent) answers each input with a line
 that quotes its briefing's task line, so the test sees the briefing
-arrived. A second message reaches the same conductor; it parks after its
-warm period (DUDE_CONDUCTOR_WARM, seconds in this suite); a third message
-resumes it, timed, and it answers. Throughout, the task's workflow, Runs
-and branch stay as delivery left them.
+arrived. A second message reaches the same conductor, kept warm by its
+project's conductorWarmMinutes so it is live however slow the runner;
+with that reset it parks after the suite's warm period
+(DUDE_CONDUCTOR_WARM, seconds); a third message resumes it, timed, and it
+answers. Throughout, the task's workflow, Runs and branch stay as
+delivery left them.
 """
 
 from __future__ import annotations
@@ -45,6 +47,11 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str
 ):
     project = _conductor_project(client, forge_project)
+    # Warm for ten minutes while the first two messages are live, however
+    # slow the runner: the second must reach a running conductor, not
+    # resume a parked one. Reset below, to the suite's seconds, to park it.
+    settings = f"/v1/projects/{project['id']}/settings"
+    assert client.patch(settings, {"delivery": {"conductorWarmMinutes": 10}}).status_code == 200
     task = _delivered(client, project, fake_github)
     branch = next(r["branch"] for r in task["runs"] if r["branch"])
     before = _state(client, owner_dsn, task["id"], fake_github, branch)
@@ -62,13 +69,17 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     briefed = [e for e in client.events(runId=conductor) if e["eventType"] == "conductor.briefed"]
     assert len(briefed) == 1 and briefed[0]["payload"]["text"].endswith("why is the max backoff 8s?")
 
-    # A second message reaches the same conductor.
+    # A second message reaches the same conductor, still warm: no resume.
+    assert client.get_run(conductor)["status"] == "running"
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "and does it retry POSTs?"})
     assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
     wait_until(lambda: len(_said(client, conductor)) == 2, timeout=30, message="the second answer never came")
     assert "and does it retry POSTs?" in _said(client, conductor)[1]
+    assert query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,)) == []
 
-    # Past its warm period it is parked, quietly.
+    # Past its warm period — the project's setting reset, the suite's
+    # seconds (DUDE_CONDUCTOR_WARM) — it is parked, quietly.
+    assert client.patch(settings, {"delivery": {"conductorWarmMinutes": None}}).status_code == 200
     wait_until(lambda: (r := client.get_run(conductor))["status"] == "paused" and r["dudePause"] == "conductor",
                timeout=30, message="the conductor was never parked")
     assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == before[0]
