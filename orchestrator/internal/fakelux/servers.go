@@ -291,15 +291,16 @@ func (s *Server) Migrate(id string) {
 	s.setState(run, "stopping")
 	s.setStateWith(run, "stopped", "migrate")
 	run.Epoch++
+	run.starts++
 	run.moveNext = true
 	accepted := time.Now()
 	run.acceptedAt = &accepted
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
-	epoch := run.Epoch
+	epoch, start := run.Epoch, run.starts
 	s.mu.Unlock()
-	go s.play(run, epoch, spec, true)
+	go s.play(run, epoch, start, spec, true)
 }
 
 // ServerStates is each of a Run's servers' state, by name.

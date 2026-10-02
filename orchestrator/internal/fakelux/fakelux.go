@@ -140,6 +140,9 @@ type Run struct {
 	// Epoch stays the stopped one till then, as lux's runs.current_epoch
 	// does. 0 when none is pending.
 	assigning int
+	// The start lux accepted last (submit, resume or migrate), counted up:
+	// a start under way goes on only while it is still the latest one.
+	starts int
 	// Its next placement goes to another host (a migrate).
 	moveNext bool
 	artifacts  []*artifact
@@ -333,12 +336,13 @@ func (run *Run) currentPlacement() *placement {
 // each a moment after the last, as a runner reports them. The workload
 // starts when the Run is running (setStateWith). It stops, and says so
 // (false), once that start is over: the Run ended (cancelled, stopped)
-// or moved on to another epoch meanwhile.
-func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
+// or moved on to another epoch or start meanwhile.
+func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	step := after / 5
 	time.Sleep(step)
+	s.hold(epoch, holdAssign)
 	s.mu.Lock()
-	if !run.starting(epoch) {
+	if !run.starting(epoch, start) {
 		s.mu.Unlock()
 		return false
 	}
@@ -354,7 +358,7 @@ func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
 	for _, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ContainerStartedAt} {
 		time.Sleep(step)
 		s.mu.Lock()
-		if !run.starting(epoch) {
+		if !run.starting(epoch, start) {
 			s.mu.Unlock()
 			return false
 		}
@@ -366,10 +370,25 @@ func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
 	return true
 }
 
-// starting says the Run's start into epoch is still under way, assigned
-// or not. Callers hold s.mu.
-func (run *Run) starting(epoch int) bool {
-	return (run.Epoch == epoch || run.assigning == epoch) && !lux.Terminal(run.State)
+// starting says the Run's start into epoch, accepted as start, is still
+// under way, assigned or not: a later accepted start ends it even before
+// its own epoch is assigned. Callers hold s.mu.
+func (run *Run) starting(epoch, start int) bool {
+	return run.starts == start && (run.Epoch == epoch || run.assigning == epoch) && !lux.Terminal(run.State)
+}
+
+// Where a start can be held by a test (Server.onStart).
+const (
+	holdAssign   = "assign"   // before its host is assigned
+	holdWorkload = "workload" // placed, before its workload starts
+	holdOver     = "over"     // the start has gone as far as it will
+)
+
+// hold lets a test stop a start at point, without the fake's lock.
+func (s *Server) hold(epoch int, point string) {
+	if s.onStart != nil {
+		s.onStart(epoch, point)
+	}
 }
 
 // stopRequested stamps the current placement asked to stop. Callers hold
@@ -484,6 +503,9 @@ type Server struct {
 	// request is answered first, as lux answers the POST before the
 	// agent's records arrive.
 	InputGate chan struct{}
+	// onStart, set by a test before any Run, is called by each start at
+	// its hold points (hold), and may block to order it against others.
+	onStart func(epoch int, point string)
 
 	// Pools is what GET /v1/pools lists; nil is DefaultPools. POST
 	// /v1/pools adds one, or updates the one of its name; DELETE
@@ -732,7 +754,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.next++
-	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1}
+	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1}
+	start := run.starts
 	accepted := time.Now()
 	run.acceptedAt = &accepted
 	run.cond = sync.NewCond(&s.mu)
@@ -747,22 +770,25 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		s.byKey[k] = run.ID
 	}
 	s.mu.Unlock()
-	go s.play(run, 1, spec, false)
+	go s.play(run, 1, start, spec, false)
 	writeJSON(w, 201, s.view(run))
 }
 
 // play is the agent's life: start, check out, take the task, work, go idle.
-func (s *Server) play(run *Run, epoch int, spec map[string]any, resumed bool) {
+// start is the accepted start it plays (Run.starts).
+func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed bool) {
+	defer s.hold(epoch, holdOver)
 	after := s.StartAfter
 	if after <= 0 {
 		after = 20 * time.Millisecond
 	}
-	if !s.placing(run, epoch, after) {
+	if !s.placing(run, epoch, start, after) {
 		return // cancelled, stopped or moved on before it started
 	}
+	s.hold(epoch, holdWorkload)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !run.starting(epoch) {
+	if !run.starting(epoch, start) {
 		return
 	}
 	if run.behavior.FailToStart {
@@ -1631,6 +1657,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	// stopped one; the new one is set when the placement is assigned
 	// (placing).
 	run.assigning = run.Epoch + 1
+	run.starts++
 	accepted := time.Now()
 	run.acceptedAt = &accepted
 	if in.Input != nil {
@@ -1641,10 +1668,10 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.setState(run, "resuming")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
-	epoch := run.assigning
+	epoch, start := run.assigning, run.starts
 	view := s.view(run)
 	s.mu.Unlock()
-	go s.play(run, epoch, spec, true)
+	go s.play(run, epoch, start, spec, true)
 	writeJSON(w, 202, view)
 }
 
