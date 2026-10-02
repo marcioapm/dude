@@ -15,14 +15,21 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 
 | tool | what it does | who may |
 |---|---|---|
-| `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides. The goal is required, at least 16 characters trimmed, as a person's is (`GoalMin`, `TASK_GOAL_MIN`) | implementer, investigator |
+| `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides. The goal is required, at least 16 characters trimmed, as a person's is (`GoalMin`, `TASK_GOAL_MIN`) | implementer, investigator, conductor |
 | `create_epic` | a new epic in the project | investigator |
 | `list_tasks` | the project's epics and tasks, with status and keys | all |
 | `search_memory` | search the project's history: tasks, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
-| `ask_person` | a question for a person; the turn ends and the answer is the next input. The only way an agent asks: the question block is gone | implementer, fixer |
+| `ask_person` | a question for a person; the turn ends and the answer is the next input. The only way an agent asks: the question block is gone. A conductor's is answered in its task's Chat | implementer (and so the fixer), investigator, conductor |
 | `publish_artifact` | write a file for people (name, content) — same as `$LUX_ARTIFACTS`, for agents that prefer a tool | all |
 | `request_repository` | ask for another repository of the organization, read or write, with a reason; a person approves or denies (#45) | all |
 | `run_diff` | what a Run of the caller's task changed (`dude diff`): its checkout, uncommitted work included, against the commit it started from, as stored in `run_diffs` — one snapshot, no history. Without paths, the files by churn with counts and no lines (paged, 200 by default, at most 1,000); `nameStatus`, path and status only; with paths, those files as unified diff text, at most 2,000 lines a call. Another task's Run is refused | all |
+| `findings` | the caller's task's review findings (`dude findings [ID...]`), open and most severe first, at most 200: each one's id, severity, category, repository, `file:line`, status, who raised it and how it was settled — fixed by which Run, accepted by a person, superseded, or open after so many fix attempts. No text in the list: with `ids` (at most 20) those findings in full — title, description, suggested fix, resolution note — and `unknown` for ids that are not the task's | conductor |
+| `pull_requests` | the caller's task's pull requests (`dude prs`): repository and number, URL, state, head branch and commit, base, checks (the roll-up and each check's status and conclusion), review (the roll-up and each reviewer's word), unresolved threads, and the feedback people left — the latest 50, oldest first, each with its author, kind (comment, line comment, review, changes requested), path, an excerpt of at most 280 characters on one line, whether a fixer Run was sent it (`actedOnBy`, matched on its author and words in the Run's `pr_feedback`) and why it woke nobody (`ignored`); `feedbackTotal` counts all of it | conductor |
+
+A task's **conductor** (the agent people talk to in its Chat) reads with
+these and changes nothing: it has no tool that edits, and its checkout is
+never pushed. Its briefing names findings and Runs by id, and these tools
+are how it reads what the briefing leaves out.
 
 Everything an agent creates is marked as created by that Run (`created_by_run_id`)
 and shown so in the UI; nothing an agent creates starts work on its own.
@@ -65,6 +72,11 @@ approved.
   is lost, its open questions and pending requests are cancelled
   (triggers). The chat shows them as "No longer needed". Answering one
   gets a 409 that says the run ended.
+- **A conductor is parked between messages, not for a person.** After its
+  turn it stays running for `conductorWarmMinutes` (default 5), then is
+  parked (`dude_pause = 'conductor'`) with nothing open for anyone: it
+  raises nothing and the task does not move. The next message in Chat
+  resumes it (`run_resumes.cause = 'conductor'`).
 
 ## Identity and authority
 
