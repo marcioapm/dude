@@ -16,7 +16,8 @@ import { removeObject, storageConfigured } from "./storage.ts";
 
 /** How long an upload may wait to be sent. */
 export const UNATTACHED_TTL_HOURS = 24;
-const BATCH = 200;
+/** Queued keys one pass deletes at a time. */
+export const SWEEP_BATCH = 200;
 /** How long one pass drains the queue before leaving the rest to the next. */
 export const DRAIN_BUDGET_MS = 60_000;
 
@@ -40,16 +41,16 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   let failed = 0;
   // Without a bucket nothing was ever stored; the queue waits for one.
   if (!storageConfigured()) return { expired, deleted, failed };
-  // Batch after batch until the queue is empty or the pass's time is spent.
-  // A key that failed is skipped for the rest of the pass, so it cannot be
-  // taken again and again ahead of the others.
+  // Batch after batch until the queue is empty, the pass's time is spent,
+  // or a whole batch fails. A key that failed is skipped for the rest of
+  // the pass, so it cannot be taken again and again ahead of the others.
   const deadline = Date.now() + budgetMs;
   const skip: string[] = [];
   while (Date.now() < deadline) {
     const keys = await withoutTenant(async ({ sql }) => {
       await sql`SET LOCAL ROLE dude_sweeper`;
       return (await sql`SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
-        ORDER BY queued_at LIMIT ${BATCH}`) as Array<{ object_key: string }>;
+        ORDER BY queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
     });
     if (keys.length === 0) break;
     const done: string[] = [];
@@ -70,6 +71,9 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
       });
     }
     deleted += done.length;
+    // Storage refused every delete of a batch: it will refuse the next
+    // too, and each later batch scans past a longer skip list.
+    if (done.length === 0) break;
   }
   return { expired, deleted, failed };
 }

@@ -14,7 +14,7 @@ import { buildRouter } from "../src/index.ts";
 import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
-import { sweepAttachments } from "../src/sweeper.ts";
+import { SWEEP_BATCH, sweepAttachments } from "../src/sweeper.ts";
 import { imageInfo } from "../src/images.ts";
 import { attachmentName } from "../src/api/routes/attachments.ts";
 
@@ -393,6 +393,21 @@ describe("the sweeper", () => {
     expect((await sweepAttachments()).deleted).toBeGreaterThanOrEqual(450);
     expect(await stillQueued(keys)).toEqual([]);
     expect(keys.filter((k) => objects.has(k))).toEqual([]);
+  });
+
+  test("a pass whose whole batch storage refuses ends there, leaving everything queued", async () => {
+    const keys = Array.from({ length: 450 }, (_, i) => `attachments/${ORG}/refused/${String(i).padStart(3, "0")}`).sort();
+    await owner`INSERT INTO attachment_object_deletions ${owner(keys.map((object_key) => ({ object_key, organization_id: ORG })))}`;
+    s3Down = true;
+    try {
+      const result = await sweepAttachments();
+      expect(result).toEqual({ expired: 0, deleted: 0, failed: SWEEP_BATCH });
+      expect(await stillQueued(keys)).toEqual(keys);
+    } finally {
+      s3Down = false;
+    }
+    expect((await sweepAttachments()).deleted).toBeGreaterThanOrEqual(450);
+    expect(await stillQueued(keys)).toEqual([]);
   });
 });
 
