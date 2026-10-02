@@ -36,6 +36,8 @@ import {
   summarizeToolArgs,
   MachineChip,
   MachineTip,
+  TierChip,
+  TierTip,
   AttachDropZone,
   ImageViewer,
 } from "@dude/design-system/components";
@@ -321,7 +323,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     subtitle: (
       <>
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
-        {run.model ? <code>{run.model}</code> : null}
+        {run.model ? <RunTierChip tier={run.modelTier} model={run.model} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
@@ -946,6 +948,26 @@ class TerminalReader {
         if (this.again && this.wanted) this.ask();
       });
   }
+}
+
+/**
+ * What the session asked the proxy for: its tier and the model the tier
+ * requested when the session started. What the proxy served is the
+ * proxy's to say. A Run from before tiers shows its model alone.
+ */
+function RunTierChip({ tier, model, role, phase }: { tier: string | null; model: string; role: AgentRole; phase: string | null }) {
+  const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
+  return (
+    <TierChip tier={tier} model={model} data-testid="run-model"
+      tooltip={
+        <TierTip title={tier ?? model}
+          aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">
+          {tier
+            ? <>The {agent}’s tier. When this session started, {tier} asked the proxy for <code>{model}</code>; changing {tier} now changes the next session, not this one.</>
+            : <>When this session started, dude asked the proxy for <code>{model}</code>.</>}
+        </TierTip>
+      } />
+  );
 }
 
 /**

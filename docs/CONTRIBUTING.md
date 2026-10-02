@@ -102,6 +102,13 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   previews; the spec carries the size as `resources` and its pool, by
   lux's id, as `placement.poolId`, and `runs.machine` keeps what it ran on. Design:
   [`design/machine-sizes.md`](design/machine-sizes.md).
+- **Every agent runs on a model tier, never a model.** The organisation's
+  tiers (`model_tiers`) are named by each role's settings; a tier names the
+  model dude requests from the LLM proxy. The spec declares that model under
+  `llm-anthropic` (`claude-*`) or `llm-openai` in `OPENCODE_CONFIG_CONTENT`,
+  and `runs.model_tier` / `runs.model` keep what was requested. A role on no
+  tier, or on one with no model, fails its Run saying so. Design:
+  [`design/model-tiers.md`](design/model-tiers.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
 - **A turn is done when the agent goes busy then idle**, as lux's shim
@@ -215,8 +222,10 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   one too (lux keeps a lost Run to resume).
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
-  `<server>-<task>-<project>.<preview domain>` — one DNS label
-  (`servers.PreviewLabel`). lux owns the URL and says on its feed when
+  `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
+  (`servers.PreviewLabel`), chosen once when the server is created and
+  kept: a server is found again by its `dude.preview` label, never by
+  hostname. lux owns the URL and says on its feed when
   someone opens one (`server.wake_requested`) or none is used
   (`server.idle`); `servers.Feed` records it and the preview loop acts.
   Its Run is servers-only (no `workload.servers`), resumed with `sync` on
@@ -253,8 +262,9 @@ These were settled deliberately. Change them on purpose, not by accident.
   backstop.
 - **Multi-tenant from the first migration**, enforced by row-level security,
   in both processes.
-- **Models are configured per project, per role**, falling back to the
-  organization. Per-role `context` is appended to that role's prompt.
+- **Models are configured per project, per role, as tiers**, falling back to
+  the organization; the organization's tiers say which model each requests.
+  Per-role `context` is appended to that role's prompt.
 - **DB access**: `Bun.sql` in the backend, `pgx` in the orchestrator, raw SQL
   in both; migrations are `.sql` files run by `bun run migrate`.
 - **Phases are Runs**, not agent subagents. The reviewer executes but never
@@ -320,7 +330,9 @@ Each of these cost real time.
 | Browser | `tests/suites/test_web_ui.py`, `test_gallery_ui.py` | The web app and the design system, in system Chrome |
 | Browser, no backend | `apps/web/test/browser_*.py` (`python3 apps/web/test/browser_terminal.py`) | Layout and sign-in the web app decides alone, against the Vite dev server and the fixture client or routed API answers, in system Chrome |
 
-The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`)
+The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`,
+requested by a tier like any other model; the suites' `ApiClient.on_models`
+puts roles on such tiers)
 plays every phase deterministically: the implementer commits, the reviewer
 raises one blocking finding unless the fixer's file is in its tree, the fixer
 and simplifier commit. `fake/hang` never finishes its turn, for steering and

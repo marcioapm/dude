@@ -70,14 +70,14 @@ func TestFakeLuxRelativePreviewHostname(t *testing.T) {
 }
 
 func TestPreviewHostnameWithoutDomainIsBare(t *testing.T) {
-	if got := servers.PreviewHostname("", "web", "task", "project", ""); got != "web-task-project" {
+	if got := servers.PreviewHostname("", "web", servers.PreviewOf{TaskID: "t1", TaskKey: "task", ProjectID: "p1", ProjectSlug: "project"}, ""); got != "web-task-project" {
 		t.Fatalf("hostname = %q", got)
 	}
 }
 
 type relativePreviewLux struct {
 	lux.Client
-	creates, lookups []string
+	creates, lookups, labelLookups []string
 }
 
 func (c *relativePreviewLux) CreateServer(ctx context.Context, in lux.CreateServer) (lux.TenantServer, error) {
@@ -95,6 +95,7 @@ func (c *relativePreviewLux) ListServers(ctx context.Context, hostname string, l
 			return nil, fmt.Errorf("expected relative lookup, got %q", hostname)
 		}
 	}
+	c.labelLookups = append(c.labelLookups, labels...)
 	return c.Client.ListServers(ctx, hostname, labels...)
 }
 
@@ -112,14 +113,14 @@ func TestRelativePreviewCreationAdoptionAndSaltedRetry(t *testing.T) {
 			}
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			task, runID := w.startPreview()
-			plain := servers.PreviewLabel("web", task, w.project, "")
+			plain := servers.PreviewLabel("web", w.previewOf(task), "")
 			want := plain
 			var existing lux.TenantServer
 			if mode != "create" && mode != "both" {
 				owner := runID
 				if mode == "salt" {
 					owner = "another-preview"
-					want = servers.PreviewLabel("web", task, w.project, runID)
+					want = servers.PreviewLabel("web", w.previewOf(task), runID)
 				}
 				var err error
 				existing, err = w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000, Command: []string{"sh", "-c", "npm run dev"},
@@ -147,7 +148,9 @@ func TestRelativePreviewCreationAdoptionAndSaltedRetry(t *testing.T) {
 			if (mode == "adopt" || mode == "race") && id != existing.ID {
 				t.Fatalf("adopted %s, want %s", id, existing.ID)
 			}
-			if w.labelled(runID) != 1 || len(calls.lookups) == 0 || calls.lookups[0] != plain {
+			// A preview's servers are found by their dude.preview label, never
+			// by a hostname read back.
+			if w.labelled(runID) != 1 || len(calls.lookups) != 0 || len(calls.labelLookups) == 0 || calls.labelLookups[0] != "dude.preview="+runID {
 				t.Fatalf("servers or lookups: %+v", calls)
 			}
 			if mode == "salt" && (len(calls.creates) != 2 || calls.creates[0] != plain || calls.creates[1] != want) {
@@ -182,7 +185,7 @@ func TestAFullNamePreviewSurvivesTheSwitchToRelativeNames(t *testing.T) {
 	w.until("full-name preview asleep", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wakeable`, runID) == 1
 	})
-	full := servers.PreviewLabel("web", task, w.project, "") + "." + previewDomain
+	full := servers.PreviewLabel("web", w.previewOf(task), "") + "." + previewDomain
 	id := w.serverID(runID, "web")
 	if got := w.str(`SELECT hostname FROM preview_servers WHERE run_id = $1`, runID); got != full {
 		t.Fatalf("stored hostname = %q, want %q", got, full)

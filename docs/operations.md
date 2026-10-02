@@ -191,15 +191,23 @@ to start in previews. With a lux that serves previews (its
 label under the preview domain:
 
 ```
-<server>-<task id>-<project id>.<preview domain>     web-wi-0mg7…-prj-0mg7….preview-absmartly.dev
+<server>-<task key>-<project slug>.<preview domain>     web-jerv-2-jervasion.preview-absmartly.dev
 ```
 
 The domain's wildcard certificate need cover one level only. Each part is
 lowercased with anything outside `a-z0-9` made `-`; a label longer than 63
 characters is cut and ends in `-` and 8 hex characters of a hash of the
-three parts, so it is stable and distinct. lux refusing a hostname another
-server has (`hostname_taken`) makes dude choose a second, hashed one. dude
-keeps lux's server id and stores the full hostname and URL lux returns.
+server's name and the task's and project's ids, so it is stable and
+distinct. A project's slug is unique in its organization and never changes,
+so two projects sharing a key prefix get different names; another
+organization's project of the same slug may hold the name, and lux refusing
+a hostname another server has (`hostname_taken`) makes dude choose a
+second, hashed one. A server keeps the hostname it was created at: renaming
+a project's key prefix leaves existing previews' URLs as they are, and
+previews made before names used key and slug keep their id-based ones. dude
+keeps lux's server id, stores the full hostname and URL lux returns, and
+finds a preview's servers by their `dude.preview` label; it never reads a
+hostname back.
 
 - **Declaring a preview** creates its servers (`wake: request`, `lifetime:
   owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
@@ -433,7 +441,7 @@ does not refuse to start.
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
 | `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
 | `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
-| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | optional; older lux's `previewDomain` | orchestrator | Needed only for lux predating relative hostnames when it does not report its domain. New lux receives only `<server>-<task>-<project>` and returns the full hostname and URL (see [Branch previews](#branch-previews)). If set, must match a domain lux reports; ignored for naming when new lux reports null. |
+| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | optional; older lux's `previewDomain` | orchestrator | Needed only for lux predating relative hostnames when it does not report its domain. New lux receives only `<server>-<task key>-<project slug>` and returns the full hostname and URL (see [Branch previews](#branch-previews)). If set, must match a domain lux reports; ignored for naming when new lux reports null. |
 | `previews.reap_after` | `DUDE_PREVIEW_REAP_AFTER` | `168h` | orchestrator | A branch preview nobody has opened for this long is ended and its lux servers deleted; positive. lux's own `expireAfter` (30 days, set by dude) is the safety net. |
 | `llm.url` | `DUDE_LLM_URL` | none | orchestrator | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
 | `llm.key` | `DUDE_LLM_KEY` | none | orchestrator | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |
@@ -514,16 +522,21 @@ dude gives every real agent Run these, and nothing else about its model:
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
   orchestrator's variables of the same names;
 - `OPENCODE_CONFIG_CONTENT`, the Run's model and effort as inline OpenCode
-  config, e.g. `{"model":"llm-anthropic/claude-sonnet-5","agent":{"build":{"reasoningEffort":"high"}}}`
-  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode merges
-  it over its file config.
+  config. The model is the one the role's tier requests, declared under the
+  provider its name goes through (`claude-*`: `llm-anthropic`; anything else:
+  `llm-openai`), e.g.
+  `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{}}}},"agent":{"build":{"reasoningEffort":"high"}}}`
+  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode
+  deep-merges it over its file config, so a model the file declares keeps its
+  `limit` and `reasoning`.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
 the URL and key from the environment. The dev image
 (`images/runtime/opencode.json`) and the production image define the same
 two providers, `llm-anthropic` (`@ai-sdk/anthropic`) and `llm-openai`
-(`@ai-sdk/openai-compatible`), so model names in settings work in both:
+(`@ai-sdk/openai-compatible`); dude writes every Run's model under one of
+them:
 
 ```json
 {
@@ -560,23 +573,21 @@ managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
 it sets would override each Run's model and effort. Both images use
 `/usr/local/share/dude/opencode.json`.
 
-A role's model in dude's settings must be `llm-anthropic/<model>` or
-`llm-openai/<model>`, with a non-empty model name, no whitespace or extra
-slash, and at most 200 characters. Model names are not a fixed catalog:
-the agent image must define the selected model. Check the selected image's
-OpenCode `provider.models` catalog, not only the LLM endpoint: an endpoint
-serving a model does not register it with OpenCode. The dev catalog is
-`images/runtime/opencode.json`; custom images can define other model names
-under the same providers. There is no shared runtime catalog API, so settings
-validate provider/form rather than pinning custom images to the dev catalog.
-Settings writes and project
-creation/updates reject other providers with a 400; legacy stored strings
-remain readable so they can be corrected or reset.
+A role names a model tier, and a tier the model dude requests, as the proxy
+names it (no provider prefix, whitespace or slash; at most 200 characters):
+see [`design/model-tiers.md`](design/model-tiers.md). The model need not be in
+the image's file: dude declares it in each Run's inline config, so any name
+the proxy serves works without an image change. One the file does declare
+keeps the `limit` and `reasoning` it gives it; one it does not gets
+OpenCode's defaults — no context limit (so no automatic compaction) and
+32000 output tokens a request (OpenCode 1.18.34). Declare a model in the
+file when it needs a known context window.
 
-The only exceptions are the test harness models `fake/scripted`, `fake/hang`,
-`fake/tools`, `fake/request`, `fake/wait`, `fake/live`, and `fake/ask`, implemented
-by `orchestrator/internal/fakeagent`. These are deterministic test/demo agents,
-not production image providers; arbitrary `fake/<model>` values are not accepted.
+The only names that are not the proxy's are the test harness models
+`fake/scripted`, `fake/hang`, `fake/tools`, `fake/request`, `fake/wait`,
+`fake/live`, and `fake/ask`, implemented by `orchestrator/internal/fakeagent`.
+These are deterministic test/demo agents, not production image providers;
+arbitrary `fake/<model>` values are not accepted.
 
 ### Upgrading from DUDE_OPENCODE_*
 
@@ -588,9 +599,9 @@ Run as the secrets `opencode_auth` and `opencode_config`
   refs to `opencode_auth` and `opencode_config`, answers 422
   `secrets_required` when they are not supplied, and the Run fails. Finish or
   cancel parked real-model Runs before upgrading, or accept that they fail.
-- Role models in project and organization settings must name a provider the
-  image defines (`llm-anthropic/…`, `llm-openai/…`); a provider from a
-  person's own OpenCode config no longer exists in the Run.
+- Role models are tiers since migration 069, which made each organization's
+  tiers from the models its roles named (see
+  [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
 - A Run keeps the URL, model and effort it started with; only the key is
   supplied again on each resume.
 

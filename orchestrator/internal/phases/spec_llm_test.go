@@ -18,7 +18,7 @@ func llmSpec(model, effort string) lux.Spec {
 // The key reaches the agent only as a lux secret in its environment: never
 // in the spec's plain env or labels, which lux stores and shows.
 func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
-	spec := llmSpec("llm/impl", "high")
+	spec := llmSpec("claude-opus-5-5", "high")
 	i := slices.IndexFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "DUDE_LLM_KEY" })
 	if i < 0 {
 		t.Fatalf("secrets = %+v, want DUDE_LLM_KEY", spec.Secrets)
@@ -46,31 +46,62 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 	}
 }
 
+// A Run's OpenCode config names the model under the provider its name goes
+// through, and declares it there, so a model the image's file does not list
+// still resolves; the effort is the agent's reasoningEffort, max as high.
 func TestTheModelAndEffortAreInlineOpenCodeConfig(t *testing.T) {
+	declare := func(provider, model string) map[string]any {
+		return map[string]any{provider: map[string]any{"models": map[string]any{model: map[string]any{}}}}
+	}
+	effort := func(e string) map[string]any {
+		return map[string]any{"build": map[string]any{"reasoningEffort": e}}
+	}
 	for _, tc := range []struct {
-		effort string
-		want   map[string]any
+		model, effort string
+		want          map[string]any
 	}{
-		{"high", map[string]any{"model": "llm/impl", "agent": map[string]any{"build": map[string]any{"reasoningEffort": "high"}}}},
-		{"low", map[string]any{"model": "llm/impl", "agent": map[string]any{"build": map[string]any{"reasoningEffort": "low"}}}},
-		{"max", map[string]any{"model": "llm/impl", "agent": map[string]any{"build": map[string]any{"reasoningEffort": "high"}}}},
-		{"", map[string]any{"model": "llm/impl"}},
+		{"claude-opus-5-5", "high", map[string]any{"model": "llm-anthropic/claude-opus-5-5",
+			"provider": declare("llm-anthropic", "claude-opus-5-5"), "agent": effort("high")}},
+		// Not in the image's opencode.json: declared all the same.
+		{"claude-nova-7", "low", map[string]any{"model": "llm-anthropic/claude-nova-7",
+			"provider": declare("llm-anthropic", "claude-nova-7"), "agent": effort("low")}},
+		{"gpt-5.6-sol", "max", map[string]any{"model": "llm-openai/gpt-5.6-sol",
+			"provider": declare("llm-openai", "gpt-5.6-sol"), "agent": effort("high")}},
+		{"gemini-3.8-pro", "", map[string]any{"model": "llm-openai/gemini-3.8-pro",
+			"provider": declare("llm-openai", "gemini-3.8-pro")}},
+		// Only a name starting claude- is Anthropic's.
+		{"my-claude-proxy", "", map[string]any{"model": "llm-openai/my-claude-proxy",
+			"provider": declare("llm-openai", "my-claude-proxy")}},
 	} {
-		spec := llmSpec("llm/impl", tc.effort)
+		spec := llmSpec(tc.model, tc.effort)
 		var got map[string]any
 		if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CONFIG_CONTENT"]), &got); err != nil {
-			t.Fatalf("effort %q: OPENCODE_CONFIG_CONTENT = %q: %v", tc.effort, spec.Env["OPENCODE_CONFIG_CONTENT"], err)
+			t.Fatalf("%s: OPENCODE_CONFIG_CONTENT = %q: %v", tc.model, spec.Env["OPENCODE_CONFIG_CONTENT"], err)
 		}
 		if !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("effort %q: config = %v, want %v", tc.effort, got, tc.want)
+			t.Errorf("%s effort %q: config = %v, want %v", tc.model, tc.effort, got, tc.want)
 		}
+		if spec.Labels["dude.model"] != tc.model {
+			t.Errorf("%s: label dude.model = %q, want the model as the proxy names it", tc.model, spec.Labels["dude.model"])
+		}
+	}
+}
+
+func TestATiersRunIsLabelledWithTheTier(t *testing.T) {
+	c := AgentConfig{LLMURL: "https://llm.example/v1"}
+	spec := buildSpec(c, specInput{RunID: "run_1", TaskID: "wi_1", Phase: "review", Model: "claude-fable-5-1", ModelTier: "Thinker"})
+	if spec.Labels["dude.model_tier"] != "Thinker" || spec.Labels["dude.model"] != "claude-fable-5-1" {
+		t.Errorf("labels = %v", spec.Labels)
+	}
+	if _, ok := buildSpec(c, specInput{Phase: "review", Model: "claude-fable-5-1"}).Labels["dude.model_tier"]; ok {
+		t.Error("a Run with no tier is labelled with one")
 	}
 }
 
 // Building one Run's env must not change the next one's.
 func TestRunEnvsAreTheirOwn(t *testing.T) {
-	a := llmSpec("llm/a", "")
-	b := llmSpec("llm/b", "")
+	a := llmSpec("claude-a", "")
+	b := llmSpec("claude-b", "")
 	if a.Env["OPENCODE_CONFIG_CONTENT"] == b.Env["OPENCODE_CONFIG_CONTENT"] {
 		t.Errorf("both Runs have %s", a.Env["OPENCODE_CONFIG_CONTENT"])
 	}

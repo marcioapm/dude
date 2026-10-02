@@ -1,8 +1,8 @@
 /**
  * Project and repository routes.
  *
- * Projects own the per-role agent model configuration, which is the knob that
- * decides which model runs as orchestrator, implementer, reviewer and so on.
+ * Projects own the per-role agent configuration: which model tier runs as
+ * orchestrator, implementer, reviewer and so on.
  */
 
 import { z } from "zod";
@@ -18,6 +18,7 @@ import { deleteObject } from "../../storage.ts";
 import { repositoryFields } from "./structure.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { checkTiers } from "./models.ts";
 import { requireImage } from "./images.ts";
 import type { OrgScope } from "../../db/client.ts";
 
@@ -91,6 +92,7 @@ async function createProject(ctx: RequestContext): Promise<Response> {
     const existing = await scope.sql`
       SELECT id FROM projects WHERE slug = ${input.slug} LIMIT 1`;
     if (existing.length > 0) return { conflict: true as const };
+    await checkTiers(scope, input.agentModels ?? {});
 
     const projectId = newId("project");
     if (input.runtimeImageId) await requireImage(scope, input.runtimeImageId);
@@ -164,6 +166,7 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
 
   const project = await withOrg(ctx.principal.organizationId, async (scope) => {
+    await checkTiers(scope, input.agentModels ?? {});
     if (input.runtimeImageId) {
       const [current] = (await scope.sql`SELECT runtime_image_id AS id FROM projects WHERE id = ${projectId}`) as Array<{ id: string | null }>;
       await requireImage(scope, input.runtimeImageId, current?.id);

@@ -22,6 +22,7 @@ import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
 import { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
+import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
 
 const PROMPT = `# Implementer
 
@@ -142,6 +143,30 @@ function MachinesDemo() {
   );
 }
 
+function TiersDemo() {
+  const [model, setModel] = useState("claude-opus-5-5");
+  return (
+    <Col>
+      <Label>TierLine</Label>
+      <TierLine icon="brain" tone="info" name="Thinker" description="Reads, plans, judges and tidies. Slow and thorough." />
+      <TierLine icon="agent" tone="success" name="Coder" description="Writes and fixes code for hours at a time." />
+      <TierLine icon="zap" tone="attention" name="Fast" description="Small, mechanical jobs where speed beats depth." />
+      <Label>FlowSteps</Label>
+      <FlowSteps steps={[
+        { title: "An agent asks for a tier", children: <>Implementer → <code>Coder</code>, set in Agents or a project.</> },
+        { title: "dude requests its model", children: <>Coder → <code>claude-opus-5-5</code>, sent as-is on every call.</> },
+        { title: "The proxy serves it", children: "That model if it can, or a fallback from its own config. dude doesn’t see which." },
+      ]} />
+      <Label>NameChips</Label>
+      <NameChips label="Names the proxy knows" names={["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"]} value={model} onPick={setModel} />
+      <Label>TierChip, with its tooltip; one with no tier</Label>
+      <TierChip tier="Coder" model="claude-opus-5-5"
+        tooltip={<TierTip title="Coder" aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">When this session started, Coder asked the proxy for claude-opus-5-5.</TierTip>} />
+      <TierChip model="llm-anthropic/claude-sonnet-5" />
+    </Col>
+  );
+}
+
 export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
   const [source, setSource] = useState(PROMPT);
   const [prompt, setPrompt] = useState<"add" | "replace" | "inherit">("add");
@@ -215,6 +240,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-machines" title="NumberInput / Select meta / FitBar / ProportionBar / MachineChip" note="A machine size in the pieces that show it. NumberInput moves in steps (− value + and ↑ ↓), keeps what is typed, and names the step when it is off. A Select option's meta is muted on its line and follows the label into the trigger; description is a line under it; footer sits under the list. FitBar is how much of one host a size takes, words only when nobody knows the host. ProportionBar splits a host's memory, the part nobody gets hatched. MachineChip is the session header's machine, its origin in a tooltip.">
         <Panes mode={mode}>
           <MachinesDemo />
+        </Panes>
+      </Block>
+      <Block id="s-tiers" title="TierLine / FlowSteps / NameChips / TierChip" note="A model tier in the pieces that show it. TierLine is a tier in a table or picker: its mark, name and what it is for. FlowSteps explains how something works once, in steps side by side. NameChips are suggestions under a field that takes any name. TierChip is the session header's model: the tier and the model it requested, what dude asked for and no more.">
+        <Panes mode={mode}>
+          <TiersDemo />
         </Panes>
       </Block>
       <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading.">

@@ -1,0 +1,169 @@
+/* TierMark: a glyph on its tone's tint, square like an agent's tile. */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--ds-radius-control);
+}
+.mark-md {
+  width: 28px;
+  height: 28px;
+}
+.mark-sm {
+  width: 16px;
+  height: 16px;
+}
+.tone-info {
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+.tone-success {
+  background: var(--ds-tone-success-bg);
+  color: var(--ds-tone-success-fg);
+}
+.tone-attention {
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-tone-attention-fg);
+}
+.tone-neutral {
+  background: var(--ds-tone-neutral-bg);
+  color: var(--ds-tone-neutral-fg);
+}
+
+/* TierLine: mark, then the name over what it is for. */
+.line {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.lineText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.lineName {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.lineDescription {
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-muted);
+  white-space: normal;
+}
+
+/* FlowSteps: three steps side by side on the chrome shade, told apart by space. */
+.flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.flowStep {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+.flowTitle {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ds-color-text-strong);
+}
+.flowBody {
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-secondary);
+}
+
+/* NameChips: suggestions under a field. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.nameChip {
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  cursor: pointer;
+}
+.nameChip:hover {
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+}
+.nameChip:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 1px;
+}
+.nameChipOn,
+.nameChipOn:hover {
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+
+/* TierChip: the session header's model, as MachineChip is its machine. */
+.chip {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  max-width: 100%;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  min-width: 0;
+}
+.chip:hover,
+.chip[data-state$="open"] {
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+}
+.chipIcon {
+  color: var(--ds-color-text-muted);
+}
+.chipTier {
+  color: var(--ds-color-text-secondary);
+}
+.chipModel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-4) 0;
+  max-width: 300px;
+}
+.tipTitle {
+  font-weight: var(--ds-weight-semibold);
+}
+.tipBody {
+  line-height: var(--ds-leading-snug);
+}
+.tipAside {
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-muted);
+}

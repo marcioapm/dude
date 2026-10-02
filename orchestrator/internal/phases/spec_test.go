@@ -23,7 +23,7 @@ func goldenInput(model string) (AgentConfig, specInput) {
 	}
 	in := specInput{
 		RunID: "run_1", OrganizationID: "org_1", TaskID: "wi_1", Phase: "implement", Role: "implementer",
-		Image: "registry.example/dude/agent:1", Model: model, Prompt: "Do the thing.",
+		Image: "registry.example/dude/agent:1", Model: model, ModelTier: "Coder", Prompt: "Do the thing.",
 		Repos: []specRepo{
 			{Name: "api", URL: "https://github.com/acme/api.git", Ref: "main"},
 			{Name: "web", URL: "https://github.com/acme/web.git", Ref: "abc123", ReadOnly: true},
@@ -36,7 +36,7 @@ func goldenInput(model string) (AgentConfig, specInput) {
 // What dude sends lux for a phase Run, byte for byte: a change to the spec
 // shows up here as a diff to read, not as a silent change on the wire.
 func TestTheSpecIsTheGoldenOne(t *testing.T) {
-	for name, model := range map[string]string{"opencode": "llm/impl", "scripted": "fake/scripted", "registry": "llm/impl"} {
+	for name, model := range map[string]string{"opencode": "claude-opus-5-5", "scripted": "fake/scripted", "registry": "claude-opus-5-5"} {
 		t.Run(name, func(t *testing.T) {
 			c, in := goldenInput(model)
 			if name == "registry" {
@@ -66,7 +66,7 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 
 // Unset Runs must not wait for a host offering nested containers.
 func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
-	for _, model := range []string{"llm/impl", "fake/scripted"} {
+	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
 		for _, set := range []bool{false, true} {
 			c, in := goldenInput(model)
 			c.NestedContainers = set
