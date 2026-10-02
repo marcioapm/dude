@@ -38,7 +38,8 @@ func TestAPhaseRunsOnItsRolesTierAndRecordsIt(t *testing.T) {
 }
 
 // Editing the tier moves the next session, not the running one: a parked
-// Run resumed after its tier changed keeps the model and tier it started on.
+// Run resumed after its tier changed — even to no model at all — goes on
+// with the model and tier it started on.
 func TestATiersNewModelReachesTheNextSessionNotTheRunningOne(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -48,7 +49,7 @@ func TestATiersNewModelReachesTheNextSessionNotTheRunningOne(t *testing.T) {
 	w.deliver(wi)
 	runID := w.parked(wi)
 
-	mustExec(t, w.owner, `UPDATE model_tiers SET model = 'claude-fable-5-1', name = 'Renamed' WHERE id = $1`, tier)
+	mustExec(t, w.owner, `UPDATE model_tiers SET model = NULL, name = 'Renamed' WHERE id = $1`, tier)
 	r := w.lux.Runs()[0]
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, out)
@@ -67,6 +68,7 @@ func TestATiersNewModelReachesTheNextSessionNotTheRunningOne(t *testing.T) {
 	}
 
 	// A new session takes the tier as it is now.
+	mustExec(t, w.owner, `UPDATE model_tiers SET model = 'claude-fable-5-1' WHERE id = $1`, tier)
 	wi2 := w.task()
 	w.deliver(wi2)
 	w.until("the second implementer to reach lux", func() bool {
