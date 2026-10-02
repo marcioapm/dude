@@ -59,8 +59,10 @@ RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
 
 # The agent's providers: not secret, so they are the image's. They read the
 # URL and key dude gives every Run (DUDE_LLM_URL, DUDE_LLM_KEY); a Run's
-# model and effort come on top in OPENCODE_CONFIG_CONTENT. Models are named
-# llm-anthropic/<model> or llm-openai/<model> in dude's settings. Not in
+# model and effort come on top in OPENCODE_CONFIG_CONTENT, which declares
+# the model under llm-anthropic (claude-*) or llm-openai (any other name), so
+# a model the proxy serves needs no rebuild. The models listed in the file
+# only give OpenCode their context and output limits and reasoning flag. Not in
 # /etc/opencode/: OpenCode merges that directory above OPENCODE_CONFIG_CONTENT.
 # See docs/operations.md, "Agent image contract".
 COPY --chmod=0644 opencode.json /usr/local/share/dude/opencode.json
