@@ -284,6 +284,7 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     title = page.get_by_test_id("task-title")
+    page.get_by_test_id("task-goal").fill("Enter in the title must not create the task.")
     title.fill("Not yet")
     expect(page.get_by_test_id("task-save")).to_be_enabled()
     title.press("Enter")
@@ -296,6 +297,39 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     title.focus()
     title.press("Enter")
     expect(page.get_by_test_id("task-goal-preview")).to_be_focused()
+    assert console_errors == []
+
+
+def test_creating_a_task_needs_a_goal_of_at_least_16_characters(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    expect(dialog.locator("label", has_text="Goal")).to_have_text("Goal · required")
+    page.get_by_test_id("task-title").fill("Show invoices in euros")
+    create, deliver = page.get_by_test_id("task-save"), page.get_by_test_id("task-create-deliver")
+    # Untouched, the goal says only that it is required.
+    expect(create).to_be_disabled()
+    expect(deliver).to_be_disabled()
+    expect(dialog).not_to_contain_text("more character")
+
+    goal = page.get_by_test_id("task-goal")
+    goal.fill("Bill in euros")
+    expect(dialog.get_by_text("3 more characters to save: why it matters and what should change.", exact=True)).to_be_visible()
+    expect(create).to_be_disabled()
+    # Whitespace around it does not count; nor does Ctrl/⌘+Enter save it.
+    goal.fill("   Bill in euros \n\n")
+    expect(create).to_be_disabled()
+    goal.press("ControlOrMeta+Enter")
+    goal.fill("Bill EU customers")
+    expect(dialog).not_to_contain_text("more character")
+    expect(create).to_be_enabled()
+    expect(deliver).to_be_enabled()
+    create.click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    assert [i["goal"] for i in items if i["title"] == "Show invoices in euros"] == ["Bill EU customers"]
     assert console_errors == []
 
 
@@ -869,6 +903,7 @@ def test_a_task_names_the_repositories_it_changes_and_reads(
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Document the greeting")
+    page.get_by_test_id("task-goal").fill("Say in the docs how the greeting picks a name.")
     chooser = page.get_by_test_id("task-repositories")
     # Nothing chosen says what that means.
     expect(chooser).to_contain_text("changes no code")
