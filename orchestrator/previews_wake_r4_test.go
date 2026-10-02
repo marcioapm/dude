@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,61 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 	}
 }
 
+// slowReplay is lux whose output stream from the start of a Run's records
+// takes replay before its first frame, as lux reading and decompressing
+// every archived output blob of the Run does, while replaying is set.
+type slowReplay struct {
+	lux.Client
+	replay    time.Duration
+	replaying atomic.Bool
+}
+
+func (s *slowReplay) Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(lux.Frame) error) error {
+	if s.replaying.Load() && cursor == "" {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(s.replay):
+		}
+	}
+	return s.Client.Output(ctx, runID, cursor, afterEvent, fn)
+}
+
+// A preview's Run ran and crashed, its crash applied; reading the Run's
+// archived output takes longer than the drain's bound. The wake does not
+// wait on that output: the next sweep resumes the Run once, and it serves.
+func TestACrashedPreviewWakesWhileItsOutputIsSlowToReplay(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	w.open(web)
+	w.running(runID, "web")
+	r := w.luxRuns()[0]
+	w.lux.Crash(r.ID)
+	waitFor(t, "the follower to apply the crash", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'failed'`, runID) == 1
+	})
+	slow := &slowReplay{Client: w.previews.Lux, replay: 400 * time.Millisecond}
+	slow.replaying.Store(true)
+	w.previews.Lux = slow
+	w.previews.DrainFor = 200 * time.Millisecond
+	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = now(), next_attempt_at = NULL WHERE id = $1`, runID)
+	if _, err := w.previews.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.Resumed != 1 {
+		t.Fatalf("the crashed Run was not resumed while its output was slow: resumed %d, calls %v\n%s",
+			r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+	}
+	w.open(web)
+	if n := len(w.luxRuns()); n != 1 || r.Resumed != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
+		w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
+		t.Fatalf("%d lux runs, resumed %d, calls %v; want the Run resumed once\n%s", n, r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+	}
+}
+
 // crashedThenFailedResumes leaves a preview's Run that ran and crashed,
 // then was resumed n times outside this wake (an accepted resume whose
 // acknowledgement was lost), each start failing before it ran. The
@@ -93,7 +149,7 @@ func (w *world) crashedThenFailedResumes(n int) (runID, web string, r *fakelux.R
 	w.running(runID, "web")
 	r = w.luxRuns()[0]
 	held, _ := w.holdOneStream("failed")
-	w.t.Cleanup(func() { w.lux.CutStreams(nil) })
+	w.t.Cleanup(func() { w.lux.PageEvents(nil) })
 	w.lux.Crash(r.ID)
 	wait(w.t, held, "the follower held before the crash")
 	w.lux.FailStarts("dude.preview="+runID, n)
@@ -109,14 +165,14 @@ func (w *world) crashedThenFailedResumes(n int) (runID, web string, r *fakelux.R
 }
 
 // The drain's first page ends after the crash, before the later resume's
-// events: lux's state (failed) is the state applied, but the later start's
+// events (lux recorded them after the page's query): lux's state (failed) is the state applied, but the later start's
 // failure is unread. It is counted before the wake decides: the Run is not
 // resumed again, it is cancelled and replaced, and the new Run serves.
 func TestARepeatedStateAtAPageEndIsNotTheRunsHistory(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, web, r := w.crashedThenFailedResumes(1)
-	w.cutFirstDrainAt("resuming", fakelux.StreamEnds)
+	w.pageEventsAt("resuming", pageShort)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +190,7 @@ func TestARepeatedStateAtAPageEndIsNotTheRunsHistory(t *testing.T) {
 	w.open(web)
 }
 
-// Every page of the drain ends after one event, so no pass finds lux with
+// Every page of the drain carries one event, so no page finds lux with
 // nothing past dude's cursor: the wake decides nothing (no resume, no
 // cancel, no new Run) and is released, backed off. Once lux's pages are
 // whole, the failed starts read are the count, and the Run is replaced.
@@ -142,35 +198,27 @@ func TestADrainThatNeverReachesAnEmptyPageDecidesNothing(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, web, r := w.crashedThenFailedResumes(2)
-	// A stream's first event goes on; its next one ends the page. The next
-	// stream starts at that event.
-	var mu sync.Mutex
-	armed, lastCut := false, int64(-1)
-	w.lux.CutStreams(func(id string, eventID int64, _ string) fakelux.StreamCut {
+	// Every page carries one event: the next page starts after it.
+	var pages atomic.Int32
+	w.lux.PageEvents(func(id string, _ int64, ids []int64) int {
 		if id != r.ID {
-			return fakelux.StreamGoesOn
+			return len(ids)
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		if armed && eventID != lastCut {
-			armed, lastCut = false, eventID
-			return fakelux.StreamEnds
-		}
-		armed = true
-		return fakelux.StreamGoesOn
+		pages.Add(1)
+		return min(len(ids), 1)
 	})
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if r.Resumed != 2 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") || len(w.luxRuns()) != 1 {
-		t.Fatalf("decided on a partial history: resumed %d, calls %v, %d lux runs\n%s",
-			r.Resumed, w.lux.CallsOf(r.ID), len(w.luxRuns()), w.preview(runID))
+	if r.Resumed != 2 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") || len(w.luxRuns()) != 1 || pages.Load() < 2 {
+		t.Fatalf("decided on a partial history: resumed %d, calls %v, %d lux runs, %d pages\n%s",
+			r.Resumed, w.lux.CallsOf(r.ID), len(w.luxRuns()), pages.Load(), w.preview(runID))
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL
 		AND next_attempt_at > now() AND lux_run_id = $2`, runID, r.ID); n != 1 {
 		t.Fatalf("the wake was not released and backed off:\n%s", w.preview(runID))
 	}
-	w.lux.CutStreams(nil)
+	w.lux.PageEvents(nil)
 	w.sweepAgain(runID)
 	w.untilPreview(runID, "a new Run running", func() bool {
 		return len(w.luxRuns()) == 2 &&

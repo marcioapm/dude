@@ -635,28 +635,39 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 // dude has not applied yet, here and now, rather than leaving it to a
 // follower: whether its start ran decides what a wake does with it, and a
 // failed start is counted once (luxEvent) wherever it is first applied.
-// lux's stream of an ended Run ends after its last event, or after one page
-// of a long backlog, and its end frame does not say which; nor does the
-// Run's state, which a later start can end in again. So the Run is drained
-// until a pass from the stored cursor reaches lux's end with no event past
-// it, and the state applied is the Run's state in lux then; short of that
-// within drainPasses, an error (the wake is tried again later).
+// It reads lux's lifecycle events a page at a time from the stored cursor
+// (GET events), not the Run's output stream, which replays every archived
+// output blob before its first event. A page with events says nothing of
+// what is past it, nor does the Run's state, which a later start can end in
+// again. So the Run is drained until a page from the stored cursor comes
+// back empty, and the state applied is the Run's state in lux then; short of
+// that within drainPages pages and DrainFor, an error (the wake is tried
+// again later, from the cursor reached).
 func (p *Previews) drain(ctx context.Context, r wakeRun) error {
-	for range drainPasses {
-		dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
-		sent, err := p.followEvents(dctx, r.previewRun)
-		cancel()
+	dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
+	defer cancel()
+	for range drainPages {
+		after, err := p.afterEvent(dctx, r.previewRun)
 		if err != nil {
 			return err
 		}
-		current, applied, err := p.appliedState(ctx, r)
+		page, err := p.Lux.Events(dctx, r.LuxRunID, after)
+		if err != nil {
+			return err
+		}
+		for _, f := range page {
+			if err := p.applyEvent(dctx, r.previewRun, f); err != nil {
+				return err
+			}
+		}
+		current, applied, err := p.appliedState(dctx, r)
 		if err != nil || !current {
 			return err
 		}
-		if sent > 0 {
+		if len(page) > 0 {
 			continue
 		}
-		lr, err := p.Lux.Get(ctx, r.LuxRunID)
+		lr, err := p.Lux.Get(dctx, r.LuxRunID)
 		if err != nil {
 			return err
 		}
@@ -664,7 +675,7 @@ func (p *Previews) drain(ctx context.Context, r wakeRun) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("lux run %s: no pass of its events reached their end within %d passes", r.LuxRunID, drainPasses)
+	return fmt.Errorf("lux run %s: no page of its events came back empty within %d pages", r.LuxRunID, drainPages)
 }
 
 // appliedState is whether the wake's lux Run is still the preview's, and
@@ -677,10 +688,11 @@ func (p *Previews) appliedState(ctx context.Context, r wakeRun) (current bool, a
 	return current, applied, err
 }
 
-// drain's bounds: each pass's stream, and the passes.
+// drain's bounds: the whole paging, and its pages (lux's are up to 1000
+// events each; what is applied stays applied for the next try).
 const (
-	drainFor    = 30 * time.Second
-	drainPasses = 5
+	drainFor   = 30 * time.Second
+	drainPages = 5
 )
 
 // startState is what dude has applied of the preview's Run: whether its
