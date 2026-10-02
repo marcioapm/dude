@@ -386,7 +386,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, machine, err := s.spec(ctx, r, nil, image)
+	spec, machine, sent, err := s.spec(ctx, r, nil, image)
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -397,16 +397,8 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
-	// The images the task's text shows: every phase's prompt carries the
-	// task (delivery.PromptAttachments).
-	var sent []delivery.SentAttachment
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var err error
-		sent, err = delivery.PromptAttachments(ctx, tx, r.ID)
-		return err
-	}); err != nil {
-		return err
-	}
+	// The images the task's text shows, as spec numbered them: every
+	// phase's prompt carries the task (delivery.PromptAttachments).
 	images, reason, err := s.readAttachments(ctx, sent)
 	if err != nil {
 		return s.retryLater(ctx, r, err)
@@ -531,8 +523,10 @@ const EvImagePreparing = "run.image_preparing"
 // (Syncer.image).
 //
 // Also returns the size the Run's role resolves to now (nil: the
-// organization has none); submit records it, a resume does not.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
+// organization has none); submit records it, a resume does not. And the
+// task's images in the order the prompt numbers them, read in the same
+// transaction as its text: submit sends exactly these.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, []delivery.SentAttachment, error) {
 	var in specInput
 	var title, goal string
 	var repos []delivery.Repository
@@ -609,10 +603,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, nil, nil, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, nil, errNoModel(noTier)
+		return lux.Spec{}, nil, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
 
@@ -639,7 +633,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -666,11 +660,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, nil, errForge{err}
+		return lux.Spec{}, nil, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, nil, errForge{err}
+			return lux.Spec{}, nil, nil, errForge{err}
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -678,7 +672,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, nil, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
@@ -692,18 +686,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, `SELECT tool_starts FROM runs WHERE id = $1`, r.ID).Scan(&start)
 		}); err != nil {
-			return lux.Spec{}, nil, err
+			return lux.Spec{}, nil, nil, err
 		}
 		token, hash := agenttools.RunToken(s.Agent.ToolsKey, r.ID, start)
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, r.ID, hash)
 			return err
 		}); err != nil {
-			return lux.Spec{}, nil, err
+			return lux.Spec{}, nil, nil, err
 		}
 		in.ToolsToken = token
 	}
-	return buildSpec(s.Agent, in), in.Machine, nil
+	return buildSpec(s.Agent, in), in.Machine, taskImages, nil
 }
 
 // runBranch is where one phase Run's commits are pushed. Every Run has its
@@ -1322,7 +1316,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, err := s.spec(ctx, r, &lr.Spec, "")
+	spec, _, _, err := s.spec(ctx, r, &lr.Spec, "")
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}
