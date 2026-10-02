@@ -167,6 +167,24 @@ test("a resize handle snaps to Small within 10 px and writes it", async () => {
   expect(f.value("goal")).toBe('One.\n\n![a.png](attachment:att_a "small left")');
 });
 
+test("a change from outside clears the selection, steals no focus, and Backspace elsewhere removes nothing", async () => {
+  const B = "![b.png](attachment:att_b)";
+  const f = await mountFields([{ id: "crit", kind: "criteria", value: `- [ ] One\n- [ ] Two ${A}` }]);
+  const input = document.createElement("input");
+  document.body.appendChild(input);
+  cleanups.push(() => input.remove());
+  await f.select("crit");
+  expect(f.container.querySelector("[data-image-toolbar]")).not.toBeNull();
+  input.focus();
+  // An upload finishing in front of the selected image: reference 0 is now another image.
+  await f.type("crit", `- [ ] One ${B}\n- [ ] Two ${A}`);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelector("[data-selected]")).toBeNull();
+  expect(document.activeElement).toBe(input);
+  await f.key(document.activeElement!, "Backspace");
+  expect(f.value("crit")).toBe(`- [ ] One ${B}\n- [ ] Two ${A}`);
+});
+
 test("a drag from the goal drops under a criterion as its continuation line", async () => {
   const f = await mountFields([
     { id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` },
