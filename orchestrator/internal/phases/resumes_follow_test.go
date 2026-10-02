@@ -296,8 +296,11 @@ func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *t
 	if n := len(w.timed()); n != 1 {
 		t.Fatalf("%d run.resume.timed with no frame after lux's answer, want 1", n)
 	}
-	// A later chunk, were it taken as the first output, would stamp the
-	// row now.
+	// A later running state, busy and chunk, were any taken as the first,
+	// would stamp the row now.
+	st.frames <- running(3)
+	st.frames <- cursorFrame(busy(3), "later-busy")
+	w.committed("later-busy", 5*time.Second)
 	st.frames <- cursorFrame(spoke(3), "o3")
 	w.committed("o3", 5*time.Second)
 	time.Sleep(100 * time.Millisecond)
@@ -313,6 +316,9 @@ func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *t
 	}
 	if _, ok := got[0]["totalMs"]; ok {
 		t.Errorf("totalMs %v reported though the first output's time is unknown", got[0]["totalMs"])
+	}
+	if _, ok := got[0]["untilBusyMs"]; ok {
+		t.Errorf("untilBusyMs %v reported though the first busy's time is unknown", got[0]["untilBusyMs"])
 	}
 	if row := w.row(3); row["first_output_at"] != nil || row["busy_at"] != nil || row["running_at"] != nil {
 		t.Errorf("stamped from a later frame: running %v busy %v first output %v",
