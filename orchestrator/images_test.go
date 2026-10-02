@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -71,10 +73,13 @@ func TestATaskStartedWithAnImageGivesItToItsFirstAgent(t *testing.T) {
 		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
 			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
 	})
-	// The reviewer after it is not shown it again.
+	// The reviewer after it is asked about the work, and not shown them.
 	w.until("a second phase", func() bool { return len(w.lux.Runs()) >= 2 })
-	if strings.Contains(string(w.lux.Runs()[1].Spec), `"attachments"`) {
-		t.Error("a later phase was given the prompt's images too")
+	if !strings.Contains(string(w.lux.Runs()[1].Spec), `"dude.phase":"review"`) {
+		t.Fatalf("the second Run is not the reviewer: %s", w.lux.Runs()[1].Spec)
+	}
+	if got := promptImages(t, w.lux.Runs()[1].Spec); len(got) != 0 {
+		t.Errorf("the reviewer was given the prompt's images: %v", got)
 	}
 	// Once given, the prompt takes no more.
 	w.upload(b, "att_late", wi, "late.png", screenshot)
@@ -169,6 +174,93 @@ func TestAnAnswerCarriesItsImagesToTheAgent(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.answered'
 		AND payload->'attachments'->0->>'id' = 'att_phone'`, wi); n != 1 {
 		t.Errorf("question.answered does not carry the image")
+	}
+}
+
+// promptImages are the images a lux Run's spec carried with its prompt.
+func promptImages(t *testing.T, spec []byte) []string {
+	t.Helper()
+	var s struct {
+		Workload struct {
+			Attachments []struct {
+				Name string
+				Data []byte
+			} `json:"attachments"`
+		} `json:"workload"`
+	}
+	if err := json.Unmarshal(spec, &s); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, a := range s.Workload.Attachments {
+		names = append(names, a.Name)
+	}
+	return names
+}
+
+// The task's images go with every Run given the task as its prompt: an
+// implementer that failed before its agent saw them is retried with them.
+func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi := w.task()
+	w.upload(b, "att_design", wi, "design.png", screenshot)
+	// Missing the first time: the first implementer fails at submit.
+	delete(b, "attachments/att_design")
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	w.until("delivery to stop for a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&reason)
+	if reason != "the task's image design.png is gone from storage" {
+		t.Fatalf("the first implementer failed with %q", reason)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Fatalf("lux was given %d Runs", n)
+	}
+
+	b["attachments/att_design"] = screenshot
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.until("the second implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
+		t.Fatalf("the retried implementer was given %v", got)
+	}
+	w.until("its prompt turn to name the image", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
+			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
+	})
+}
+
+// A delivery whose workflow could not start is asked again with the same
+// images: they are already the prompt's, and it goes.
+func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi := w.task()
+	w.upload(b, "att_design", wi, "design.png", screenshot)
+	// The workflow cannot start, for this organization only.
+	mustExec(t, w.owner, fmt.Sprintf(`CREATE FUNCTION refuse_%[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'workflow store down'; END $$;
+		CREATE TRIGGER refuse_%[1]s BEFORE INSERT ON workflow_runs FOR EACH ROW
+		WHEN (NEW.organization_id = '%[1]s') EXECUTE FUNCTION refuse_%[1]s()`, w.org))
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 500 {
+		t.Fatalf("deliver with the workflow store down: %d %v", status, body)
+	}
+	mustExec(t, w.owner, fmt.Sprintf(`DROP TRIGGER refuse_%[1]s ON workflow_runs; DROP FUNCTION refuse_%[1]s()`, w.org))
+
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
+		t.Fatalf("deliver again: %d %v", status, body)
+	}
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
+		t.Fatalf("the implementer was given %v", got)
+	}
+	// It was sent, with the prompt: a steer cannot take it.
+	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_design' AND for_prompt AND attached_at IS NOT NULL`); n != 1 {
+		t.Errorf("the image is not the prompt's")
 	}
 }
 
