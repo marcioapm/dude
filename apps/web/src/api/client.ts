@@ -129,6 +129,17 @@ export interface WebhookHealth {
     registeredAt: string | null; error: string | null }>;
 }
 
+/** Someone (or a team, as "org/slug") a review can be asked of, as GitHub offers them. */
+export interface ReviewerCandidate {
+  kind: "user" | "team";
+  login: string;
+  name?: string;
+  avatarUrl?: string;
+  /** Why GitHub suggests them; absent for one found by words. */
+  reason?: "changed" | "commented";
+  members?: number;
+}
+
 /** How dude behaves on GitHub for the organization. */
 export interface GithubSettings {
   whoCanWake: "collaborators" | "members" | "anyone";
@@ -462,6 +473,17 @@ export class ApiClient {
 
   requestReview(id: string, logins: string[]): Promise<unknown> {
     return this.#request("POST", `/v1/pull-requests/${id}/reviewers`, { logins });
+  }
+
+  /**
+   * Who could review: GitHub's suggestions for pull request `id` with no
+   * words, else who matches them — in its repository, or with no `id`, in
+   * the organization's.
+   */
+  async reviewerCandidates(id: string | null, q: string): Promise<ReviewerCandidate[]> {
+    const query = q ? `?q=${encodeURIComponent(q)}` : "";
+    const path = id ? `/v1/pull-requests/${id}/reviewer-candidates${query}` : `/v1/forge/reviewer-candidates${query}`;
+    return (await this.#request<{ candidates: ReviewerCandidate[] }>("GET", path)).candidates;
   }
 
   getProject(id: string): Promise<ProjectDetail> {

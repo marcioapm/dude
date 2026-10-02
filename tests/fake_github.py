@@ -40,6 +40,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Who the fake says can review: the reviewer picker's people.
+REVIEWERS = [
+    {"login": "ana", "name": "Ana Ribeiro", "avatarUrl": ""},
+    {"login": "tom", "name": "Tom Okafor", "avatarUrl": ""},
+    {"login": "bo", "name": "Bo Lindqvist", "avatarUrl": ""},
+]
+
 @dataclass
 class PullRequest:
     number: int
@@ -498,9 +505,22 @@ class FakeGitHub:
                 self._send(404, {"message": "Not Found"})
 
             def _graphql(self, body: dict) -> None:
-                """The one query dude sends: a pull request's review threads."""
+                """The queries dude sends: a pull request's review threads,
+                and who could review it (REVIEWERS; the first two suggested)."""
                 v = body.get("variables") or {}
                 gh = root._for_repo(v.get("name", "")) if v.get("owner") == root.owner else None
+                if "teams(" in body.get("query", ""):
+                    # The owner's teams: none, as for a repository a user owns.
+                    return self._send(200, {"data": {"organization": None}, "errors": [
+                        {"type": "NOT_FOUND", "message": "Could not resolve to an Organization"}]})
+                if gh is not None and "suggestedReviewers" in body.get("query", ""):
+                    pr = gh.pulls.get(int(v.get("number") or 0))
+                    words = (v.get("q") or "").lower()
+                    # Suggestions only without words, as GitHub's @include(if:$suggest).
+                    suggested = [] if words else [{"isCommenter": i == 1, "reviewer": u} for i, u in enumerate(REVIEWERS[:2])]
+                    return self._send(200, {"data": {"repository": {
+                        "pullRequest": {"author": {"login": "dude-bot"}, "suggestedReviewers": suggested} if pr else None,
+                        "assignableUsers": {"nodes": [u for u in REVIEWERS if words in f"{u['login']} {u['name']}".lower()]}}}})
                 pr = gh.pulls.get(int(v.get("number") or 0)) if gh else None
                 if pr is None:
                     return self._send(200, {"data": {"repository": None}, "errors": [

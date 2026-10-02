@@ -552,7 +552,16 @@ export const prCheckSchema = z.object({
   diagnostic: z.string().nullable().optional(),
 });
 /** A reviewer's latest word (`PrReview`); `REQUESTED` for one asked who has not answered. */
-export const prReviewSchema = z.object({ login: z.string(), state: z.string(), submittedAt: z.string().nullable().optional() });
+export const prReviewSchema = z.object({
+  login: z.string(),
+  state: z.string(),
+  submittedAt: z.string().nullable().optional(),
+  avatarUrl: z.string().optional(),
+  /** A team asked ("org/slug"), not a person. */
+  team: z.boolean().optional(),
+  /** Asked again since this verdict: it stands, but they owe another look. */
+  rerequested: z.boolean().optional(),
+});
 
 export const pullRequestSchema = z.object({
   id: z.string(),
@@ -640,19 +649,50 @@ export function prActualChecks(checks: ReadonlyArray<PrCheck>): PrCheck[] {
   return checks.filter((c) => !c.diagnostic);
 }
 
-/** Why the checks could not all be read, in a person's words. */
+/** Why the checks could not all be read, in a person's words: one line. */
 export function prCheckDiagnosticReason(code: string): string {
+  return code === CHECK_RUNS_FORBIDDEN ? "GitHub won't show dude this repository's checks" : "Some GitHub checks cannot be read";
+}
+
+/**
+ * What to do about it, under that line: what the token lacks, and that CI
+ * may well be running — dude cannot see it, so Merge waits.
+ */
+export function prCheckDiagnosticFix(code: string): string | null {
   return code === CHECK_RUNS_FORBIDDEN
-    ? "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)."
-    : "Some GitHub checks cannot be read.";
+    ? "dude's GitHub token needs Checks: Read on this repository, and the organization's approval if it uses SSO. CI may be running; dude can't see it, so Merge waits."
+    : null;
+}
+
+/** A reviewer's latest word, in a person's words: "approved", "requested changes". */
+export function reviewWords(state: string): string {
+  switch (state.toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "COMMENTED":
+      return "commented";
+    case "CHANGES_REQUESTED":
+      return "requested changes";
+    case "REQUESTED":
+      return "review requested";
+    case "DISMISSED":
+      return "review dismissed";
+    default:
+      return state.toLowerCase().replaceAll("_", " ");
+  }
 }
 
 /** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */
 export interface PrReview {
   login: string;
-  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`. */
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`, or `REQUESTED` for one asked who has not answered. */
   state: string;
   submittedAt?: string | null | undefined;
+  avatarUrl?: string | undefined;
+  /** A team asked ("org/slug"), not a person. */
+  team?: boolean | undefined;
+  /** Asked again since this verdict: it stands on GitHub, but they owe another look. */
+  rerequested?: boolean | undefined;
 }
 
 export type PrMergeable = "clean" | "behind" | "conflicting" | "unknown";
