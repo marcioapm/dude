@@ -55,3 +55,29 @@ func TestAnEndingRunTimesTheResumeItsFollowerNeverDid(t *testing.T) {
 		})
 	}
 }
+
+// A Run ended and its process stopped before its timing was published:
+// the row has its first output and no timed_at, and nothing of the Run is
+// left to do. The startup pass publishes it once; a second pass, nothing.
+// A resume older than the pass looks back is left alone.
+func TestTheStartupPassTimesWhatAnEndedRunNeverPublished(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status = 'completed', lux_state = 'stopped', lux_stop_reason = 'complete', ended_at = now()
+		WHERE id = $1`, w.run.ID)
+	base := time.Now().Add(-time.Minute)
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at, first_output_at)
+		VALUES ($1, $2, 2, 'person', $3, $4, $5)`, w.run.ID, w.run.Org, base, base.Add(time.Second), base.Add(3*time.Second))
+	old := base.Add(-8 * 24 * time.Hour)
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, first_output_at, created_at)
+		VALUES ($1, $2, 3, 'person', $3, $4, $3)`, w.run.ID, w.run.Org, old, old.Add(time.Second))
+
+	w.s.TimeUntimedResumes(w.ctx)
+	got := w.timed()
+	if len(got) != 1 || got[0]["epoch"] != 2.0 || got[0]["totalMs"] != 3000.0 {
+		t.Fatalf("after the startup pass: %v, want one run.resume.timed for epoch 2 of 3000ms", got)
+	}
+	w.s.TimeUntimedResumes(w.ctx)
+	if n := len(w.timed()); n != 1 {
+		t.Errorf("%d run.resume.timed after a second pass, want 1", n)
+	}
+}
