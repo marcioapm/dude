@@ -260,9 +260,6 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	var body struct {
 		Policy  json.RawMessage `json:"policy"`
 		ActorID string          `json:"actorId"`
-		// Images given with the task's prompt: every Run given the task as
-		// its prompt sees them (delivery.TaskPromptPhases).
-		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -278,25 +275,8 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 			}
 			return err
 		}
-		// The prompt's images are set only before any agent has been given
-		// the prompt, and each delivery asked until then names the whole
-		// set: none, after a start that failed, lets them go. Once the
-		// delivery's workflow exists a delivery naming none is the same
-		// delivery asked again (Deliver, a double submit), and keeps them.
-		var started, queued bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent'),
-			EXISTS (SELECT 1 FROM workflow_runs WHERE workflow_type = $2 AND idempotency_key = $3)`,
-			taskID, delivery.WorkflowType, deliveryKey(taskID)).Scan(&started, &queued); err != nil {
-			return err
-		}
-		if started && len(body.AttachmentIDs) > 0 {
-			return fail(http.StatusConflict, "conflict", "task %s has started: its prompt was given already", taskID)
-		}
-		if !started && (len(body.AttachmentIDs) > 0 || !queued) {
-			if _, err := attach(r.Context(), tx, taskID, "", body.AttachmentIDs); err != nil {
-				return err
-			}
-		}
+		// The prompt's images are the ones the task's text references,
+		// kept so by the backend on every save (delivery.PromptAttachments).
 		// Which repositories it works on is the task's to say: none is
 		// work that changes no code — unless its project has just one.
 		return delivery.NameOnlyRepository(r.Context(), tx, taskID)
