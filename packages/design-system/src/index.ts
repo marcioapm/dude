@@ -26,6 +26,8 @@ export {
 } from "./util/format.ts";
 export type { DurationOptions, TimestampStyle, UsdOptions } from "./util/format.ts";
 export { isBlockStart as isMarkdownBlockStart, parseMarkdown, safeUrl } from "./util/markdown.ts";
+export * as imageLayout from "./util/imageLayout.ts";
+export type { ImageLayout, ImageSize, ImageAlign, FieldKind as ImageFieldKind } from "./util/imageLayout.ts";
 export { parseAnsi } from "./util/ansi.ts";
 export type { AnsiColor, AnsiStyle, AnsiSegment, ParseAnsiOptions } from "./util/ansi.ts";
 export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";

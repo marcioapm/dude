@@ -1,0 +1,265 @@
+/**
+ * An image's layout in a task's Markdown, and the edits Preview makes to
+ * the source. The layout is the reference's title: `![alt](attachment:id
+ * "small right")`. Words: a size (`small`, `medium`, `full`, or a width in
+ * px) and an alignment (`center`, `left`, `right`); unknown words are
+ * ignored, `full` is always centred, and defaults are not written back.
+ *
+ * Every edit takes the field's source and returns the new source: the text
+ * stays the one source of truth. Images are named by their place among the
+ * text's references (`attachmentReferences`), which is the order Markdown
+ * draws them in.
+ */
+
+import { attachmentReferences } from "@dude/domain";
+import { parseMarkdown } from "./markdown.ts";
+
+export type ImageSize = "small" | "medium" | "full" | number;
+export type ImageAlign = "center" | "left" | "right";
+export interface ImageLayout {
+  readonly size: ImageSize;
+  readonly align: ImageAlign;
+}
+
+export const IMAGE_SIZES = { small: 200, medium: 420 } as const;
+/** The narrowest a free resize goes, in px. */
+export const IMAGE_MIN_WIDTH = 120;
+
+export function parseLayout(title: string | undefined): ImageLayout {
+  let size: ImageSize = "medium";
+  let align: ImageAlign = "center";
+  for (const w of (title ?? "").split(/[ \t]+/)) {
+    if (w === "small" || w === "medium" || w === "full") size = w;
+    else if (/^\d{1,5}$/.test(w)) size = Math.max(IMAGE_MIN_WIDTH, Number(w));
+    else if (w === "center" || w === "left" || w === "right") align = w;
+  }
+  return { size, align: size === "full" ? "center" : align };
+}
+
+/** The title to write, defaults dropped; undefined for medium and centred. */
+export function layoutTitle(l: ImageLayout): string | undefined {
+  const words: string[] = [];
+  if (l.size !== "medium") words.push(String(typeof l.size === "number" ? Math.max(IMAGE_MIN_WIDTH, Math.round(l.size)) : l.size));
+  if (l.align !== "center" && l.size !== "full") words.push(l.align);
+  return words.length ? words.join(" ") : undefined;
+}
+
+/** CSS width for a size; `max-width: 100%` clamps it to the column. */
+export function layoutWidth(size: ImageSize): string {
+  return size === "full" ? "100%" : `${typeof size === "number" ? size : IMAGE_SIZES[size]}px`;
+}
+
+/**
+ * A dragged width as a size: Small or Medium within ±10 px of theirs, Full
+ * at the column's edge (`max`), else the px width, never under 120.
+ */
+export function snapWidth(px: number, max: number): ImageSize {
+  if (px >= max - 6) return "full";
+  for (const k of ["small", "medium"] as const) if (Math.abs(px - IMAGE_SIZES[k]) <= 10) return k;
+  return Math.max(IMAGE_MIN_WIDTH, Math.round(Math.min(px, max)));
+}
+
+/** `n`'s reference with `layout` as its title; everything before the URL's end kept as written. */
+export function withLayout(text: string, n: number, layout: ImageLayout): string {
+  const r = attachmentReferences(text)[n];
+  if (!r) return text;
+  const span = text.slice(r.from, r.to);
+  let end = urlStart(span) + "attachment:".length + r.id.length;
+  if (span[end] === ">") end++;
+  const title = layoutTitle(layout);
+  return text.slice(0, r.from) + span.slice(0, end) + (title ? ` "${title}"` : "") + ")" + text.slice(r.to);
+}
+
+/** Where `attachment:` starts in one reference: past the alt's `]`, which an escape never is. */
+function urlStart(span: string): number {
+  let i = 2;
+  while (i < span.length && span[i] !== "]") i += span[i] === "\\" ? 2 : 1;
+  return span.indexOf("attachment:", i);
+}
+
+const lineOf = (text: string, at: number) => text.slice(0, at).split("\n").length - 1;
+const blank = (l: string | undefined) => l === undefined || l.trim() === "";
+
+/**
+ * The text without `n`'s reference, and the reference as written. A line
+ * left empty goes, with a blank line it leaves doubled; inside a line the
+ * spaces either side close up to one.
+ */
+export function cutReference(text: string, n: number): { text: string; ref: string } | null {
+  const r = attachmentReferences(text)[n];
+  if (!r) return null;
+  const ref = text.slice(r.from, r.to);
+  const lineStart = text.lastIndexOf("\n", r.from - 1) + 1;
+  const nl = text.indexOf("\n", r.to);
+  const lineEnd = nl < 0 ? text.length : nl;
+  const head = text.slice(lineStart, r.from);
+  const tail = text.slice(r.to, lineEnd);
+  if (blank(head + tail)) {
+    const lines = text.split("\n");
+    const at = lineOf(text, r.from);
+    lines.splice(at, 1);
+    while (at < lines.length && blank(lines[at]) && (at === 0 || blank(lines[at - 1]))) lines.splice(at, 1);
+    if (at >= lines.length) while (lines.length && blank(lines[lines.length - 1])) lines.pop();
+    return { text: lines.join("\n"), ref };
+  }
+  const joined = tail === "" ? head.replace(/[ \t]+$/, "") : head.endsWith(" ") && tail.startsWith(" ") ? head + tail.slice(1) : head + tail;
+  return { text: text.slice(0, lineStart) + joined + text.slice(lineEnd), ref };
+}
+
+export function removeReference(text: string, n: number): string {
+  return cutReference(text, n)?.text ?? text;
+}
+
+// --- Where an image can go ---------------------------------------------------
+
+/** The line each top-level block of the goal starts on. */
+function blockStarts(text: string): number[] {
+  const lines: number[] = [];
+  parseMarkdown(text, { blockLines: lines });
+  return lines;
+}
+
+const MARKER = /^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * The criteria's items, as `criteria.ts` reads them: a list marker short of
+ * the current item's content column starts the next; `last` is the item's
+ * last non-blank line, `column` where a continuation line is indented to.
+ */
+export function criteriaItems(text: string): Array<{ first: number; last: number; column: number }> {
+  const out: Array<{ first: number; last: number; column: number }> = [];
+  let fence: string | null = null;
+  text.split("\n").forEach((line, i) => {
+    const cur = out[out.length - 1];
+    const f = FENCE.exec(line)?.[1];
+    if (fence !== null) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && line.trim() === f) fence = null;
+      if (cur) cur.last = i;
+      return;
+    }
+    if (f) fence = f;
+    if (blank(line)) return;
+    const m = MARKER.exec(line);
+    const indent = m ? m[1]!.replace(/\t/g, "    ").length : 0;
+    if (m && !f && indent <= 3 && (!cur || indent < Math.min(cur.column, 4))) {
+      out.push({ first: i, last: i, column: indent + m[2]!.length + 1 });
+    } else if (cur) cur.last = i;
+  });
+  return out;
+}
+
+export type FieldKind = "goal" | "criteria";
+
+/** How many slots a field has: before each goal block and after the last; one per criterion. */
+export function slotCount(text: string, kind: FieldKind): number {
+  return kind === "goal" ? blockStarts(text).length + 1 : Math.max(1, criteriaItems(text).length);
+}
+
+/**
+ * `ref` put in at `slot`, and its offset. In the goal, a paragraph of its own
+ * before block `slot` (or at the end). In the criteria, a continuation line,
+ * indented to the item's content, under the last line of criterion `slot`:
+ * it stays that criterion's and creates or merges none.
+ */
+export function insertReference(text: string, ref: string, slot: number, kind: FieldKind): { text: string; at: number } {
+  const lines = text === "" ? [] : text.split("\n");
+  let at: number;
+  if (kind === "goal") {
+    const starts = blockStarts(text);
+    if (slot >= starts.length) {
+      while (lines.length && blank(lines[lines.length - 1])) lines.pop();
+      if (lines.length) lines.push("");
+      at = lines.length;
+      lines.push(ref);
+    } else {
+      at = starts[Math.max(0, slot)]!;
+      const add = [ref, ""];
+      let refLine = at;
+      if (at > 0 && !blank(lines[at - 1])) {
+        add.unshift("");
+        refLine++;
+      }
+      lines.splice(at, 0, ...add);
+      at = refLine;
+    }
+  } else {
+    const items = criteriaItems(text);
+    const item = items[Math.min(Math.max(0, slot), items.length - 1)];
+    if (!item) {
+      at = lines.length;
+      lines.push(`- [ ] ${ref}`);
+      const joined = lines.join("\n");
+      return { text: joined, at: joined.length - ref.length };
+    }
+    at = item.last + 1;
+    lines.splice(at, 0, " ".repeat(item.column) + ref);
+  }
+  const joined = lines.join("\n");
+  const lineOffset = lines.slice(0, at).reduce((s, l) => s + l.length + 1, 0);
+  return { text: joined, at: lineOffset + lines[at]!.indexOf(ref) };
+}
+
+/** Which slot `n`'s reference sits in, and whether it is all of it (a goal paragraph of its own; the end of a criterion). */
+function placeOf(text: string, n: number, kind: FieldKind): { slot: number; own: boolean } | null {
+  const r = attachmentReferences(text)[n];
+  if (!r) return null;
+  const line = lineOf(text, r.from);
+  if (kind === "goal") {
+    const starts = blockStarts(text);
+    let b = 0;
+    while (b + 1 < starts.length && starts[b + 1]! <= line) b++;
+    const end = b + 1 < starts.length ? starts[b + 1]! : Infinity;
+    const lines = text.split("\n");
+    const blockText = lines.slice(starts[b], Math.min(end, lines.length)).join("\n").trim();
+    return { slot: b, own: blockText === text.slice(r.from, r.to) };
+  }
+  const items = criteriaItems(text);
+  let i = 0;
+  while (i + 1 < items.length && items[i + 1]!.first <= line) i++;
+  const lines = text.split("\n");
+  const itemEnd = lines.slice(0, (items[i]?.last ?? 0) + 1).join("\n").length;
+  return { slot: i, own: text.slice(r.to, itemEnd).trim() === "" };
+}
+
+/** The reference's index in `text` at offset `at`. */
+const indexAt = (text: string, at: number) => attachmentReferences(text).findIndex((r) => r.from === at);
+
+/**
+ * `n`'s image moved within its field to `slot` (in the field as it is now).
+ * Returns the new text and the image's new index; null when nothing moves.
+ */
+export function moveReferenceTo(text: string, n: number, slot: number, kind: FieldKind): { text: string; index: number } | null {
+  const place = placeOf(text, n, kind);
+  const cut = cutReference(text, n);
+  if (!place || !cut) return null;
+  let target = slot;
+  // A goal paragraph of its own is gone after the cut: the slots after it move down one.
+  if (kind === "goal" && place.own && slot > place.slot) target--;
+  if (kind === "goal" && place.own && target === place.slot) return null;
+  if (kind === "criteria" && place.own && target === place.slot) return null;
+  const put = insertReference(cut.text, cut.ref, target, kind);
+  return { text: put.text, index: indexAt(put.text, put.at) };
+}
+
+/** `n`'s image one block up (-1) or down (+1): past the goal paragraph or criterion beside it. */
+export function moveReference(text: string, n: number, dir: -1 | 1, kind: FieldKind): { text: string; index: number } | null {
+  const place = placeOf(text, n, kind);
+  if (!place) return null;
+  if (kind === "goal") {
+    const blocks = blockStarts(text).length;
+    // Own paragraph: before the one above, or after the one below. In a paragraph: before it, or after it.
+    const slot = place.own ? (dir < 0 ? place.slot - 1 : place.slot + 2) : dir < 0 ? place.slot : place.slot + 1;
+    if (slot < 0 || slot > blocks) return null;
+    return moveReferenceTo(text, n, slot, kind);
+  }
+  const items = criteriaItems(text).length;
+  const slot = place.own ? place.slot + dir : dir < 0 ? place.slot - 1 : place.slot;
+  if (slot < 0 || slot >= items) return null;
+  return moveReferenceTo(text, n, slot, kind);
+}
+
+/** Whether `n`'s image can move one block in `dir`. */
+export function canMove(text: string, n: number, dir: -1 | 1, kind: FieldKind): boolean {
+  return moveReference(text, n, dir, kind) !== null;
+}

@@ -208,6 +208,45 @@ button.imageButton {
   color: var(--ds-color-text-muted);
 }
 
+/* An attachment image laid out by its title (ImageFigure). Text holding
+   one is a size container, so a narrow column can centre every image, and
+   a flow root, so a float never hangs out of the field. */
+.root.figures {
+  container-type: inline-size;
+  display: flow-root;
+}
+.figure {
+  display: block;
+  max-width: 100%;
+  margin: var(--ds-space-4) auto;
+}
+.figure[data-align="left"] {
+  float: left;
+  margin: var(--ds-space-4) var(--ds-space-16) var(--ds-space-8) 0;
+}
+.figure[data-align="right"] {
+  float: right;
+  margin: var(--ds-space-4) 0 var(--ds-space-8) var(--ds-space-16);
+}
+.figure .imageButton,
+.figure .image,
+.figure .imageLoading {
+  display: block;
+  width: 100%;
+}
+.figure .imageLoading {
+  height: auto;
+  aspect-ratio: 16 / 10;
+}
+/* Under 480 px the text beside a float would be a strip: every image takes its own line. */
+@container (max-width: 479px) {
+  .figure[data-align="left"],
+  .figure[data-align="right"] {
+    float: none;
+    margin: var(--ds-space-4) auto;
+  }
+}
+
 /* Lists */
 /* Hanging indent: markers sit in the 1.5em gutter, wrapped lines align with the text. */
 .list {
@@ -230,6 +269,11 @@ button.imageButton {
 .liBody {
   display: block;
   min-width: 0;
+}
+/* Each criterion holds its own floats: an image never spills into the next item. */
+.figures .liBody {
+  display: flow-root;
+  flex: 1;
 }
 .liBody > * + * {
   margin-top: 0.25em;

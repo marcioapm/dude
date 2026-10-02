@@ -58,6 +58,12 @@ export type IconName =
   | "arrow-down-to-line"
   | "file"
   | "image"
+  | "image-small"
+  | "image-medium"
+  | "image-full"
+  | "wrap-left"
+  | "wrap-center"
+  | "wrap-right"
   | "download"
   | "play"
   | "archive"
@@ -162,6 +168,14 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   "arrow-down": { d: "M8 3v10M4 9l4 4 4-4" },
   "arrow-right": { d: "M3 8h10M9 4l4 4-4 4" },
   "arrow-down-to-line": { d: "M8 2.5v8M4.5 7l3.5 3.5L11.5 7M3 13.5h10" },
+  /* An image's size in the column: a box a third, two thirds, or all of the width. */
+  "image-small": { d: "M2.5 5.5h4v5h-4zM9 6h4.5M9 10h4.5" },
+  "image-medium": { d: "M2.5 4.5h7.5v7H2.5zM12 6h1.5M12 10h1.5" },
+  "image-full": { d: "M2.5 4.5h11v7h-11z" },
+  /* Where the text goes around an image: lines beside it, or above and below. */
+  "wrap-left": { d: "M2.5 4h5v5h-5zM10 4.5h3.5M10 8h3.5M2.5 12h11" },
+  "wrap-center": { d: "M5 5h6v5H5zM2.5 2.75h11M2.5 13h11" },
+  "wrap-right": { d: "M8.5 4h5v5h-5zM2.5 4.5H6M2.5 8H6M2.5 12h11" },
   file: { d: "M4 2.5h5l3 3v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1ZM9 2.5v3h3" },
   /* A framed picture: horizon, a hill and a sun. */
   image: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5ZM2.5 11l3.5-3.5 2.5 2.5 2-2 3 3M10.5 6.5h.01" },
