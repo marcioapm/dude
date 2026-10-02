@@ -90,6 +90,13 @@ describe("a test message's result", () => {
     expect(testResultWords({ efforts: ["high", null], sent: null, ok: true, latencyMs: 900, status: 200, error: null }))
       .toBe("answered (efforts high, none; sent without an effort, as the agent sends it) in 0.9 s");
   });
+
+  test("what was sent, when it is none of the efforts asked", () => {
+    expect(testResultWords({ efforts: ["max"], sent: "high", ok: false, latencyMs: 40, status: 400, error: "reasoning_effort high is not supported" }))
+      .toBe("(effort max, sent as high): the proxy answered 400 — reasoning_effort high is not supported");
+    expect(testResultWords({ efforts: ["max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null }))
+      .toBe("answered (effort max, sent as high) in 1.2 s");
+  });
 });
 
 describe("the upgrade's notes", () => {
