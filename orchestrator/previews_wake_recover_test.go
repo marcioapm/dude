@@ -30,7 +30,7 @@ func TestAnAcceptedResumeThatFailsToStartGetsANewRun(t *testing.T) {
 		t.Errorf("old Run resumed %d times, calls %v; want one resume, then cancelled", old.Resumed, w.lux.CallsOf(old.ID))
 	}
 	fresh := w.luxRuns()[1]
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND start_failures = 0 AND error IS NULL`,
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND error IS NULL`,
 		runID, fresh.ID); n != 1 {
 		t.Fatalf("dude does not hold the new Run, recovered:\n%s", w.describeRuns())
 	}
@@ -59,9 +59,15 @@ func TestAPreviewWhoseRunNeverStartsIsTriedABoundedNumberOfTimes(t *testing.T) {
 	w.lux.FailStarts("dude.preview="+runID, 100)
 
 	w.lux.RequestServer(web, "/")
-	w.until("dude to give up", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 3 AND wake_wanted_at IS NULL
-			AND status = 'paused'`, runID) == 1
+	view := func() map[string]any {
+		_, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+		run, _ := out["run"].(map[string]any)
+		return run
+	}
+	w.until("dude to give up and say why", func() bool {
+		msg, _ := view()["error"].(string)
+		return strings.Contains(msg, "failed to start (start-failed) 3 times") &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL AND status = 'paused'`, runID) == 1
 	})
 	for range 10 {
 		w.pump()
@@ -74,18 +80,16 @@ func TestAPreviewWhoseRunNeverStartsIsTriedABoundedNumberOfTimes(t *testing.T) {
 			t.Errorf("replaced Run %s not cancelled: %v", r.ID, w.lux.CallsOf(r.ID))
 		}
 	}
-	code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
-	run, _ := out["run"].(map[string]any)
-	if msg, _ := run["error"].(string); code != 200 || run["asleep"] != true || run["previewStage"] != nil ||
-		!strings.Contains(msg, "failed to start (start-failed) 3 times") {
-		t.Fatalf("view = %d %v", code, run)
+	if run := view(); run["asleep"] != true || run["previewStage"] != nil {
+		t.Fatalf("view = %v; want asleep, no stage", run)
 	}
 
 	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code != 200 {
 		t.Fatalf("start = %d %v", code, out)
 	}
 	w.until("the person's wake tried", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 4 AND wake_wanted_at IS NULL`, runID) == 1
+		return len(w.luxRuns()) == 4 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL AND status = 'paused'`, runID) == 1
 	})
 	for range 10 {
 		w.pump()
@@ -108,7 +112,7 @@ func TestARunThatRanThenFailedIsResumedNotReplaced(t *testing.T) {
 	r := w.luxRuns()[0]
 	w.lux.Crash(r.ID)
 	w.until("asleep", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND start_failures = 0`, runID) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
 	w.open(web)
 	if n := len(w.luxRuns()); n != 1 || r.Resumed != 1 {
