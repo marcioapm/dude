@@ -979,9 +979,10 @@ const KeepFor = 7 * 24 * time.Hour
 // agent's conversation with it; then, or straight away for any other, it is
 // cancelled.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
-	if r.Keep && !r.KeepExpired && r.LuxRunID != "" {
+	if r.Keep && !r.KeepExpired && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
 		return s.keep(ctx, r)
 	}
+	// Not worth keeping, its time is up, or lux has nothing left to resume.
 	return s.cancel(ctx, r)
 }
 
@@ -1079,8 +1080,12 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.fail(ctx, r, "cannot resume: "+cannot.Error())
 	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
-		// Already resuming: an earlier attempt got through and its answer
-		// was lost. lux's stream reports how it went.
+		// Already resuming (an earlier attempt got through and its answer
+		// was lost: lux's stream reports how it went) — or not resumable at
+		// all, cancelled or finished in lux, which fails it.
+		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && cur.State != "resuming" {
+			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)
+		}
 		err = nil
 		lr.State = "resuming"
 	}
@@ -1640,7 +1645,11 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, w.id,
 				'phase-finished:' || r.id || CASE WHEN r.finishes > 0 THEN ':' || r.finishes ELSE '' END
 			FROM runs r
+			-- The delivery of the Run's own attempt: one started over is
+			-- not told of an earlier attempt's Runs. (A delivery from
+			-- before attempts were kept in its state is any attempt's.)
 			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
+			  AND COALESCE(NULLIF(w.state->>'attempt', '')::int, r.attempt) = r.attempt
 			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
 			  -- Work that changes no code is judged by what it published, so

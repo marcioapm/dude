@@ -446,3 +446,79 @@ func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 		t.Errorf("the resumed agent was told %q", in)
 	}
 }
+
+// A kept Run an operator cancelled in lux is not offered to resume, and
+// one resumed all the same fails rather than waiting for ever.
+func TestARunCancelledInLuxIsNotResumed(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.aborted()
+	w.lux.CancelInLux(w.lux.Runs()[0].ID)
+	// Resumed before dude heard of the cancel: lux refuses, and it fails.
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the resume to fail, and stop the delivery for a person", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND error LIKE 'cannot resume%'`, runID) == 1 &&
+			w.taskStatus(wi) == "awaiting_input"
+	})
+	w.until("its lux run to be let go, not kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID) == 1
+	})
+}
+
+// A reviewer still waiting for room when the review was aborted does not
+// keep the others from being resumed: it is queued again with them.
+func TestAReviewerNeverStartedIsQueuedAgainOnResume(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Commit: map[string]string{"auth/session.go": "package auth\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Hang: true}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("two reviewers at work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'`, wi) >= 2
+	})
+	var started, pending string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY created_at LIMIT 1`, wi).Scan(&started)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND id <> $2 LIMIT 1`, wi, started).Scan(&pending)
+	// The second never reached lux.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL WHERE id = $1`, pending)
+	if status, body := w.call("/internal/runs/"+started+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	w.until("the started reviewer to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, started) == 1
+	})
+	if got, _ := w.options(wi); len(got) == 0 || got[0] != "resume" {
+		t.Fatalf("an aborted review with a reviewer never started offers %v", got)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the never-started reviewer to be submitted", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, pending) == 1
+	})
+}
+
+// After a start over, attempt 1's Runs are not signalled to attempt 2's
+// delivery.
+func TestAnEarlierAttemptsRunsAreNotSignalledToTheNext(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.aborted()
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	w.until("attempt 2's implementer", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2`, wi) == 1
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_signals WHERE payload->>'runId' = $1`, runID); n != 0 {
+		t.Errorf("attempt 1's run was signalled %d times", n)
+	}
+}

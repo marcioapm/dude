@@ -492,6 +492,17 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 	return done
 }
 
+// CancelInLux cancels a Run as an operator would in lux itself: nothing of
+// it is left to resume.
+func (s *Server) CancelInLux(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.Cancelled = true
+		s.setState(run, "cancelled")
+	}
+}
+
 // Crash ends a Run's agent as a dead container would.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()

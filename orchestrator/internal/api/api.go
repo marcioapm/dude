@@ -602,8 +602,9 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		// The step it is part of stops with it — the reviewers beside it, the
 		// whole of a delivery — each kept, so the task can be picked back up
 		// where it stopped (phases.Syncer.end).
+		// Kept: one lux has (keep has no meaning for one it never had).
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-			control_reason = $3, ended_at = now(), keep = true
+			control_reason = $3, ended_at = now(), keep = lux_run_id IS NOT NULL
 			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL)
 			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`,
 			runID, ri.TaskID, db.Nullable(body.Reason)); err != nil {

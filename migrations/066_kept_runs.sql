@@ -20,3 +20,13 @@ COMMENT ON COLUMN runs.keep IS
   'Aborted or failed, and worth resuming: its lux Run is stopped and kept rather than cancelled.';
 COMMENT ON COLUMN runs.kept_until IS
   'Kept: until when its lux Run is kept for a resume; then it is cancelled.';
+
+-- A Run a person can take back up where it stopped: aborted or failed,
+-- worth keeping, and stopped and kept in lux until a time not yet passed.
+-- One lux has not yet stopped is not: a resume would wait for a stop
+-- nobody asks for. The one definition, for the orchestrator (offering and
+-- taking a resume) and the backend (an escalation's actions) alike.
+CREATE FUNCTION run_kept(r runs) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT r.status IN ('aborted', 'failed') AND r.keep AND r.lux_run_id IS NOT NULL
+    AND r.lux_stop_reason IS NOT DISTINCT FROM 'kept' AND COALESCE(r.kept_until > now(), false)
+$$;

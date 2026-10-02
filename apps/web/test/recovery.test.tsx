@@ -9,7 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
+import { RUN_ID, TASK_ID, taskFor } from "../src/fixtures/data.ts";
+import { stopOf } from "../src/screens/Recovery.tsx";
 import type { RecoverAction } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -141,5 +142,23 @@ describe("a task started over", () => {
     const line = await until(() => [...page.querySelectorAll("[data-testid=activity-item]")].find((l) => l.textContent?.includes("picked the task back up")),
       "the pick-up in Activity");
     expect(line.textContent).toContain("started over as attempt 2");
+  });
+});
+
+describe("what stopped the task", () => {
+  const people = { you: null, me: null, all: [], byId: new Map(), names: new Map(), refresh: async () => people, seen: () => false } as never;
+  const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  const ev = (eventType: string, min: number, payload: Record<string, unknown> = {}) =>
+    ({ eventType, occurredAt: at(min), runId: null, payload, actor: { type: "human", id: "u" } }) as never;
+
+  test("a failure the work went on past, by a decision, is not what stopped it later", () => {
+    const base = taskFor("a");
+    const failed = { ...base.runs[0]!, id: "run_old", status: "failed" as const, endedAt: at(60), error: "host lost" };
+    const task = { ...base, status: "aborted" as const, runs: [failed] };
+    // Tried again on the escalation, and later stopped on no Run.
+    const stop = stopOf(task, [ev("task.decided", 50, { action: "retry" }), ev("task.decided", 5, { action: "stop" })], people);
+    expect(stop.run).toBeNull();
+    // Without that decision, the failure is what stopped it.
+    expect(stopOf(task, [ev("task.decided", 5, { action: "stop" })], people).run?.id).toBe("run_old");
   });
 });

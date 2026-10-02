@@ -150,13 +150,9 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 	return runID, err
 }
 
-// KeptRun (SQL, over runs) is a Run a person can take back up where it
-// stopped: aborted or failed, worth keeping, and stopped and kept in lux
-// (phases.Syncer.keep) until a time not yet passed. One lux has not yet
-// stopped cannot be: a resume waits for a stop nobody would ask for. The
-// control plane's escalationJson says the same.
-const KeptRun = `(status IN ('aborted', 'failed') AND keep AND lux_run_id IS NOT NULL
-	AND lux_stop_reason = 'kept' AND kept_until > now())`
+// KeptRun (SQL, over a runs row named runs) is a Run a person can take
+// back up where it stopped: migration 066's run_kept, the one definition.
+const KeptRun = `run_kept(runs)`
 
 // Kept says whether a failed Run is kept for a person to resume
 // (phases.Syncer.end): its agent died, rather than dude failing it for a

@@ -292,16 +292,28 @@ const updateTaskInput = z.object({
  * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const { ownerId: ownerGiven, ...input } = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId: ownerGiven, ...given } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
+      SELECT project_id AS "projectId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
+      FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
       status: string;
+      title: string;
+      goal: string;
+      acceptanceCriteria: string[];
     }>;
     if (!current[0]) return { missing: true as const };
     const { projectId, status } = current[0];
+    // What the edit really changes: a dialog sends every field, and what it
+    // left as it was is no change — to the rules below, or to the record
+    // (a resumed agent is told its task changed only when it did).
+    const input = { ...given };
+    if (input.title === current[0].title) delete input.title;
+    if (input.goal === current[0].goal) delete input.goal;
+    if (input.acceptanceCriteria !== undefined &&
+      JSON.stringify(input.acceptanceCriteria) === JSON.stringify(current[0].acceptanceCriteria)) delete input.acceptanceCriteria;
     const changesTheTask = input.title !== undefined || input.goal !== undefined ||
       input.acceptanceCriteria !== undefined || input.repositories !== undefined;
     // Started means a delivery exists, whatever the status says yet: the
@@ -317,7 +329,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     }
     const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
     if (ownerId === null) return { noPerson: ownerGiven };
-    if (Object.keys(input).length === 0 && ownerId === undefined) return { unchanged: true as const };
+    if (Object.keys(given).length === 0 && ownerId === undefined) return { unchanged: true as const };
     if (input.repositories) {
       const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };

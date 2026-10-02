@@ -53,6 +53,8 @@ type stoppedTask struct {
 	// delivery), kept in lux, and when the first of them stops being kept.
 	Kept      []string
 	KeptUntil *time.Time
+	// The Runs a resume queues again: they stopped before lux had them.
+	Unstarted []string
 }
 
 // stoppedRun is one of the Runs a task stopped on.
@@ -61,6 +63,8 @@ type stoppedRun struct {
 	Until *time.Time
 	// Still kept to resume (delivery.KeptRun).
 	Kept bool
+	// Stopped before lux had it: nothing to resume, and nothing lost.
+	Unstarted bool
 }
 
 func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stoppedTask, error) {
@@ -94,26 +98,33 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	if len(stoppedRuns) == 0 {
 		return t, nil
 	}
-	// Each one that ended stopped (aborted, failed) must be kept to resume:
-	// a step resumed with one gone would wait on it for ever. One that
-	// finished meanwhile (a reviewer done just before the abort) is not
-	// resumed: its phase.finished is waiting for the step that resumes.
-	rows, err := tx.Query(ctx, `SELECT id, kept_until, COALESCE(`+delivery.KeptRun+`, false) FROM runs
+	// Each one that ended stopped (aborted, failed) must be kept to resume —
+	// a step resumed with one gone would wait on it for ever — or never have
+	// reached lux (a reviewer still waiting for room), which loses nothing
+	// and is simply queued again. One that finished meanwhile (a reviewer
+	// done just before the abort) is not resumed: its phase.finished is
+	// waiting for the step that resumes.
+	rows, err := tx.Query(ctx, `SELECT id, kept_until, `+delivery.KeptRun+`, lux_run_id IS NULL FROM runs
 		WHERE id = ANY($1) AND status IN ('aborted', 'failed') ORDER BY created_at`, stoppedRuns)
 	if err != nil {
 		return t, err
 	}
-	kept, err := pgx.CollectRows(rows, pgx.RowToStructByPos[stoppedRun])
+	ended, err := pgx.CollectRows(rows, pgx.RowToStructByPos[stoppedRun])
 	if err != nil {
 		return t, err
 	}
-	if len(kept) == 0 || slices.ContainsFunc(kept, func(r stoppedRun) bool { return !r.Kept }) {
+	if !slices.ContainsFunc(ended, func(r stoppedRun) bool { return r.Kept }) ||
+		slices.ContainsFunc(ended, func(r stoppedRun) bool { return !r.Kept && !r.Unstarted }) {
 		return t, nil
 	}
-	for _, k := range kept {
-		t.Kept = append(t.Kept, k.ID)
-		if k.Until != nil && (t.KeptUntil == nil || k.Until.Before(*t.KeptUntil)) {
-			t.KeptUntil = k.Until
+	for _, r := range ended {
+		if r.Unstarted {
+			t.Unstarted = append(t.Unstarted, r.ID)
+			continue
+		}
+		t.Kept = append(t.Kept, r.ID)
+		if r.Until != nil && (t.KeptUntil == nil || r.Until.Before(*t.KeptUntil)) {
+			t.KeptUntil = r.Until
 		}
 	}
 	return t, nil
@@ -281,8 +292,14 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	rc := &delivery.Recover{Action: action}
 	if action == "resume" {
 		rc.At = t.resumeAt()
-		st.PendingRunIDs = t.Kept
+		st.PendingRunIDs = append(slices.Clone(t.Kept), t.Unstarted...)
 		if err := resumeKept(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, note); err != nil {
+			return err
+		}
+		// Those lux never had start now, as they would have.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'pending', control = 'none', keep = false, ended_at = NULL,
+				control_reason = NULL, phase_notified_at = NULL, finishes = finishes + 1
+			WHERE id = ANY($1) AND lux_run_id IS NULL AND status IN ('aborted', 'failed')`, t.Unstarted); err != nil {
 			return err
 		}
 	} else {

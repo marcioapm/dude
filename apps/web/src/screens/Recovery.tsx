@@ -35,13 +35,15 @@ export interface Stop {
 
 /**
  * How the task stopped: the current attempt's last aborted or failed Run
- * since it was last picked up, and who stopped it and why. None, when it
- * stopped on no Run (a pull request closed, a person stopping a review
- * that got stuck): the notice then says only that it stopped.
+ * since the work last went on past one (a pick-up, or a decision other
+ * than Stop), and who stopped it and why. None, when it stopped on no Run
+ * (a pull request closed, a person stopping a review that got stuck): the
+ * notice then says only that it stopped.
  */
 export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], people: People): Stop {
   const attempt = Math.max(1, ...task.runs.map((r) => r.attempt));
-  const since = events.findLast((e) => e.eventType === "task.recovered")?.occurredAt ?? "";
+  const since = events.findLast((e) => e.eventType === "task.recovered" ||
+    (e.eventType === "task.decided" && e.payload.action !== "stop"))?.occurredAt ?? "";
   const ended = task.runs.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
