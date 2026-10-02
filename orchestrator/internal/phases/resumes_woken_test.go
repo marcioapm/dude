@@ -79,6 +79,15 @@ func TestAnAnswerWakesFromTheLastAskThatHeldThePark(t *testing.T) {
 		}
 	})
 
+	t.Run("a question answered after a blocking decision is it", func(t *testing.T) {
+		w := wokenWorld(t, base)
+		w.request("rr_"+w.run.Org, true, "denied", sec(2))
+		w.question("q_a_"+w.run.Org, sec(4))
+		if _, got := w.wokenAt(w.run); !got.Equal(sec(4)) {
+			t.Errorf("woken at %v, want the answer at %v", got, sec(4))
+		}
+	})
+
 	t.Run("an earlier park's answer is not this park's", func(t *testing.T) {
 		w := wokenWorld(t, base)
 		w.exec(`INSERT INTO events (id, organization_id, event_type, occurred_at, run_id, actor_type, actor_id, source)
