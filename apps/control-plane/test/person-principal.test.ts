@@ -56,7 +56,8 @@ test("a person with no key creates a task that is theirs alone, or nothing on ba
   const router = new Router(async () => principal);
   registerWorkRoutes(router);
   const create = (body: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/tasks", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: project, ...body }),
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectId: project, goal: "Work a person asked for without an API key.", ...body }),
   }));
 
   const res = await create({ title: "Keyless task" });

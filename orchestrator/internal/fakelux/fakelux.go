@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -435,6 +436,7 @@ type event struct {
 	Epoch int
 	Type  string
 	Data  map[string]any
+	Time  time.Time
 }
 
 type Server struct {
@@ -467,6 +469,8 @@ type Server struct {
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
+	// Previews optionally advertises the relative-naming capability in whoami.
+	Previews *bool
 	// The port in preview URLs, when not the scheme's (a local demo).
 	PreviewPort int
 	// How often idle servers are looked for; zero is 100ms.
@@ -517,6 +521,14 @@ type Server struct {
 	// given, reported as each placement's memoryLimit (a newer lux); zero
 	// reports none, as today's lux.
 	MemoryShare float64
+	// Starts still to fail, by spec label "key=value" (FailStarts), and
+	// the state each ends in.
+	failStarts map[string]int
+	failAs     map[string]string
+	// Test hooks for stream delivery, placement starts, and event pages.
+	beforeEvent func(runID string, eventID int64, typ string)
+	beforeStart func(runID string)
+	eventPages  func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -612,6 +624,105 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 	return done
 }
 
+// FailStarts makes the next n starts (a submit's or a resume's placement)
+// of Runs whose spec has the label "key=value" fail before the workload
+// runs, as lux reports a container that would not start; n <= 0 clears it.
+func (s *Server) FailStarts(label string, n int) { s.failStartsAs(label, n, "failed") }
+
+// LoseStarts is FailStarts with the host lost mid-start: the Run is lost.
+func (s *Server) LoseStarts(label string, n int) { s.failStartsAs(label, n, "lost") }
+
+func (s *Server) failStartsAs(label string, n int, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failStarts == nil {
+		s.failStarts, s.failAs = map[string]int{}, map[string]string{}
+	}
+	if n <= 0 {
+		delete(s.failStarts, label)
+		return
+	}
+	s.failStarts[label], s.failAs[label] = n, state
+}
+
+// takeFailStart uses up one of FailStarts' for a Run of this spec: the
+// state the start ends in, "" for none. Callers hold s.mu.
+func (s *Server) takeFailStart(spec map[string]any) string {
+	labels, _ := spec["labels"].(map[string]any)
+	for k, v := range labels {
+		key := fmt.Sprintf("%s=%v", k, v)
+		if s.failStarts[key] > 0 {
+			s.failStarts[key]--
+			return s.failAs[key]
+		}
+	}
+	return ""
+}
+
+// BeforeEvent has every Run's output stream call fn before it sends each
+// lifecycle event, without the fake's lock: a test holds a follower there
+// while the Run moves on. nil clears it.
+func (s *Server) BeforeEvent(fn func(runID string, eventID int64, typ string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeEvent = fn
+}
+
+// BeforeStart has every placement (a submit's, a resume's) call fn as it
+// starts, before it runs or fails, without the fake's lock. nil clears it.
+func (s *Server) BeforeStart(fn func(runID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeStart = fn
+}
+
+// PageEvents has every GET /v1/runs/{id}/events ask fn, without the fake's
+// lock, how many of the events past after (ids, at most lux's page of
+// eventsPage) its page carries: fewer is a short page, one that blocks is a
+// slow request, a negative answer fails it (503). An empty page while there
+// are events past after is lux recording them after the page's query. nil
+// clears it.
+func (s *Server) PageEvents(fn func(runID string, after int64, ids []int64) int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventPages = fn
+}
+
+// EventState is the state a Run's state event reported; "" for another.
+func (s *Server) EventState(runID string, eventID int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[runID]; run != nil {
+		for _, e := range run.events {
+			if e.ID == eventID {
+				st, _ := e.Data["state"].(string)
+				return st
+			}
+		}
+	}
+	return ""
+}
+
+// State is the Run's state now.
+func (s *Server) State(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return run.State
+	}
+	return ""
+}
+
+// Lose ends a Run as lux does when its host stops answering: lost,
+// resumable from its last snapshot.
+func (s *Server) Lose(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setStateWith(run, "lost", "host lost")
+	}
+}
+
 // Crash ends a Run's agent as a dead container would.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
@@ -685,6 +796,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs", s.submit)
 	mux.HandleFunc("GET /v1/runs/{id}", s.get)
 	mux.HandleFunc("GET /v1/runs/{id}/output", s.output)
+	mux.HandleFunc("GET /v1/runs/{id}/events", s.events)
 	mux.HandleFunc("POST /v1/runs/{id}/input", s.input)
 	mux.HandleFunc("POST /v1/runs/{id}/push", s.push)
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.stop)
@@ -719,6 +831,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
+	})
+	mux.HandleFunc("POST /fake/fail-starts", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		s.FailStarts(r.URL.Query().Get("label"), n)
+		writeJSON(w, 200, map[string]any{"label": r.URL.Query().Get("label"), "n": n})
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
@@ -787,12 +904,28 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	}
 	s.hold(epoch, holdWorkload)
 	s.mu.Lock()
+	hook := s.beforeStart
+	s.mu.Unlock()
+	if hook != nil {
+		hook(run.ID)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !run.starting(epoch, start) {
 		return
 	}
 	if run.behavior.FailToStart {
 		s.setState(run, "failed")
+		return
+	}
+	switch s.takeFailStart(spec) {
+	case "failed":
+		// As lux's runner reports a container that would not start (exit
+		// 125): the placement never ran its workload, and the Run is failed.
+		s.setStateWith(run, "failed", "start-failed")
+		return
+	case "lost":
+		s.setStateWith(run, "lost", "host lost")
 		return
 	}
 	s.setState(run, "running")
@@ -1735,11 +1868,17 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		for _, e := range run.events {
+		for i := 0; i < len(run.events); i++ {
+			e := run.events[i]
 			if e.ID <= afterEvent {
 				continue
 			}
 			afterEvent = e.ID
+			if hook := s.beforeEvent; hook != nil {
+				s.mu.Unlock()
+				hook(run.ID, e.ID, e.Type)
+				s.mu.Lock()
+			}
 			if !send("lux", map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data}) {
 				return
 			}
@@ -1750,6 +1889,47 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 		}
 		run.cond.Wait()
 	}
+}
+
+// eventsPage is how many events lux's GET /v1/runs/{id}/events returns at
+// most.
+const eventsPage = 1000
+
+// events is GET /v1/runs/{id}/events: the Run's lifecycle events after an
+// id, in id order, a page at a time, as lux lists them.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	var after int64
+	fmt.Sscan(r.URL.Query().Get("after"), &after)
+	s.mu.Lock()
+	var out []event
+	for _, e := range run.events {
+		if e.ID > after && len(out) < eventsPage {
+			out = append(out, e)
+		}
+	}
+	pages := s.eventPages
+	s.mu.Unlock()
+	if pages != nil {
+		ids := make([]int64, len(out))
+		for i, e := range out {
+			ids[i] = e.ID
+		}
+		n := pages(run.ID, after, ids)
+		if n < 0 {
+			writeErr(w, 503, "unavailable", "events unavailable")
+			return
+		}
+		out = out[:min(n, len(out))]
+	}
+	list := make([]map[string]any, 0, len(out))
+	for _, e := range out {
+		list = append(list, map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data, "time": e.Time})
+	}
+	writeJSON(w, 200, map[string]any{"events": list})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
