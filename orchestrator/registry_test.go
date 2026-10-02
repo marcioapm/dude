@@ -400,7 +400,7 @@ func (w *world) restart(p registry.Provider) *bytes.Buffer {
 	var logs bytes.Buffer
 	w.syncer = &phases.Syncer{DB: old.DB, Lux: old.Lux, Forges: old.Forges, Agent: old.Agent, Registry: p,
 		Log: slog.New(slog.NewTextHandler(&logs, nil)), ParkAfter: old.ParkAfter, IdleAfter: old.IdleAfter,
-		RetryAhead: old.RetryAhead}
+		RetryAhead: old.RetryAhead, KeepFor: old.KeepFor}
 	w.t.Cleanup(w.syncer.Stop)
 	return &logs
 }
@@ -491,7 +491,7 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 }
 
 // A Run waiting a minute for its login and then aborted has its lux Run
-// cancelled on the next sweep, not after the login retry comes due.
+// kept on the next sweep, not after the login retry comes due.
 func TestAnAbortDoesNotWaitForTheLoginRetry(t *testing.T) {
 	w := newWorld(t)
 	w.withECR()
@@ -512,8 +512,8 @@ func TestAnAbortDoesNotWaitForTheLoginRetry(t *testing.T) {
 	}
 	w.pump()
 	// lux's Run is stopped, which the syncer treats as over (ask skips the
-	// call): the sweep's cancel shows as the recorded stop reason.
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel' AND control = 'none'`, runID); n != 1 {
+	// call): the sweep's keep shows as the recorded stop reason.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept' AND control = 'none'`, runID); n != 1 {
 		t.Fatalf("the abort was not acted on by the sweep after it")
 	}
 	var still time.Time

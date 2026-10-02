@@ -335,12 +335,34 @@ export type Task = z.infer<typeof taskSchema>;
  * waits (`GET /v1/tasks/:id`, the navigation tree).
  */
 /**
- * A person's decision on an escalation: try the step that stopped again;
+ * A person's decision on an escalation: resume the agent whose Run failed,
+ * where it stopped (while it is kept); try the step that stopped again;
  * accept the findings a review got stuck on and go on; take what was
  * merged as the task; wait on the pull requests still open; or stop.
  */
-export const escalationActionSchema = z.enum(["retry", "accept", "done", "wait", "stop"]);
+export const escalationActionSchema = z.enum(["resume", "retry", "accept", "done", "wait", "stop"]);
 export type EscalationAction = z.infer<typeof escalationActionSchema>;
+
+/**
+ * Picking a stopped (aborted or failed) task back up: resume the agents
+ * that stopped, where they stopped, while they are kept; try the step
+ * again with new ones on the same branch; or start over as a new attempt
+ * on a new branch.
+ */
+export const recoverActionSchema = z.enum(["resume", "retry", "restart"]);
+export type RecoverAction = z.infer<typeof recoverActionSchema>;
+
+/** How a stopped task can be picked back up (`GET /v1/tasks/:id/recover`). */
+export const recoveryOptionsSchema = z.object({
+  taskId: z.string(),
+  /** The ways open now, the one that fits best first; empty for a task that has not stopped. */
+  actions: z.array(recoverActionSchema),
+  /** The task's attempt: Start over makes the next. */
+  attempt: z.number().int(),
+  /** Until when a resume can: when the first of the kept Runs stops being kept. */
+  keptUntil: z.string().nullable(),
+});
+export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 
 export const escalationSchema = z.object({
   reason: z.string(),

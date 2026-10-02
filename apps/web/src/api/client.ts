@@ -19,6 +19,8 @@ import type {
   Escalation,
   EscalationAction,
   Finding,
+  RecoverAction,
+  RecoveryOptions,
   Repository,
   PullRequest,
   PauseMode,
@@ -77,6 +79,8 @@ export type {
   Escalation,
   EscalationAction,
   Finding,
+  RecoverAction,
+  RecoveryOptions,
   Person,
   PersonDetail,
   PersonRef,
@@ -851,6 +855,16 @@ export class ApiClient {
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
   markDone(taskId: string): Promise<{ status: string }> {
     return this.#request("POST", `/v1/tasks/${taskId}/done`, {});
+  }
+
+  /** How a stopped task can be picked back up now, and until when a resume can. */
+  recoveryOptions(taskId: string): Promise<RecoveryOptions> {
+    return this.#request("GET", `/v1/tasks/${taskId}/recover`);
+  }
+
+  /** Pick a stopped task back up — the task's owner does — with a note for the agents. */
+  recover(taskId: string, action: RecoverAction, note: string): Promise<{ action: RecoverAction }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note });
   }
 
   /** How delivery goes on after it stopped for a person: the task's owner decides. */
