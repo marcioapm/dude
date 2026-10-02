@@ -111,10 +111,16 @@ type Run struct {
 	// Each input request's body as received (refused ones too), by request
 	// id, in order: a retry of one request adds another.
 	InputBodies map[string][]string
+	// What each accepted input carried as images, by request id.
+	attachments map[string][]attachmentMeta
+	// Request ids of input taken.
+	taken map[string]bool
 	// The secrets each accepted resume carried, in order, decoded and as
 	// sent (every field of each descriptor).
 	ResumeSecrets    [][]lux.Secret
 	ResumeSecretsRaw []json.RawMessage
+	// The input text each accepted resume carried, in order: "" for none.
+	ResumeInputs []string
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
 	// What was asked of it, in order: "exec", "stop", "cancel".
@@ -174,6 +180,7 @@ type Run struct {
 type queuedInput struct {
 	text, requestID string
 	accepted        bool
+	attachments     []attachmentMeta
 }
 
 // accept acknowledges input the harness took, as lux's shim does, once: in
@@ -184,30 +191,39 @@ func (s *Server) accept(run *Run, in *queuedInput) {
 		return
 	}
 	in.accepted = true
-	s.recordAccepted(run, in.requestID, in.text)
+	s.recordAccepted(run, in.requestID, in.text, in.attachments)
 }
 
 // recordAccepted writes the harness's accepted answer, with a read receipt
-// to follow. Callers hold s.mu.
-func (s *Server) recordAccepted(run *Run, requestID, text string) {
+// to follow, and the metadata of any images it carried. Callers hold s.mu.
+func (s *Server) recordAccepted(run *Run, requestID, text string, attachments []attachmentMeta) {
 	lands := "next_step"
 	if s.NextTurnInput {
 		lands = "next_turn"
 	}
-	s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "phase": lux.InputAccepted, "receipt": true,
-		"lands": lands, "text": text})
+	record := map[string]any{"requestId": requestID, "phase": lux.InputAccepted, "receipt": true,
+		"lands": lands, "text": text}
+	if len(attachments) > 0 {
+		record["attachments"] = records(attachments)
+	}
+	s.recordEvent(run, lux.RecordInput, record)
 }
 
 // recordFailed writes the failure of input the agent never read, in the
 // shape this lux writes it. Callers hold s.mu.
 func (s *Server) recordFailed(run *Run, in queuedInput, reason string) {
+	record := map[string]any{"requestId": in.requestID, "error": reason}
+	if len(in.attachments) > 0 && !s.LegacyInput {
+		record["attachments"] = records(in.attachments)
+	}
 	switch {
 	case s.LegacyInput:
-		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "error": reason})
+		s.recordEvent(run, lux.RecordInput, record)
 	case in.accepted:
-		s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": in.requestID, "error": reason})
+		s.recordEvent(run, lux.RecordInputFailed, record)
 	default:
-		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "phase": lux.InputFailed, "error": reason})
+		record["phase"] = lux.InputFailed
+		s.recordEvent(run, lux.RecordInput, record)
 	}
 }
 
@@ -592,12 +608,47 @@ func (s *Server) Runs() []*Run {
 	return out
 }
 
+// Records is what lux recorded of a Run, in order: each {type, data}.
+func (s *Server) Records(id string) []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil {
+		return nil
+	}
+	out := make([]map[string]any, len(run.records))
+	for i, rec := range run.records {
+		out[i] = rec.Event
+	}
+	return out
+}
+
 // CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
 func (s *Server) CallsOf(id string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		return slices.Clone(run.Calls)
+	}
+	return nil
+}
+
+// ResumeInputs is the input text each accepted resume of a Run carried.
+func (s *Server) ResumeInputs(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.ResumeInputs)
+	}
+	return nil
+}
+
+// InputBodies is each body POSTed to a Run's /input with requestID.
+func (s *Server) InputBodies(id, requestID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.InputBodies[requestID])
 	}
 	return nil
 }
@@ -843,6 +894,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
 	})
+	// What each input of a Run carried as images, by request id: lux's
+	// record of them (name, type, size, sha256), never the bytes.
+	mux.HandleFunc("GET /fake/runs/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		run := s.runs[r.PathValue("id")]
+		if run == nil {
+			writeErr(w, 404, "not_found", "no such run")
+			return
+		}
+		out := map[string]any{}
+		for id, ms := range run.attachments {
+			out[id] = records(ms)
+		}
+		writeJSON(w, 200, out)
+	})
 	mux.HandleFunc("POST /fake/fail-starts", func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 		s.FailStarts(r.URL.Query().Get("label"), n)
@@ -857,9 +924,27 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
+// MaxBody is luxd's limit on a request body: an input or a submit larger
+// is refused before it is read as JSON.
+const MaxBody = 8 << 20
+
+// readBody reads a request body as luxd does, answering 400 for one over
+// MaxBody. On an error the answer is written.
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+	if err != nil {
+		writeErr(w, 400, "bad_request", "request body too large or unreadable: "+err.Error())
+	}
+	return body, err
+}
+
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(w, r)
+	if err != nil {
+		return
+	}
 	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
 		return
 	}
@@ -867,6 +952,22 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &spec)
 	if msg := registryAuthProblem(raw); msg != "" {
 		writeErr(w, 422, "invalid_spec", msg)
+		return
+	}
+	// The prompt's images, checked at submit as lux does.
+	var withImages struct {
+		Workload struct {
+			Attachments json.RawMessage `json:"attachments"`
+		} `json:"workload"`
+	}
+	_ = json.Unmarshal(raw, &withImages)
+	promptImages, problem := checkAttachments(withImages.Workload.Attachments)
+	if problem != "" {
+		writeErr(w, 400, lux.CodeInvalidAttachment, "workload."+problem)
+		return
+	}
+	if len(promptImages) > 0 && generic(spec) {
+		writeErr(w, 400, lux.CodeAttachmentsUnsupported, "a generic workload cannot take images")
 		return
 	}
 	s.mu.Lock()
@@ -883,6 +984,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.next++
 	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1}
+	if len(promptImages) > 0 {
+		run.attachments = map[string][]attachmentMeta{"prompt": promptImages}
+	}
 	start := run.starts
 	accepted := time.Now()
 	run.acceptedAt = &accepted
@@ -978,7 +1082,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		if s.LegacyInput {
 			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "text": prompt})
 		} else {
-			s.recordAccepted(run, "prompt", prompt)
+			s.recordAccepted(run, "prompt", prompt, run.attachments["prompt"])
 			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": "prompt"})
 		}
 	}
@@ -1377,11 +1481,15 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Text      string `json:"text"`
-		RequestID string `json:"requestId"`
-		Interrupt bool   `json:"interrupt"`
+		Text        string          `json:"text"`
+		RequestID   string          `json:"requestId"`
+		Interrupt   bool            `json:"interrupt"`
+		Attachments json.RawMessage `json:"attachments"`
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := readBody(w, r)
+	if err != nil {
+		return
+	}
 	_ = json.Unmarshal(body, &in)
 	s.mu.Lock()
 	if run.InputBodies == nil {
@@ -1391,6 +1499,17 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	if s.BeforeInput != nil && !s.BeforeInput(run.ID, in.RequestID) {
 		writeErr(w, 503, "unavailable", "try again")
+		return
+	}
+	images, problem := checkAttachments(in.Attachments)
+	if problem != "" {
+		writeErr(w, 400, lux.CodeInvalidAttachment, problem)
+		return
+	}
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	if len(images) > 0 && generic(spec) {
+		writeErr(w, 400, lux.CodeAttachmentsUnsupported, "a generic workload cannot take images")
 		return
 	}
 	s.mu.Lock()
@@ -1403,13 +1522,29 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
+	// One request id is one input, as lux keys input by it: a retry of one
+	// it already took is answered, not queued again.
+	if run.taken[in.RequestID] && in.RequestID != "" {
+		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
+		return
+	}
+	if run.taken == nil {
+		run.taken = map[string]bool{}
+	}
+	run.taken[in.RequestID] = true
+	if len(images) > 0 {
+		if run.attachments == nil {
+			run.attachments = map[string][]attachmentMeta{}
+		}
+		run.attachments[in.RequestID] = images
+	}
 	// A busy agent: lux (the harness) takes input at once and the agent
 	// reads it at its next step (FinishTools, or the turn's end). A legacy
 	// lux, as its ACP adapter did, holds it until the turn ends and
 	// acknowledges it only then. An interrupt with no text only stops the
 	// turn, as lux's interrupt message does: nothing to deliver.
-	if in.Text != "" {
-		run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID})
+	if in.Text != "" || len(images) > 0 {
+		run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID, attachments: images})
 		if run.busy && run.State == "running" {
 			s.accept(run, &run.queued[len(run.queued)-1])
 		}
@@ -1804,6 +1939,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.starts++
 	accepted := time.Now()
 	run.acceptedAt = &accepted
+	resumeInput := ""
+	if in.Input != nil {
+		resumeInput = in.Input.Text
+	}
+	run.ResumeInputs = append(run.ResumeInputs, resumeInput)
 	if in.Input != nil {
 		// Delivered once the agent is back, as lux does: it is the input the
 		// resumed agent was waiting for.

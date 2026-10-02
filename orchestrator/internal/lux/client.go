@@ -256,6 +256,39 @@ type Workload struct {
 	BeforeStop *BeforeStop `json:"beforeStop,omitempty"`
 	// Servers lux starts on every start of the Run (a branch preview's).
 	Servers []ServerInput `json:"servers,omitempty"`
+	// Images given with the first prompt (request id "prompt"), as an
+	// input's are.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is an image given to the agent with an input or the prompt
+// (lux feat/input-attachments): its bytes, standard base64 without a data:
+// prefix, on the wire. lux checks the bytes are ContentType.
+type Attachment struct {
+	Name        string `json:"name"`
+	ContentType string `json:"contentType"`
+	Data        []byte `json:"data"`
+}
+
+// What lux takes in one input's attachments.
+const (
+	MaxAttachments     = 10
+	MaxAttachmentBytes = 5 << 20
+)
+
+// lux's refusals of an input's attachments: one it cannot take
+// (invalid_attachment), or a Run that has nowhere to put an image (a
+// generic adapter).
+const (
+	CodeInvalidAttachment      = "invalid_attachment"
+	CodeAttachmentsUnsupported = "attachments_unsupported"
+)
+
+// InputRequest is one input to a running agent.
+type InputRequest struct {
+	Text, RequestID string
+	Interrupt       bool
+	Attachments     []Attachment
 }
 
 // BeforeStop is a command lux runs inside the container, as the workload's
@@ -469,7 +502,8 @@ const (
 // Client is what dude calls on lux. An interface so tests can stand in.
 type Client interface {
 	Submit(ctx context.Context, spec Spec, idempotencyKey string) (Run, error)
-	Input(ctx context.Context, runID, text, requestID string, interrupt bool) error
+	// Input sends a Run's agent words, images or an interrupt.
+	Input(ctx context.Context, runID string, in InputRequest) error
 	Push(ctx context.Context, runID, requestID string) error
 	Stop(ctx context.Context, runID string) error
 	Cancel(ctx context.Context, runID string) error
@@ -611,13 +645,16 @@ func (c *HTTPClient) Submit(ctx context.Context, spec Spec, key string) (Run, er
 	return r, err
 }
 
-func (c *HTTPClient) Input(ctx context.Context, runID, text, requestID string, interrupt bool) error {
-	body := map[string]any{"requestId": requestID}
-	if text != "" {
-		body["text"] = text
+func (c *HTTPClient) Input(ctx context.Context, runID string, in InputRequest) error {
+	body := map[string]any{"requestId": in.RequestID}
+	if in.Text != "" {
+		body["text"] = in.Text
 	}
-	if interrupt {
+	if in.Interrupt {
 		body["interrupt"] = true
+	}
+	if len(in.Attachments) > 0 {
+		body["attachments"] = in.Attachments
 	}
 	return c.do(ctx, "POST", "/v1/runs/"+runID+"/input", body, nil, nil)
 }

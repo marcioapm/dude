@@ -169,6 +169,21 @@ body {
   min-height: 0;
   display: flex;
 }
+/* The session, as the drop target for images: header, bar and conversation alike. */
+.runDrop {
+  flex: 1;
+  min-width: 0;
+}
+/* The New task dialog's content, as the drop target for images: it takes the content's place. */
+.taskDrop {
+  flex: 1;
+}
+/* The paperclip's tooltip: what may be attached, one fact a line (the tooltip caps its width). */
+.attachLimitsHint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
 .runRail {
   flex: none;
   width: 260px;
@@ -242,6 +257,14 @@ body {
   justify-content: space-between;
   gap: var(--ds-space-12);
   min-height: var(--ds-size-row-default);
+}
+
+/* The images given with a task's prompt: chips, then the paperclip. */
+.taskImages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
 }
 
 /* A task's owner, labelled inline among its header's actions. */

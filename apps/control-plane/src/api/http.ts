@@ -81,6 +81,31 @@ export async function parseBody<T>(request: Request, schema: ZodType<T>): Promis
   return result.data;
 }
 
+/**
+ * A request's body, read no further than `max` bytes: a client that sends
+ * no length, or a false one, is cut off at the cap rather than held whole.
+ * Over it, `tooBig` is thrown.
+ */
+export async function readCapped(request: Request, max: number, tooBig: () => Error): Promise<Uint8Array> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && !(Number(declared) <= max)) throw tooBig();
+  if (!request.body) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = request.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > max) {
+      await reader.cancel();
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, size);
+}
+
 /** Read a bounded integer query parameter. */
 export function intParam(
   url: URL,
