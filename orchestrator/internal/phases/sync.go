@@ -1370,8 +1370,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
 // (kind is a dude_pause) so the syncer knows when to resume it; a person's
 // later pause or resume wins. A pause other than for a repository is a
-// park, and says so in the Run's chat; an idle one also raises the work
-// item for a person to look at (lowered when they resume it).
+// park, and says so in the Run's chat; an idle one of a phase Run also
+// raises the work item for a person to look at (lowered when they resume it).
 //
 // The sweep decided from what it read; the pause checks it still holds — a
 // Run parked for a person still waits on one, an idle one has done nothing
@@ -1396,9 +1396,11 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			return err
 		}
 		var taskStatus string
-		if kind == "idle" {
+		if kind == "idle" && !r.conductor() {
 			// Raised for a person to look at, from whatever it was (running,
-			// in review); put back when the Run is taken up again.
+			// in review); put back when the Run is taken up again. Not for a
+			// conductor's: it changes nothing about the task, and its park
+			// shows in Chat.
 			if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
 				return err
 			}
