@@ -180,7 +180,7 @@ def test_a_run_records_the_prompt_version_it_ran_with(client: ApiClient, owner_d
     """The scripted agent runs the phases; each Run records the prompt
     versions current when it started, and the history counts them."""
     project = client.create_project(
-        name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
+        name="Notes", slug=f"notes-{os.urandom(3).hex()}",
         agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
     )
     client.post("/v1/prompts/implementer", {"body": "Implement it, carefully."})
@@ -545,7 +545,7 @@ def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, e
     sent carries the size as resources and its pool by lux's id, and the
     Run records it with the pool's name then."""
     project = client.create_project(
-        name="Sized", slug=f"sized-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
+        name="Sized", slug=f"sized-{os.urandom(3).hex()}",
         agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
     )
     big = _pool_id(client, "big")

@@ -8,8 +8,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { click, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RUN_ID } from "../src/fixtures/data.ts";
-import { RunScreen } from "../src/screens/RunScreen.tsx";
+import { PreparingImage, RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
+import { BUILDER_GIVE_UP_MINUTES } from "@dude/domain";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -270,5 +271,32 @@ describe("the terminal", () => {
     await emitForTest("run.paused");
     await until(() => (page.querySelector("[data-testid=terminal-link]") ? null : true), "the terminal gone once paused");
     expect(page.querySelector("[data-testid=terminal-icon]") !== null).toBe(false);
+  });
+});
+
+describe("a Run preparing its image", () => {
+  const callout = async (preparing: NonNullable<RunDetail["preparingImage"]>) => {
+    const { container, unmount } = await mount(<PreparingImage preparing={preparing} />);
+    mounted.push(unmount);
+    return container.querySelector("[data-testid=preparing-image]")!.textContent;
+  };
+  const waiting = { buildId: "imb_1", state: "running", imageName: "acme-base", version: 1, builderOfflineSince: null };
+
+  test("its image's first version building says so, without a finish's minute or two", async () => {
+    expect(await callout({ ...waiting, kind: "build" })).toBe(
+      "Preparing image: building acme-base v1 (its first version). The builder is on it now; the session starts once it is built and published. Nothing is spent until then.",
+    );
+  });
+
+  test("the dude layer being added to it", async () => {
+    expect(await callout({ ...waiting, kind: "finish", state: "queued" })).toBe(
+      "Preparing image: adding the dude layer to acme-base v1. It is next in the builder’s line; the session starts once it is done, usually within a minute or two. Nothing is spent until then.",
+    );
+  });
+
+  test("an offline builder names the give-up limit", async () => {
+    expect(await callout({ ...waiting, kind: "build", builderOfflineSince: "2026-10-01T08:00:00Z" })).toContain(
+      `if it stays offline for ${BUILDER_GIVE_UP_MINUTES} minutes of the wait, this Run fails before it starts`,
+    );
   });
 });

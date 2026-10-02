@@ -38,6 +38,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
@@ -148,6 +149,8 @@ type phaseRun struct {
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
 	Attempt                        int
+	// The image job a pending Run waits on (runs.image_build_id), "" for none.
+	ImageBuildID string
 }
 
 const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
@@ -169,7 +172,7 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
-	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
+	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt, COALESCE(r.image_build_id, '')`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -229,7 +232,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
-		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.ImageBuildID)
 	return r, err
 }
 
@@ -351,9 +354,22 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	return s.deliverDirectives(ctx, r)
 }
 
-// submit builds the Run's spec and hands it to lux.
+// submit builds the Run's spec and hands it to lux. A Run whose image is
+// a library image waits, still pending, until its image has the current
+// dude layer, and fails before lux if it cannot have it.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
-	spec, machine, err := s.spec(ctx, r, nil)
+	image, got, err := s.image(ctx, r)
+	var waiting images.Waiting
+	var refused images.Refused
+	switch {
+	case errors.As(err, &waiting):
+		return s.waitForImage(ctx, r, waiting)
+	case errors.As(err, &refused):
+		return s.fail(ctx, r, "cannot start: "+refused.Reason)
+	case err != nil:
+		return s.retryLater(ctx, r, err)
+	}
+	spec, machine, err := s.spec(ctx, r, nil, image)
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -386,15 +402,16 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 				}
 			}
 		}
-		// machine: what it runs on, recorded with the lux Run it runs as, so a
-		// later edit or removal of the size leaves this Run's record alone.
+		// machine and image: what it runs on and in, recorded with the lux
+		// Run it runs as, so a later edit of the size or a new version of
+		// the image leaves this Run's record — and its resumes — alone.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
-			machine = $10::jsonb,
+			machine = $10::jsonb, image = $11::jsonb, image_waiting_since = NULL,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine)
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, got)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -402,20 +419,78 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	})
 }
 
+// image is the image a Run starts in: the first library image its role,
+// its project or its organization names, finished with the current dude
+// layer (images.Choose: Waiting while it is not, Refused when it cannot
+// be), else the project's typed image, else DUDE_AGENT_IMAGE.
+func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImage, error) {
+	var ref string
+	var got *images.RunImage
+	var outcome error
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var site images.Site
+		var projectModels, orgModels json.RawMessage
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(p.runtime_image_id, ''), COALESCE(p.runtime_image, ''), COALESCE(o.default_image_id, ''),
+				p.agent_models, o.default_agent_models
+			FROM projects p JOIN organizations o ON o.id = p.organization_id WHERE p.id = $1`, r.ProjectID).
+			Scan(&site.RuntimeID, &site.RuntimeTyped, &site.DefaultID, &projectModels, &orgModels); err != nil {
+			return fmt.Errorf("load the project's image: %w", err)
+		}
+		known, err := images.Known(ctx, tx)
+		if err != nil {
+			return err
+		}
+		site.Role = images.RoleImage(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels, known)
+		site.Fallback = s.Agent.DefaultImage
+		ref, got, err = images.Choose(ctx, tx, site, s.Agent.Layer, r.ID, r.ImageBuildID)
+		err, outcome = images.Settle(err)
+		return err
+	})
+	if err == nil {
+		err = outcome
+	}
+	return ref, got, err
+}
+
+// ImagePoll is how soon a Run (or a preview) waiting for its image looks
+// again. The builder takes a Run's finish first; one takes about a minute.
+const ImagePoll = 5 * time.Second
+
+// waitForImage leaves a Run pending while the builder prepares its image,
+// saying so in its chat the first time.
+func (s *Syncer) waitForImage(ctx context.Context, r phaseRun, w images.Waiting) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, ImagePoll.Seconds()); err != nil {
+			return err
+		}
+		if !w.New {
+			return nil
+		}
+		return s.event(ctx, tx, r, EvImagePreparing, ledger.ActorSystem, map[string]any{"buildId": w.Build})
+	})
+}
+
+// EvImagePreparing: a Run waits for its image's dude layer (or its first
+// version) before it goes to lux. Payload: {buildId}.
+const EvImagePreparing = "run.image_preparing"
+
 // spec gathers what the Run's lux spec is built from. It is the only
 // source of what lux starts a Run with — its submit, and every resume's
 // secrets — so each start carries fresh credentials: the forge token,
 // the tools token, the registry login.
 //
 // stored is lux's copy of the Run's spec, for a resume (resumeInput): the
-// registry login is the one it names, for the image lux has, whatever the
-// project names now. Nil for a submit.
+// image and its registry login are the ones it names, whatever the
+// project names now. Nil for a submit, which passes the image it chose
+// (Syncer.image).
 //
 // Also returns the size the Run's role resolves to now (nil: the
 // organization has none); submit records it, a resume does not.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (lux.Spec, *delivery.Machine, error) {
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
 	var in specInput
-	var title, goal, image string
+	var title, goal string
 	var repos []delivery.Repository
 	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
@@ -426,10 +501,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models, o.default_agent_models
+			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID).
-			Scan(&title, &goal, &criteria, &image, &projectModels, &orgModels); err != nil {
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -497,8 +572,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		in.Machine = &m
 	}
 	in.Image = image
-	if in.Image == "" {
-		in.Image = s.Agent.DefaultImage
+	if stored != nil {
+		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
 		return lux.Spec{}, nil, err
@@ -1134,7 +1209,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, err := s.spec(ctx, r, &lr.Spec)
+	spec, _, err := s.spec(ctx, r, &lr.Spec, "")
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}
