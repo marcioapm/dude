@@ -16,6 +16,8 @@ export interface MarkdownEditorProps {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly label?: string | undefined;
+  /** After the label, muted, as `Input`'s: "required". */
+  readonly labelNote?: string | undefined;
   /** Accessible name when there is no visible label. */
   readonly "aria-label"?: string | undefined;
   /** Beside the label: what to write here. When locked, why it cannot be changed. */
@@ -104,6 +106,7 @@ export function MarkdownEditor({
   value,
   onChange,
   label,
+  labelNote,
   "aria-label": ariaLabel,
   hint,
   error,
@@ -261,6 +264,7 @@ export function MarkdownEditor({
           {label ? (
             <label className={inputStyles["label"]} htmlFor={fieldId}>
               {label}
+              {labelNote ? <span className={inputStyles["labelNote"]}> · {labelNote}</span> : null}
             </label>
           ) : null}
           {hint ? (
