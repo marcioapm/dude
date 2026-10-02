@@ -163,6 +163,18 @@ async function decideTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
+const chatInput = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+
+/**
+ * A message in a task's Chat: it starts the task's conductor, or is its
+ * next input (the orchestrator decides which, and answers which Run).
+ */
+async function chatTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, chatInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/chat`,
+    JSON.stringify(input), ctx.principal);
+}
+
 async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
@@ -391,6 +403,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
+  router.post("/v1/tasks/:id/chat", chatTask);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

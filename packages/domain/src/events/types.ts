@@ -202,6 +202,13 @@ export const EventTypes = {
   // Human interaction
   QuestionAsked: "question.asked",
   QuestionAnswered: "question.answered",
+  /**
+   * A person wrote in a task's Chat, on its conductor's Run. Payload:
+   * `{ text, directiveId? }`: the first message has none (it is the
+   * conductor's briefing, with dude's note before it); each later one is
+   * delivered as the directive named.
+   */
+  ChatMessage: "chat.message",
 
   // Artifacts
   ArtifactCreated: "artifact.created",
