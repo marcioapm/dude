@@ -19,7 +19,7 @@ test("an attachment: image goes through the resolver, in its place; another imag
   }} />);
   expect(asked).toEqual([["att_h1", "header shot"]]);
   // In the paragraph, between its words.
-  expect(h).toMatch(/<p[^>]*>Before <button[^>]*data-testid="markdown-image"[^>]*><img src="blob:shown\/att_h1" alt="header shot"[^>]*\/><\/button> after\.<\/p>/);
+  expect(h).toMatch(/<p[^>]*>Before <span[^>]*data-testid="markdown-figure"[^>]*><button[^>]*data-testid="markdown-image"[^>]*><img src="blob:shown\/att_h1" alt="header shot"[^>]*\/><\/button><\/span> after\.<\/p>/);
   // The other image is a link and nothing fetches it.
   expect(h).toContain('href="https://tracker.test/p.png"');
   expect(h).not.toContain('src="https://tracker.test');
@@ -56,6 +56,27 @@ test("an unavailable image says so", () => {
   const h = renderToStaticMarkup(<MarkdownImage alt="gone.png" unavailable />);
   expect(h).toContain("gone.png · unavailable");
   expect(h).not.toContain("<img");
+});
+
+test("each attachment image is framed by its title's layout, numbered in reading order", () => {
+  const seen: number[] = [];
+  const h = renderToStaticMarkup(<Markdown breaks
+    source={'Intro ![a](attachment:att_a "small right") text.\n\n- [ ] One ![b](attachment:att_b "320 left")\n- [ ] Two\n  ![c](attachment:att_c "full right")\n\n![d](attachment:att_d)'}
+    attachmentImage={(id, alt, _t, n) => {
+      seen.push(n!);
+      return <MarkdownImage src={`blob:${id}`} alt={alt} />;
+    }} />);
+  expect(seen).toEqual([0, 1, 2, 3]);
+  const figures = [...h.matchAll(/data-align="(\w+)" data-size="(\w+)" style="width:([^"]+)"/g)].map((m) => [m[1], m[2], m[3]]);
+  expect(figures).toEqual([["right", "small", "200px"], ["left", "320", "320px"], ["center", "full", "100%"], ["center", "medium", "420px"]]);
+});
+
+test("an editor frame takes the place of the default figure", () => {
+  const h = renderToStaticMarkup(<Markdown source={'![a](attachment:att_a "small left")'}
+    attachmentImage={(id, alt) => <MarkdownImage src={`blob:${id}`} alt={alt} />}
+    attachmentFrame={(f) => <span data-frame={`${f.n}:${f.layout.size}:${f.layout.align}`}>{f.children}</span>} />);
+  expect(h).toContain('data-frame="0:small:left"');
+  expect(h).not.toContain("markdown-figure");
 });
 
 test("the editor's Preview draws through the same resolver", () => {

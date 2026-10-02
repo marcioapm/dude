@@ -67,6 +67,8 @@ export interface ParseOptions {
   readonly breaks?: boolean | undefined;
   /** Heading ids already taken, shared by the sections of one document so each id is unique in it. */
   readonly usedIds?: Map<string, number> | undefined;
+  /** Filled with the source line each top-level block starts on, one per block returned. */
+  readonly blockLines?: number[] | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,13 +115,14 @@ export function parseMarkdown(src: string, opts: ParseOptions = {}): Block[] {
   const breaks = opts.breaks === true;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const usedIds = opts.usedIds ?? new Map<string, number>();
-  return parseBlocks(lines, { streaming, breaks, usedIds }, 0);
+  return parseBlocks(lines, { streaming, breaks, usedIds, blockLines: opts.blockLines }, 0);
 }
 
 interface BlockCtx {
   readonly streaming: boolean;
   readonly breaks: boolean;
   readonly usedIds: Map<string, number>;
+  readonly blockLines?: number[] | undefined;
 }
 
 function parseBlocks(lines: readonly string[], ctx: BlockCtx, depth: number): Block[] {
@@ -136,7 +139,8 @@ function parseBlocks(lines: readonly string[], ctx: BlockCtx, depth: number): Bl
       i++;
       continue;
     }
-
+    // Every branch below pushes exactly one block.
+    if (depth === 0) ctx.blockLines?.push(i);
     // Fenced code
     const fence = FENCE_RE.exec(line);
     if (fence) {
