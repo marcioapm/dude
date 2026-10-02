@@ -130,8 +130,9 @@ func (w *resumeWorld) lockResume(epoch int) func() {
 
 // A resume row locked elsewhere holds up nothing of the Run: the batch
 // carrying lux's running state and the agent's first busy commits its
-// frames and cursor at once, without the timing it could not write, and a
-// later batch is recorded as usual.
+// frames and cursor at once, without the timing it could not write, and so
+// does an output batch while it is still locked. A batch after the lock is
+// gone looks for the first output again, and records it.
 func TestALockedResumeRowDoesNotHoldUpTheRunsStream(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
@@ -151,9 +152,12 @@ func TestALockedResumeRowDoesNotHoldUpTheRunsStream(t *testing.T) {
 	if luxState != "running" || busyAt == nil {
 		t.Errorf("the Run's own state was not recorded: lux_state %q busy %v", luxState, busyAt)
 	}
+	st.frames <- cursorFrame(spoke(2), "locked-output")
+	w.committed("locked-output", 5*time.Second)
 	release()
-	if row := w.row(2); row["running_at"] != nil || row["busy_at"] != nil {
-		t.Errorf("timing written though its row was locked: running %v busy %v", row["running_at"], row["busy_at"])
+	if row := w.row(2); row["running_at"] != nil || row["busy_at"] != nil || row["first_output_at"] != nil {
+		t.Errorf("timing written though its row was locked: running %v busy %v first output %v",
+			row["running_at"], row["busy_at"], row["first_output_at"])
 	}
 
 	st.frames <- cursorFrame(spoke(2), "c2")
