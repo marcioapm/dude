@@ -592,6 +592,106 @@ def test_edit_task_takes_an_image_at_once_and_delivery_gives_it_to_the_agent(
     assert console_errors == []
 
 
+def _image_drag(page: Page, source, target_panel, li_index: int) -> None:
+    """Drags an image in Preview (HTML5 DnD, as the browser fires it) onto a criteria panel,
+    level with the bottom of its `li_index`-th criterion: the slot under it."""
+    page.evaluate("""([fig, panel, i]) => {
+      const dt = new DataTransfer();
+      const r = fig.getBoundingClientRect();
+      fig.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + 5, clientY: r.top + 5 }));
+      const li = panel.querySelectorAll(':scope li')[i];
+      const y = li.getBoundingClientRect().bottom;
+      const x = panel.getBoundingClientRect().left + 40;
+      panel.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      panel.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      panel.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      fig.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    }""", [source.element_handle(), target_panel.element_handle(), li_index])
+
+
+@pytest.mark.ui
+def test_an_image_laid_out_in_preview_keeps_its_place_and_size_and_the_agent_reads_only_where_it_is(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    # The implementer is given the real prompt and finishes; the reviewers hang, so the delivery runs on.
+    _real_models(client, forge_project, reviewer="fake/hang")
+    task = client.create_task(forge_project["id"], "Lay out the mock", goal="The receipt should look like the mock below.",
+                              acceptanceCriteria=["Totals are right-aligned", "The logo sits top left", "Prints on one page"])
+    res = upload(client, task["id"], png(600, 400, (30, 90, 200)), png(600, 400, (30, 90, 200)), "mock.png")
+    assert res.status_code == 201, res.text
+    att = res.json()["id"]
+    goal = f"The receipt should look like the mock below.\n\n![mock.png](attachment:{att})\n\nKeep the paper size A4."
+    assert client.patch(f"/v1/tasks/{task['id']}", {"goal": goal}).status_code == 200
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+
+    # Preview: select it, then Wrap right and Small, each a toolbar button.
+    page.get_by_test_id("task-goal-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    preview = page.get_by_test_id("task-goal-preview")
+    figure = preview.locator("[data-image-n='0']")
+    expect(figure.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    figure.click()
+    toolbar = page.get_by_role("toolbar", name="Image layout")
+    expect(toolbar).to_be_visible()
+    toolbar.get_by_role("button", name="Wrap right").click()
+    toolbar.get_by_role("button", name="Small").click()
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal.replace(f"{att})", f'{att} "small right")'))
+    _shoot(page, "6-image-layout-selected")
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    assert client.get(f"/v1/tasks/{task['id']}").json()["goal"] == goal.replace(f"{att})", f'{att} "small right")')
+    assert _attached(owner_dsn, task["id"]) == [att]
+
+    # Reloaded, the task screen draws it floated right at 200 px.
+    page.reload()
+    shown = page.get_by_test_id("task-screen").get_by_test_id("markdown-figure")
+    expect(shown.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    style = shown.evaluate("el => { const s = getComputedStyle(el); return [s.float, el.getBoundingClientRect().width]; }")
+    assert style[0] == "right" and abs(style[1] - 200) < 1, style
+
+    # Dragged under criterion 2: a continuation line there; the list keeps its length.
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-goal-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    page.get_by_test_id("task-criteria-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    source = page.get_by_test_id("task-goal-preview").locator("[data-image-n='0']")
+    expect(source.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    _image_drag(page, source, page.get_by_test_id("task-criteria-preview"), 1)
+    ref = f'![mock.png](attachment:{att} "small right")'
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        f"- [ ] Totals are right-aligned\n- [ ] The logo sits top left\n  {ref}\n- [ ] Prints on one page")
+    expect(page.get_by_test_id("task-goal")).to_have_value("The receipt should look like the mock below.\n\nKeep the paper size A4.")
+    expect(page.get_by_test_id("task-criteria-count")).to_have_text("3 criteria")
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    saved = client.get(f"/v1/tasks/{task['id']}").json()
+    assert saved["acceptanceCriteria"] == ["Totals are right-aligned", f"The logo sits top left\n{ref}", "Prints on one page"], saved
+    assert _attached(owner_dsn, task["id"]) == [att]
+
+    # Delivered: the agent reads the image inside criterion 2, with no layout words.
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    lux_run = _submitted(client, owner_dsn, task["id"], "implement")
+    images = wait_until(lambda: fake_lux_images(env, lux_run).get("prompt"), timeout=30, message="no prompt images")
+    assert [a["name"] for a in images] == ["mock.png"]
+    prompt = lux_spec(env, lux_run)["workload"]["prompt"]
+    assert "- The logo sits top left\n  [Image 1: mock.png]\n- Prints on one page" in prompt, prompt
+    assert "small" not in prompt and "attachment:" not in prompt, prompt
+    wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review" and r["status"] == "running"), None),
+               timeout=90, message="no reviewer running")
+
+    # While it runs: a click opens the viewer, and no toolbar appears.
+    page.reload()
+    page.get_by_test_id("edit-task").click()
+    locked = page.get_by_test_id("task-criteria-preview").get_by_test_id("markdown-figure")
+    expect(locked.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    expect(locked).not_to_have_attribute("draggable", "true")
+    locked.locator("img").click()
+    expect(page.get_by_test_id("image-viewer")).to_be_visible()
+    expect(page.get_by_role("toolbar", name="Image layout")).to_have_count(0)
+    assert console_errors == []
+
+
 def _open_new_task(page: Page, web_url: str, org: dict) -> None:
     """The New task dialog, on the board of the org's project (the `forge_project` fixture makes it)."""
     page.set_viewport_size({"width": 1440, "height": 900})
