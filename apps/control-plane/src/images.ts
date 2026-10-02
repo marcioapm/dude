@@ -2,13 +2,15 @@
  * What an image file is, read from its bytes: its type by magic number and
  * its pixel size from its header. Nothing is decoded. A file that claims to
  * be an image and is not one, or is one of another type, is refused before
- * anything is stored.
+ * anything is stored. Faces (people's and projects' images) and the images
+ * sent to agents both check here.
  */
 
-export type ImageType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+import type { AttachmentType } from "@dude/domain";
 
-export const IMAGE_TYPES: readonly ImageType[] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+export type ImageType = AttachmentType;
 
+/** The extension an object of each type is stored and downloaded with. */
 export const EXTENSION: Record<ImageType, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",

@@ -17,42 +17,22 @@ import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, newId } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { EXTENSION, imageInfo, type ImageType } from "../../images.ts";
 import { deleteObject, getObject, putObject, storageConfigured } from "../../storage.ts";
-import { HttpError, badRequest, conflict, forbidden, json, noContent, notFound } from "../http.ts";
+import { HttpError, badRequest, conflict, forbidden, json, noContent, notFound, readCapped } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-/** The JSON shape of an attachment (AttachmentInfo), from a row of `attachments`. */
-export const ATTACHMENT_JSON = (alias = "a") => `json_build_object(
-  'id', ${alias}.id, 'name', ${alias}.name, 'contentType', ${alias}.content_type,
-  'width', ${alias}.width, 'height', ${alias}.height, 'bytes', ${alias}.bytes,
-  'original', json_build_object('contentType', ${alias}.original_content_type, 'width', ${alias}.original_width,
-    'height', ${alias}.original_height, 'bytes', ${alias}.original_bytes))`;
+/** The JSON shape of an attachment (AttachmentInfo), from a row of `attachments` aliased `a`. */
+const ATTACHMENT_JSON = `json_build_object(
+  'id', a.id, 'name', a.name, 'contentType', a.content_type,
+  'width', a.width, 'height', a.height, 'bytes', a.bytes,
+  'original', json_build_object('contentType', a.original_content_type, 'width', a.original_width,
+    'height', a.original_height, 'bytes', a.original_bytes))`;
 
 const unconfigured = () =>
   new HttpError(503, "image storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
 
 // Both files and the form's own bytes.
 const MAX_BODY = ATTACHMENT_LIMITS.originalBytes + ATTACHMENT_LIMITS.deliveredBytes + 64 * 1024;
-
-async function readCapped(request: Request): Promise<Uint8Array> {
-  const declared = request.headers.get("content-length");
-  const tooBig = () => badRequest(`an upload is at most ${Math.round(MAX_BODY / 1e6)} MB`);
-  if (declared !== null && !(Number(declared) <= MAX_BODY)) throw tooBig();
-  if (!request.body) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = request.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > MAX_BODY) {
-      await reader.cancel();
-      throw tooBig();
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
+const tooBig = () => badRequest(`an upload is at most ${Math.round(MAX_BODY / 1e6)} MB`);
 
 /**
  * A name lux takes and a person recognises: path separators and control
@@ -97,7 +77,7 @@ async function upload(ctx: RequestContext): Promise<Response> {
     (await sql`SELECT id FROM tasks WHERE id = ${taskId}`)[0]);
   if (!task) throw notFound(`task ${taskId} not found`);
 
-  const body = await readCapped(ctx.request);
+  const body = await readCapped(ctx.request, MAX_BODY, tooBig);
   let form: FormData;
   try {
     form = (await new Response(body, { headers: { "content-type": ctx.request.headers.get("content-type") ?? "" } }).formData()) as FormData;
@@ -139,7 +119,7 @@ async function upload(ctx: RequestContext): Promise<Response> {
       VALUES (${id}, ${organizationId}, ${taskId}, (SELECT id FROM people WHERE id = ${ctx.principal.personId}), ${name},
         ${delivered.type}, ${delivered.width}, ${delivered.height}, ${delivered.bytes.length}, ${sha256}, ${objectKey},
         ${original.type}, ${original.width}, ${original.height}, ${original.bytes.length}, ${originalKey})
-      RETURNING ${sql.unsafe(ATTACHMENT_JSON())} AS info`)[0] as { info: unknown });
+      RETURNING ${sql.unsafe(ATTACHMENT_JSON)} AS info`)[0] as { info: unknown });
     return json(row.info, 201);
   } catch (err) {
     await deleteObject(objectKey);

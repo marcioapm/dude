@@ -8,7 +8,7 @@
 
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
-import { EventTypes, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput, taskGoalInput } from "@dude/domain";
+import { ATTACHMENT_LIMITS, EventTypes, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput, taskGoalInput } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -130,8 +130,8 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
-  /** Images uploaded to the task, given to its first agent with the prompt. */
-  attachmentIds: z.array(z.string().min(1)).max(6).optional(),
+  /** Images uploaded to the task, given with its prompt to every agent the task is the prompt of. */
+  attachmentIds: z.array(z.string().min(1)).max(ATTACHMENT_LIMITS.perMessage).optional(),
 });
 
 /**

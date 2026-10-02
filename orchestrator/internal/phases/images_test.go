@@ -198,7 +198,7 @@ func TestARetriedImageSteerLandsOnce(t *testing.T) {
 	w.deliver()
 	// A third send of the same request id, as after a crash before sent_at
 	// was written.
-	if err := w.s.Lux.InputWith(context.Background(), w.run.LuxRunID, lux.InputRequest{Text: "look", RequestID: "dir_retry",
+	if err := w.s.Lux.Input(context.Background(), w.run.LuxRunID, lux.InputRequest{Text: "look", RequestID: "dir_retry",
 		Attachments: []lux.Attachment{{Name: "checkout.png", ContentType: "image/png", Data: pngBytes}}}); err != nil {
 		t.Fatal(err)
 	}
