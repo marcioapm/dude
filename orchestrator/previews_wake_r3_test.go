@@ -3,7 +3,7 @@ package orchestrator_test
 // A wakeable preview across migration 066 (rows whose earlier events were
 // applied without the start markers), a wake's acknowledgement racing an
 // earlier start's end that reaches dude after the wake was claimed, and a
-// drain whose stream stops short of the Run's last event.
+// drain whose page stops short of the Run's last event.
 
 import (
 	"context"
@@ -323,7 +323,7 @@ func (w *world) failedStartUnapplied() (runID string, r *fakelux.Run) {
 	})
 	w.t.Cleanup(func() {
 		w.lux.BeforeEvent(nil)
-		w.lux.CutStreams(nil)
+		w.lux.PageEvents(nil)
 		if !isClosed(release) {
 			close(release)
 		}
@@ -342,29 +342,46 @@ func (w *world) failedStartUnapplied() (runID string, r *fakelux.Run) {
 	return runID, r
 }
 
-// cutFirstDrainAt has the next stream to reach a state event of this state
-// stopped there, as how says; every later one goes on.
-func (w *world) cutFirstDrainAt(state string, how fakelux.StreamCut) {
+// pageEventsAt has the first page of GET events whose events include a
+// state event of this state answered as how says; every later page is
+// whole. pageShort carries only the events before it: none if it is the
+// page's first, lux having recorded it after the page's query. pageFails
+// fails the request (503).
+func (w *world) pageEventsAt(state string, how pageCut) {
 	var once sync.Once
-	w.lux.CutStreams(func(id string, eventID int64, typ string) fakelux.StreamCut {
-		if typ != "state" || w.lux.EventState(id, eventID) != state {
-			return fakelux.StreamGoesOn
+	w.lux.PageEvents(func(id string, _ int64, ids []int64) int {
+		for i, eventID := range ids {
+			if w.lux.EventState(id, eventID) != state {
+				continue
+			}
+			n := len(ids)
+			once.Do(func() {
+				if n = i; how == pageFails {
+					n = -1
+				}
+			})
+			return n
 		}
-		cut := fakelux.StreamGoesOn
-		once.Do(func() { cut = how })
-		return cut
+		return len(ids)
 	})
 }
 
-// A drain whose stream ends (lux's end frame) before the Run's failure, as
-// after one page of a long backlog, is not taken as the Run's history: the
-// state applied is not lux's, so it drains again and counts the failed
-// start before deciding.
+type pageCut int
+
+const (
+	pageShort pageCut = iota
+	pageFails
+)
+
+// A drain whose page ends before the Run's failure, lux having recorded it
+// after the page's query, is not taken as the Run's history: the state
+// applied is not lux's, so it pages again and counts the failed start
+// before deciding.
 func TestADrainEndedShortOfTheFailureDrainsAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, r := w.failedStartUnapplied()
-	w.cutFirstDrainAt("failed", fakelux.StreamEnds)
+	w.pageEventsAt("failed", pageShort)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -374,14 +391,14 @@ func TestADrainEndedShortOfTheFailureDrainsAgain(t *testing.T) {
 	}
 }
 
-// A drain whose stream drops without lux's end frame is an error: the wake
-// stays wanted and unclaimed, nothing is replaced, and the next try counts
-// the failed start.
+// A drain whose page request fails at the Run's failure is an error: the
+// wake stays wanted and unclaimed, nothing is replaced, and the next try
+// counts the failed start.
 func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, r := w.failedStartUnapplied()
-	w.cutFirstDrainAt("failed", fakelux.StreamDrops)
+	w.pageEventsAt("failed", pageFails)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -400,17 +417,17 @@ func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 	}
 }
 
-// outputDown is lux with its output endpoint unavailable while down is set.
-type outputDown struct {
+// eventsDown is lux with its events endpoint unavailable while down is set.
+type eventsDown struct {
 	lux.Client
 	down atomic.Bool
 }
 
-func (o *outputDown) Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(lux.Frame) error) error {
-	if o.down.Load() {
-		return &lux.Error{Status: 503, Code: "unavailable", Message: "output unavailable"}
+func (e *eventsDown) Events(ctx context.Context, runID string, after int64) ([]lux.Frame, error) {
+	if e.down.Load() {
+		return nil, &lux.Error{Status: 503, Code: "unavailable", Message: "events unavailable"}
 	}
-	return o.Client.Output(ctx, runID, cursor, afterEvent, fn)
+	return e.Client.Events(ctx, runID, after)
 }
 
 // sweepAgain makes the preview's backed-off wake due and sweeps once.
@@ -424,9 +441,9 @@ func (w *world) sweepAgain(runID string) {
 	}
 }
 
-// The wake waits on a drain that cannot finish: the stream of the ended
-// Run stays open (held before its failure) past the drain's bound, or lux's
-// output endpoint is unavailable. The wake stays wanted and unclaimed, with
+// The wake waits on a drain that cannot finish: the page request reaching
+// the ended Run's failure is not answered within the drain's bound, or lux's
+// events endpoint is unavailable. The wake stays wanted and unclaimed, with
 // nothing replaced or resumed and nothing counted; once lux answers, the
 // next try counts the failed start and replaces the Run.
 func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
@@ -450,7 +467,7 @@ func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
 			t.Fatalf("the failed Run: resumed %d, calls %v; want replaced", r.Resumed, w.lux.CallsOf(r.ID))
 		}
 	}
-	t.Run("stream stays open", func(t *testing.T) {
+	t.Run("page request stays open", func(t *testing.T) {
 		w := newWorld(t)
 		w.wakeable()
 		runID, r := w.failedStartUnapplied()
@@ -459,24 +476,26 @@ func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
 		var once sync.Once
 		release := func() { once.Do(func() { close(open) }) }
 		t.Cleanup(release)
-		w.lux.CutStreams(func(id string, eventID int64, typ string) fakelux.StreamCut {
-			if typ == "state" && w.lux.EventState(id, eventID) == "failed" {
-				<-open
+		w.lux.PageEvents(func(id string, _ int64, ids []int64) int {
+			for _, eventID := range ids {
+				if w.lux.EventState(id, eventID) == "failed" {
+					<-open
+				}
 			}
-			return fakelux.StreamGoesOn
+			return len(ids)
 		})
 		if _, err := w.previews.Sweep(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		w.lux.CutStreams(nil)
+		w.lux.PageEvents(nil)
 		release()
 		recovers(t, w, runID, r)
 	})
-	t.Run("output unavailable", func(t *testing.T) {
+	t.Run("events unavailable", func(t *testing.T) {
 		w := newWorld(t)
 		w.wakeable()
 		runID, r := w.failedStartUnapplied()
-		down := &outputDown{Client: w.previews.Lux}
+		down := &eventsDown{Client: w.previews.Lux}
 		down.down.Store(true)
 		w.previews.Lux = down
 		if _, err := w.previews.Sweep(context.Background()); err != nil {

@@ -55,8 +55,8 @@ type Previews struct {
 	ReapAfter time.Duration
 	// How many wakeable previews one sweep takes at most; zero is 1000.
 	SweepLimit int
-	// How long one pass of a wake's drain waits on lux's stream; zero is
-	// 30 seconds.
+	// How long a wake's drain may page lux's events in all; zero is 30
+	// seconds.
 	DrainFor time.Duration
 
 	mu        sync.Mutex
@@ -454,7 +454,7 @@ func (p *Previews) follow(r previewRun) {
 			p.mu.Unlock()
 			cancel()
 		}()
-		if _, err := p.followEvents(ctx, r); err != nil && ctx.Err() == nil {
+		if err := p.followEvents(ctx, r); err != nil && ctx.Err() == nil {
 			p.Log.Warn("following a preview's lux events stopped", "run", r.ID, "error", err)
 		}
 	}()
@@ -483,48 +483,60 @@ func (p *Previews) Stop() {
 // and lux leaves its servers' output out of the stream, so its records are
 // skipped: only the event position is kept. lux ends every stream it
 // finishes with an end frame: one that stops without it was cut short
-// (errNoEnd). Returns how many lifecycle events lux sent past the stored
-// cursor.
-func (p *Previews) followEvents(ctx context.Context, r previewRun) (int, error) {
-	var after int64
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
-	}); err != nil {
-		return 0, err
+// (errNoEnd).
+func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
+	after, err := p.afterEvent(ctx, r)
+	if err != nil {
+		return err
 	}
-	ended, sent := false, 0
-	err := p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
+	ended := false
+	err = p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
 		if f.Kind == "end" {
 			ended = true
 		}
 		if f.Kind != "lux" {
 			return nil
 		}
-		sent++
-		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			// Skipped: an event of a Run the preview has let go of
-			// (retireRun), whose stream is still draining; and one already
-			// applied, by this orchestrator's drain or another's follower.
-			var current bool
-			var applied int64
-			if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, lux_after_event FROM runs WHERE id = $1 FOR UPDATE`,
-				r.ID, r.LuxRunID).Scan(&current, &applied); err != nil || !current || f.EventID <= applied {
-				return err
-			}
-			if err := p.luxEvent(ctx, tx, r, f); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `UPDATE runs SET lux_after_event = GREATEST(lux_after_event, $2) WHERE id = $1`, r.ID, f.EventID)
-			return err
-		})
+		return p.applyEvent(ctx, r, f)
 	})
 	if err == nil && !ended {
 		if ctx.Err() != nil {
-			return sent, ctx.Err()
+			return ctx.Err()
 		}
-		return sent, errNoEnd
+		return errNoEnd
 	}
-	return sent, err
+	return err
+}
+
+// afterEvent is the id of the last lux event applied to the preview.
+func (p *Previews) afterEvent(ctx context.Context, r previewRun) (int64, error) {
+	var after int64
+	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
+	})
+	return after, err
+}
+
+// applyEvent applies one lux lifecycle event (a "lux" frame, from the
+// output stream or a page of GET events) to the preview and moves its
+// cursor past it, in one transaction holding the row.
+func (p *Previews) applyEvent(ctx context.Context, r previewRun, f lux.Frame) error {
+	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Skipped: an event of a Run the preview has let go of (retireRun),
+		// whose stream is still draining; and one already applied, by this
+		// orchestrator's drain or another's follower.
+		var current bool
+		var applied int64
+		if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, lux_after_event FROM runs WHERE id = $1 FOR UPDATE`,
+			r.ID, r.LuxRunID).Scan(&current, &applied); err != nil || !current || f.EventID <= applied {
+			return err
+		}
+		if err := p.luxEvent(ctx, tx, r, f); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_after_event = GREATEST(lux_after_event, $2) WHERE id = $1`, r.ID, f.EventID)
+		return err
+	})
 }
 
 var errNoEnd = errors.New("lux's event stream stopped without its end")
