@@ -550,6 +550,8 @@ describe("a task started over", () => {
   test("on a running session of attempt 2, a repository request can be decided and steers interrupted or retried", async () => {
     const page = await taskPage(restarted(), { runId: "run_a2_fix" });
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on attempt 2's fixer");
+    await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal in attempt 2's rail");
+    expect(count(page, "[data-testid=terminal-link]")).toBe(1);
     await askAndSteer("run_a2_fix");
     const request = await until(() => page.querySelector<HTMLElement>("[data-testid=repository-request]"), "the repository request");
     expect(buttons(request, "Approve")).toBe(1);
@@ -578,6 +580,9 @@ describe("a task started over", () => {
     expect(buttons(request, "Decline")).toBe(0);
     expect(buttons(page, "Interrupt now")).toBe(0);
     expect(buttons(page, "Retry")).toBe(0);
+    // No shell into its sandbox either, in the rail or the header.
+    expect(count(page, "[data-testid=terminal-link]")).toBe(0);
+    expect(count(page, "[data-testid=terminal-icon]")).toBe(0);
   });
 
   test("a running session of attempt 2 can be steered and stopped", async () => {
