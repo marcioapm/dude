@@ -472,6 +472,18 @@ describe("removing a tier while a project's role is set to it", () => {
     expect((await tiers()).map((t) => t.id)).not.toContain(gone);
   });
 
+  test("the organization's patch queued first: it completes and the removal moves what it set", async () => {
+    const [thinker] = await tiers();
+    const gone = await freshTier("Racing C");
+    const [patch, removal] = await interleaved(
+      () => call(adminKey, "PATCH", "/v1/settings/organization", { roles: { reviewer: { tier: gone } } }),
+      () => call(adminKey, "DELETE", `/v1/models/tiers/${gone}`, { replacement: thinker.id }),
+    );
+    expect([patch.status, removal.status]).toEqual([200, 200]);
+    expect((await orgModels()).reviewer).toEqual({ tier: thinker.id });
+    expect((await tiers()).map((t) => t.id)).not.toContain(gone);
+  }, 15_000);
+
   // The epic takes the project row, then its insert needs the organization's
   // row FOR KEY SHARE; the removal holds that row by then, and wants the
   // project's next. Only a lock on the organization that lets KEY SHARE
