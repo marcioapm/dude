@@ -310,7 +310,7 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 		rel := h
 		if strings.HasSuffix(h, "."+domain) {
 			rel = strings.TrimSuffix(h, "."+domain)
-		} else if s.Previews == nil || !*s.Previews {
+		} else if s.Previews == nil || !*s.Previews || strings.Contains(in.Hostname, ".") {
 			writeErr(w, 422, "invalid_server", fmt.Sprintf("hostname: %q is not under the preview domain %s", in.Hostname, domain))
 			return
 		}
