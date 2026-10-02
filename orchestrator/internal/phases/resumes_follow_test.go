@@ -239,9 +239,9 @@ func TestFramesBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 	}
 }
 
-// lux resuming into another epoch than dude foresaw: the row moves to
-// lux's epoch, and the frames of that epoch streamed before it moved do
-// not keep the later ones from being timed.
+// lux resuming into another epoch than dude foresaw, before any of that
+// epoch's frames came: the row moves to lux's epoch, and its frames,
+// streamed after, are timed.
 func TestAResumeIntoAnotherEpochIsTimedOnceItsRowMoves(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC()
@@ -250,10 +250,6 @@ func TestAResumeIntoAnotherEpochIsTimedOnceItsRowMoves(t *testing.T) {
 	if foreseen != 2 {
 		t.Fatalf("foreseen epoch %d, want 2", foreseen)
 	}
-	// Epoch 3's first frames, while the row is still under epoch 2.
-	st.frames <- cursorFrame(busy(3), "c1")
-	st.frames <- cursorFrame(spoke(3), "c1b")
-	w.committed("c1b", 5*time.Second)
 	w.resumeAnswered(stoppedOnHost1(base), lux.Run{Epoch: 3, State: "resuming"})
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1 AND epoch = 2`); n != 0 {
 		t.Errorf("the row stayed under the foreseen epoch")
@@ -263,8 +259,76 @@ func TestAResumeIntoAnotherEpochIsTimedOnceItsRowMoves(t *testing.T) {
 	w.committed("c3", 5*time.Second)
 	row := w.row(3)
 	if row["busy_at"] == nil || row["first_output_at"] == nil {
-		t.Errorf("epoch 3's later frames were not timed: busy %v, first output %v", row["busy_at"], row["first_output_at"])
+		t.Errorf("epoch 3's frames were not timed: busy %v, first output %v", row["busy_at"], row["first_output_at"])
 	}
+}
+
+// lux streams the first frames of another epoch than dude foresaw — its
+// session, busy and a single chunk, all committed while the row is still
+// under the foreseen one — and then answers with that epoch, and nothing
+// more comes. When those frames came is recorded nowhere: the resume is
+// timed once, without them, and no later frame's time stands in for its
+// first output.
+func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	st := w.following()
+	w.s.Lux = &otherEpochLux{streamLux: st, w: w}
+	r := w.run
+	r.Resumable = true
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(w.timed()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := len(w.timed()); n != 1 {
+		t.Fatalf("%d run.resume.timed with no frame after lux's answer, want 1", n)
+	}
+	// A later chunk, were it taken as the first output, would stamp the
+	// row now.
+	st.frames <- cursorFrame(spoke(3), "o3")
+	w.committed("o3", 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	got := w.timed()
+	if len(got) != 1 || got[0]["epoch"] != 3.0 {
+		t.Fatalf("run.resume.timed %v, want one for epoch 3", got)
+	}
+	phases := got[0]["phases"].(map[string]any)
+	for _, unknown := range []string{"reload", "take", "firstOutput"} {
+		if _, ok := phases[unknown]; ok {
+			t.Errorf("phase %s reported from frames whose time was never recorded: %v", unknown, phases)
+		}
+	}
+	if _, ok := got[0]["totalMs"]; ok {
+		t.Errorf("totalMs %v reported though the first output's time is unknown", got[0]["totalMs"])
+	}
+	if row := w.row(3); row["first_output_at"] != nil || row["busy_at"] != nil || row["running_at"] != nil {
+		t.Errorf("stamped from a later frame: running %v busy %v first output %v",
+			row["running_at"], row["busy_at"], row["first_output_at"])
+	}
+}
+
+// otherEpochLux resumes the Run into epoch 3 (dude foresees 2), streaming
+// and having committed its session, busy and one chunk before it answers.
+type otherEpochLux struct {
+	*streamLux
+	w *resumeWorld
+}
+
+func (f *otherEpochLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.frames <- record(3, "lux.session", map[string]any{"sessionId": "s1"})
+	f.frames <- cursorFrame(busy(3), "e1")
+	f.w.committed("e1", 5*time.Second)
+	f.frames <- cursorFrame(spoke(3), "e2")
+	f.w.committed("e2", 5*time.Second)
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 3}, nil
 }
 
 // A resume lux refuses for good leaves no row, and the Run fails; one it

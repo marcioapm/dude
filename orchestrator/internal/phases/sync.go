@@ -1055,13 +1055,19 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		return true, s.retryOrFail(ctx, r, err, "lux refused to resume the run")
 	}
+	missed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// The Run's row first, held against the stream's batches until this
+		// commits: the resume's timing reads what they committed of it.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+			return err
+		}
+		missed = s.resumeAccepted(ctx, tx, r, foreseen, lr)
 		// The agent is starting a new turn; the old "done" no longer holds.
 		// lux_state is what lux says now ("resuming"), so directives wait for
 		// the stream to report it running. A resumed lux Run's cost is no
 		// longer final, so it goes back on the cost work list; the stored
 		// amounts stand until the next read replaces them.
-		s.resumeAccepted(ctx, tx, r, foreseen, lr)
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
 			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
@@ -1099,6 +1105,10 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason, "epoch": epoch})
 	}); err != nil {
 		return true, err
+	}
+	if missed {
+		// No frame of its epoch is left to stamp it: timed as it stands.
+		go s.resumeFollowUp(r, map[int]bool{lr.Epoch: true})
 	}
 	// Directives given while it was paused are sent by the usual path once
 	// lux reports the resumed Run running, each on its own so each is

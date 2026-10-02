@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -149,17 +150,35 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 
 // resumeAccepted moves the row of a resume lux accepted to the epoch lux
 // says it is for, when that is not the one foreseen; in the transaction
-// that takes the Run out of paused. lux's answer with no epoch (a resume
-// already under way, a 409) leaves it.
-func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) {
+// that takes the Run out of paused, with the Run's row locked, before it
+// is updated. lux's answer with no epoch (a resume already under way, a
+// 409) leaves it.
+//
+// Frames of that epoch the stream committed before the move found no row
+// to stamp, and nothing durable records when they came: the agent's
+// events carry no epoch, and a chunk may not be an event yet. What the
+// Run's row does say is whether any came since dude asked: the session
+// epoch reached it, lux reported it running, or the agent was active
+// after requested_at. Then the row is marked frames_missed, and true is
+// returned, for its timing to be written as it stands once the
+// transaction commits: no later frame stamps it.
+func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) (missed bool) {
 	if resumed.Epoch == 0 || resumed.Epoch == foreseen {
-		return
+		return false
 	}
 	s.bestEffort(ctx, tx, r, "accepted", func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE run_resumes SET epoch = $3 WHERE run_id = $1 AND epoch = $2
-			AND NOT EXISTS (SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $3)`, r.ID, foreseen, resumed.Epoch)
+		err := tx.QueryRow(ctx, `UPDATE run_resumes rr SET epoch = $3,
+				frames_missed = r.agent_session_epoch >= $3 OR r.lux_state = 'running'
+					OR COALESCE(r.agent_active_at >= rr.requested_at, false)
+			FROM runs r WHERE r.id = rr.run_id AND rr.run_id = $1 AND rr.epoch = $2
+			AND NOT EXISTS (SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $3)
+			RETURNING rr.frames_missed`, r.ID, foreseen, resumed.Epoch).Scan(&missed)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return err
 	})
+	return missed
 }
 
 // writePlacements records what lux reported of a resume's placement (cur)
@@ -192,12 +211,13 @@ const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_
 // resume is in before lux is asked for it (resumeAsked), so a frame of an
 // epoch with no row is settled unless the row is still to come or to move
 // to it: while the Run is paused (lux's answer not in yet) and the epoch
-// is newer than every row. The first placement (epoch 1) is no resume.
+// is newer than every row. The first placement (epoch 1) is no resume. A
+// row whose first frames were missed (frames_missed) takes no stamp.
 func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string, epoch int) (stamped *int, missing, settled bool) {
 	s.bestEffort(ctx, tx, t.run, col, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `WITH target AS (SELECT epoch FROM run_resumes WHERE run_id = $1 AND `+latestResume+`),
 			stamped AS (UPDATE run_resumes SET `+col+` = clock_timestamp()
-				WHERE run_id = $1 AND epoch IN (SELECT epoch FROM target) AND `+col+` IS NULL
+				WHERE run_id = $1 AND epoch IN (SELECT epoch FROM target) AND `+col+` IS NULL AND NOT frames_missed
 				RETURNING epoch, assigned_at IS NULL OR image_ready_at IS NULL OR volumes_restored_at IS NULL
 					OR container_started_at IS NULL OR workload_started_at IS NULL OR host_name IS NULL AS missing)
 			SELECT (SELECT epoch FROM stamped), COALESCE((SELECT missing FROM stamped), false),
@@ -326,7 +346,7 @@ func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
 	if err := s.DB.InSystem(ctx, "resume-timing", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, rr.epoch
 			FROM run_resumes rr JOIN runs r ON r.id = rr.run_id
-			WHERE rr.timed_at IS NULL AND rr.first_output_at IS NOT NULL
+			WHERE rr.timed_at IS NULL AND (rr.first_output_at IS NOT NULL OR rr.frames_missed)
 			  AND rr.created_at > now() - make_interval(secs => $1)
 			ORDER BY rr.created_at LIMIT $2`, untimedWithin.Seconds(), untimedLimit)
 		if err != nil {

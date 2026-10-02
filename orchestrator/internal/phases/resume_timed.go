@@ -24,14 +24,15 @@ type resumeTiming struct {
 }
 
 // timeResumes writes run.resume.timed for each of the Run's resumes whose
-// first output is in and that has none yet — the one into epoch, or with
-// epoch 0 every one (a follower starting again, after a batch whose
-// follow-up never ran). Once each: timed_at is set in the same
-// transaction.
+// first output is in, or whose first frames were missed (frames_missed),
+// and that has none yet — the one into epoch, or with epoch 0 every one (a
+// follower starting again, after a batch whose follow-up never ran). Once
+// each: timed_at is set in the same transaction.
 func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET timed_at = now()
-			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL AND first_output_at IS NOT NULL
+			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL
+			  AND (first_output_at IS NOT NULL OR frames_missed)
 			RETURNING epoch, cause, moved, host_name, woken_at, requested_at, assigned_at, image_ready_at,
 				volumes_restored_at, workload_started_at, running_at, busy_at, first_output_at`, r.ID, epoch)
 		if err != nil {

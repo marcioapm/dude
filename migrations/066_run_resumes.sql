@@ -55,6 +55,12 @@ CREATE TABLE run_resumes (
   busy_at              timestamptz,
   -- The agent's first message, thought or tool call after the resume.
   first_output_at      timestamptz,
+  -- lux answered with another epoch than dude foresaw, after the stream
+  -- had already brought that epoch's session: its first frames came while
+  -- the row was under the other epoch, and when is not recorded anywhere.
+  -- running_at, busy_at and first_output_at stay NULL rather than take a
+  -- later frame's time, and it is timed without them.
+  frames_missed        boolean NOT NULL DEFAULT false,
   -- run.resume.timed was written for it: once, whatever replays.
   timed_at             timestamptz,
   created_at           timestamptz NOT NULL DEFAULT now(),
