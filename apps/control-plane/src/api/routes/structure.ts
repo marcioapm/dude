@@ -9,10 +9,11 @@
  */
 
 import { z } from "zod";
-import { EventTypes, epicState, epicStateSchema, newId, taskCriteriaInput, taskGoalInput, type EpicState } from "@dude/domain";
+import { EventTypes, epicState, epicStateSchema, newId, taskCriteriaInput, taskGoalInput, taskGoalShortBy, type EpicState } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
+import { goalTooShort } from "./work.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
@@ -308,6 +309,9 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     // orchestrator moves the status on its own schedule.
     const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
     if (changesTheTask && delivering.length > 0) return { started: status };
+    // After the started check, so a started task asked for a new goal hears it is fixed.
+    // A task saved before the rule keeps its short goal until someone sets one.
+    if (input.goal !== undefined && taskGoalShortBy(input.goal) > 0) return { shortGoal: true as const };
     if (input.epicId) {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
       if (epic.length === 0) return { noEpic: input.epicId };
@@ -342,6 +346,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   if ("started" in result) {
     throw conflict(`delivery has started (${result.started}); what it asks for can no longer change — abort and create a new one`);
   }
+  if ("shortGoal" in result) throw goalTooShort();
   if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
   if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
   if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);

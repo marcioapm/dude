@@ -271,6 +271,19 @@ export type Person = z.infer<typeof personSchema>;
 
 /** Longest goal a task takes, in characters (UTF-16 units, as `.length`). */
 export const TASK_GOAL_MAX = 65_536;
+/**
+ * Shortest goal a task is saved with, in the same units, counted with
+ * surrounding whitespace trimmed. The agents' `create_task` keeps the same
+ * rule (`GoalMin` in orchestrator/internal/agenttools).
+ */
+export const TASK_GOAL_MIN = 16;
+export const TASK_GOAL_TOO_SHORT =
+  `a task needs a goal of at least ${TASK_GOAL_MIN} characters: why it matters and what should change`;
+
+/** How many more characters `goal` needs to be saved; 0 when it has enough. */
+export function taskGoalShortBy(goal: string): number {
+  return Math.max(0, TASK_GOAL_MIN - goal.trim().length);
+}
 /** Longest a task's acceptance criteria are all together; one criterion has no limit of its own. */
 export const TASK_CRITERIA_MAX = 16_384;
 
