@@ -40,6 +40,12 @@ func TestTheFixerIsTheImplementerUnlessSetApart(t *testing.T) {
 	if got := ResolveRole("fixer", project, org); got.Tier != "mtr_coder" || got.Effort != "high" {
 		t.Errorf("fixer with its own effort = %+v", got)
 	}
+	// The fixer's own tier on any layer comes before the implementer's on
+	// any layer: the organization's fixer beats the project's implementer.
+	if got := ResolveRole("fixer", json.RawMessage(`{"implementer":{"tier":"fast"}}`),
+		json.RawMessage(`{"fixer":{"tier":"thinker"},"implementer":{"tier":"coder"}}`)); got.Tier != "thinker" {
+		t.Errorf("fixer set apart on the organization, implementer on the project = %+v, want thinker", got)
+	}
 	if PromptRoleForPhase[PhaseFix] != "fixer" || PromptRoleForPhase[PhaseReview] != "reviewer" {
 		t.Error("phases take the wrong role's settings")
 	}

@@ -59,8 +59,8 @@ func TestATiersNewModelReachesTheNextSessionNotTheRunningOne(t *testing.T) {
 	if err := w.owner.QueryRow(ctx, `SELECT model, model_tier FROM runs WHERE id = $1`, runID).Scan(&model, &name); err != nil {
 		t.Fatal(err)
 	}
-	// onModel names the tier after its model, cut to a tier name's length.
-	if model != "claude-opus-5-5" || name != "claude-opus-5-5" {
+	// The Run keeps what it was submitted with: the model, and the tier's name then.
+	if model != "claude-opus-5-5" || name != onModelTier("claude-opus-5-5") {
 		t.Errorf("after the tier changed the running Run says %s on %s", model, name)
 	}
 	if spec := submitted(t, r); spec.Labels["dude.model"] != "claude-opus-5-5" {
@@ -83,9 +83,11 @@ func TestARunWithNoModelFailsSayingWhy(t *testing.T) {
 		name, setup, want string
 	}{
 		{"a tier with no model", `UPDATE model_tiers SET model = NULL WHERE organization_id = $1`,
-			"The Implementer runs on fake/scripted, which names no model yet. An admin sets it in Models."},
+			"The Implementer runs on T fake/scripted, which names no model yet. An admin sets it in Models."},
 		{"no tier", `UPDATE projects SET agent_models = agent_models - 'implementer' WHERE organization_id = $1`,
 			"The Implementer runs on no model tier. An admin picks one in Agents."},
+		{"a tier that is gone", `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer}', '{"tier":"mtr_gone"}') WHERE organization_id = $1`,
+			"The Implementer's model tier no longer exists. An admin picks another in Agents."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)

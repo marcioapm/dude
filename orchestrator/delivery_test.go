@@ -201,16 +201,26 @@ func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 
 // onModel puts the project's role on a tier of the organization's that
 // requests model, made for it once (a role names a tier, never a model),
-// and returns the tier's id.
+// and returns the tier's id. The tier's name is OnModelTier(model), never
+// the model itself, so a test can tell the two apart.
 func (w *world) onModel(role, model string) string {
 	w.t.Helper()
 	id := "mtr_" + strings.NewReplacer("/", "_", ".", "_", "-", "_").Replace(model)
 	mustExec(w.t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model, position)
-		VALUES ($1 || '_' || $2, $2, left($3, 24), $3, 10) ON CONFLICT DO NOTHING`, id, w.org, model)
+		VALUES ($1 || '_' || $2, $2, $4, $3, 10) ON CONFLICT DO NOTHING`, id, w.org, model, onModelTier(model))
 	mustExec(w.t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, ARRAY[$2::text],
 		COALESCE(agent_models->$2, '{}'::jsonb) || jsonb_build_object('tier', $3 || '_' || $4)) WHERE id = $1`,
 		w.project, role, id, w.org)
 	return id + "_" + w.org
+}
+
+// onModelTier is the name onModel gives the tier it makes for model.
+func onModelTier(model string) string {
+	name := "T " + model
+	if len(name) > 24 {
+		name = name[:24]
+	}
+	return name
 }
 
 func (w *world) task() string {

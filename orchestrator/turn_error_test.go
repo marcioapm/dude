@@ -37,7 +37,7 @@ func testFailedTurn(t *testing.T, model string) {
 		FROM runs WHERE task_id = $1`, wi).Scan(&status, &errText, &pushAsked); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || !strings.Contains(errText, `on `+model+`, which requested "`+model+`" from the LLM proxy`) || !strings.Contains(errText, "Cannot connect to API") {
+	if status != "failed" || !strings.Contains(errText, `on `+onModelTier(model)+`, which requested "`+model+`" from the LLM proxy`) || !strings.Contains(errText, "Cannot connect to API") {
 		t.Errorf("run %s: %q; want failed, naming the tier, its model and the agent's error", status, errText)
 	}
 	if pushAsked || w.lux.Runs()[0].Pushed {
