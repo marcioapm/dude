@@ -62,6 +62,18 @@ beforeAll(async () => {
   await project("prj_abs2", "org_acme", { simplifier: { model: "llm-openai/gpt-5.6-sol" } });
   // A name too long for a tier's, and a model no tier can hold.
   await project("prj_long", "org_none", { implementer: { model: `llm-openai/${"m".repeat(30)}` }, reviewer: { model: "llm-openai/a b" } });
+  // Bedrock-style ids alike in their first 24 characters, and a model named as a seeded tier is, in another case.
+  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_bed', 'Bed', 'bed',
+    ${{ implementer: { model: "llm-anthropic/claude-opus-5-5" } }}::jsonb)`;
+  await project("prj_bed1", "org_bed", { reviewer: { model: "llm-openai/anthropic.claude-3-5-sonnet-20240620-v1:0" } });
+  await project("prj_bed2", "org_bed", { reviewer: { model: "llm-openai/anthropic.claude-3-5-sonnet-20241022-v2:0" } });
+  await project("prj_bed3", "org_bed", { simplifier: { model: "llm-openai/FAST" } });
+  // The orchestrator's role naming a model; a project's fixer naming Coder's model.
+  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_shapes', 'Shapes', 'shapes',
+    ${{ orchestrator: { model: "llm-anthropic/claude-fable-5-1", effort: "low" }, implementer: { model: "llm-anthropic/claude-opus-5-5" } }}::jsonb)`;
+  await project("prj_coder", "org_shapes", { fixer: { model: "llm-anthropic/claude-opus-5-5" } });
+  // A project on the scripted agent, in an organization whose tiers ask for it.
+  await project("prj_fake", "org_fake", { implementer: { model: "fake/scripted" } });
 
   for (const f of files.filter((f) => f.version >= "066")) await db.unsafe(await f.contents());
 }, 120_000);
@@ -155,6 +167,43 @@ describe("an organization there before tiers", () => {
   test("the scripted agent's models are kept as they are", async () => {
     const t = await byName("org_fake");
     expect([t.Thinker!.model, t.Coder!.model]).toEqual(["fake/scripted", "fake/scripted"]);
+  });
+
+  test("names made alike, by a 24-character cut or by a seeded tier's name in another case, are numbered; each project keeps its own", async () => {
+    const t = await byName("org_bed");
+    const v1 = t["anthropic.claude-3-5-son"]!;
+    const v2 = t["anthropic.claude-3-5-s 2"]!;
+    const fast = t["FAST 2"]!;
+    expect(Object.keys(t).sort()).toEqual(["Coder", "FAST 2", "Fast", "Thinker", "anthropic.claude-3-5-s 2", "anthropic.claude-3-5-son"].sort());
+    expect([v1.model, v2.model, fast.model]).toEqual([
+      "anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic.claude-3-5-sonnet-20241022-v2:0", "FAST"]);
+    expect(t.Fast!.model).toBeNull();
+    expect(await projectModels("prj_bed1")).toEqual({ reviewer: { tier: v1.id } });
+    expect(await projectModels("prj_bed2")).toEqual({ reviewer: { tier: v2.id } });
+    expect(await projectModels("prj_bed3")).toEqual({ simplifier: { tier: fast.id } });
+    expect((await notes("org_bed")).filter((n: { projectId: string | null }) => n.projectId).map((n: { tierName: string; newTier: boolean }) => [n.tierName, n.newTier]))
+      .toEqual([["anthropic.claude-3-5-son", true], ["anthropic.claude-3-5-s 2", true], ["FAST 2", true]]);
+  });
+
+  test("an orchestrator naming a model is on Thinker, voting for its model", async () => {
+    const t = await byName("org_shapes");
+    expect(t.Thinker!.model).toBe("claude-fable-5-1");
+    expect((await orgModels("org_shapes")).orchestrator).toEqual({ tier: t.Thinker!.id, effort: "low" });
+  });
+
+  test("a project's override on a model a tier already asks for reuses that tier, a fixer's and the scripted agent's too", async () => {
+    const shapes = await byName("org_shapes");
+    expect(Object.keys(shapes)).toHaveLength(3);
+    expect(await projectModels("prj_coder")).toEqual({ fixer: { tier: shapes.Coder!.id } });
+    const fake = await byName("org_fake");
+    expect(Object.keys(fake)).toHaveLength(3);
+    expect(await projectModels("prj_fake")).toEqual({ implementer: { tier: fake.Thinker!.id } });
+    const projectNotes = [...await notes("org_shapes"), ...await notes("org_fake")]
+      .filter((n: { projectId: string | null }) => n.projectId);
+    expect(projectNotes).toEqual([
+      { projectId: "prj_coder", role: "fixer", oldModel: "llm-anthropic/claude-opus-5-5", tierName: "Coder", newTier: false, modelChanged: false },
+      { projectId: "prj_fake", role: "implementer", oldModel: "fake/scripted", tierName: "Thinker", newTier: false, modelChanged: false },
+    ]);
   });
 
   test("no organization or project names a model any more", async () => {
