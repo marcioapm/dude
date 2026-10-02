@@ -187,6 +187,38 @@ describe("a branch preview on the Servers tab", () => {
     }
     const page = await taskPage(new FailedPreview("e"), { tab: "servers" });
     const callout = await until(() => page.querySelector<HTMLElement>("[data-testid=preview-error]"), "the preview's error");
-    expect(callout.textContent).toContain(why);
+    expect(callout.textContent).toBe(why);
+  });
+
+  test("an old-style preview's error is not shown as a wakeable preview's callout", async () => {
+    class OldStyle extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({
+          ...d,
+          run: d.run ? { ...d.run, wakeable: false, asleep: false, error: "the preview stopped: failed" } : null,
+        }));
+      }
+    }
+    const page = await taskPage(new OldStyle("e"), { tab: "servers" });
+    await until(() => page.querySelector("[data-testid=servers-panel][data-run=preview]"), "the preview's panel");
+    expect(page.querySelector("[data-testid=preview-error]")).toBe(null);
+  });
+
+  test("a wakeable preview's error goes once it recovers", async () => {
+    let error: string | null = "the preview's Run failed to start (start-failed); trying a new Run (start 2 of 3)";
+    class Recovering extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({
+          ...d,
+          run: d.run ? { ...d.run, wakeable: true, asleep: false, error } : null,
+        }));
+      }
+    }
+    const page = await taskPage(new Recovering("e"), { tab: "servers" });
+    await until(() => page.querySelector("[data-testid=preview-error]"), "the preview's error");
+    error = null;
+    const { emitForTest } = await import("./dom.ts");
+    await emitForTest("servers.changed");
+    await until(() => (page.querySelector("[data-testid=preview-error]") === null ? true : null), "the error gone after recovery");
   });
 });
