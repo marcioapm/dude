@@ -1,10 +1,12 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -461,6 +464,269 @@ func TestAMessageForAConductorThatFailedOrWasAbortedIsSettled(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 2 {
 		t.Errorf("%d conductors after the abort, want 2: an abort starts none", n)
+	}
+}
+
+// endedConductor is a delivered task whose conductor answered a message
+// and then stopped, and was ended with nothing unread; and that conductor.
+func (w *world) endedConductor() (task, ended string) {
+	w.t.Helper()
+	w.syncer.ConductorWarm = time.Hour
+	task, _ = w.delivered()
+	_, out := w.chat(task, "what changed?")
+	ended, _ = out["runId"].(string)
+	w.until("the answer", func() bool { return len(w.said(ended)) == 1 })
+	w.stopped(ended)
+	w.until("the stopped conductor to be ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, ended) == 1
+	})
+	return task, ended
+}
+
+// unread is a message by actor, with images, that a person sent conductor
+// runID and it never read, as Chat or a steer records it: its directive,
+// its images, and its event. Returns the directive.
+func (w *world) unread(runID, actor, text string, images ...string) string {
+	w.t.Helper()
+	ctx := context.Background()
+	var id string
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		ref := delivery.RunRef{Org: w.org, ProjectID: w.project, RunID: runID}
+		if err := tx.QueryRow(ctx, `SELECT task_id FROM runs WHERE id = $1`, runID).Scan(&ref.TaskID); err != nil {
+			return err
+		}
+		var err error
+		if id, _, err = delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"}); err != nil {
+			return err
+		}
+		attached, err := delivery.Attach(ctx, tx, ref.TaskID, id, images)
+		if err != nil {
+			return err
+		}
+		writer := delivery.Writer{ActorType: "human", ActorID: actor}
+		if len(attached) == 0 {
+			return delivery.ChatEvent(ctx, tx, ref, writer, map[string]any{"text": text, "directiveId": id})
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{Type: "run.steered", OrganizationID: w.org, ProjectID: w.project,
+			TaskID: ref.TaskID, RunID: runID, ActorType: writer.ActorType, ActorID: actor, Source: ledger.SourceOrchestrator,
+			CorrelationID: ref.TaskID, Payload: map[string]any{"directiveId": id, "text": text, "attachments": attached}})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
+// handedTo is the conductor an ended one's unread directive went to, ""
+// for none, and the error its copy failed with.
+func (w *world) handedTo(directive string) (next, why string) {
+	w.t.Helper()
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->>'nextRunId', ''), payload->>'error' FROM events
+		WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, directive).Scan(&next, &why)
+	return next, why
+}
+
+// A message handed on to a conductor a person paused asks for it back, as
+// a message in Chat does: it is resumed, and answers the message.
+func TestAMessageHandedToAPausedConductorResumesIt(t *testing.T) {
+	w := conductorWorld(t)
+	task, ended := w.endedConductor()
+	_, out := w.chat(task, "hello again")
+	next, _ := out["runId"].(string)
+	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	if status, body := w.call("/internal/runs/"+next+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause IS NULL`, next) == 1
+	})
+
+	queued := w.unread(ended, "", "and the tests?")
+	w.until("the paused conductor to answer the message handed to it", func() bool {
+		said := w.said(next)
+		return len(said) == 2 && strings.Contains(said[1], "and the tests?")
+	})
+	if to, why := w.handedTo(queued); to != next {
+		t.Errorf("the ended conductor's copy failed with %q, next %q, want %s", why, to, next)
+	}
+}
+
+// A message with images handed on to the task's live conductor reaches it
+// with its images, the same bytes; a text-only one after it too, in order.
+func TestAMessageWithImagesHandedToTheLiveConductorKeepsThem(t *testing.T) {
+	w := conductorWorld(t)
+	b := w.withImages()
+	task, ended := w.endedConductor()
+	_, out := w.chat(task, "hello again")
+	next, _ := out["runId"].(string)
+	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+
+	w.upload(b, "att_layout_"+w.org, task, "layout.png", screenshot)
+	image := w.unread(ended, "", "Explain this screenshot", "att_layout_"+w.org)
+	words := w.unread(ended, "", "and the tests?")
+	w.until("both messages answered", func() bool { return len(w.said(next)) == 3 })
+	said := w.said(next)
+	if !strings.Contains(said[1], "Explain this screenshot") || !strings.Contains(said[2], "and the tests?") {
+		t.Errorf("answered out of order: %q", said[1:])
+	}
+	var carried string
+	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = $1`, "att_layout_"+w.org).Scan(&carried)
+	luxNext := w.luxRunOf(next)
+	got := w.lux.Attachments(luxNext)[carried]
+	if len(got) != 1 || got[0].Name != "layout.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Fatalf("the live conductor got %+v with the message (directive %s)", got, carried)
+	}
+	if bodies := w.lux.InputBodies(luxNext, carried); len(bodies) != 1 || !strings.Contains(bodies[0], "Explain this screenshot") {
+		t.Errorf("/input for the handed-on message got %q", bodies)
+	}
+	for _, d := range []string{image, words} {
+		if to, why := w.handedTo(d); to != next {
+			t.Errorf("%s failed with %q, next %q, want %s", d, why, to, next)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'
+		AND payload->'attachments'->0->>'id' = $2`, next, "att_layout_"+w.org); n != 1 {
+		t.Errorf("the next conductor's Chat does not show the image")
+	}
+}
+
+// With no live conductor, the first message handed on would be a new
+// conductor's briefing, which carries no images: a message with images
+// fails, saying so, and goes nowhere; the text-only one after it starts
+// the next conductor.
+func TestAMessageWithImagesIsNotABriefing(t *testing.T) {
+	w := conductorWorld(t)
+	b := w.withImages()
+	task, ended := w.endedConductor()
+	w.upload(b, "att_layout_"+w.org, task, "layout.png", screenshot)
+	image := w.unread(ended, "", "Explain this screenshot", "att_layout_"+w.org)
+	words := w.unread(ended, "", "and the tests?")
+	var next string
+	w.until("the text-only message to start the next conductor", func() bool {
+		next, _, _ = w.conductor(task)
+		return next != ended && len(w.said(next)) == 1
+	})
+	if to, why := w.handedTo(image); to != "" || why != "the conductor stopped before reading it; its images were not passed on; send it again" {
+		t.Errorf("the message with images: next %q, %q", to, why)
+	}
+	if to, _ := w.handedTo(words); to != next {
+		t.Errorf("the text-only message went to %q, want %s", to, next)
+	}
+	if said := w.said(next)[0]; strings.Contains(said, "Explain this screenshot") || !strings.Contains(said, "and the tests?") {
+		t.Errorf("the next conductor answered %q", said)
+	}
+}
+
+// Two people's unread messages, handed on to a new conductor, keep their
+// order and their writers: the first is its briefing's message, the
+// second queued for it; it answers both.
+func TestTwoMessagesHandedOnKeepTheirOrderAndWriters(t *testing.T) {
+	w := conductorWorld(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	task, ended := w.endedConductor()
+	first := w.unread(ended, ana, "Ana: and the tests?")
+	second := w.unread(ended, bo, "Bo: and the docs?")
+	var next string
+	w.until("both answered by the next conductor", func() bool {
+		next, _, _ = w.conductor(task)
+		return next != ended && len(w.said(next)) == 2
+	})
+	rows, err := w.owner.Query(context.Background(), `SELECT actor_id, payload->>'text' FROM events
+		WHERE run_id = $1 AND event_type = 'chat.message' ORDER BY cursor`, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type message struct{ Actor, Text string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[message])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []message{{ana, "Ana: and the tests?"}, {bo, "Bo: and the docs?"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("the next conductor's Chat: %v, want %v", got, want)
+	}
+	if said := w.said(next); !strings.Contains(said[1], "Bo: and the docs?") {
+		t.Errorf("its second answer %q", said[1])
+	}
+	for _, d := range []string{first, second} {
+		if to, why := w.handedTo(d); to != next {
+			t.Errorf("%s failed with %q, next %q, want %s", d, why, to, next)
+		}
+	}
+}
+
+// Aborting a conductor during live delivery stops it alone and keeps
+// nothing: the phase Run and the workflow go on. Aborting the phase Run
+// stops delivery, and leaves the live conductor alone.
+func TestAbortingAConductorOrAPhaseLeavesTheOtherAlone(t *testing.T) {
+	w := conductorWorld(t)
+	w.syncer.ConductorWarm = time.Hour
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == "conductor" {
+			return scripted(spec)
+		}
+		return fakelux.Behaviour{Hang: true}
+	}
+	task := w.task()
+	w.deliver(task)
+	var implementer string
+	w.until("the implementer to run", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND status = 'running' AND lux_state = 'running'`, task).Scan(&implementer)
+		return implementer != ""
+	})
+	// state is what an abort may change: each Run's status, keep and lux
+	// end, the workflow's status and the task's.
+	state := func(runID string) string {
+		var s string
+		_ = w.owner.QueryRow(context.Background(), `SELECT status::text || ' keep=' || keep::text
+			|| ' stop=' || COALESCE(lux_stop_reason, '') || ' kept=' || (kept_until IS NOT NULL)::text FROM runs WHERE id = $1`, runID).Scan(&s)
+		return s
+	}
+	workflow := func() string {
+		var s string
+		_ = w.owner.QueryRow(context.Background(), `SELECT status::text FROM workflow_runs WHERE task_id = $1`, task).Scan(&s)
+		return s + " task " + w.taskStatus(task)
+	}
+
+	_, out := w.chat(task, "what changed?")
+	first, _ := out["runId"].(string)
+	w.until("the conductor's answer", func() bool { return len(w.said(first)) == 1 })
+	implBefore, wfBefore := state(implementer), workflow()
+	if status, body := w.call("/internal/runs/"+first+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort the conductor: %d %v", status, body)
+	}
+	w.until("the aborted conductor's lux Run to be ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason IS NOT NULL`, first) == 1
+	})
+	for range 3 {
+		w.pump()
+	}
+	if got := state(first); got != "aborted keep=false stop=cancel kept=false" {
+		t.Errorf("the aborted conductor: %s, want cancelled and never kept", got)
+	}
+	if got := state(implementer); got != implBefore {
+		t.Errorf("aborting the conductor moved the implementer: %s, then %s", implBefore, got)
+	}
+	if got := workflow(); got != wfBefore {
+		t.Errorf("aborting the conductor moved delivery: %s, then %s", wfBefore, got)
+	}
+
+	_, out = w.chat(task, "and now?")
+	second, _ := out["runId"].(string)
+	w.until("the next conductor's answer", func() bool { return len(w.said(second)) == 1 })
+	if status, body := w.call("/internal/runs/"+implementer+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort the implementer: %d %v", status, body)
+	}
+	w.until("the implementer to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, implementer) == 1
+	})
+	if got := state(second); got != "running keep=false stop= kept=false" {
+		t.Errorf("aborting the implementer touched the live conductor: %s", got)
+	}
+	if status, out := w.chat(task, "still there?"); status != 200 || out["runId"] != second {
+		t.Errorf("a message after the phase abort: %d %v, want it for %s", status, out, second)
 	}
 }
 
