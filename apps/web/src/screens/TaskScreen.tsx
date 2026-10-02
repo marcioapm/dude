@@ -310,7 +310,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const stoppedOn = stopOfTask?.run?.id ?? null;
   const shownRun = openedRun ?? picked;
   const retried = item && shownRun ? retriedRun(item.runs.find((r) => r.id === shownRun), item.runs) : false;
-  const pickUpHere = canPickUp && !earlier && shownRun !== null && shownRun === stoppedOn;
+  // Only ever the current attempt's: what stopped the task is a Run of it.
+  const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
   const openStopped = useMemo<StoppedRun | undefined>(
     () => (earlier ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
       : retried ? { setAside: "retry" }
@@ -432,7 +433,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
-      {(item.escalation && !earlier) || stop || aside || problem ? (
+      {item.escalation || stop || aside || problem ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
           {item.escalation && !earlier ? (
