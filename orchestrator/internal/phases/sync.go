@@ -397,8 +397,8 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
-	// The images given with the task's prompt, when this Run's prompt is
-	// the task (delivery.TaskPromptPhases).
+	// The images the task's text shows: every phase's prompt carries the
+	// task (delivery.PromptAttachments).
 	var sent []delivery.SentAttachment
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
@@ -544,6 +544,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var sizes delivery.Sizes
 	var tier delivery.Tier
 	var noTier string
+	var taskImages []delivery.SentAttachment
 	settingsRole := delivery.PromptRoleForPhase[r.Phase]
 	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
@@ -557,6 +558,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		var err error
 		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
+		// The images the prompt numbers, as submit sends them.
+		if taskImages, err = delivery.PromptAttachments(ctx, tx, r.ID); err != nil {
+			return err
+		}
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
@@ -641,7 +646,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r),
+		Branch: runBranch(r), Images: delivery.PromptImages(taskImages),
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each

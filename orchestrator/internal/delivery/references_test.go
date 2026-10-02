@@ -1,0 +1,87 @@
+package delivery
+
+import (
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestImageRefsSkipCodeAndReadEveryURLForm(t *testing.T) {
+	text := strings.Join([]string{
+		"See ![a](attachment:att_a) and ![b](<attachment:att_b> \"t\") and ![c \\] d](attachment:att_c 'x')",
+		"`![no](attachment:att_span)` then ``a ` ![no](attachment:att_span2) ``",
+		"```",
+		"![no](attachment:att_fence)",
+		"```",
+		"![e](attachment:att_e) ![web](https://x.test/a.png) [link](attachment:att_link)",
+	}, "\n")
+	var ids, alts []string
+	for _, r := range ImageRefs(text) {
+		ids = append(ids, r.ID)
+		alts = append(alts, r.Alt)
+		if !strings.HasPrefix(text[r.From:r.To], "![") || !strings.HasSuffix(text[r.From:r.To], ")") {
+			t.Errorf("offsets of %s cover %q", r.ID, text[r.From:r.To])
+		}
+	}
+	if want := []string{"att_a", "att_b", "att_c", "att_e"}; !slices.Equal(ids, want) {
+		t.Errorf("ids %v, want %v", ids, want)
+	}
+	if want := []string{"a", "b", "c ] d", "e"}; !slices.Equal(alts, want) {
+		t.Errorf("alts %v, want %v", alts, want)
+	}
+}
+
+// The agent's list is the goal's images, then the criteria's, each once,
+// in order of first appearance; each reference reads as its place in it.
+func TestPromptNumbersImagesInFirstAppearanceOrder(t *testing.T) {
+	goal := "The header ![header](attachment:att_h) overlaps.\n\nCompare ![mock](attachment:att_m) with ![header](attachment:att_h)."
+	criteria := []string{"Looks like ![mock](attachment:att_m)", "No scrollbar, as in ![after](attachment:att_a)"}
+	ids := TaskImageIDs(goal, criteria)
+	if want := []string{"att_h", "att_m", "att_a"}; !slices.Equal(ids, want) {
+		t.Fatalf("TaskImageIDs = %v, want %v", ids, want)
+	}
+	in := PromptInput{Title: "Fix the header", Goal: goal, AcceptanceCriteria: criteria,
+		Images: []PromptImage{{"att_h", "header.png"}, {"att_m", "mock.png"}, {"att_a", "after.webp"}}}
+	for _, phase := range []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest, PhaseInvestigate} {
+		got := Prompt(phase, in)
+		for _, want := range []string{
+			"The header [Image 1: header.png] overlaps.\n\nCompare [Image 2: mock.png] with [Image 1: header.png].",
+			"- Looks like [Image 2: mock.png]\n- No scrollbar, as in [Image 3: after.webp]",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s prompt lacks %q:\n%s", phase, want, got)
+			}
+		}
+		if strings.Contains(got, "attachment:") {
+			t.Errorf("%s prompt still has a reference:\n%s", phase, got)
+		}
+	}
+}
+
+// A reference to an image the Run is not given (another task's, removed)
+// reads as unavailable, never as an error.
+func TestAMissingImageReadsAsUnavailable(t *testing.T) {
+	in := PromptInput{Title: "T", Goal: "Before ![gone.png](attachment:att_gone) after, and ![x](attachment:att_x).",
+		Images: []PromptImage{{"att_x", "x.png"}}}
+	got := Prompt(PhaseImplement, in)
+	if want := "Before [Image unavailable: gone.png] after, and [Image 1: x.png]."; !strings.Contains(got, want) {
+		t.Errorf("prompt lacks %q:\n%s", want, got)
+	}
+}
+
+// A saved prompt's {{task.goal}} reads the goal as the task section does.
+func TestASavedPromptsGoalNamesImagesToo(t *testing.T) {
+	org := "Goal: {{task.goal}}"
+	got := Prompt(PhaseImplement, PromptInput{Title: "T", Goal: "![a](attachment:att_a)", OrgPrompt: &org,
+		Images: []PromptImage{{"att_a", "a.png"}}})
+	if !strings.HasPrefix(got, "Goal: [Image 1: a.png]") {
+		t.Errorf("prompt starts %q", got[:min(len(got), 60)])
+	}
+}
+
+func TestAPullRequestNamesTheImages(t *testing.T) {
+	body := prBody("See ![shot.png](attachment:att_s).", []string{"Matches ![mock](attachment:att_m)"}, nil, 0)
+	if !strings.Contains(body, "See [Image: shot.png].") || !strings.Contains(body, "Matches [Image: mock]") || strings.Contains(body, "attachment:") {
+		t.Errorf("pull request body:\n%s", body)
+	}
+}

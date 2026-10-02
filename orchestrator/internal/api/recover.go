@@ -363,8 +363,13 @@ func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, r
 func changedTask(title, goal string, rawCriteria []byte) string {
 	var criteria []string
 	_ = json.Unmarshal(rawCriteria, &criteria)
-	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title, strings.TrimSpace(goal))
+	// A resume carries no images, so the changed text names them only.
+	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title,
+		strings.TrimSpace(delivery.ImagesAsText(goal)))
 	if len(criteria) > 0 {
+		for i, c := range criteria {
+			criteria[i] = delivery.ImagesAsText(c)
+		}
 		text += "\n\nAcceptance criteria:\n" + delivery.CriteriaList(criteria)
 	}
 	return text
