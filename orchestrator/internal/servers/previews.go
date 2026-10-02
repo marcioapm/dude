@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -489,6 +490,14 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 			return nil
 		}
 		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			// A Run the preview has let go of (retireRun), whose stream
+			// is still draining: a wake that replaced it cancels it, and
+			// what it reports is not the preview's.
+			var current bool
+			if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2 FROM runs WHERE id = $1 FOR UPDATE`,
+				r.ID, r.LuxRunID).Scan(&current); err != nil || !current {
+				return err
+			}
 			if err := p.luxEvent(ctx, tx, r, f); err != nil {
 				return err
 			}
@@ -506,11 +515,19 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 	case f.EventType == "state":
 		// A move is not an end: lux resumes it (lux.Recorded).
 		state := lux.Recorded(str("state"), str("reason"))
+		var status string
+		var wakeable, ours bool
+		var failures int
+		if err := tx.QueryRow(ctx, `SELECT status::text, wakeable, lux_stop_reason IS NULL, start_failures FROM runs WHERE id = $1`,
+			r.ID).Scan(&status, &wakeable, &ours, &failures); err != nil {
+			return err
+		}
 		// Running is a start: what its idle time counts from. A preview dude
 		// did not stop that ends has failed (a clone, its image); one it
 		// stopped is parked or finished, as dude already recorded. A
 		// wakeable one goes back to sleep instead, its error kept: lux can
-		// resume a failed Run, and the next request wakes it.
+		// resume a Run that crashed, and the next request wakes it. One
+		// that ended before it ran is a failed start (startFailed).
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			active_since = CASE WHEN $2 = 'running' THEN now() ELSE active_since END,
@@ -521,13 +538,23 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 			dude_pause = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND wakeable
 			                  THEN 'unused' ELSE dude_pause END,
 			error = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running')
-			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2) ELSE error END,
+			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2)
+			             WHEN $2 = 'running' AND start_failures > 0 THEN NULL ELSE error END,
+			start_failures = CASE WHEN $2 = 'running' THEN 0 ELSE start_failures END,
 			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND NOT wakeable
 			                THEN now() ELSE ended_at END
 			WHERE id = $1`, r.ID, state, lux.Terminal(state), str("reason")); err != nil {
 			return err
 		}
-		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "state", "luxState": state})
+		change := map[string]any{"change": "state", "luxState": state}
+		if wakeable && ours && (status == "scheduled" || status == "starting") && (state == "failed" || state == "lost") {
+			why, err := p.startFailed(ctx, tx, r, failures+1, cmp.Or(str("reason"), state))
+			if err != nil {
+				return err
+			}
+			change["error"] = why
+		}
+		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, change)
 	case f.EventType == "git.checkout":
 		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas WHERE id = $1`,
 			r.ID, str("repo"), str("base"))
