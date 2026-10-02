@@ -46,7 +46,7 @@ import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -86,6 +86,8 @@ export interface ChatVariant {
   send: (text: string) => Promise<unknown>;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
+  /** The task's earlier conductors' conversations, above this one's turns. */
+  before?: ReactNode;
 }
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
@@ -394,6 +396,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               }
               emptyMessage="Waiting for the conductor to start."
             >
+              {chat.before}
               {grouped.map((group) => Array.isArray(group)
                 ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
                 : render(group))}
@@ -702,6 +705,51 @@ function pendingReason(wait: SteerWait) {
     case "starting": return "Lands when the agent starts.";
   }
 }
+
+/**
+ * A task's conductor that ended, in its Chat above the next: its whole
+ * conversation, read once (it will say nothing more), with nothing to
+ * answer or steer. A line says where it ended; the latest conductor takes
+ * what is written next.
+ */
+export const EndedConductor = memo(function EndedConductor({ client, runId, status }: { client: ApiClient; runId: string; status: RunDetail["status"] }) {
+  const people = usePeople();
+  const [events, setEvents] = useState<PersistedEvent[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const all: PersistedEvent[] = [];
+      for (let after = 0; ;) {
+        const page = await client.events({ runId, after, limit: ENDED_PAGE });
+        all.push(...page.events);
+        if (page.events.length < ENDED_PAGE) break;
+        after = page.nextCursor;
+      }
+      if (!cancelled) setEvents(all);
+    })().catch(() => {
+      if (!cancelled) setEvents([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, runId]);
+  const turns = useMemo(() => (events ? asides(project(events, status).turns) : []), [events, status]);
+  if (!events) return null;
+  const dude = dudeName(events[0]?.taskId ?? "");
+  const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude);
+  return (
+    <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
+      {turns.map((group) => Array.isArray(group)
+        ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+        : render(group))}
+      <ChatNotice kind="parked" by={dude} at={events.at(-1)?.occurredAt ?? Date.now()} data-testid="earlier-conductor-ended"
+        text="This conductor has ended. The next one takes what you write, briefed afresh." />
+    </div>
+  );
+});
+
+/** Events per read of an ended conductor's ledger: the API's most. */
+const ENDED_PAGE = 1000;
 
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions) {
