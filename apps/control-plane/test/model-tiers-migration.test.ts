@@ -48,6 +48,10 @@ beforeAll(async () => {
   await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_tie', 'Tie', 'tie',
     ${{ reviewer: { model: "llm-openai/gpt-5.6-sol" }, investigator: { model: "llm-anthropic/claude-fable-5-1" } }}::jsonb)`;
   await db`INSERT INTO organizations (id, name, slug) VALUES ('org_none', 'None', 'none')`;
+  // Most of Thinker's roles name one model; its first role names another.
+  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_most', 'Most', 'most',
+    ${{ investigator: { model: "llm-anthropic/claude-sonnet-5-5" }, reviewer: { model: "llm-anthropic/claude-fable-5-1" },
+        simplifier: { model: "llm-anthropic/claude-fable-5-1" } }}::jsonb)`;
   await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_fake', 'Fake', 'fake',
     ${{ implementer: { model: "fake/scripted" }, reviewer: { model: "fake/scripted" } }}::jsonb)`;
   const project = (id: string, org: string, models: unknown) =>
@@ -128,6 +132,10 @@ describe("an organization there before tiers", () => {
     expect((await byName("org_tie")).Thinker!.model).toBe("claude-fable-5-1");
   });
 
+  test("the model most roles name wins over the first role's", async () => {
+    expect((await byName("org_most")).Thinker!.model).toBe("claude-fable-5-1");
+  });
+
   test("one whose roles named no model gets tiers naming none, and its roles on them", async () => {
     const t = await byName("org_none");
     expect([t.Thinker!.model, t.Coder!.model, t.Fast!.model]).toEqual([null, null, null]);
@@ -177,7 +185,8 @@ describe("an organization made after", () => {
 
 describe("the database refuses what the API would", () => {
   const insert = async (id: string, over: Record<string, unknown> = {}): Promise<string> => {
-    const t = { name: id, description: "", model: "claude-opus-5-5", ...over };
+    // The name is short and unique, so a refusal is the field under test's.
+    const t = { name: id.slice(-20), description: "", model: "claude-opus-5-5", ...over };
     try {
       await db`INSERT INTO model_tiers (id, organization_id, name, description, model) VALUES (${id}, 'org_none', ${t.name}, ${t.description}, ${t.model})`;
       return "";
@@ -191,18 +200,18 @@ describe("the database refuses what the API would", () => {
     expect(await insert("scripted", { model: "fake/hang" })).toBe("");
   });
 
-  for (const [what, over] of [
-    ["an empty name", { name: "" }],
-    ["a name over 24", { name: "x".repeat(25) }],
-    ["a description over 80", { description: "d".repeat(81) }],
-    ["a model with its provider", { model: "llm-anthropic/claude-opus-5-5" }],
-    ["a model with a space", { model: "a b" }],
-    ["an empty model", { model: "" }],
-    ["a model over 200", { model: "m".repeat(201) }],
-    ["a test model it does not have", { model: "fake/other" }],
+  for (const [what, over, constraint] of [
+    ["an empty name", { name: "" }, "name"],
+    ["a name over 24", { name: "x".repeat(25) }, "name"],
+    ["a description over 80", { description: "d".repeat(81) }, "description"],
+    ["a model with its provider", { model: "llm-anthropic/claude-opus-5-5" }, "model"],
+    ["a model with a space", { model: "a b" }, "model"],
+    ["an empty model", { model: "" }, "model"],
+    ["a model over 200", { model: "m".repeat(201) }, "model"],
+    ["a test model it does not have", { model: "fake/other" }, "model"],
   ] as const) {
     test(what, async () => {
-      expect(await insert(`bad_${what.replaceAll(" ", "_")}`, over)).toMatch(/check constraint/);
+      expect(await insert(`bad ${what}`, over)).toContain(`model_tiers_${constraint}_check`);
     });
   }
 

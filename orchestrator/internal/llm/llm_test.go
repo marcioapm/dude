@@ -16,6 +16,7 @@ func TestAModelGoesThroughAProviderByItsName(t *testing.T) {
 	for model, want := range map[string]string{
 		"claude-opus-5-5": ProviderAnthropic, "claude-haiku-4.5": ProviderAnthropic,
 		"gpt-5.6-sol": ProviderOpenAI, "gemini-3.8-pro": ProviderOpenAI, "my-claude": ProviderOpenAI, "Claude-x": ProviderOpenAI,
+		"claudette-1": ProviderOpenAI,
 	} {
 		if got := Provider(model); got != want {
 			t.Errorf("Provider(%q) = %s, want %s", model, got, want)
