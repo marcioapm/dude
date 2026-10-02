@@ -409,6 +409,37 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   where "Sent as" would be. While the conductor asks, it is the answer
   composer, as in a session.
 
+### Images in a conversation
+
+- A steer, an answer and a task's prompt take images the same way: the
+  `ChatComposer` tray. The app passes `onAttachFiles` and the composer shows
+  the paperclip first in the action row, its tooltip (`attachHint`) giving
+  the limits so nobody learns them from an error; pasting an image into the
+  field attaches it, pasting text does not. `attachDisabledReason` turns the
+  paperclip off and says why ("Image storage isn't set up").
+- **The design system never reads, scales or uploads a file.** The app does,
+  and passes each image as a `ComposerAttachment`: `uploading` with a
+  `progress` ring (a sweep when unknown), `ready` with a size badge and the
+  uploaded `attachmentId`, or `error` with a short reason on the chip
+  ("38 MB · max 10") and a longer one for the warning line.
+- Send waits while a chip uploads ("Uploading 1 of 2…" takes the lands
+  hint's place) and stays off while a chip cannot be sent; Enter during an
+  upload sends once the images are up. A message may be images alone. The
+  submission carries `attachmentIds`.
+- `AttachDropZone` makes a whole conversation the drop target, so a drop
+  is never missed. While files are over it, an overlay — an accent inset
+  ring, not a border — says how many and, in the steer's own words, who
+  gets them and when (`detail`).
+- A sent turn's images are `MessageImages` in `ChatMessage`'s `attachments`
+  slot, under its words: one shows large (up to 360px on its long side), several as a row of
+  150px tiles, name · size on hover. The turn's receipt covers them; a
+  failed one keeps them, with Retry.
+- `ImageViewer` opens over everything: ← → between the message's images,
+  Esc closes, Download, and "Original W×H" when the agent got a scaled
+  copy. Its line says what the agent got — "The agent got 1200×760 PNG ·
+  412 KB, scaled from 2400×1520 · 1.9 MB · read at 15:52:40" — leaving out
+  "scaled from" when it was not.
+
 ### Picking a stopped task back up
 
 - A task that stopped — a person aborted it, its agent died, or delivery

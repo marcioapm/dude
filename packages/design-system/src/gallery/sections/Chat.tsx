@@ -15,6 +15,7 @@ import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { TaskHistory } from "../../components/TaskHistory.tsx";
+import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
@@ -539,6 +540,8 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
+
+      <ImagesBlock mode={mode} />
 
       <Block
         id="ch-realistic"

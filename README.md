@@ -81,7 +81,10 @@ DATABASE_URL="postgres://dude:dude@localhost:5433/dude" bun run migrate
 (cd orchestrator && go build -o bin/ ./cmd/...)
 ```
 
-Photos are kept in S3 (`DUDE_S3_*`, see [`docs/operations.md`](docs/operations.md)).
+Photos, and the images people send agents, are kept in S3 (`DUDE_S3_*`, see
+[`docs/operations.md`](docs/operations.md)); the orchestrator reads the
+images from it too, so set the same variables on both processes. To try
+images with a real agent, see [`docs/demo/chat-images.md`](docs/demo/chat-images.md).
 The test suite and the demo start their own S3, a versitygw container
 (`dude-e2e-s3`, port 59200), and make a bucket per run.
 

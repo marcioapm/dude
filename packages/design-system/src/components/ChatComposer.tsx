@@ -1,8 +1,11 @@
-import { useEffect, useId, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
-import { Button } from "../primitives/Button.tsx";
+import { Button, IconButton } from "../primitives/Button.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
+import { AttachmentChip, attachmentWarning, takePastedFiles, type ComposerAttachment } from "./ImageAttachments.tsx";
 import styles from "./ChatComposer.module.css";
+import trayStyles from "./ImageAttachments.module.css";
 
 /**
  * The two ways a human intervenes, plus the initial prompt, plus `chat`:
@@ -63,17 +66,36 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    */
   readonly landsHint?: ReactNode;
   /**
+  /**
    * Chat only: who it goes to and on what terms, where `sentAs` would be —
    * "To **Conductor** · read-only".
    */
   readonly to?: ReactNode;
+  /**
+   * Images in the tray, in order: the app reads, scales and uploads them
+   * and says how each is doing. Send waits while one uploads and refuses
+   * while one cannot be sent; a message may be images alone.
+   */
+  readonly attachments?: ReadonlyArray<ComposerAttachment> | undefined;
+  /**
+   * Files picked with the paperclip or pasted into the field. Set, the
+   * paperclip shows (before `leading`) and pasting an image attaches it.
+   */
+  readonly onAttachFiles?: ((files: File[]) => void) | undefined;
+  readonly onRemoveAttachment?: ((id: string) => void) | undefined;
+  /** What the file picker offers ("image/png,image/jpeg,…"). */
+  readonly attachAccept?: string | undefined;
+  /** The paperclip's tooltip: what may be attached, and the limits. */
+  readonly attachHint?: ReactNode;
+  /** Set, the paperclip is off and says why ("Image storage isn't set up"). */
+  readonly attachDisabledReason?: string | undefined;
 }
 
 export type ComposerSubmission =
-  | { readonly mode: "answer"; readonly questionId: string; readonly text: string }
-  | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean }
-  | { readonly mode: "prompt"; readonly text: string }
-  | { readonly mode: "chat"; readonly text: string };
+  | { readonly mode: "answer"; readonly questionId: string; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
+  | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean; readonly attachmentIds: ReadonlyArray<string> }
+  | { readonly mode: "prompt"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
+  | { readonly mode: "chat"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> };
 
 const MODE_LABEL: Record<ComposerMode, string> = {
   answer: "Answer",
@@ -131,6 +153,12 @@ export function ChatComposer({
   canInterrupt,
   landsHint,
   to,
+  attachments = [],
+  onAttachFiles,
+  onRemoveAttachment,
+  attachAccept,
+  attachHint,
+  attachDisabledReason,
   className,
   ...rest
 }: ChatComposerProps) {
@@ -159,16 +187,28 @@ export function ChatComposer({
     el.style.height = `${Math.min(8 * line + pad, Math.max(line + pad, el.scrollHeight))}px`;
   }, [text]);
 
-  const canSubmit = !disabled && !busy && text.trim().length > 0;
+  const uploading = attachments.filter((a) => a.state === "uploading").length;
+  const invalid = attachments.some((a) => a.state === "error");
+  const ready = attachments.filter((a) => a.state === "ready" && a.attachmentId).map((a) => a.attachmentId!);
+  const hasContent = text.trim().length > 0 || ready.length > 0;
+  const canSubmit = !disabled && !busy && uploading === 0 && !invalid && hasContent;
+  // Enter while images upload: sent as soon as they are up.
+  const [sendWhenUploaded, setSendWhenUploaded] = useState(false);
 
   const submit = async (override?: string) => {
     const t = (override ?? text).trim();
-    if (disabled || busy || t.length === 0) return;
+    if (disabled || busy || invalid) return;
+    if (uploading > 0) {
+      if (t.length > 0 || attachments.length > 0) setSendWhenUploaded(true);
+      return;
+    }
+    if (t.length === 0 && ready.length === 0) return;
+    const attachmentIds = ready;
     const submission: ComposerSubmission =
-      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t }
-        : mode === "steer" ? { mode: "steer", text: t, interrupt }
-        : mode === "chat" ? { mode: "chat", text: t }
-        : { mode: "prompt", text: t };
+      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t, attachmentIds }
+        : mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds }
+        : mode === "chat" ? { mode: "chat", text: t, attachmentIds }
+        : { mode: "prompt", text: t, attachmentIds };
     setBusy(true);
     let sent = false;
     try {
@@ -184,11 +224,29 @@ export function ChatComposer({
     }
   };
 
+  useEffect(() => {
+    if (!sendWhenUploaded) return;
+    if (invalid || disabled) setSendWhenUploaded(false);
+    else if (uploading === 0) {
+      setSendWhenUploaded(false);
+      void submit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendWhenUploaded, uploading, invalid, disabled]);
+
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return; // Shift+Enter is a new line
     e.preventDefault();
     void submit();
   };
+
+  const attachOff = disabled === true || attachDisabledReason !== undefined;
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onAttachFiles || attachOff) return;
+    // Pasted files are attached; pasted text still goes into the field.
+    takePastedFiles(e, onAttachFiles);
+  };
+  const picker = useRef<HTMLInputElement>(null);
 
   const isDisabled = disabled === true;
   const answerOptions = mode === "answer" && question?.options ? question.options : [];
@@ -211,7 +269,14 @@ export function ChatComposer({
         </div>
       ) : null}
 
-      <div className={styles["field"]}>
+      <div className={cx(styles["field"], attachments.length > 0 && styles["withTray"])}>
+        {attachments.length > 0 ? (
+          <div className={trayStyles["tray"]} role="list" aria-label="Images to send">
+            {attachments.map((a) => (
+              <div role="listitem" key={a.id}><AttachmentChip attachment={a} onRemove={disabled ? undefined : onRemoveAttachment} /></div>
+            ))}
+          </div>
+        ) : null}
         <label htmlFor={id} className="ds-sr-only">
           {MODE_LABEL[mode]}
         </label>
@@ -226,11 +291,36 @@ export function ChatComposer({
           autoFocus={autoFocus}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
+          onPaste={onPaste}
           aria-describedby={`${id}-hint`}
         />
       </div>
 
+      {invalid ? (
+        <div className={trayStyles["warning"]} role="status" data-testid="attachment-warning">
+          <Icon name="warning" size={14} />
+          <span>{attachmentWarning(attachments)}</span>
+        </div>
+      ) : null}
+
       <div className={styles["actions"]}>
+        {onAttachFiles ? (
+          <>
+            <Tooltip content={attachDisabledReason ?? attachHint ?? "Attach images"} keepOnPress={attachOff}>
+              <span className={styles["attach"]}>
+                <IconButton icon="paperclip" label={attachDisabledReason ?? "Attach images (or paste, or drop)"} size="sm"
+                  disabled={attachOff} aria-disabled={attachOff} data-testid="attach-button"
+                  onClick={() => picker.current?.click()} />
+              </span>
+            </Tooltip>
+            <input ref={picker} type="file" multiple hidden accept={attachAccept} data-testid="attach-input"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                if (files.length > 0) onAttachFiles(files);
+              }} />
+          </>
+        ) : null}
         {leading}
         {answerOptions.length > 0 ? (
           <div className={styles["options"]} role="group" aria-label="Answer with one of">
@@ -258,7 +348,11 @@ export function ChatComposer({
         <span id={`${id}-hint`} className={cx(styles["hint"], answerOptions.length > 0 && "ds-sr-only")}>
           {isDisabled ? null : (
             <>
-              {mode === "steer" && landsHint && !interrupt ? <span className={styles["lands"]} data-testid="lands-hint">{landsHint}</span> : null}
+              {uploading > 0 ? (
+                <span className={styles["lands"]} data-testid="upload-hint">
+                  Uploading {uploading} of {attachments.length}…
+                </span>
+              ) : mode === "steer" && landsHint && !interrupt ? <span className={styles["lands"]} data-testid="lands-hint">{landsHint}</span> : null}
               <span className={cx(styles["hint"], Boolean(landsHint) && mode === "steer" && !interrupt && styles["keys"])}>
                 <kbd className={styles["kbd"]}>Enter</kbd> {mode === "answer" ? "answer" : "send"} <kbd className={styles["kbd"]}>⇧ Enter</kbd> new line
               </span>

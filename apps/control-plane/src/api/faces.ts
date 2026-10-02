@@ -9,52 +9,17 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { badRequest, notFound } from "./http.ts";
+import { ATTACHMENT_TYPES, type AttachmentType } from "@dude/domain";
+import { badRequest, notFound, readCapped } from "./http.ts";
+import { EXTENSION, sniff } from "../images.ts";
 import { deleteObject, getObject, putObject } from "../storage.ts";
 
 /** Browsers resize before uploading, so this is a guard, not a quality setting. */
 export const PHOTO_MAX_BYTES = 512 * 1024;
 
-/** Each image type: the key's extension, and whether bytes are one. */
-const TYPES: Record<string, { ext: string; is: (b: Uint8Array) => boolean }> = {
-  "image/png": { ext: "png", is: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
-  "image/jpeg": { ext: "jpg", is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  "image/gif": { ext: "gif", is: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
-  "image/webp": { ext: "webp", is: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 },
-};
-const TYPE_OF_EXT = new Map(Object.entries(TYPES).map(([type, { ext }]) => [ext, type]));
+const TYPE_OF_EXT = new Map(ATTACHMENT_TYPES.map((type) => [EXTENSION[type], type]));
 
 const tooBig = () => badRequest(`an image is at most ${PHOTO_MAX_BYTES / 1024} KB`);
-
-/**
- * The body, read no further than the cap: a client that sends no length,
- * or a false one, is cut off at PHOTO_MAX_BYTES rather than held whole.
- */
-async function readCapped(request: Request): Promise<Uint8Array> {
-  const declared = request.headers.get("content-length");
-  if (declared !== null && !(Number(declared) <= PHOTO_MAX_BYTES)) throw tooBig();
-  if (!request.body) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = request.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > PHOTO_MAX_BYTES) {
-      await reader.cancel();
-      throw tooBig();
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks) {
-    bytes.set(c, at);
-    at += c.length;
-  }
-  return bytes;
-}
 
 /**
  * Store an uploaded image under `prefix` (built from ids the caller has
@@ -69,15 +34,14 @@ export async function replaceImage<T>(
   prefix: string,
   record: (image: { key: string; token: string }) => Promise<{ result: T; old: string | null | undefined }>,
 ): Promise<T> {
-  const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-  const known = TYPES[type];
-  if (!known) throw badRequest("an image is image/png, image/jpeg, image/webp or image/gif");
-  const bytes = await readCapped(request);
+  const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() as AttachmentType;
+  if (!ATTACHMENT_TYPES.includes(type)) throw badRequest("an image is image/png, image/jpeg, image/webp or image/gif");
+  const bytes = await readCapped(request, PHOTO_MAX_BYTES, tooBig);
   if (bytes.length === 0) throw badRequest("no image in the request");
-  if (!known.is(bytes)) throw badRequest(`the body is not ${type}`);
+  if (sniff(bytes) !== type) throw badRequest(`the body is not ${type}`);
   const token = randomBytes(12).toString("base64url");
   // The type rides in the key, so serving it is one read.
-  const key = `${prefix}/${token}.${known.ext}`;
+  const key = `${prefix}/${token}.${EXTENSION[type]}`;
   await putObject(key, bytes, type);
   let recorded: { result: T; old: string | null | undefined };
   try {

@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # local directory, started on first use and left running like the dev
 # Postgres; each run makes and removes its own bucket.
 S3_IMAGE = os.environ.get("DUDE_TEST_S3_IMAGE", "versity/versitygw:v1.7.0")
-S3_CONTAINER = "dude-e2e-s3"
+S3_CONTAINER = os.environ.get("DUDE_TEST_S3_CONTAINER", "dude-e2e-s3")
 S3_PORT = int(os.environ.get("DUDE_TEST_S3_PORT", "59200"))
 S3_ACCESS_KEY = "dudes3"
 S3_SECRET_KEY = "dudes3-secret"
@@ -268,6 +268,8 @@ class TestEnvironment:
                 # A working agent's diff is read every few seconds besides
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",
+                # The images people send agents: it reads what the backend stored.
+                **self.s3_env,
                 **self._tools_env(),
                 **self.orchestrator_env,
             },
