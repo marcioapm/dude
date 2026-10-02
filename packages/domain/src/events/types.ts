@@ -84,6 +84,15 @@ export const EventTypes = {
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
   /**
+   * dude parked a Run itself: it waits on a person, went quiet, or its
+   * preview is unused. Payload: `{ reason, message, taskStatus?, parkedAt? }`:
+   * `parkedAt` is when the park began, as the database stored it in the
+   * park's own transaction — the boundary an answer or decision ending it
+   * is compared with, on the same clock. Absent from older parks and from
+   * a preview's.
+   */
+  RunParked: "run.parked",
+  /**
    * A person asked for a paused Run to be resumed. Payload: `{ reason,
    * requestedAt }`: `requestedAt` is when they asked, as the database
    * stored it — what the resume's `run.resume.timed` counts from.

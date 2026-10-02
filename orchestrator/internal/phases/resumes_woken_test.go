@@ -120,3 +120,52 @@ func TestAPersonsResumeOfAParkWakesFromTheirResume(t *testing.T) {
 		t.Errorf("%s at %v, want person at %v", cause, got, base.Add(7*time.Second))
 	}
 }
+
+// The orchestrator's clock is 100ms ahead of the database's. dude parks
+// the Run while it waits on a question, and a person answers it 30ms
+// later: the answer is after the park began, though its database stamp
+// is before the park event's own time. It wakes the resume.
+func TestAnAnswerJustAfterTheParkWakesItWhateverTheOrchestratorsClock(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`DELETE FROM questions WHERE run_id = $1`, w.run.ID)
+	w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status)
+		VALUES ('q_'||$1, $1, $2, $3, 'Sorted?', 'open')`, w.run.Org, w.run.TaskID, w.run.ID)
+	w.exec(`UPDATE runs SET status = 'running', lux_state = 'running', dude_pause = NULL, lux_stop_reason = NULL,
+		waiting_since = now() - interval '1 hour' WHERE id = $1`, w.run.ID)
+	w.s.Now = func() time.Time {
+		var db time.Time
+		if err := w.owner.QueryRow(w.ctx, `SELECT clock_timestamp()`).Scan(&db); err != nil {
+			w.t.Fatal(err)
+		}
+		return db.Add(100 * time.Millisecond)
+	}
+	r := w.run
+	r.Status, r.LuxState, r.DudePause = statusRunning, "running", ""
+	if err := w.s.requestPause(w.ctx, r, "person", "parked while it waits for a person"); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`); n != 1 {
+		t.Fatalf("%d run.parked", n)
+	}
+	time.Sleep(30 * time.Millisecond)
+	var answered time.Time
+	if err := w.owner.QueryRow(w.ctx, `UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now()
+		WHERE run_id = $1 RETURNING answered_at`, w.run.ID).Scan(&answered); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE runs SET status = 'paused', dude_pause = 'person', control = 'none' WHERE id = $1`, w.run.ID)
+	if cause, got := w.wokenAt(w.run); cause != causeAnswer || !got.Equal(answered) {
+		t.Errorf("%s at %v, want the answer at %v", cause, got, answered)
+	}
+}
+
+// An older park, recorded before run.parked carried parkedAt, is bounded
+// by the event's own time.
+func TestAParkWithoutParkedAtIsBoundedByItsEventsTime(t *testing.T) {
+	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	w := wokenWorld(t, base)
+	w.question("q_before_"+w.run.Org, base.Add(-time.Second))
+	if _, got := w.wokenAt(w.run); !got.IsZero() {
+		t.Errorf("woken at %v by an answer before the park; want unknown", got)
+	}
+}
