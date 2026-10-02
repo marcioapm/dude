@@ -405,6 +405,7 @@ type Server struct {
 	// Hooks a test holds the fake at (BeforeEvent, BeforeStart).
 	beforeEvent func(runID string, eventID int64, typ string)
 	beforeStart func(runID string)
+	cutStream   func(runID string, eventID int64, typ string) StreamCut
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -550,6 +551,29 @@ func (s *Server) BeforeStart(fn func(runID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.beforeStart = fn
+}
+
+// StreamCut is what CutStreams does to a Run's output stream at an event.
+type StreamCut int
+
+const (
+	// StreamGoesOn sends the event.
+	StreamGoesOn StreamCut = iota
+	// StreamDrops closes the stream before the event, without an end: a
+	// connection lost mid-stream.
+	StreamDrops
+	// StreamEnds sends end before the event, as lux does after one page
+	// (1000 events) of a finished Run's backlog.
+	StreamEnds
+)
+
+// CutStreams has every Run's output stream ask fn before it sends each
+// lifecycle event (before BeforeEvent), without the fake's lock. nil clears
+// it.
+func (s *Server) CutStreams(fn func(runID string, eventID int64, typ string) StreamCut) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cutStream = fn
 }
 
 // EventState is the state a Run's state event reported; "" for another.
@@ -1694,6 +1718,18 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 			e := run.events[i]
 			if e.ID <= afterEvent {
 				continue
+			}
+			if cut := s.cutStream; cut != nil {
+				s.mu.Unlock()
+				how := cut(run.ID, e.ID, e.Type)
+				s.mu.Lock()
+				switch how {
+				case StreamDrops:
+					return
+				case StreamEnds:
+					send("end", map[string]any{"cursor": "", "state": run.State, "afterEvent": afterEvent})
+					return
+				}
 			}
 			afterEvent = e.ID
 			if hook := s.beforeEvent; hook != nil {
