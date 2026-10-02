@@ -15,7 +15,7 @@ import (
 // How long each resume of a Run took, as a person feels it: from when it
 // became due (a person's Resume, an answer, an approval) to the agent's
 // first output. One run_resumes row per lux resume, keyed by the new
-// placement's epoch (migration 066), filled from what dude already handles:
+// placement's epoch (migration 067), filled from what dude already handles:
 //
 //   - whilePaused: the row, its cause and woken_at, requested_at, and the
 //     placement it was stopped from, from the Get the resume makes anyway;
