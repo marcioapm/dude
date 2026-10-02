@@ -518,49 +518,56 @@ describe("removing a tier while a project's role is set to it", () => {
   }, 15_000);
 
   /**
-   * Three new tiers, ids a < b < c, written to the table in the opposite
-   * order: locked in id order they are taken a, b, c; in table order (no
-   * ORDER BY) c, b, a. The test checks the table order it relies on.
+   * Three new tiers, ids a < b < c, written to the table and named in the
+   * opposite order: locked in id order they are taken a, b, c; by a
+   * statement with no ORDER BY, read through the table or the name index,
+   * c, b, a. The test checks the table order it relies on.
    */
   async function threeTiers(tag: string): Promise<[string, string, string]> {
     const ids = ["a", "b", "c"].map((x) => `mtr_racing_${tag}_${x}`);
-    for (const id of [...ids].reverse()) {
+    for (const [i, id] of [...ids].reverse().entries()) {
       await owner`INSERT INTO model_tiers (id, organization_id, name, position)
-        VALUES (${id}, ${ORG}, ${`Racing ${tag} ${id.slice(-1)}`}, (SELECT max(position) + 1 FROM model_tiers WHERE organization_id = ${ORG}))`;
+        VALUES (${id}, ${ORG}, ${`Racing ${tag} ${i}`}, (SELECT max(position) + 1 FROM model_tiers WHERE organization_id = ${ORG}))`;
     }
     const inTable = (await owner`SELECT id FROM model_tiers WHERE id IN ${owner(ids)} ORDER BY ctid`).map((r: Json) => r.id);
     expect(inTable).toEqual([...ids].reverse());
     return ids as [string, string, string];
   }
 
-  // Each reorder test holds tier b, and the other request locks c, then a.
-  // In id order (a, b, c) for every statement, the reorder takes a and
-  // queues on b, and the other request queues on a. If the reorder locks in
-  // table order (c, b, a) it holds c, or if the other request locks c before
-  // a, it holds c; either way once b is free each waits on the other: 40P01.
-  test("a removal while the tiers are reordered: both complete", async () => {
-    const [a, b, c] = await threeTiers("d");
-    const order = (await tiers()).map((t) => t.id).reverse();
-    const [reorder, removal] = await interleaved(
-      () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
-      () => call(adminKey, "DELETE", `/v1/models/tiers/${c}`, { replacement: a }),
-      holdTier(b),
-    );
-    expect([reorder.status, removal.status]).toEqual([200, 200]);
-    expect((await tiers()).map((t) => t.id)).toEqual(order.filter((id) => id !== c));
-  }, 15_000);
+  // Each test holds tier b while a reorder and a request locking a and c
+  // (named in the order given) run. In id order for every statement, the
+  // reorder takes a and queues on b, and the other request queues on a.
+  // A reorder locking c first, or a request locking c before a, holds c
+  // while the other holds a: once b is free, each waits on the other.
+  // "a, c" pins the reorder's order; "c, a" the other request's.
+  for (const [first, second] of [["a", "c"], ["c", "a"]] as const) {
+    test(`a removal while the tiers are reordered, the removed and its replacement ${first}, ${second}: both complete`, async () => {
+      const [a, b, c] = await threeTiers(`d${first}`);
+      const pick = { a, c };
+      const order = (await tiers()).map((t) => t.id).reverse();
+      const [reorder, removal] = await interleaved(
+        () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
+        () => call(adminKey, "DELETE", `/v1/models/tiers/${pick[first]}`, { replacement: pick[second] }),
+        holdTier(b),
+      );
+      expect([reorder.status, removal.status]).toEqual([200, 200]);
+      expect((await tiers()).map((t) => t.id)).toEqual(order.filter((id) => id !== pick[first]));
+    }, 15_000);
 
-  test("a patch naming two tiers while the tiers are reordered: both complete", async () => {
-    const [a, b, c] = await threeTiers("e");
-    await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
-    const order = (await tiers()).map((t) => t.id).reverse();
-    const [reorder, patch] = await interleaved(
-      () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
-      () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: c }, implementer: { tier: a } } }),
-      holdTier(b),
-    );
-    expect([reorder.status, patch.status]).toEqual([200, 200]);
-    expect(await projectModels()).toEqual({ reviewer: { tier: c }, implementer: { tier: a } });
-    expect((await tiers()).map((t) => t.id)).toEqual(order);
-  }, 15_000);
+    test(`a patch naming tiers ${first}, ${second} while the tiers are reordered: both complete`, async () => {
+      const [a, b, c] = await threeTiers(`e${first}`);
+      const pick = { a, c };
+      await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+      const order = (await tiers()).map((t) => t.id).reverse();
+      const roles = { implementer: { tier: pick[first] }, reviewer: { tier: pick[second] } };
+      const [reorder, patch] = await interleaved(
+        () => call(adminKey, "PUT", "/v1/models/tiers/order", { ids: order }),
+        () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles }),
+        holdTier(b),
+      );
+      expect([reorder.status, patch.status]).toEqual([200, 200]);
+      expect(await projectModels()).toEqual(roles);
+      expect((await tiers()).map((t) => t.id)).toEqual(order);
+    }, 15_000);
+  }
 });
