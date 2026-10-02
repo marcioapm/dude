@@ -580,7 +580,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   rendered — a task's goal, its acceptance criteria. A note, a command or
   a reason stays a `Textarea`. It has Textarea's anatomy (label, hint,
   error, `aria-describedby`, `maxLength`, the caller's `data-testid` on the
-  textarea), except that the hint sits beside the label, not under the
+  textarea) and `Input`'s `labelNote` ("required"), except that the hint sits beside the label, not under the
   field — the frame's footer is under it; the error stays under the frame.
   Empty, Preview says "Nothing to preview yet." In Preview the formatting
   buttons hide (and leave no band when they had wrapped). The field is a
