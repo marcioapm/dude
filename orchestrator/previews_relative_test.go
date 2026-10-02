@@ -42,9 +42,12 @@ func TestFakeLuxRelativePreviewHostname(t *testing.T) {
 	} else if le, ok := lux.AsError(err); !ok || le.Status != 409 || le.Code != "hostname_taken" {
 		t.Fatalf("conflict = %v", err)
 	}
-	dotted, err := client.CreateServer(ctx, lux.CreateServer{Name: "api", Port: 3001, Hostname: "api.task", Wake: "request"})
-	if err != nil || dotted.Hostname == nil || *dotted.Hostname != "api.task."+previewDomain {
-		t.Fatalf("dotted relative server = %+v, %v", dotted, err)
+	// lux takes one relative label only: a dotted name must already be under the domain.
+	for _, dotted := range []string{"api.task", "api."} {
+		_, err := client.CreateServer(ctx, lux.CreateServer{Name: "api", Port: 3001, Hostname: dotted, Wake: "request"})
+		if le, ok := lux.AsError(err); !ok || le.Status != 422 || le.Code != "invalid_server" {
+			t.Fatalf("dotted relative %q = %v", dotted, err)
+		}
 	}
 	if fake.RequestServer(sv.ID, "/relative") {
 		t.Fatal("an asleep server served a request")
