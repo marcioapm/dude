@@ -10,7 +10,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// sizeRow is one of an organisation's machine sizes, as migration 068
+// sizeRow is one of an organisation's machine sizes, as migration 069
 // leaves it.
 type sizeRow struct {
 	ID, Name        string
@@ -50,13 +50,13 @@ func conductorSize(t *testing.T, owner *pgx.Conn, org string) string {
 	return *id
 }
 
-// Migration 068 renames the orchestrator role to conductor in what is
+// Migration 069 renames the orchestrator role to conductor in what is
 // stored — the enum's rows, the role keys of settings, the ledger's role —
 // and gives every organisation the Small size as the conductor's, reusing
 // one already named Small, while Standard stays the default.
 func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	ctx := context.Background()
-	owner, apply := dbtest.Upgrade(t, "068")
+	owner, apply := dbtest.Upgrade(t, "069")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug, default_agent_models) VALUES
 		('org_plain', 'Plain', 'plain', '{"orchestrator":{"model":"llm-openai/o","effort":"high"},"reviewer":{"model":"llm-openai/r"}}'),
 		('org_small', 'HasSmall', 'has-small', '{}'),
