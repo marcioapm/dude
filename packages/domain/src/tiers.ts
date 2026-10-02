@@ -133,6 +133,18 @@ export interface ProxyModels {
 // Resolving and moving
 // ---------------------------------------------------------------------------
 
+/** A role's settings layers, the project's (if any) over the organization's. */
+type RoleLayers = { project?: AgentModels | null | undefined; organization: AgentModels | null | undefined };
+
+/** The roles whose settings a role takes, in order: the fixer falls back to the implementer's. */
+function roleChain(role: string): string[] {
+  return role === "fixer" ? ["fixer", "implementer"] : [role];
+}
+
+function roleField(layer: AgentModels | null | undefined, role: string, field: "tier" | "effort"): string | undefined {
+  return (layer as Record<string, Partial<Record<"tier" | "effort", string>>> | null | undefined)?.[role]?.[field];
+}
+
 /**
  * The tier a role runs on: the first layer that names one — the
  * project's, then the organization's; for the fixer, then the
@@ -142,14 +154,13 @@ export interface ProxyModels {
  */
 export function resolveTier(
   role: string,
-  layers: { project?: AgentModels | null | undefined; organization: AgentModels | null | undefined },
+  layers: RoleLayers,
   tiers: ReadonlyArray<Pick<ModelTier, "id">>,
 ): { tierId: string | null; from: "project" | "organization" | "implementer" | null } {
-  const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
   const ordered = [["project", layers.project], ["organization", layers.organization]] as const;
-  for (const r of chain) {
+  for (const r of roleChain(role)) {
     for (const [name, layer] of ordered) {
-      const id = (layer as Record<string, { tier?: string }> | null | undefined)?.[r]?.tier;
+      const id = roleField(layer, r, "tier");
       if (!id) continue;
       return { tierId: tiers.some((t) => t.id === id) ? id : null, from: r === role ? name : "implementer" };
     }
@@ -161,14 +172,10 @@ export function resolveTier(
  * A role's reasoning effort over the same layers, field by field (the
  * fixer then the implementer's), as the orchestrator's ResolveRole has it.
  */
-export function resolveEffort(
-  role: string,
-  layers: { project?: AgentModels | null | undefined; organization: AgentModels | null | undefined },
-): string | null {
-  const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
-  for (const r of chain) {
+export function resolveEffort(role: string, layers: RoleLayers): string | null {
+  for (const r of roleChain(role)) {
     for (const layer of [layers.project, layers.organization]) {
-      const effort = (layer as Record<string, { effort?: string }> | null | undefined)?.[r]?.effort;
+      const effort = roleField(layer, r, "effort");
       if (effort) return effort;
     }
   }
