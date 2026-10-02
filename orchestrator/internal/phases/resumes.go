@@ -87,15 +87,22 @@ func placementsAround(ps []lux.Placement, epoch int) (cur, prev lux.Placement) {
 }
 
 // woken (SQL, over runs r and the cause $3): when the resume became due.
-// A person's Resume is control_requested_at. An answer is the latest
-// answer or decision on the Run: whichever closed the last open ask. An
-// approved repository is its approval.
+// A person's Resume is control_requested_at. An approved repository is
+// the latest approval not yet brought (status still approved): a denial
+// brings nothing. An answer is the last of the asks that held the park
+// (delivery.OpenAsk: a question, or a blocking repository request) to be
+// answered or decided since the park began (its run.parked); an ask that
+// held nothing, or closed before this park, made nothing due.
 const woken = `CASE $3
 	WHEN 'person' THEN r.control_requested_at
 	WHEN 'idle' THEN r.control_requested_at
 	WHEN 'repository' THEN (SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'approved')
-	ELSE GREATEST((SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id),
-		(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id)) END`
+	ELSE (SELECT GREATEST(
+			(SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id AND q.answered_at >= park.at),
+			(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.blocking
+				AND q.decided_at >= park.at))
+		FROM (SELECT COALESCE(max(e.occurred_at), '-infinity') AS at FROM events e
+			WHERE e.run_id = r.id AND e.event_type = 'run.parked') park) END`
 
 // resumeAsked inserts the row for a resume dude is about to ask lux for,
 // in a transaction of its own, before lux is asked: lux may stream the
