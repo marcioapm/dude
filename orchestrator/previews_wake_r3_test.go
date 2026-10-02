@@ -346,9 +346,10 @@ func (w *world) failedStartUnapplied() (runID string, r *fakelux.Run) {
 // state event of this state answered as how says; every later page is
 // whole. pageShort carries only the events before it: none if it is the
 // page's first, lux having recorded it after the page's query. pageFails
-// fails the request (503).
-func (w *world) pageEventsAt(state string, how pageCut) {
+// fails the request (503). cut is closed once that page is answered.
+func (w *world) pageEventsAt(state string, how pageCut) (cut <-chan struct{}) {
 	var once sync.Once
+	done := make(chan struct{})
 	w.lux.PageEvents(func(id string, _ int64, ids []int64) int {
 		for i, eventID := range ids {
 			if w.lux.EventState(id, eventID) != state {
@@ -359,11 +360,13 @@ func (w *world) pageEventsAt(state string, how pageCut) {
 				if n = i; how == pageFails {
 					n = -1
 				}
+				close(done)
 			})
 			return n
 		}
 		return len(ids)
 	})
+	return done
 }
 
 type pageCut int
@@ -381,9 +384,12 @@ func TestADrainEndedShortOfTheFailureDrainsAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, r := w.failedStartUnapplied()
-	w.pageEventsAt("failed", pageShort)
+	cut := w.pageEventsAt("failed", pageShort)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if !isClosed(cut) {
+		t.Fatal("the drain read no page short of the failure")
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1 AND lux_state = 'failed' AND lux_run_id = $2`,
 		runID, r.ID); n != 1 || len(w.luxRuns()) != 1 {
@@ -398,9 +404,12 @@ func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, r := w.failedStartUnapplied()
-	w.pageEventsAt("failed", pageFails)
+	cut := w.pageEventsAt("failed", pageFails)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if !isClosed(cut) {
+		t.Fatal("the drain asked for no page at the failure")
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 0 AND wake_wanted_at IS NOT NULL
 		AND wake_claimed_at IS NULL AND lux_run_id = $2`, runID, r.ID); n != 1 || len(w.luxRuns()) != 1 {
@@ -420,11 +429,13 @@ func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 // eventsDown is lux with its events endpoint unavailable while down is set.
 type eventsDown struct {
 	lux.Client
-	down atomic.Bool
+	down    atomic.Bool
+	refused atomic.Int32
 }
 
 func (e *eventsDown) Events(ctx context.Context, runID string, after int64) ([]lux.Frame, error) {
 	if e.down.Load() {
+		e.refused.Add(1)
 		return nil, &lux.Error{Status: 503, Code: "unavailable", Message: "events unavailable"}
 	}
 	return e.Client.Events(ctx, runID, after)
@@ -476,9 +487,11 @@ func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
 		var once sync.Once
 		release := func() { once.Do(func() { close(open) }) }
 		t.Cleanup(release)
+		var held atomic.Bool
 		w.lux.PageEvents(func(id string, _ int64, ids []int64) int {
 			for _, eventID := range ids {
 				if w.lux.EventState(id, eventID) == "failed" {
+					held.Store(true)
 					<-open
 				}
 			}
@@ -489,6 +502,9 @@ func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
 		}
 		w.lux.PageEvents(nil)
 		release()
+		if !held.Load() {
+			t.Fatal("the drain asked for no page at the failure")
+		}
 		recovers(t, w, runID, r)
 	})
 	t.Run("events unavailable", func(t *testing.T) {
@@ -500,6 +516,9 @@ func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
 		w.previews.Lux = down
 		if _, err := w.previews.Sweep(context.Background()); err != nil {
 			t.Fatal(err)
+		}
+		if down.refused.Load() == 0 {
+			t.Fatal("the drain asked lux for no events")
 		}
 		down.down.Store(false)
 		recovers(t, w, runID, r)

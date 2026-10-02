@@ -205,9 +205,12 @@ func TestARepeatedStateAtAPageEndIsNotTheRunsHistory(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	runID, web, r := w.crashedThenFailedResumes(1)
-	w.pageEventsAt("resuming", pageShort)
+	cut := w.pageEventsAt("resuming", pageShort)
 	if _, err := w.previews.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if !isClosed(cut) {
+		t.Fatal("the drain read no page ending before the later resume")
 	}
 	if r.Resumed != 1 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1`, runID) != 1 {
 		t.Fatalf("decided before the later failed start was counted: resumed %d, calls %v\n%s",
