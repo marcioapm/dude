@@ -67,7 +67,7 @@ import { roleLabel } from "../machines.ts";
  * The organisation's tiers, loaded once per client by the settings screen
  * and passed to the Models page and every role's tier field; `setTiers`
  * takes what a change on the Models page answered. A failed load leaves no
- * tiers; `problem` is for the Models page.
+ * tiers, and `problem` says why, on the Models page and each Model field.
  */
 export function useModelTiers(client: ApiClient) {
   const [tiers, setTiers] = useState<ModelTiersResponse | null>(null);

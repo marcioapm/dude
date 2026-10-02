@@ -693,7 +693,8 @@ def test_a_project_overrides_a_roles_tier_and_resets_it(
     # Inherited: the organisation's Thinker, named as such.
     expect(tier).to_have_text(re.compile(rf"^From {re.escape(org_name)} · Thinker"))
     tier.click()
-    expect(page.get_by_role("listbox")).to_contain_text(f"Tiers are {org_name}’s — ask an admin to change one")
+    # The tiers are the organisation's: its admin is offered its Models page.
+    expect(page.get_by_role("listbox").get_by_role("button", name="Manage tiers in Models")).to_be_visible()
     page.get_by_role("option").filter(has_text=re.compile(r"^Fast")).click()
     expect(toast(page, "Model saved")).to_be_visible()
     was_thinker = re.compile(rf"^Overridden\s*{re.escape(org_name)}: Thinker\s*Reset$")

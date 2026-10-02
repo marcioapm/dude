@@ -295,7 +295,7 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
 }
 
 /** Every machine size and model tier a patch names must be the organization's. */
-async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
+async function checkSizesAndTiers(scope: OrgScope, patch: SettingsPatch) {
   for (const change of Object.values(patch.roles ?? {})) {
     if (change?.machineSize) await requireSize(scope, change.machineSize);
   }
@@ -322,7 +322,7 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
     // Sizes and tiers before the organization row: the order their removal locks them in.
-    await checkSizes(scope, patch);
+    await checkSizesAndTiers(scope, patch);
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
@@ -345,7 +345,7 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
     // Sizes and tiers before the organization and project rows: the order their removal locks them in.
-    await checkSizes(scope, patch);
+    await checkSizesAndTiers(scope, patch);
     const layers = await loadLayers(scope, projectId, true);
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);

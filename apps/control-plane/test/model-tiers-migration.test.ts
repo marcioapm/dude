@@ -264,6 +264,17 @@ describe("the database refuses what the API would", () => {
     expect(await tiers("org_seedless")).toEqual([]);
     expect(await orgModels("org_seedless")).toEqual({});
   });
+
+  test("the app reads and dismisses the upgrade's notes, but cannot add or delete one", async () => {
+    const count = async () => (await db`SELECT count(*)::int AS n FROM model_tier_upgrade_notes WHERE organization_id = 'org_acme'`)[0].n as number;
+    const n = await count();
+    expect(await asApp("org_acme", (tx) => tx`INSERT INTO model_tier_upgrade_notes (organization_id, role, old_model, tier_name)
+      VALUES ('org_acme', 'reviewer', 'x', 'Thinker')`)).toContain("permission denied for table model_tier_upgrade_notes");
+    expect(await asApp("org_acme", (tx) => tx`DELETE FROM model_tier_upgrade_notes`))
+      .toContain("permission denied for table model_tier_upgrade_notes");
+    expect(await count()).toBe(n);
+    expect(await asApp("org_acme", (tx) => tx`SELECT 1 FROM model_tier_upgrade_notes`)).toBe("");
+  });
   const insert = async (id: string, over: Record<string, unknown> = {}): Promise<string> => {
     // The name is short and unique, so a refusal is the field under test's.
     const t = { name: id.slice(-20), description: "", model: "claude-opus-5-5", ...over };

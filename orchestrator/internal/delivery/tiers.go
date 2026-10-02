@@ -10,6 +10,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
 // Tier is a tier as a Run is built from it: its name, and the model it
@@ -29,7 +31,7 @@ func TierFor(ctx context.Context, tx pgx.Tx, role string, settings RoleSettings)
 	t := Tier{ID: settings.Tier}
 	var model *string
 	err := tx.QueryRow(ctx, `SELECT name, model FROM model_tiers WHERE id = $1`, settings.Tier).Scan(&t.Name, &model)
-	if err == pgx.ErrNoRows {
+	if db.IsNotFound(err) {
 		return Tier{}, fmt.Sprintf("The %s's model tier no longer exists. An admin picks another in Agents.", who), nil
 	}
 	if err != nil {

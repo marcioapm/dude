@@ -321,6 +321,7 @@ async function createSession(ctx: RequestContext): Promise<Response> {
     const run = runs[0];
     if (!run) return { missing: true as const };
 
+    // Read for its harness only: the model comes from the tier below.
     const resolved = resolveAgentModel(
       input.role,
       { agentModels: run.agentModels ?? {} },

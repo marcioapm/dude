@@ -103,7 +103,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
   // The organisation's sizes, once for the screen: each Machine field's choices.
   const sizes = useMachineSizes(client).sizes?.sizes ?? null;
   // And its tiers: each role's Model field's choices.
-  const tiers = useModelTiers(client).tiers?.tiers ?? null;
+  const models = useModelTiers(client);
+  const tiers = models.tiers?.tiers ?? null;
 
   return (
     <SettingsFrame
@@ -163,7 +164,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} tiers={tiers} />
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} tiers={tiers}
+              tiersProblem={models.problem} onManageTiers={admin ? () => onOrganization("models") : undefined} />
           ) : isMemoryPage(page) ? (
             <MemoryPages client={client} page={page} projects={projects} admin={admin} index={index} onPage={onPage}
               scope={{ kind: "project", id: project.id, name: project.name, organization: orgName }} />

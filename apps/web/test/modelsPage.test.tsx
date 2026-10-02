@@ -158,27 +158,56 @@ describe("the Models page", () => {
 });
 
 describe("a role's tier", () => {
-  test("on a project: the organisation's tier first, every tier after, and the tiers are the organisation's", async () => {
+  async function projectRole(admin: boolean, client = new FixtureClient("a"), onOrganization: (page: string) => void = () => {}) {
     const { container, unmount } = await mount(
       <TooltipProvider>
         <ToastProvider>
-          <ProjectSettingsScreen client={new FixtureClient("a")} projectId={PROJECT.id} projects={[]} admin page="reviewer"
-            onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={() => {}} />
+          <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin={admin} page="reviewer"
+            onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={onOrganization} />
         </ToastProvider>
       </TooltipProvider>,
     );
     mounted.push(unmount);
-    const field = await until(() => container.querySelector<HTMLButtonElement>("[data-testid=role-tier]"), "the Model select");
-    expect(field.getAttribute("aria-label")).toBe("Model");
-    expect(field.textContent).toBe("From Example · Thinker");
-    await press(field);
-    const options = await until(() => {
+    return container;
+  }
+  const openOptions = async (container: HTMLElement) => {
+    await press(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=role-tier]"), "the Model select"));
+    return until(() => {
       const o = [...document.querySelectorAll<HTMLElement>("[role=option]")];
       return o.length ? o : null;
     }, "the options");
+  };
+
+  test("on a project: the organisation's tier first, every tier after; an admin is offered Models", async () => {
+    const pages: string[] = [];
+    const container = await projectRole(true, new FixtureClient("a"), (p) => pages.push(p));
+    const field = await until(() => container.querySelector<HTMLButtonElement>("[data-testid=role-tier]"), "the Model select");
+    expect(field.getAttribute("aria-label")).toBe("Model");
+    expect(field.textContent).toBe("From Example · Thinker");
+    const options = await openOptions(container);
     expect(options.map((o) => o.getAttribute("data-value"))).toEqual(["__inherit__", "mtr_thinker", "mtr_coder", "mtr_fast"]);
     expect(options[0]!.textContent).toBe("From Example · Thinkerclaude-fable-5-1");
     expect(options[3]!.textContent).toContain("Not set");
+    expect(document.body.textContent).not.toContain("ask an admin");
+    await click(button(document, "Manage tiers in Models")!);
+    expect(pages).toEqual(["models"]);
+  });
+
+  test("on a project, for someone not an admin: the tiers are the organisation's, ask an admin", async () => {
+    const container = await projectRole(false);
+    await openOptions(container);
     expect(document.body.textContent).toContain("Tiers are Example’s — ask an admin to change one");
+    expect(button(document, "Manage tiers in Models")).toBeUndefined();
+  });
+
+  test("tiers that could not be loaded say so, not just No tier", async () => {
+    class Failing extends FixtureClient {
+      override modelTiers(): Promise<ModelTiersResponse> {
+        return Promise.reject(new Error("the backend answered 503"));
+      }
+    }
+    const container = await projectRole(true, new Failing("a"));
+    const problem = await until(() => container.querySelector("[data-testid=role-tier-problem]"), "the tiers' problem");
+    expect(problem.textContent).toBe("Example’s tiers could not be loaded: the backend answered 503");
   });
 });
