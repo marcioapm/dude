@@ -176,12 +176,8 @@ func TestASteerRefusesImagesThatAreNotItsTasksToSend(t *testing.T) {
 // holds a small PNG for it.
 func (w *world) uploadSized(b bucket, id, task string, size int) {
 	w.t.Helper()
-	key := "attachments/" + id
-	b[key] = screenshot
-	mustExec(w.t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
-		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
-		VALUES ($1, $2, $3, $1||'.png', 'image/png', 10, 10, $4, 'x', $5, 'image/png', 20, 20, $4, $5||'.o')`,
-		id, w.org, task, size, key)
+	w.upload(b, id, task, id+".png", screenshot)
+	mustExec(w.t, w.owner, `UPDATE attachments SET bytes = $2, original_bytes = $2 WHERE id = $1`, id, size)
 }
 
 // An answer may be an image alone: it reaches the agent with the question

@@ -67,6 +67,14 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
   const update = useCallback((id: string, change: Partial<Chip>) => {
     setChips((cs) => cs.map((c) => (c.id === id ? { ...c, ...change } : c)));
   }, []);
+  const uploadFailed = useCallback((id: string, err: unknown) => {
+    update(id, { state: "error", error: "Upload failed", errorDetail: err instanceof ApiError ? err.message : "the upload failed" });
+  }, [update]);
+  const dropPreview = useCallback((id: string) => {
+    const url = previews.current.get(id);
+    if (url) URL.revokeObjectURL(url);
+    previews.current.delete(id);
+  }, []);
 
   useEffect(() => () => {
     for (const url of previews.current.values()) URL.revokeObjectURL(url);
@@ -94,9 +102,7 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
           const result = await makeChip(chipsRef.current, chip.id, file, limits);
           if ("refused" in result) {
             // Not an image, or one too big to draw: no thumbnail, the file glyph.
-            const url = previews.current.get(chip.id);
-            if (url) URL.revokeObjectURL(url);
-            previews.current.delete(chip.id);
+            dropPreview(chip.id);
             update(chip.id, { state: "error", error: result.refused.short, errorDetail: result.refused.detail, previewUrl: undefined });
             continue;
           }
@@ -123,31 +129,24 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
           }
           update(chip.id, { state: "ready", attachmentId: uploaded.id, badge: formatBytes(uploaded.bytes), progress: 1 });
         } catch (err) {
-          const message = err instanceof ApiError ? err.message : "the upload failed";
-          update(chip.id, { state: "error", error: "Upload failed", errorDetail: message });
+          uploadFailed(chip.id, err);
         }
       }
     })();
-  }, [client, taskId, limits, update]);
+  }, [client, taskId, limits, update, uploadFailed, dropPreview]);
 
   const remove = useCallback((id: string) => {
     const chip = chipsRef.current.find((c) => c.id === id);
     if (chip?.attachmentId) void client.removeAttachment(chip.attachmentId).catch(() => {});
-    const url = previews.current.get(id);
-    if (url) URL.revokeObjectURL(url);
-    previews.current.delete(id);
+    dropPreview(id);
     setChips((cs) => cs.filter((c) => c.id !== id));
-  }, [client]);
+  }, [client, dropPreview]);
 
   const clear = useCallback((sent: ReadonlyArray<string>) => {
     const gone = new Set(sentChips(chipsRef.current, sent).map((c) => c.id));
-    for (const id of gone) {
-      const url = previews.current.get(id);
-      if (url) URL.revokeObjectURL(url);
-      previews.current.delete(id);
-    }
+    for (const id of gone) dropPreview(id);
     setChips((cs) => cs.filter((c) => !gone.has(c.id)));
-  }, []);
+  }, [dropPreview]);
 
   const uploadTo = useCallback(async (task: string) => {
     const ids: string[] = [];
@@ -163,13 +162,12 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         update(chip.id, { state: "ready", attachmentId: uploaded.id, progress: 1 });
         ids.push(uploaded.id);
       } catch (err) {
-        const message = err instanceof ApiError ? err.message : "the upload failed";
-        update(chip.id, { state: "error", error: "Upload failed", errorDetail: message });
+        uploadFailed(chip.id, err);
         throw err;
       }
     }
     return ids;
-  }, [client, update]);
+  }, [client, update, uploadFailed]);
 
   const disabledReason = limitsAnswer && !limitsAnswer.enabled ? "Image storage isn't set up" : undefined;
   return { attachments: chips, add, remove, clear, disabledReason, limits, uploadTo };
