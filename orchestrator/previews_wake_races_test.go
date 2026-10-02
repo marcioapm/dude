@@ -148,6 +148,27 @@ func (w *world) secondFollower(runID, web, holdAt string) *gateLux {
 	}
 }
 
+// holdOneStream holds the first of the Run's output streams to reach a
+// state event of this state, in the fake lux itself, so that stream stays
+// open while the Run resumes; the others go on. Close release to let it go.
+func (w *world) holdOneStream(state string) (reached, release chan struct{}) {
+	reached, release = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	w.lux.BeforeEvent(func(runID string, eventID int64, typ string) {
+		if typ != "state" || w.lux.EventState(runID, eventID) != state {
+			return
+		}
+		mine := false
+		once.Do(func() { mine = true })
+		if mine {
+			close(reached)
+			<-release
+		}
+	})
+	w.t.Cleanup(func() { w.lux.BeforeEvent(nil) })
+	return reached, release
+}
+
 func isClosed(ch <-chan struct{}) bool {
 	select {
 	case <-ch:
@@ -268,19 +289,22 @@ func TestAFailedStartSeenBeforeTheWakeCommitsIsCounted(t *testing.T) {
 	web := w.serverID(runID, "web")
 	a := newGateLux(w.previews.Lux, w.lux)
 	w.previews.Lux = a
-	g := w.secondFollower(runID, web, "stopping")
+	w.secondFollower(runID, web, "")
+	reached, release := w.holdOneStream("stopping")
 	old := w.luxRuns()[0]
 
 	w.lux.Idle(web)
 	w.until("parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
-	wait(t, g.reached, "the second follower held")
+	wait(t, reached, "one follower held")
 	w.lux.FailStarts("dude.preview="+runID, 1)
 	a.afterResume = func(id string) {
 		waitFor(t, "the resumed start to fail", func() bool { return w.lux.State(id) == "failed" })
-		close(g.release)
-		wait(t, g.done, "the other follower to consume the failure")
+		close(release)
+		waitFor(t, "the held follower to consume the failure", func() bool {
+			return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'failed'`, runID) == 1
+		})
 	}
 	w.lux.RequestServer(web, "/")
 	w.until("a new Run running", func() bool {
@@ -303,18 +327,19 @@ func TestARunningSeenBeforeTheWakeCommitsIsNotAFailedStart(t *testing.T) {
 	web := w.serverID(runID, "web")
 	a := newGateLux(w.previews.Lux, w.lux)
 	w.previews.Lux = a
-	g := w.secondFollower(runID, web, "stopping")
+	w.secondFollower(runID, web, "")
+	reached, release := w.holdOneStream("stopping")
 	r := w.luxRuns()[0]
 
 	w.lux.Idle(web)
 	w.until("parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
-	wait(t, g.reached, "the second follower held")
+	wait(t, reached, "one follower held")
 	a.afterResume = func(id string) {
 		waitFor(t, "the resumed Run running", func() bool { return w.lux.State(id) == "running" })
-		close(g.release)
-		waitFor(t, "the other follower to consume running", func() bool {
+		close(release)
+		waitFor(t, "the held follower to consume running", func() bool {
 			return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, runID) == 1
 		})
 	}
