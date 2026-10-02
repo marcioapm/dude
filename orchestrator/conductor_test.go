@@ -961,6 +961,31 @@ func (w *world) luxSpecOf(phase string) string {
 	return ""
 }
 
+// pausePhase is a person pausing the Run through the API; the pause is
+// pending until the syncer has lux stop it.
+func (w *world) pausePhase(runID string) {
+	w.t.Helper()
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		w.t.Fatalf("pause: %d %v", status, body)
+	}
+}
+
+// personallyPaused says whether a person's pause of the Run took effect.
+func (w *world) personallyPaused(runID string) bool {
+	return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause IS NULL AND control = 'none'`, runID) == 1
+}
+
+// resumePhase is a person resuming the Run through the API, until it runs.
+func (w *world) resumePhase(runID string) {
+	w.t.Helper()
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		w.t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the Run to run again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+	})
+}
+
 // The conductor's question raised the task's current wait, and something
 // else then came to wait on a person without moving the task. Answering
 // the conductor leaves the task waiting; settling that blocker, the last,
@@ -1028,6 +1053,37 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 				if status, body := w.call("/internal/runs/"+implementer+"/resume", map[string]any{}); status != 200 {
 					w.t.Fatalf("resume: %d %v", status, body)
 				}
+				w.until("the implementer to run again", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, implementer) == 1
+				})
+			}
+		}},
+		{"a phase agent a person paused", "", func(w *world, task, implementer string) func() {
+			w.pausePhase(implementer)
+			w.until("the implementer to be paused", func() bool { return w.personallyPaused(implementer) })
+			return func() { w.resumePhase(implementer) }
+		}},
+		{"a person's pause still pending", "", func(w *world, task, implementer string) func() {
+			w.pausePhase(implementer)
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'
+				AND control = 'pause_graceful' AND dude_pause IS NULL`, implementer); n != 1 {
+				w.t.Fatalf("the pause is not pending")
+			}
+			return func() {
+				w.until("the implementer to be paused", func() bool { return w.personallyPaused(implementer) })
+				if got := w.taskStatus(task); got != "awaiting_input" {
+					w.t.Fatalf("the pause taking effect ended the wait: the task is %s", got)
+				}
+				w.resumePhase(implementer)
+			}
+		}},
+		{"a person's resume still pending", "", func(w *world, task, implementer string) func() {
+			w.pausePhase(implementer)
+			w.until("the implementer to be paused", func() bool { return w.personallyPaused(implementer) })
+			if status, body := w.call("/internal/runs/"+implementer+"/resume", map[string]any{}); status != 200 {
+				w.t.Fatalf("resume: %d %v", status, body)
+			}
+			return func() {
 				w.until("the implementer to run again", func() bool {
 					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, implementer) == 1
 				})
