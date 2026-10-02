@@ -121,6 +121,15 @@ CREATE FUNCTION pg_temp.tier_model(raw text) RETURNS text LANGUAGE sql IMMUTABLE
   FROM (SELECT regexp_replace(raw, '^(llm-anthropic|llm-openai)/', '') AS m) s
 $$;
 
+-- The tier model most of roles name in an organization's agent models; a
+-- tie goes to the first role in the list. NULL when none names one.
+CREATE FUNCTION pg_temp.most_named(models jsonb, roles text[]) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT model FROM (
+    SELECT pg_temp.tier_model(models->x.role->>'model') AS model, x.ord
+    FROM unnest(roles) WITH ORDINALITY x(role, ord)) s
+  WHERE model IS NOT NULL GROUP BY model ORDER BY count(*) DESC, min(ord) LIMIT 1
+$$;
+
 DO $$
 DECLARE
   o record;
@@ -139,16 +148,8 @@ DECLARE
   models jsonb;
 BEGIN
   FOR o IN SELECT id, default_agent_models AS m FROM organizations ORDER BY id LOOP
-    -- The model most of a tier's roles already name; a tie goes to the
-    -- first role in its list.
-    SELECT model INTO thinker_model FROM (
-      SELECT pg_temp.tier_model(o.m->x.role->>'model') AS model, x.ord
-      FROM unnest(thinker_roles) WITH ORDINALITY x(role, ord)) s
-    WHERE model IS NOT NULL GROUP BY model ORDER BY count(*) DESC, min(ord) LIMIT 1;
-    SELECT model INTO coder_model FROM (
-      SELECT pg_temp.tier_model(o.m->x.role->>'model') AS model, x.ord
-      FROM unnest(coder_roles) WITH ORDINALITY x(role, ord)) s
-    WHERE model IS NOT NULL GROUP BY model ORDER BY count(*) DESC, min(ord) LIMIT 1;
+    thinker_model := pg_temp.most_named(o.m, thinker_roles);
+    coder_model := pg_temp.most_named(o.m, coder_roles);
 
     -- The trigger is not there yet: the seed is called here, once.
     ids := seed_model_tiers_for(o.id, thinker_model, coder_model);
