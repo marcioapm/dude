@@ -56,6 +56,7 @@ type schema struct {
 		PRReconcile       any `toml:"pr_reconcile" env:"DUDE_PR_RECONCILE" kind:"duration" use:"orchestrator" default:"15m"`
 		ParkAfter         any `toml:"park_after" env:"DUDE_PARK_AFTER" kind:"duration" use:"orchestrator" default:"0s"`
 		IdleAfter         any `toml:"idle_after" env:"DUDE_IDLE_AFTER" kind:"duration" use:"orchestrator" default:"0s"`
+		ConductorWarm     any `toml:"conductor_warm" env:"DUDE_CONDUCTOR_WARM" kind:"duration" use:"orchestrator" default:"0s"`
 		DiffEvery         any `toml:"diff_every" env:"DUDE_DIFF_EVERY" kind:"duration" use:"orchestrator" default:"15s"`
 		MachineUSDPerHour any `toml:"machine_usd_per_hour" env:"DUDE_MACHINE_USD_PER_HOUR" kind:"float" use:"orchestrator" default:"0.20"`
 		LuxCostEvery      any `toml:"lux_cost_every" env:"DUDE_LUX_COST_EVERY" kind:"duration" use:"orchestrator" default:"2m"`

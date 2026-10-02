@@ -267,7 +267,8 @@ func (w *world) until(what string, cond func() bool) {
 }
 
 func (w *world) describeRuns() string {
-	rows, _ := w.owner.Query(context.Background(), `SELECT phase::text, status::text, COALESCE(error, ''), COALESCE(lux_state, ''),
+	rows, _ := w.owner.Query(context.Background(), `SELECT COALESCE(phase::text, role::text, ''), status::text,
+		COALESCE(error, '') || COALESCE(' next ' || next_attempt_at::text, ''), COALESCE(lux_state, ''),
 		turn_done_at IS NOT NULL FROM runs WHERE organization_id = $1 ORDER BY created_at`, w.org)
 	defer rows.Close()
 	var b strings.Builder

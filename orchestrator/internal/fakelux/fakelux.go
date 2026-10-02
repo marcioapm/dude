@@ -91,6 +91,9 @@ type Behaviour struct {
 	TurnError string
 	// A Hang is woken by any input, not only one after a resume.
 	WakeOnInput bool
+	// A task's conductor: each turn's reply quotes its briefing and the
+	// input it answers (fakeagent.ConductorReply), in place of Reply.
+	Conductor bool
 }
 
 type Run struct {
@@ -578,7 +581,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
 		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
-		FinishEdits: step.FinishEdits}
+		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor}
 }
 
 // Runs returns every Run submitted, in order.
@@ -1046,6 +1049,12 @@ func (s *Server) turn(run *Run) {
 		s.edit(run, b.FinishEdits)
 	}
 	reply := b.Reply
+	if b.Conductor {
+		reply = strings.TrimPrefix(run.Prompt(), "echo ")
+		if !first {
+			reply = fakeagent.ConductorTurn(run.Prompt(), run.Inputs[len(run.Inputs)-1])
+		}
+	}
 	if asking {
 		reply = "I asked; waiting for the answer."
 	}

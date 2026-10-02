@@ -450,8 +450,12 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		t.resumeRunning(ctx, tx, s, epoch)
 		return nil
 	}
+	role := t.run.Phase
+	if t.run.conductor() {
+		role = delivery.RoleConductor
+	}
 	return s.event(ctx, tx, t.run, evSessionStarted, ledger.ActorAgent,
-		map[string]any{"role": t.run.Phase, "externalSessionId": id})
+		map[string]any{"role": role, "externalSessionId": id})
 }
 
 // activity tracks the agent's turn. Busy means it took its task; idle after

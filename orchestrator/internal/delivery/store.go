@@ -445,7 +445,8 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 }
 
 // AskTx records an agent's question for a person, and the task waiting
-// on it.
+// on it. The question's event keeps the status the task had before
+// (taskStatus), for an answer to a conductor to put back.
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
 	id := ids.New(ids.Question)
 	opts, _ := json.Marshal(db.NonNil(options))
@@ -453,12 +454,19 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts); err != nil {
 		return "", err
 	}
-	if _, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
-		"the agent asked a question"); err != nil {
+	var before string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&before); err != nil {
 		return "", err
 	}
-	_, err := ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent,
-		map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}))
+	moved, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input", "the agent asked a question")
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}
+	if moved {
+		payload["taskStatus"] = before
+	}
+	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
 	return id, err
 }
 
