@@ -184,6 +184,37 @@ describe("an organization made after", () => {
 });
 
 describe("the database refuses what the API would", () => {
+  const asApp = async <T>(org: string, fn: (sql: SQL) => Promise<T>): Promise<string> => {
+    const url = new URL(OWNER_URL);
+    url.username = "dude_app";
+    url.password = "dude_app";
+    url.pathname = `/${NAME}`;
+    const app = new SQL(url.toString());
+    try {
+      return await app.begin(async (tx) => {
+        await tx`SELECT set_config('app.organization_id', ${org}, true)`;
+        await fn(tx);
+        return "";
+      });
+    } catch (err) {
+      return String(err);
+    } finally {
+      await app.end();
+    }
+  };
+
+  test("the app cannot seed tiers into an organization, its own or another's", async () => {
+    // An organization with no tiers, so a call that ran would succeed and add three.
+    await db`INSERT INTO organizations (id, name, slug) VALUES ('org_seedless', 'Seedless', 'seedless')`;
+    await db`UPDATE organizations SET default_agent_models = '{}' WHERE id = 'org_seedless'`;
+    await db`DELETE FROM model_tiers WHERE organization_id = 'org_seedless'`;
+    for (const as of ["org_acme", "org_seedless"]) {
+      expect(await asApp(as, (tx) => tx`SELECT seed_model_tiers_for('org_seedless', 'evil', 'evil')`))
+        .toContain("permission denied for function seed_model_tiers_for");
+    }
+    expect(await tiers("org_seedless")).toEqual([]);
+    expect(await orgModels("org_seedless")).toEqual({});
+  });
   const insert = async (id: string, over: Record<string, unknown> = {}): Promise<string> => {
     // The name is short and unique, so a refusal is the field under test's.
     const t = { name: id.slice(-20), description: "", model: "claude-opus-5-5", ...over };

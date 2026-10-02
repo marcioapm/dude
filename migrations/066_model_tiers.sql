@@ -68,9 +68,9 @@ GRANT SELECT, UPDATE ON model_tier_upgrade_notes TO dude_app;
 -- Every organization starts with three tiers, none naming a model yet, and
 -- its roles on them: Thinker for those that read and judge, Coder for the
 -- implementer (the fixer follows it), Fast for none yet. Returns the
--- tiers' ids by name.
+-- tiers' ids by name. Any organization's: the trigger's alone to call.
 CREATE FUNCTION seed_model_tiers_for(org text, thinker_model text, coder_model text) RETURNS jsonb
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   ids jsonb := jsonb_build_object(
     'Thinker', 'mtr_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 24),
@@ -94,6 +94,7 @@ BEGIN
   UPDATE organizations SET default_agent_models = models WHERE id = org;
   RETURN ids;
 END $$;
+REVOKE ALL ON FUNCTION seed_model_tiers_for(text, text, text) FROM PUBLIC;
 
 CREATE FUNCTION seed_model_tiers() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
