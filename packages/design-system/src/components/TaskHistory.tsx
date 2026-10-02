@@ -32,19 +32,19 @@ export function TaskHistory({ lead, steps = [], facts = [], icon = "zap", action
           <>
             <span className={styles["dot"]} aria-hidden> · </span>
             <span className={styles["steps"]}>
-              {steps.map((s, i) => (
+              {steps.map((step, i) => (
                 <span key={i} className={styles["step"]}>
                   {i > 0 ? <span className={styles["arrow"]} aria-label="then"> → </span> : null}
-                  {s}
+                  {step}
                 </span>
               ))}
             </span>
           </>
         ) : null}
-        {facts.map((f, i) => (
+        {facts.map((fact, i) => (
           <span key={i} className={styles["fact"]}>
             <span className={styles["dot"]} aria-hidden> · </span>
-            {f}
+            {fact}
           </span>
         ))}
       </p>

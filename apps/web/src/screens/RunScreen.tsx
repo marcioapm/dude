@@ -461,7 +461,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
             ) : null}
             <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
               <SessionRailBlock label="Briefed with">
-                <SessionFacts facts={[...chat.briefedWith]} />
+                <SessionFacts facts={chat.briefedWith} />
               </SessionRailBlock>
               <SessionRailBlock label="Conductor">
                 <SessionFacts facts={[
