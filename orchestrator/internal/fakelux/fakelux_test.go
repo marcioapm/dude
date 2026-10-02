@@ -126,7 +126,7 @@ func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 	fake.InputGate = make(chan struct{})
 	c, run := submitRun(t, fake)
 	awaitRun(t, fake, run.ID, "the first turn never ended", func(r *Run) bool { return r.turnsEnded == 1 })
-	if err := c.Input(context.Background(), run.ID, "more", "req_1", false); err != nil {
+	if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "more", RequestID: "req_1"}); err != nil {
 		t.Fatal(err)
 	}
 	if n := inputWorkers(); n != 1 {
@@ -202,10 +202,10 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 				fake.FailUnreadOnInterrupt = old
 				c, run := submitRun(t, fake)
 				awaitRun(t, fake, run.ID, "the tool never started", func(r *Run) bool { return len(r.openTools) == 1 })
-				if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
+				if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "check the migration", RequestID: "dir_a"}); err != nil {
 					t.Fatal(err)
 				}
-				if err := c.Input(context.Background(), run.ID, "", "dir_b", true); err != nil {
+				if err := c.Input(context.Background(), run.ID, lux.InputRequest{RequestID: "dir_b", Interrupt: true}); err != nil {
 					t.Fatal(err)
 				}
 				got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs

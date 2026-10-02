@@ -9,7 +9,8 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId, resolveAgentModel, resolveTier,
+  ATTACHMENT_LIMITS, BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId,
+  resolveAgentModel, resolveTier,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy,
 } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
@@ -150,6 +151,8 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
+  /** Images uploaded to the task, given with its prompt to every agent the task is the prompt of. */
+  attachmentIds: z.array(z.string().min(1)).max(ATTACHMENT_LIMITS.perMessage).optional(),
 });
 
 /**

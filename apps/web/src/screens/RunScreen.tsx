@@ -39,6 +39,8 @@ import {
   MachineTip,
   TierChip,
   TierTip,
+  AttachDropZone,
+  ImageViewer,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
@@ -58,6 +60,8 @@ import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
+import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
+import type { AttachmentInfo } from "@dude/domain";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -302,14 +306,25 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // Awaited, so the composer stays busy until the API has answered: no
   // second submit of the same words while the first is on its way. In a
   // task's Chat every message — an answer to its question too — goes to
-  // the task's Chat, which knows what the conductor waits on.
+  // the task's Chat, which knows what the conductor waits on (words only:
+  // Chat's composer has no image tray).
+  const limits = useAttachmentLimits(client);
+  const tray = useImageTray(client, run?.taskId, limits);
+  const images = useSentImages(client);
+  // The images of one message, open in the viewer.
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const send = useCallback(
-    (submission: ComposerSubmission) =>
-      chat ? intervene(() => chat.send(submission.text), "send the message")
-      : submission.mode === "answer"
-        ? intervene(() => client.answer(submission.questionId, submission.text), "answer the agent")
-        : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt }), "steer this run"),
-    [client, runId, intervene, chat],
+    async (submission: ComposerSubmission) => {
+      const ok = await (chat ? intervene(() => chat.send(submission.text), "send the message")
+        : submission.mode === "answer"
+        ? intervene(() => client.answer(submission.questionId, submission.text, submission.attachmentIds), "answer the agent")
+        : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt,
+          attachmentIds: submission.attachmentIds }), "steer this run"));
+      // Sent: the images are the message's now, not the tray's.
+      if (ok) tray.clear(submission.attachmentIds);
+      else throw new Error("not sent");
+    },
+    [client, runId, intervene, tray, chat],
   );
 
   // Interrupt now (a queued steer) and Retry (a failed one) send the same
@@ -375,6 +390,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
   };
 
+  // Images can be dropped while the composer takes a message.
+  const composerOpen = isLive && !isPreviewRun && !((run.status === "paused" && !conversation.openQuestion) ||
+    (conversation.openQuestion !== null && waitingOn !== undefined));
   const changed = diffSummary?.files ?? [];
   // The name dude signs this task's messages with.
   const dude = dudeName(run.taskId);
@@ -384,7 +402,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands),
     resend: resteer,
   } : undefined;
-  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer);
+  const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
+  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer, shown);
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -427,6 +446,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
               ) : null}
             </ChatTranscript>
+            {viewing ? (
+              <ImageViewer
+                images={viewing.turn.attachments.map(images.sent)}
+                index={viewing.index}
+                onIndexChange={(index) => setViewing({ ...viewing, index })}
+                onClose={() => setViewing(null)}
+                context={viewedContext(viewing.turn, people, runLabel(run), dude)}
+                readAt={viewing.turn.kind === "human" && viewing.turn.read && viewing.turn.deliveredAt ? clock(viewing.turn.deliveredAt) : undefined}
+                onWantOriginal={(i) => images.wantOriginal(viewing.turn.attachments[i]!.id)}
+                onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
+              />
+            ) : null}
             <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
               <SessionRailBlock label="Briefed with">
                 <SessionFacts facts={[...chat.briefedWith]} />
@@ -509,6 +540,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   return (
     <div className="runScreen" data-view={view} data-testid="run-screen">
+      {/* The whole session takes a dropped image, header and rail included, on the conversation. */}
+      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || !composerOpen} disabledReason={tray.disabledReason}
+        detail={<>They go with your next {conversation.openQuestion ? "answer" : "steer"} to <b>{runLabel(run)}</b>.{" "}
+          {conversation.openQuestion ? "It reads them with your answer." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
       <SessionHeader session={session} actions={actions} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
           focus; Changes draws its own controls into the slot after it. */}
@@ -589,6 +624,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   sentAs={youName ? firstName(youName) : undefined}
                   canInterrupt
                   landsHint={landsHint(run.status, activeTool, conversation.lands)}
+                  attachments={tray.attachments}
+                  onAttachFiles={tray.add}
+                  onRemoveAttachment={tray.remove}
+                  attachAccept="image/png,image/jpeg,image/webp,image/gif"
+                  attachHint={limitsHint(tray.limits)}
+                  attachDisabledReason={tray.disabledReason}
                 />
               )}
               emptyMessage="Waiting for the agent to start."
@@ -608,6 +649,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 />
               ) : null}
             </ChatTranscript>
+            {viewing ? (
+              <ImageViewer
+                images={viewing.turn.attachments.map(images.sent)}
+                index={viewing.index}
+                onIndexChange={(index) => setViewing({ ...viewing, index })}
+                onClose={() => setViewing(null)}
+                context={viewedContext(viewing.turn, people, runLabel(run), dude)}
+                readAt={viewing.turn.kind === "human" && viewing.turn.read && viewing.turn.deliveredAt ? clock(viewing.turn.deliveredAt) : undefined}
+                onWantOriginal={(i) => images.wantOriginal(viewing.turn.attachments[i]!.id)}
+                onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
+              />
+            ) : null}
             {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
             <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
               <SessionRailBlock label="Session">
@@ -635,6 +688,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           </div>
         )}
       </div>
+      </AttachDropZone>
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">
@@ -777,8 +831,42 @@ export const EndedConductor = memo(function EndedConductor({ client, runId, stat
 /** Events per read of an ended conductor's ledger: the API's most. */
 const ENDED_PAGE = 1000;
 
+/** A turn whose images the viewer shows. */
+type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
+
+/** How a turn's images are shown, and opened. */
+interface ShownImages {
+  images: Pick<SentImages, "sent" | "mounted" | "visible">;
+  open: (turn: ViewedTurn, index: number) => void;
+}
+
+/** "15:52:40": a read time, in the viewer's line. */
+function clock(at: string): string {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+/** The lands hint as the drop overlay says it: "It reads them after the current tool." */
+function dropWhen(hint: string | null): string {
+  if (!hint) return "It reads them at its next step.";
+  return `It reads them ${hint.replace(/^Lands /, "")}.`;
+}
+
+/** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
+function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
+  if (turn.attachments.length === 0 || !shown) return {};
+  return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
+}
+
+/** "Márcio · steer to Implement · 15:52": who sent a message's images, to whom, when. */
+function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: string): string {
+  const at = new Date(turn.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (turn.kind === "prompt") return `${dude} · task to ${agent} · ${at}`;
+  const who = actorName(turn.by, people.names);
+  return `${who ? firstName(who) : "Someone"} · ${turn.intent} to ${agent} · ${at}`;
+}
+
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
-  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions) {
+  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages) {
   switch (turn.kind) {
     case "repositoryRequest": {
       // Asked of a person, like a question: approve brings it into the Run.
@@ -841,7 +929,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       // A conductor's is dude's briefing of it, tagged so.
       return (
         <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
-          content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} />
+          content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} {...turnImages(turn, shown)} />
       );
     case "message":
       return (
@@ -893,6 +981,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
           person={person}
           name={name ?? "Someone"}
+          {...turnImages(turn, shown)}
         />
       );
     }

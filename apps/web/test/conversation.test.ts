@@ -902,3 +902,27 @@ describe("incremental folding", () => {
     expect(state.turns[0]).toBe(first);
   });
 });
+
+describe("images in the conversation", () => {
+  const image = (id: string) => ({ id, name: `${id}.png`, contentType: "image/png", width: 1200, height: 760, bytes: 412,
+    original: { contentType: "image/png", width: 2400, height: 1520, bytes: 1900 } });
+
+  test("a steer, an answer and the prompt keep the images they were sent with, in order; a retry keeps its turn's", () => {
+    const turns = project([
+      ev(EventTypes.PromptDelivered, { text: "Build it", attachments: [image("att_p")] }),
+      ev(EventTypes.RunSteered, { text: "see these", directiveId: "dir_1", attachments: [image("att_b"), image("att_a")] }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_1", error: "the run stopped" }),
+      ev(EventTypes.RunSteered, { text: "see these", directiveId: "dir_2", supersedes: "dir_1" }),
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "q1", prompt: "Phone?" }),
+      ev(EventTypes.QuestionAnswered, { questionId: "q1", answer: "", directiveId: "dir_3", attachments: [image("att_q")] }),
+      // An image alone is a message.
+      ev(EventTypes.RunSteered, { text: "", directiveId: "dir_4", attachments: [image("att_only"), { id: 7 }] }),
+    ]).turns;
+    const prompt = turns.find((t) => t.kind === "prompt");
+    expect(prompt?.kind === "prompt" && prompt.attachments.map((a) => a.id)).toEqual(["att_p"]);
+    const human = turns.filter((t): t is HumanTurn => t.kind === "human");
+    expect(human.map((t) => t.attachments.map((a) => a.id))).toEqual([["att_b", "att_a"], ["att_q"], ["att_only"]]);
+    // The retry folded into the first turn, which keeps its images.
+    expect(human[0]!.directiveId).toBe("dir_2");
+  });
+});

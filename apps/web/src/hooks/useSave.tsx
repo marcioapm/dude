@@ -75,6 +75,8 @@ export interface FormDialogProps {
    * the dialog claims is claimed here too (`preventDefault()`) without acting.
    */
   onConfirmKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /** Around the dialog's whole content: an `AttachDropZone`, so a file dropped anywhere on it is taken. */
+  wrapContent?: ((content: ReactNode) => ReactNode) | undefined;
   submitLabel: ReactNode;
   canSubmit: boolean;
   onSubmit: () => void;
@@ -142,6 +144,7 @@ export function FormDialog(props: FormDialogProps) {
         readingLabel={props.readingLabel}
         onCloseReading={props.onCloseReading}
         onEscapeKeyDown={onEscapeKeyDown}
+        wrapContent={props.wrapContent}
         // A document's column scrolls: under the fields the reason would be out of sight.
         footerProblem={document ? props.problem : undefined}
         onKeyDown={(e) => {

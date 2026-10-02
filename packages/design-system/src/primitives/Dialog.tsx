@@ -69,6 +69,12 @@ export interface DialogProps {
    * controlled dialog); call `preventDefault()` to place it yourself.
    */
   readonly onCloseAutoFocus?: ((event: Event) => void) | undefined;
+  /**
+   * Puts the header, the body and the footer inside an element of the app's
+   * (an `AttachDropZone` for the whole dialog). Give it `flex: 1` and a flex
+   * column, as the dialog lays them out.
+   */
+  readonly wrapContent?: ((content: ReactNode) => ReactNode) | undefined;
 }
 
 /**
@@ -102,6 +108,7 @@ export function Dialog({
   onEscapeKeyDown,
   onOpenAutoFocus,
   onCloseAutoFocus,
+  wrapContent,
 }: DialogProps) {
   // Radix returns focus only to its own Trigger; a dialog opened from a
   // menu item or a button elsewhere would leave it on <body>.
@@ -152,6 +159,56 @@ export function Dialog({
     </div>
   ) : null;
 
+  const content = (
+    <>
+      <div className={styles["header"]}>
+        {tone ? (
+          <span
+            className={cx(styles["toneIcon"], tone === "danger" ? styles["toneDanger"] : styles["toneAttention"])}
+            aria-hidden
+          >
+            <Icon name={tone === "danger" ? "alert" : "warning"} size={16} />
+          </span>
+        ) : null}
+        <div className={styles["headerText"]}>
+          {context ? <div className={styles["context"]}>{context}</div> : null}
+          <RadixDialog.Title className={styles["title"]}>{title}</RadixDialog.Title>
+          {description ? (
+            <RadixDialog.Description className={styles["description"]}>{description}</RadixDialog.Description>
+          ) : null}
+        </div>
+        {headerActions ? <div className={styles["headerActions"]}>{headerActions}</div> : null}
+        <RadixDialog.Close asChild>
+          <IconButton icon="close" label="Close" size="sm" />
+        </RadixDialog.Close>
+      </div>
+      {size === "document" ? (
+        <div className={styles["stage"]}>
+          {body}
+          {isReading ? (
+            <div ref={readingColumn} className={styles["reading"]} role="region" aria-label={readingLabel} tabIndex={0}>
+              <div className={styles["readingMeasure"]}>{reading}</div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        body
+      )}
+      {footer ? (
+        <div className={styles["footer"]}>
+          {footerProblem ? (
+            <div className={styles["footerProblem"]} role="alert" title={footerProblem}>
+              {footerProblem}
+            </div>
+          ) : footerStart ? (
+            <div className={styles["footerStart"]}>{footerStart}</div>
+          ) : null}
+          {footer}
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <RadixDialog.Root {...compact({ open, defaultOpen, onOpenChange })}>
       {trigger ? <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger> : null}
@@ -173,51 +230,7 @@ export function Dialog({
             onCloseReading();
           }}
         >
-          <div className={styles["header"]}>
-            {tone ? (
-              <span
-                className={cx(styles["toneIcon"], tone === "danger" ? styles["toneDanger"] : styles["toneAttention"])}
-                aria-hidden
-              >
-                <Icon name={tone === "danger" ? "alert" : "warning"} size={16} />
-              </span>
-            ) : null}
-            <div className={styles["headerText"]}>
-              {context ? <div className={styles["context"]}>{context}</div> : null}
-              <RadixDialog.Title className={styles["title"]}>{title}</RadixDialog.Title>
-              {description ? (
-                <RadixDialog.Description className={styles["description"]}>{description}</RadixDialog.Description>
-              ) : null}
-            </div>
-            {headerActions ? <div className={styles["headerActions"]}>{headerActions}</div> : null}
-            <RadixDialog.Close asChild>
-              <IconButton icon="close" label="Close" size="sm" />
-            </RadixDialog.Close>
-          </div>
-          {size === "document" ? (
-            <div className={styles["stage"]}>
-              {body}
-              {isReading ? (
-                <div ref={readingColumn} className={styles["reading"]} role="region" aria-label={readingLabel} tabIndex={0}>
-                  <div className={styles["readingMeasure"]}>{reading}</div>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            body
-          )}
-          {footer ? (
-            <div className={styles["footer"]}>
-              {footerProblem ? (
-                <div className={styles["footerProblem"]} role="alert" title={footerProblem}>
-                  {footerProblem}
-                </div>
-              ) : footerStart ? (
-                <div className={styles["footerStart"]}>{footerStart}</div>
-              ) : null}
-              {footer}
-            </div>
-          ) : null}
+          {wrapContent ? wrapContent(content) : content}
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

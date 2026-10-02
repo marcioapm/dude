@@ -11,7 +11,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// sizeRow is one of an organisation's machine sizes, as migration 071
+// sizeRow is one of an organisation's machine sizes, as migration 072
 // leaves it.
 type sizeRow struct {
 	ID, Name        string
@@ -51,15 +51,15 @@ func conductorSize(t *testing.T, owner *pgx.Conn, org string) string {
 	return *id
 }
 
-// Migration 071 renames the orchestrator role to conductor in what is
+// Migration 072 renames the orchestrator role to conductor in what is
 // stored — the enum's rows, the role keys of settings, the ledger's role —
 // and gives every organisation the Small size and the Thinker tier as the
 // conductor's, reusing a size already named Small, while Standard stays the default.
 func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	ctx := context.Background()
-	owner, apply := dbtest.Upgrade(t, "071")
+	owner, apply := dbtest.Upgrade(t, "072")
 	// Settings as 069 leaves them: roles name tiers. org_plain's
-	// orchestrator is on its Coder tier, not the Thinker 071 gives one with
+	// orchestrator is on its Coder tier, not the Thinker 072 gives one with
 	// none, and its project overrides it with a tier of its own.
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES
 		('org_plain', 'Plain', 'plain'), ('org_small', 'HasSmall', 'has-small'), ('org_named', 'Named', 'named')`)
@@ -156,7 +156,7 @@ func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	}
 
 	// The conductor of an organisation that gave it no tier runs on its
-	// Thinker tier: ones from before 071, and one created after.
+	// Thinker tier: ones from before 072, and one created after.
 	for _, org := range []string{"org_small", "org_named", "org_new"} {
 		var tier, thinker *string
 		if err := owner.QueryRow(ctx, `SELECT o.default_agent_models->'conductor'->>'tier', t.id

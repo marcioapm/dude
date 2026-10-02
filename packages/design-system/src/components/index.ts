@@ -54,6 +54,8 @@ export { QuestionCard } from "./QuestionCard.tsx";
 export type { QuestionCardProps, QuestionState, QuestionKind } from "./QuestionCard.tsx";
 export { ChatComposer } from "./ChatComposer.tsx";
 export type { ChatComposerProps, ComposerMode, ComposerSubmission, PendingQuestion } from "./ChatComposer.tsx";
+export { AttachDropZone, AttachmentChip, ImageViewer, MessageImages, attachmentWarning, imageCaption, wasScaled } from "./ImageAttachments.tsx";
+export type { AttachDropZoneProps, AttachmentChipProps, ComposerAttachment, ImageFacts, ImageViewerProps, MessageImagesProps, SentImage } from "./ImageAttachments.tsx";
 export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
 export { Sidebar, SidebarLink, SidebarProfile, SidebarToggle, SIDEBAR_DRAWER_QUERY } from "./Sidebar.tsx";

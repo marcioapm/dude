@@ -100,6 +100,14 @@
 .disabled .field {
   opacity: 0.6;
 }
+/* With images, the tray sits above the words, inside the field's edge. */
+.withTray {
+  flex-direction: column;
+}
+/* The paperclip's tooltip trigger: a span, so a disabled button still says why. */
+.attach {
+  display: inline-flex;
+}
 .textarea {
   flex: 1;
   min-width: 0;

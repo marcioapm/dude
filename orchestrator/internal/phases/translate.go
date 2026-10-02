@@ -305,6 +305,14 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			if lands := landsOf(data); lands != "" {
 				payload["lands"] = lands
 			}
+			// The images it was given with the task, for the prompt turn.
+			images, err := delivery.PromptAttachmentInfo(ctx, tx, t.run.ID)
+			if err != nil {
+				return err
+			}
+			if len(images) > 0 {
+				payload["attachments"] = images
+			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
 		return t.directiveReceipt(ctx, tx, s, typ, data)
@@ -364,20 +372,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		if msg == "" {
 			msg = "lux could not deliver it"
 		}
-		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
-			WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, msg)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		if err := s.event(ctx, tx, t.run, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": msg}); err != nil {
-			return err
-		}
-		// An interrupt alone that relied on these words fails with them, once
-		// no other directive carrying them is left to deliver them.
-		return settleInterrupts(ctx, tx, s, t.run, &msg, `UPDATE directives d SET failed_at = now(), error = $3
-			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
-			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
-			RETURNING d.id`, id, t.run.ID, msg)
+		return failDirectiveTx(ctx, tx, s, t.run, id, msg)
 	}
 	receipt, _ := data["receipt"].(bool)
 	if phase == lux.InputAccepted {
