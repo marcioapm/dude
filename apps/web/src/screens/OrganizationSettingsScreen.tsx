@@ -20,14 +20,14 @@ import {
   KeyValueList,
   Spinner,
 } from "@dude/design-system/primitives";
-import type { ApiClient, ForgeConnection, Member } from "../api/client.ts";
+import type { ApiClient, ForgeConnection, ForgeVerification, Member } from "../api/client.ts";
 import { MembersSection } from "./MembersSection.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { settingsPage } from "../settings.ts";
 import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
-import { GithubBehaviour, WebhookCard } from "./GithubSettings.tsx";
+import { ForgePermissionList, GithubBehaviour, verificationSummary, WebhookCard } from "./GithubSettings.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 import { MachinesPage, useMachineSizes } from "./MachinesSettings.tsx";
 import { ModelsPage, useModelTiers } from "./ModelsSettings.tsx";
@@ -149,7 +149,8 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
+  const [verification, setVerification] = useState<ForgeVerification | null>(null);
+  const verdict = verification ? verificationSummary(verification) : null;
   const [replacing, setReplacing] = useState(false);
 
   const load = useCallback(async () => {
@@ -166,16 +167,11 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
 
   async function verify() {
     setVerifying(true);
-    setVerdict(null);
+    setVerification(null);
     try {
-      const v = await client.verifyForge();
-      setVerdict(
-        v.ok
-          ? { ok: true, text: `Connected as ${v.login ?? "an unnamed account"}${v.scopes ? ` · scopes: ${v.scopes}` : ""}` }
-          : { ok: false, text: v.reason },
-      );
+      setVerification(await client.verifyForge());
     } catch (err) {
-      setVerdict({ ok: false, text: errorText(err) });
+      setVerification({ ok: false, reason: errorText(err) });
     } finally {
       setVerifying(false);
     }
@@ -209,6 +205,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
               {verdict.text}
             </Callout>
           ) : null}
+          {verification ? <ForgePermissionList verification={verification} /> : null}
         </CardBody>
         <CardFooter>
           {connection.connected ? (
@@ -235,7 +232,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
         open={replacing}
         onOpenChange={setReplacing}
         onSaved={() => {
-          setVerdict(null);
+          setVerification(null);
           void load();
         }}
       />
