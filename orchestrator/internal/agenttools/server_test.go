@@ -561,6 +561,9 @@ func TestATaskNeedsAGoalOfAtLeast16Characters(t *testing.T) {
 		"15 characters":          body("Short", strings.Repeat("g", 15), true),
 		"15 inside whitespace":   body("Short", "  \n\t"+strings.Repeat("g", 15)+" \n  ", true),
 		"7 emoji and one letter": body("Short", strings.Repeat("😀", 7)+"g", true),
+		// JS trim() strips U+FEFF; Go's TrimSpace does not.
+		"15 inside BOMs":  body("Short", "\ufeff"+strings.Repeat("g", 15)+"\ufeff", true),
+		"only whitespace": body("Short", strings.Repeat(" ", 20), true),
 	}
 	for name, b := range refused {
 		if status, out := f.post(t, token, "create_task", b); status != 422 || out["error"] != message {
@@ -572,6 +575,8 @@ func TestATaskNeedsAGoalOfAtLeast16Characters(t *testing.T) {
 		"16 inside whitespace": body("Enough", "  "+strings.Repeat("g", 16)+"\n", true),
 		// Eight runes, but 16 UTF-16 units, as `.length` counts them.
 		"8 emoji": body("Enough", strings.Repeat("😀", 8), true),
+		// JS trim() keeps U+0085, so the control plane counts it: 16.
+		"NEL and 15 characters": body("Enough", "\u0085"+strings.Repeat("g", 15), true),
 	}
 	for name, b := range accepted {
 		if status, out := f.post(t, token, "create_task", b); status != 200 {
@@ -579,9 +584,11 @@ func TestATaskNeedsAGoalOfAtLeast16Characters(t *testing.T) {
 		}
 	}
 	var short, enough int
-	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE title = 'Short'), count(*) FILTER (WHERE title = 'Enough')
-		FROM tasks WHERE project_id = $1`, f.project).Scan(&short, &enough)
-	if short != 0 || enough != 3 {
-		t.Errorf("%d short-goal tasks and %d with enough, want 0 and 3", short, enough)
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE title = 'Short'), count(*) FILTER (WHERE title = 'Enough')
+		FROM tasks WHERE project_id = $1`, f.project).Scan(&short, &enough); err != nil {
+		t.Fatal(err)
+	}
+	if short != 0 || enough != 4 {
+		t.Errorf("%d short-goal tasks and %d with enough, want 0 and 4", short, enough)
 	}
 }

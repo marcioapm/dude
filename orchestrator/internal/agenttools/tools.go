@@ -148,6 +148,18 @@ func utf16Len(s string) int {
 	return n
 }
 
+// isJSSpace is ECMAScript's WhiteSpace and LineTerminator set, what the
+// control plane's String.prototype.trim() strips. It differs from
+// unicode.IsSpace: it includes U+FEFF and excludes U+0085.
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f',
+		'\u3000', '\ufeff':
+		return true
+	}
+	return r >= '\u2000' && r <= '\u200a'
+}
+
 func criteriaLength(criteria []string) int {
 	n := 0
 	for _, c := range criteria {
@@ -161,7 +173,7 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	switch {
 	case title == "":
 		return createTaskOut{}, refuse("a title is required")
-	case utf16Len(strings.TrimSpace(in.Goal)) < GoalMin:
+	case utf16Len(strings.TrimFunc(in.Goal, isJSSpace)) < GoalMin:
 		return createTaskOut{}, refuse("a task needs a goal of at least %d characters: say why it matters and what should "+
 			"change, so a person can decide on it without asking you", GoalMin)
 	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
