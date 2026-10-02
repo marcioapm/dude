@@ -65,7 +65,7 @@ func TestAServerWhoseCreateWasLostIsAdopted(t *testing.T) {
 }
 
 // hiddenOnce is another orchestrator's create not yet visible: the first
-// list by hostname answers empty.
+// list of the preview's servers answers empty.
 type hiddenOnce struct {
 	lux.Client
 	mu     sync.Mutex
@@ -74,7 +74,7 @@ type hiddenOnce struct {
 
 func (h *hiddenOnce) ListServers(ctx context.Context, hostname string, labels ...string) ([]lux.TenantServer, error) {
 	h.mu.Lock()
-	hide := hostname != "" && !h.hidden
+	hide := len(labels) > 0 && !h.hidden
 	h.hidden = h.hidden || hide
 	h.mu.Unlock()
 	if hide {
@@ -91,7 +91,7 @@ func TestAServerAnotherOrchestratorCreatedIsAdopted(t *testing.T) {
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task, runID := w.startPreview()
-	host := servers.PreviewHostname(previewDomain, "web", task, w.project, "")
+	host := servers.PreviewHostname(previewDomain, "web", w.previewOf(task), "")
 	theirs, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000, Hostname: host,
 		Wake: "request", Lifetime: "owner", Labels: map[string]string{"dude.preview": runID}})
 	if err != nil {
@@ -129,12 +129,15 @@ func TestASecondServerForThePreviewIsDeleted(t *testing.T) {
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.startPreview()
-	theirs, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
-		Hostname: "theirs." + previewDomain, Wake: "request", Lifetime: "owner", Labels: map[string]string{"dude.preview": runID}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.previews.Lux = &recordedFirst{Client: w.previews.Lux, record: func() {
+	var theirs lux.TenantServer
+	inner := w.previews.Lux
+	w.previews.Lux = &recordedFirst{Client: inner, record: func() {
+		var err error
+		theirs, err = inner.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
+			Hostname: "theirs." + previewDomain, Wake: "request", Lifetime: "owner", Labels: map[string]string{"dude.preview": runID}})
+		if err != nil {
+			t.Fatal(err)
+		}
 		mustExec(t, w.owner, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname)
 			VALUES ($1, $2, 'web', $3, $4)`, runID, w.org, theirs.ID, "theirs."+previewDomain)
 	}}
