@@ -41,7 +41,7 @@ def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     assert resp.status_code == 200, resp.text
     project = client.create_project(
         name="On lux", slug=f"lux-{os.urandom(3).hex()}",
-        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
         repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
     )
     yield project, gh
@@ -109,7 +109,7 @@ def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     """A live agent on lux hears a directive, stops, and continues its session."""
     project, _ = lux_project
     # An agent that never finishes its turn, to have something live to control.
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
     task = client.create_task(project["id"], "Hold")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -146,8 +146,8 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
     agent (lux-fake's MCP client) calls list_tasks, and dude records the
     call on that Run and answers with the project's work."""
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/tools", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     task = client.create_task(project["id"], "Use the tools")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -188,8 +188,8 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     the answer resumes the same lux Run, in the same agent session, and the
     resume is timed with every timestamp lux reports, in order."""
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     task = client.create_task(project["id"], "Ask on lux")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 

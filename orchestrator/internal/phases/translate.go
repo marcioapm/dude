@@ -660,14 +660,14 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 // The failure and stream cursor commit together, before a following idle or
 // queued input can turn a failed prompt into completed work.
 func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) error {
-	var model string
+	var model, tier string
 	var produced bool
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), EXISTS (SELECT 1 FROM events
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), EXISTS (SELECT 1 FROM events
 		WHERE run_id = $1 AND event_type IN ($2, $3, $4, $5)) FROM runs WHERE id = $1`,
-		t.run.ID, evAgentMessage, evAgentThought, evToolCalled, evPlanUpdated).Scan(&model, &produced); err != nil {
+		t.run.ID, evAgentMessage, evAgentThought, evToolCalled, evPlanUpdated).Scan(&model, &tier, &produced); err != nil {
 		return err
 	}
-	reason := turnFailure(agentErr, model, produced)
+	reason := turnFailure(agentErr, tier, model, produced)
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
@@ -676,15 +676,19 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
 }
 
-// turnFailure says why a turn failed, for a person. OpenCode answers a model
-// it has no provider or definition for with a generic API error (-32603,
-// "Cannot connect to API"), which reads as a network fault; when the agent
-// did nothing at all, the model is the likelier cause and is named.
-func turnFailure(agentErr, model string, produced bool) string {
+// turnFailure says why a turn failed, for a person. OpenCode answers a
+// model the proxy will not serve with a generic API error (-32603, "Cannot
+// connect to API"), which reads as a network fault; when the agent did
+// nothing at all, the model its tier requested is the likelier cause, and
+// both are named.
+func turnFailure(agentErr, tier, model string, produced bool) string {
 	if !produced && model != "" && (strings.Contains(agentErr, "-32603") || strings.Contains(agentErr, "APIError")) {
-		return fmt.Sprintf("the agent could not start its turn with model %q (a role's model must be <provider>/<model> "+
-			"for a provider and model the agent image's OpenCode config defines, e.g. llm-anthropic/claude-sonnet-5): %s",
-			model, agentErr)
+		on := fmt.Sprintf("model %q", model)
+		if tier != "" {
+			on = fmt.Sprintf("%s, which requested %q from the LLM proxy", tier, model)
+		}
+		return fmt.Sprintf("the agent could not start its turn on %s (check the tier's model in Models, "+
+			"or send it a test message there): %s", on, agentErr)
 	}
 	return "the agent's turn failed: " + agentErr
 }

@@ -11,7 +11,7 @@ import hashlib
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 import psycopg
 import requests
@@ -163,6 +163,29 @@ class ApiClient:
         resp = self.get(f"/v1/runs/{run_id}")
         assert resp.status_code == 200, f"get run failed: {resp.status_code} {resp.text}"
         return resp.json()
+
+    def tier_for(self, model: str) -> str:
+        """The id of a tier of the organization's that requests `model`, made
+        for it when none does, named `T <model>` (cut to a tier name's 24
+        characters) so that its name is never its model. Needs an admin's key."""
+        tiers = self.get("/v1/models/tiers").json()["tiers"]
+        for tier in tiers:
+            if tier["model"] == model:
+                return tier["id"]
+        resp = self.post("/v1/models/tiers", {"name": f"T {model}"[:24], "model": model})
+        assert resp.status_code == 201, f"add tier failed: {resp.status_code} {resp.text}"
+        return next(t["id"] for t in resp.json()["tiers"] if t["model"] == model)
+
+    def on_models(self, models: Mapping[str, str | dict]) -> dict:
+        """Agent models with each role on a tier requesting the model named:
+        `{"implementer": "fake/scripted"}`, or `{"implementer": {"model":
+        "fake/hang", "effort": "low"}}` to keep other fields. A role names a
+        tier, never a model; this is how a test still says which model."""
+        out = {}
+        for role, spec in models.items():
+            fields = dict(spec) if isinstance(spec, dict) else {"model": spec}
+            out[role] = {**{k: v for k, v in fields.items() if k != "model"}, "tier": self.tier_for(fields["model"])}
+        return out
 
 
 # ---------------------------------------------------------------------------

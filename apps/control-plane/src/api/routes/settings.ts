@@ -1,8 +1,8 @@
 /**
  * Settings: the organization's defaults, and each project's overrides.
  *
- * Two things are configured this way: how each agent role runs (model,
- * reasoning effort, time limit, whether it runs at all, and its prompt) and
+ * Two things are configured this way: how each agent role runs (model
+ * tier, reasoning effort, time limit, machine, whether it runs at all, and its prompt) and
  * how work is delivered. The organization's live on its row
  * (default_agent_models, delivery_policy), a project's on its own
  * (agent_models, delivery_policy) — and a project stores only what it
@@ -21,6 +21,7 @@ import {
   promptRoleSchema,
   resolveMachineSize,
   resolveRoleImage,
+  resolveTier,
   ROLE_ENABLED_BY,
   savePromptSchema,
   SETTINGS_ROLES,
@@ -46,8 +47,9 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { listSizes, requireSize } from "./machines.ts";
-import { imageIds, requireImage } from "./images.ts";
+import { checkSizes, listSizes } from "./machines.ts";
+import { checkTiers, listTiers } from "./models.ts";
+import { checkImages, imageIds } from "./images.ts";
 
 type Json = Record<string, unknown>;
 
@@ -225,6 +227,17 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         ...(layers.project ? { organization: orgOnly.from === "default" ? null : orgOnly.sizeId } : {}),
       };
     };
+    /** The tier, by the one rule (resolveTier), shaped as the machine is. */
+    const tiers = await listTiers(scope);
+    const tier = (role: SettingsRole): RoleSettings["tier"] => {
+      const { tierId, from } = resolveTier(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, tiers);
+      return {
+        value: tierId,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: resolveTier(role, { organization: layers.org.agentModels }, tiers).tierId } : {}),
+      };
+    };
     const roles = Object.fromEntries(
       SETTINGS_ROLES.map((role): [SettingsRole, RoleSettings] => {
         const enabledBy = ROLE_ENABLED_BY[role as keyof typeof ROLE_ENABLED_BY];
@@ -233,7 +246,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         return [
           role,
           {
-            model: field(role, "model"),
+            tier: tier(role),
             effort: field(role, "effort"),
             timeLimitMinutes: field(role, "timeLimitMinutes"),
             machineSize: machine(role),
@@ -296,12 +309,18 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
   return { models: nextModels as AgentModels, policy: applyKeys(policy, policyChanges) };
 }
 
-/** Every machine size and image a patch names must be the organization's. */
-async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
-  for (const change of Object.values(patch.roles ?? {})) {
-    if (change?.machineSize) await requireSize(scope, change.machineSize);
-    if (change?.image) await requireImage(scope, change.image);
-  }
+/**
+ * Every machine size, model tier and image a patch names must be the
+ * organization's, and an image must not be archived. Each table's rows are
+ * held FOR SHARE in id order, before the caller locks the organization or
+ * project row: removing a tier and archiving or publishing an image lock
+ * their own row first and the organization's after.
+ */
+async function checkReferences(scope: OrgScope, patch: SettingsPatch) {
+  const changes = Object.values(patch.roles ?? {});
+  await checkSizes(scope, changes.flatMap((change) => (change?.machineSize ? [change.machineSize] : [])));
+  await checkTiers(scope, patch.roles ?? {});
+  await checkImages(scope, changes.flatMap((change) => (change?.image ? [change.image] : [])));
 }
 
 async function recordSettings(scope: OrgScope, ctx: RequestContext, projectId: string | null, patch: SettingsPatch) {
@@ -323,9 +342,10 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
   await requireOrgAdmin(ctx);
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
+    // Sizes, tiers and images before the organization row: the order their removal or archiving locks them in.
+    await checkReferences(scope, patch);
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
-    await checkSizes(scope, patch);
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
@@ -345,9 +365,10 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   await requireProjectEditor(ctx, projectId);
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
+    // Sizes, tiers and images before the organization and project rows: the order their removal or archiving locks them in.
+    await checkReferences(scope, patch);
     const layers = await loadLayers(scope, projectId, true);
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
-    await checkSizes(scope, patch);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);
     await scope.sql`
       UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb, updated_at = now()

@@ -438,7 +438,7 @@ describe("removing a size in use", () => {
     expect(res.status).toBe(200);
     expect((await body(res)).sizes.map((s: Json) => s.name)).not.toContain("Half");
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
-    expect(org.default_agent_models.simplifier).toEqual({ machineSize: large.id, effort: "low" });
+    expect(org.default_agent_models.simplifier).toEqual({ machineSize: large.id, effort: "low", tier: expect.any(String) });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models.reviewer).toEqual({ machineSize: large.id });
     expect(p.preview_settings.machineSize).toBe(large.id);
@@ -449,7 +449,10 @@ describe("removing a size in use", () => {
     const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${large.id}`, { replacement: null });
     expect(res.status).toBe(200);
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
-    expect(org.default_agent_models).toEqual({ simplifier: { effort: "low" } });
+    // Every role keeps the tier the organization was seeded with (migration 069).
+    const sizesNamed = Object.values(org.default_agent_models as Record<string, Json>).filter((r) => "machineSize" in r);
+    expect(sizesNamed).toEqual([]);
+    expect(org.default_agent_models.simplifier).toEqual({ effort: "low", tier: expect.any(String) });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models).toEqual({});
     expect(p.preview_settings.machineSize).toBeUndefined();

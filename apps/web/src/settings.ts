@@ -23,7 +23,7 @@ export function effortLabel(effort: string | null): string {
 /** Whether a project changes anything about a role: a setting, or its prompt. */
 export function roleChanged(role: RoleSettings): boolean {
   return (
-    [role.model, role.effort, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
+    [role.tier, role.effort, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
     (role.prompt.project !== undefined && role.prompt.project.mode !== "inherit")
   );
 }

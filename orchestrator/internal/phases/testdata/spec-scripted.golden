@@ -3,6 +3,7 @@
   "labels": {
     "dude.harness": "scripted",
     "dude.model": "fake/scripted",
+    "dude.model_tier": "Coder",
     "dude.org": "org_1",
     "dude.phase": "implement",
     "dude.run": "run_1",

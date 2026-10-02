@@ -39,23 +39,19 @@ export type Effort = z.infer<typeof effortSchema>;
 /** Running time allowed per session, in minutes: up to a week. */
 export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
 
-export const MODEL_PROVIDERS = ["llm-anthropic", "llm-openai"] as const;
-// Explicit exceptions for orchestrator/internal/fakeagent's test harness, not image providers.
+// The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
 export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"] as const;
-export const MODEL_ACCEPTED_FORM = `model must be ${MODEL_PROVIDERS.map((provider) => `${provider}/<model>`).join(" or ")} (non-empty model, no whitespace or extra slash, at most 200 characters); test harness exceptions: ${TEST_HARNESS_MODELS.join(", ")}`;
-export const modelSelectionSchema = z.string().refine((value) => {
-  if (value.length > 200) return false;
-  if ((TEST_HARNESS_MODELS as readonly string[]).includes(value)) return true;
-  const [provider, model, extra] = value.split("/");
-  return (MODEL_PROVIDERS as readonly string[]).includes(provider ?? "") && Boolean(model) && extra === undefined && !/\s/u.test(value);
-}, MODEL_ACCEPTED_FORM);
+/** What a role that still names a model is told. */
+export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 
 export const agentModelConfigSchema = z.object({
   /**
+   * The model tier its sessions run on (an organization's tier id).
    * Optional at each layer: a project that changes only a role's effort
-   * keeps its organization's model (resolveAgentModel, field by field).
+   * keeps its organization's tier (resolveTier, field by field).
    */
-  model: modelSelectionSchema.optional(),
+  tier: z.string().min(1).max(100).optional(),
+  model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
@@ -415,7 +411,10 @@ export const runSchema = z.object({
    * already been translated into dude's own events.
    */
   harness: z.string().nullable().default(null),
+  /** The model dude requested when it was submitted; what the proxy served is the proxy's to say. */
   model: z.string().nullable().default(null),
+  /** The tier's name then; null for a Run from before tiers. */
+  modelTier: z.string().nullable().default(null),
   /**
    * Why dude paused it itself, and so what takes it up again: "person" —
    * parked while it waits for an answer or a decision, which resumes it;

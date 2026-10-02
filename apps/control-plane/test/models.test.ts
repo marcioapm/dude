@@ -5,7 +5,7 @@ import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
-import { promptRoleSchema } from "@dude/domain";
+import { promptRoleSchema, ROLE_MODEL_REMOVED } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const NAME = `dude_models_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -84,105 +84,58 @@ afterAll(async () => {
 });
 
 const paths = ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`];
-const invalid = ["anthropic/claude", "openai/gpt", "llmproxy/model", "model", "llm-anthropic/", "llm-openai/",
-  "llm-openai/a/b", "llm-anthropic/a b", " llm-openai/gpt", "llm-openai/gpt\n", "fake/unknown", "", "llm-openai/" + "x".repeat(190)];
-const valid = ["llm-anthropic/claude-sonnet-5", "llm-openai/new-model:latest", "llm-openai/" + "x".repeat(189),
-  "fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"];
+// Every form a role's model ever took: none is taken now, a role names a tier.
+const models = ["llm-anthropic/claude-sonnet-5", "claude-opus-5-5", "fake/scripted", ""];
 
 for (const path of paths) {
-  test(`${path} rejects invalid model writes atomically with an actionable 400`, async () => {
+  test(`${path} refuses a role's model atomically, saying to name a tier`, async () => {
     const before = await (await call("GET", path)).json();
     const [countBefore] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'settings.updated'`;
-    for (const model of invalid) {
+    for (const model of models) {
       const res = await call("PATCH", path, { roles: { implementer: { model }, reviewer: { effort: "high" } } });
       expect(res.status).toBe(400);
       const error = (await body(res)).error;
       expect(error.code).toBe("bad_request");
-      expect(error.message).toContain("roles.implementer.model");
-      expect(error.message).toContain("llm-anthropic/<model>");
-      expect(error.message).toContain("llm-openai/<model>");
+      expect(error.message).toBe(`request body failed validation: roles.implementer.model: ${ROLE_MODEL_REMOVED}`);
     }
     expect(await (await call("GET", path)).json()).toEqual(before);
     const [countAfter] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'settings.updated'`;
     expect(countAfter.n).toBe(countBefore.n);
   });
 
-  test(`${path} accepts providers and explicit harness models, then resets`, async () => {
-    for (const model of valid) {
-      const res = await call("PATCH", path, { roles: { implementer: { model } } });
-      expect(res.status).toBe(200);
-      expect((await body(res)).roles.implementer.model.value).toBe(model);
-    }
-    const reset = await call("PATCH", path, { roles: { implementer: { model: null } } });
+  test(`${path} takes one of the organization's tiers, then resets`, async () => {
+    const tiers = (await body(await call("GET", "/v1/models/tiers"))).tiers;
+    const fast = tiers.find((t: { name: string }) => t.name === "Fast");
+    const res = await call("PATCH", path, { roles: { implementer: { tier: fast.id } } });
+    expect(res.status).toBe(200);
+    expect((await body(res)).roles.implementer.tier.value).toBe(fast.id);
+    const reset = await call("PATCH", path, { roles: { implementer: { tier: null } } });
     expect(reset.status).toBe(200);
-    expect((await body(reset)).roles.implementer.model.value).toBeNull();
+    // The organization's reset ran first: neither layer names a tier for it now.
+    expect((await body(reset)).roles.implementer.tier.value).toBeNull();
   });
 }
 
-test("project update rejects invalid models without changing other fields", async () => {
+test("project create and update refuse a role's model without changing anything", async () => {
   const before = await body(await call("GET", `/v1/projects/${PROJECT}`));
-  for (const model of invalid) {
+  for (const model of models) {
     const update = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Bad", agentModels: { investigator: { model } } });
     expect(update.status).toBe(400);
-    expect((await body(update)).error.message).toContain("llm-anthropic/<model>");
-  }
-  expect(await body(await call("GET", `/v1/projects/${PROJECT}`))).toEqual(before);
-});
-
-test("project create and update use hierarchy validation, including non-settings roles", async () => {
-  for (const model of invalid) {
+    expect((await body(update)).error.message).toContain(ROLE_MODEL_REMOVED);
     const create = await call("POST", "/v1/projects", { name: "Bad", slug: "bad-model", agentModels: { orchestrator: { model } } });
     expect(create.status).toBe(400);
-    expect((await body(create)).error.message).toContain("llm-openai/<model>");
-    const update = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Bad", agentModels: { investigator: { model } } });
-    expect(update.status).toBe(400);
-    expect((await body(update)).error.message).toContain("llm-anthropic/<model>");
   }
+  expect(await body(await call("GET", `/v1/projects/${PROJECT}`))).toEqual(before);
   const [absent] = await owner`SELECT count(*)::int AS n FROM projects WHERE slug = 'bad-model'`;
   expect(absent.n).toBe(0);
-  expect((await body(await call("GET", `/v1/projects/${PROJECT}`))).name).toBe("Models");
-  for (const [i, model] of valid.entries()) {
-    const models = { orchestrator: { model }, investigator: { effort: "high" }, fixer: { model } };
-    const create = await call("POST", "/v1/projects", { name: "Good", slug: `good-model-${i}`, agentModels: models });
-    expect(create.status).toBe(201);
-    expect((await body(create)).agentModels).toEqual(models);
-    const update = await call("PATCH", `/v1/projects/${PROJECT}`, { agentModels: models });
-    expect(update.status).toBe(200);
-    expect((await body(update)).agentModels).toEqual(models);
-  }
 });
 
-test("legacy invalid stored strings read safely, allow unrelated patches, correction and reset", async () => {
+test("a stored model left over reads safely and is ignored: the role's tier is what it runs on", async () => {
   const legacy = { implementer: { model: "old-provider/old-model" } };
-  await owner`UPDATE organizations SET default_agent_models = ${legacy}::jsonb WHERE id = ${ORG}`;
   await owner`UPDATE projects SET agent_models = ${legacy}::jsonb WHERE id = ${PROJECT}`;
-  const projectRead = await call("GET", `/v1/projects/${PROJECT}`);
-  expect(projectRead.status).toBe(200);
-  expect((await body(projectRead)).agentModels).toEqual(legacy);
-  const renamed = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" });
-  expect(renamed.status).toBe(200);
-  expect((await body(renamed)).agentModels).toEqual(legacy);
-  // The project path runs after the organization's reset, so it inherits
-  // the organization's now-empty model rather than the legacy one.
-  const afterReset: Record<string, unknown> = {
-    "/v1/settings/organization": { value: null, source: "organization" },
-    [`/v1/projects/${PROJECT}/settings`]: { value: null, source: "organization" },
-  };
-  for (const path of paths) {
-    const read = await call("GET", path);
-    expect(read.status).toBe(200);
-    expect((await body(read)).roles.implementer.model.value).toBe("old-provider/old-model");
-    const patch = await call("PATCH", path, { roles: { implementer: { effort: "low" } } });
-    expect(patch.status).toBe(200);
-    expect((await body(patch)).roles.implementer.model.value).toBe("old-provider/old-model");
-    const corrected = await call("PATCH", path, { roles: { implementer: { model: "llm-openai/gpt" } } });
-    expect(corrected.status).toBe(200);
-    expect((await body(corrected)).roles.implementer.model.value).toBe("llm-openai/gpt");
-    expect((await body(await call("GET", path))).roles.implementer.model.value).toBe("llm-openai/gpt");
-    const reset = await call("PATCH", path, { roles: { implementer: { model: null } } });
-    expect(reset.status).toBe(200);
-    expect((await body(reset)).roles.implementer.model).toEqual(afterReset[path]);
-    expect((await body(await call("GET", path))).roles.implementer.model).toEqual(afterReset[path]);
-  }
+  const read = await call("GET", `/v1/projects/${PROJECT}/settings`);
+  expect(read.status).toBe(200);
+  expect((await body(read)).roles.implementer.model).toBeUndefined();
+  expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { effort: "low" } } })).status).toBe(200);
   expect((await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" })).status).toBe(200);
 });
