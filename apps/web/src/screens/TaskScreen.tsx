@@ -393,7 +393,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             </Button>
           ) : null}
           {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
-          {!earlier && item.status === "review" && prs.length === 0 && currentPhases.length > 0 && currentPhases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
+          {!earlier && item.status === "review" && prs.length === 0 && started && currentPhases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
             <Button variant="primary" leadingIcon="check" data-testid="mark-done"
               onClick={() => void client.markDone(taskId).then(() => load(), (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
               Mark done
@@ -904,7 +904,6 @@ function Activity({ events, people, runs, prs, current, many, shown, onOpenRun, 
 interface ActivityLine {
   id: string;
   at: string;
-  /** The attempt it happened in. */
   attempt: number;
   who: ReactNode;
   text: ReactNode;
