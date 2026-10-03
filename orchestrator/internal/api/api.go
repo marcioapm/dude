@@ -79,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
+	mux.Handle("POST /internal/tasks/{id}/chat", s.auth(s.chat))
 	mux.Handle("POST /internal/runs/{id}/steer", s.auth(s.steer))
 	mux.Handle("POST /internal/runs/{id}/pause", s.auth(s.pause))
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
@@ -326,6 +327,8 @@ type runInfo struct {
 	ProjectID, TaskID, Status string
 	// dude paused it itself (runs.dude_pause), and would resume it on its own.
 	DudePaused bool
+	// Its agent role; "conductor" for the task's conductor.
+	Role string
 }
 
 var liveStatuses = []string{"pending", "scheduled", "starting", "running", "paused"}
@@ -333,8 +336,9 @@ var liveStatuses = []string{"pending", "scheduled", "starting", "running", "paus
 func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
 	var kind string
-	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL, kind FROM runs WHERE id = $1 FOR UPDATE`, runID).
-		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused, &kind)
+	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL, kind, COALESCE(role::text, '')
+		FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused, &kind, &ri.Role)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
 	}
@@ -628,16 +632,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err := ownerOnly(r.Context(), tx, ri.TaskID, principalOf(r).Person, "answer"); err != nil {
 			return err
 		}
-		var answeredAt any
-		if err := tx.QueryRow(r.Context(), `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
-			answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1 RETURNING answered_at`,
-			questionID, body.Text, actor(r)).Scan(&answeredAt); err != nil {
-			return err
-		}
-		// Delivered as a steer is — queued until the agent takes it, which
-		// starts its next turn — and quoting the question it settles.
-		text := fmt.Sprintf("Answer to your question %q:\n\n%s", prompt, body.Text)
-		directiveID, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false)
+		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, body.Text, actor(r))
 		if err != nil {
 			return err
 		}
@@ -645,8 +641,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err != nil {
 			return err
 		}
-		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, ri.ProjectID, ri.TaskID, "awaiting_input",
-			"running", "a person answered the agent"); err != nil {
+		var answeredAt any
+		if err := tx.QueryRow(r.Context(), `SELECT answered_at FROM questions WHERE id = $1`, questionID).Scan(&answeredAt); err != nil {
 			return err
 		}
 		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt,
@@ -665,10 +661,45 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 	return nil
 }
 
+// answerQuestion settles an open question with a person's answer, queued
+// for its agent as a steer is — which starts its next turn — quoting the
+// question it settles; and takes the task off waiting on a person: back to
+// running for a phase agent's question, unless a conductor's question raised
+// the wait; for that wait, back to the status before it, once nothing else
+// waits on a person (delivery.EndConductorWait), which any answer may be the
+// last of.
+func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt, text, by string) (string, error) {
+	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
+		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
+		return "", err
+	}
+	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
+		Text: fmt.Sprintf("Answer to your question %q:\n\n%s", prompt, text), Scope: "run"})
+	if err != nil {
+		return "", err
+	}
+	if role != delivery.RoleConductor {
+		// A wait a conductor's question raised is ended only by
+		// EndConductorWait, once its last blocker settles.
+		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
+		if err != nil {
+			return "", err
+		}
+		if !owned {
+			if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
+				"a person answered the agent"); err != nil {
+				return "", err
+			}
+		}
+	}
+	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
+}
+
 // abort stops a Run and its task at once, and the Runs beside it. Their lux
 // Runs are stopped and kept a while by the syncer, so the task can be picked
 // back up — resumed where it stopped (recover.go); its events stay — abort
-// stops work, it does not erase it.
+// stops work, it does not erase it. A task's conductor is stopped alone:
+// nothing else about the task changes, and it is not kept.
 func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
 	var body struct{ Reason string }
@@ -676,6 +707,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		return err
 	}
 	var taskID string
+	conductor := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		ri, err := loadRun(r.Context(), tx, runID)
 		if err != nil {
@@ -685,6 +717,17 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			return fail(http.StatusConflict, "conflict", "run %s is already %s", runID, ri.Status)
 		}
 		taskID = ri.TaskID
+		if ri.Role == delivery.RoleConductor {
+			// The task's conductor changes nothing about the task, nor does
+			// stopping it: the next message in Chat starts another, so
+			// nothing is kept to resume.
+			conductor = true
+			if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
+				control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
+				return err
+			}
+			return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
+		}
 		// The step it is part of stops with it — the reviewers beside it, the
 		// whole of a delivery — each kept, so the task can be picked back up
 		// where it stopped (phases.Syncer.end).
@@ -708,6 +751,11 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 	})
 	if err != nil {
 		return err
+	}
+	if conductor {
+		s.kick()
+		write(w, http.StatusOK, map[string]any{"ok": true, "status": "aborted"})
+		return nil
 	}
 	// Its workflow stops with it, rather than waiting on a Run that will
 	// never finish.
@@ -900,6 +948,11 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 				return err
 			}
 		}
+		// A decided escalation waits on no one; the workflow then moves the
+		// task as the decision says.
+		if err := delivery.EndConductorWait(r.Context(), tx, org, projectID, taskID); err != nil {
+			return err
+		}
 		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", principalOf(r),
 			map[string]any{"reason": e.Reason, "action": body.Action, "note": e.Decided.Note})
 	})
@@ -997,6 +1050,10 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			}
 		}
 		out = map[string]any{"id": id, "status": decision}
+		// It may have been the last thing the task waited on a person for.
+		if err := delivery.EndConductorWait(r.Context(), tx, org, ri.ProjectID, taskID); err != nil {
+			return err
+		}
 		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, principalOf(r),
 			map[string]any{"requestId": id, "repository": repoName, "access": access, "note": body.Note})
 	})

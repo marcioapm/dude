@@ -19,7 +19,7 @@
 
 import { peopleJson } from "./people.ts";
 import { escalationJson } from "./work.ts";
-import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, isConductor, runLabel } from "@dude/domain";
 import type { Escalation, PersonRef, RunStatus, SessionStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json } from "../http.ts";
@@ -84,10 +84,27 @@ const SESSION_STATUS: Record<RunStatus, SessionStatus> = {
   aborted: "aborted",
 };
 
-/** The status an attempt reports: its most recent phase's. */
-function attemptStatus(runs: RunRow[]): RunStatus {
+/**
+ * The status an attempt reports: its most recent phase's. A task's
+ * conductor talks about the work and is not a step of it: it reports the
+ * attempt only when nothing else ran.
+ */
+function attemptStatus(all: RunRow[]): RunStatus {
+  const phases = all.filter((r) => !isConductor(r));
+  const runs = phases.length > 0 ? phases : all;
   const live = runs.find((r) => !TERMINAL_RUN_STATUSES.includes(r.status));
   return (live ?? runs[runs.length - 1])?.status ?? "pending";
+}
+
+/**
+ * A Run as a session row: what it asks of a person, if anything, else its
+ * status. A conductor dude parked between messages is quiet — waiting, not
+ * waiting on you: nobody owes it anything.
+ */
+function sessionStatus(r: RunRow): SessionStatus {
+  if (r.question) return "awaiting_input";
+  if (isConductor(r) && r.status === "paused") return "pending";
+  return SESSION_STATUS[r.status];
 }
 
 /** Group rows by a key, preserving the order the query returned them in. */
@@ -150,7 +167,8 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
         WHERE r.kind = 'agent'
       ) ranked
       WHERE rank <= ${ATTEMPTS_PER_TASK}
-      ORDER BY "taskId", attempt, created_at`) as RunRow[];
+      -- The task's conductor first in its attempt, as in its Sessions.
+      ORDER BY "taskId", attempt, (role = 'conductor' AND phase IS NULL) DESC, created_at`) as RunRow[];
 
     // Spend per task: its agents' model cost by the one rule every screen
     // uses (run_model_usd, migration 061): lux's AI cost once reported, else
@@ -195,7 +213,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
           sessions: phaseRuns.map((r) => ({
             id: r.id,
             role: r.role ?? DEFAULT_RUN_ROLE,
-            status: r.question ? "awaiting_input" : SESSION_STATUS[r.status],
+            status: sessionStatus(r),
             title: runLabel(r),
             // What it asked, so the board and the attention list say it
             // without opening the chat.

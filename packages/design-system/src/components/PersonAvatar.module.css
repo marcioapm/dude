@@ -76,7 +76,7 @@
   background: var(--role-bg);
   box-shadow: 0 0 0 2px var(--av-bed);
 }
-.agent[data-role="orchestrator"] { --role-fg: var(--ds-role-orchestrator-fg); --role-bg: var(--ds-role-orchestrator-bg); }
+.agent[data-role="conductor"] { --role-fg: var(--ds-role-conductor-fg); --role-bg: var(--ds-role-conductor-bg); }
 .agent[data-role="investigator"] { --role-fg: var(--ds-role-investigator-fg); --role-bg: var(--ds-role-investigator-bg); }
 .agent[data-role="implementer"] { --role-fg: var(--ds-role-implementer-fg); --role-bg: var(--ds-role-implementer-bg); }
 .agent[data-role="reviewer"] { --role-fg: var(--ds-role-reviewer-fg); --role-bg: var(--ds-role-reviewer-bg); }

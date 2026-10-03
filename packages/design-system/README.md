@@ -45,7 +45,7 @@ behind all of these, reached when something looks off.
    screen; it never takes the text below readable.
 2. **Meaning never lives in hue alone.** Every status has a tone *and* a glyph
    *and* a label. Diffs have background *and* gutter color *and* a sign
-   column. Roles have a hue *and* a glyph *and* (for the orchestrator) a
+   column. Roles have a hue *and* a glyph *and* (for the conductor) a
    shape. Grayscale the gallery and nothing is lost.
 3. **Dark is primary, light is a peer.** The operator spends hours here, often
    at night, on a big monitor. Dark mode gets the most careful contrast work
@@ -168,7 +168,7 @@ gallery for every value.
 | Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
-| Roles | `--ds-role-{orchestrator,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
+| Roles | `--ds-role-{conductor,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
@@ -379,6 +379,35 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   he aborts) wear the same face and name. Prompts clamp at eight lines with
   a "Show all" control, measured after layout so a short prompt gets no
   control (`maxLines` overrides).
+
+### A task's Chat (the conductor)
+
+- A task's **Chat** is its conversation with its conductor, the agent
+  people talk to about a task — any task, delivered weeks ago or not
+  started. It is a transcript like a session's (`ChatTranscript`,
+  `ChatMessage`, `ChatAside`, `QuestionCard`), with three differences.
+- **`TaskHistory`** heads it, pinned: the task's history in one line on
+  the raised shade — how it went, what ran (a fan-out folded, "reviewers
+  ×3", arrows muted between), what it came to (findings, cost). Before
+  anyone has written it is all there is, over an empty composer.
+- **The turns.** A person's message is `intent="message"`: signed, no tag
+  and no tint — talking, not intervening. dude's briefing of the conductor
+  is `role="system" intent="briefing"`: the prompt's frame, clamp and
+  face, tagged "Briefing", signed with the task's dude name; the message
+  it ends with is the person's own turn just before it, never said twice.
+  The conductor answers as `role="conductor"`: its round violet face. dude's
+  notices there name him (`ChatNotice by`): "El Duderino: Parked while
+  nobody is writing". A parked conductor is quiet: nothing about it is
+  amber, and nothing counts it as needing you; its question is the usual
+  `QuestionCard`, loud as any. A task that has had several conductors
+  shows each conversation in order, one after the other in the same
+  transcript: an ended one's turns with nothing to answer, closed by
+  dude's notice that it ended; only the latest has the composer.
+- **The composer is `mode="chat"`**: "Ask about this task…", Send, the
+  accent's focus, no interrupt (a message starts the conductor's next
+  turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
+  where "Sent as" would be. While the conductor asks, it is the answer
+  composer, as in a session.
 
 ### Images in a conversation
 
@@ -786,7 +815,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and "asked again · approved before" — attention, their earlier word
   muted — for one asked again after a verdict. Faces are GitHub's.
 - **Checks dude cannot read are said plainly**: "GitHub won't show dude
-  this repository's checks", what the token lacks beneath, and a link to
+  this repository's checks", beneath it that a fine-grained token cannot
+  read check runs and which token can, and a link to
   where it is fixed (`diagnosticAction`). Never a bare "CI unavailable".
 - A page's own note: a settings page with its own audience (Memory: who
   may add, who may change) renders its own `SettingsNote`; the frame's
@@ -806,7 +836,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   other.
 - Humans and agents differ on three channels at once: a human is a full
   circle with a ring, shows initials, and takes a muted identity colour;
-  agents are squares (the orchestrator a round glyph), show a glyph, and
+  agents are squares (the conductor a round glyph), show a glyph, and
   take a vivid role colour. Nothing about a person is ever a role colour or
   a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
@@ -1230,7 +1260,7 @@ MarkdownCheatsheet.
 
 - **StatusBadge** — every domain status; badge, small, icon-only and dot
   variants.
-- **AgentAvatar** — orchestrator, investigator, implementer, reviewer,
+- **AgentAvatar** — conductor, investigator, implementer, reviewer,
   simplifier, qa_browser, plus human / system / integration actors.
 - **CostDisplay, TokenCount, Duration** — the three formatters as components,
   with live ticking and budget colouring.
@@ -1238,7 +1268,7 @@ MarkdownCheatsheet.
   `goodDirection`, optional budget bar.
 - **EventRow / EventStream / EventDayDivider** — fixed-column ledger rows with
   expandable detail and a one-shot flash for new rows.
-- **SessionTreeNode / SessionTree** — recursive orchestrator → subagent tree
+- **SessionTreeNode / SessionTree** — recursive conductor → subagent tree
   with guide lines, live activity, and an aligned cost column.
 - **DiffView / DiffFile / parseUnifiedDiff** — per-file unified diffs with
   sticky gutters, kind badges and auto-collapse for large files.
@@ -1256,7 +1286,7 @@ MarkdownCheatsheet.
 - **ChatMessage** — one turn: gutter + column, not a bubble. Agent turns
   carry model, elapsed, context and output tokens, cost and the live
   activity in the foot; turns addressed to the agent are framed and tinted
-  by intent (task / answer / steer), can be queued (with where it lands),
+  by intent (task / answer / steer, and in a task's Chat briefing / message), can be queued (with where it lands),
   read (sent · read, after what), or failed, and clamp when long;
   system turns are a hairline with a label. Body is `Markdown` and grows in
   place. `avatar` puts a face of the app's own in the gutter (dude's).
@@ -1295,7 +1325,12 @@ MarkdownCheatsheet.
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (lands at the agent's next step; `landsHint` says where;
-  interrupt now is a tick) vs prompt, visibly different.
+  interrupt now is a tick) vs prompt vs chat (a task's conductor; `to`),
+  visibly different. The words leave the field only once `onSubmit`
+  confirms them: resolving `false`, or rejecting, keeps them to send again
+  (the caller shows why). A person's draft is never lost to a failed send.
+- **TaskHistory** — a task's history in one line: how it went, what ran,
+  what it came to. Heads a task's Chat.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `title` renders a plain-text name as the first `h1` (blank: `untitled`,

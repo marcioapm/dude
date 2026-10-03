@@ -116,7 +116,7 @@ function Transcript() {
       live
       session={{
         id: "s_2401-orc",
-        role: "orchestrator",
+        role: "conductor",
         status: "awaiting_input",
         model: "claude-opus-4",
         taskKey: "WI-2401",
@@ -152,20 +152,20 @@ function Transcript() {
       <Aside>
         <ThinkingBlock text={THOUGHT_1} startedAt={ts(1 * SEC)} endedAt={ts(5 * SEC)} />
       </Aside>
-      <ChatMessage role="orchestrator" model="claude-opus-4" content={MSG_1} startedAt={ts(5 * SEC)} endedAt={ts(7 * SEC)} costUsd={0.012} contextTokens={18_300} contextWindowTokens={CONTEXT_WINDOW} outputTokens={60} />
+      <ChatMessage role="conductor" model="claude-opus-4" content={MSG_1} startedAt={ts(5 * SEC)} endedAt={ts(7 * SEC)} costUsd={0.012} contextTokens={18_300} contextWindowTokens={CONTEXT_WINDOW} outputTokens={60} />
       <Aside>
         <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={ts(7_100)} endedAt={ts(7_141)} output={CLIENT_SOURCE} />
         <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={ts(10_200)} endedAt={ts(10_212)} diff={CLIENT_DIFF} />
       </Aside>
-      <ChatMessage role="orchestrator" continued content={MSG_2} startedAt={ts(10_400)} endedAt={ts(14_000)} costUsd={0.031} contextTokens={31_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={410} />
-      <ChatMessage role="orchestrator" continued content={MD_SHORT} startedAt={ts(14_020)} />
+      <ChatMessage role="conductor" continued content={MSG_2} startedAt={ts(10_400)} endedAt={ts(14_000)} costUsd={0.031} contextTokens={31_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={410} />
+      <ChatMessage role="conductor" continued content={MD_SHORT} startedAt={ts(14_020)} />
       <Aside>
         <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} startedAt={ts(14_100)} endedAt={ts(18_310)} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} maxResultLines={8} />
         <ThinkingBlock text={THOUGHT_2} startedAt={ts(18_400)} endedAt={ts(29_800)} />
       </Aside>
       <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={ts(20 * SEC)} deliveredAt={ts(29_800)} read />
       <ChatMessage
-        role="orchestrator"
+        role="conductor"
         model="claude-opus-4"
         content={MSG_3}
         startedAt={ts(29_800)}
@@ -179,9 +179,9 @@ function Transcript() {
       <Aside>
         <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck && bun test apps/control-plane" }} startedAt={ts(38_200)} endedAt={ts(42_080)} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} />
       </Aside>
-      <ChatMessage role="orchestrator" continued content="All green: 65 pass, 0 fail. The diff is 118 lines." startedAt={ts(45_600)} />
-      <ChatMessage data-shot-anchor="markdown" role="orchestrator" continued content={MD_SUMMARY} startedAt={ts(47 * SEC)} endedAt={ts(58 * SEC)} costUsd={0.021} contextTokens={63_900} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
-      <QuestionCard role="orchestrator" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={ts(12 * MIN)} />
+      <ChatMessage role="conductor" continued content="All green: 65 pass, 0 fail. The diff is 118 lines." startedAt={ts(45_600)} />
+      <ChatMessage data-shot-anchor="markdown" role="conductor" continued content={MD_SUMMARY} startedAt={ts(47 * SEC)} endedAt={ts(58 * SEC)} costUsd={0.021} contextTokens={63_900} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
+      <QuestionCard role="conductor" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={ts(12 * MIN)} />
     </ChatTranscript>
   );
 }

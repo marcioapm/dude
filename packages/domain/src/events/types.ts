@@ -90,7 +90,9 @@ export const EventTypes = {
    */
   DirectiveDelivered: "run.directive.delivered",
   /**
-   * A steer will not reach the agent. Payload: `{ directiveId, error }`.
+   * A steer will not reach the agent. Payload: `{ directiveId, error,
+   * nextRunId? }`: `nextRunId` names the conductor a message to an ended
+   * conductor was handed to instead.
    * Never after its delivery; a `DirectiveDelivered` after it (the agent
    * read it after all) supersedes it, and the failure is cleared. An
    * "Interrupt now" sent as the interrupt alone fails with the steer whose
@@ -216,8 +218,29 @@ export const EventTypes = {
   PlanUpdated: "agent.plan.updated",
 
   // Human interaction
+  /**
+   * An agent asked a person (`kind` `agent`), or the workflow escalated
+   * (`kind` `escalation`). An agent's question that moved its task to
+   * awaiting input carries `taskStatus`, what it was, and `waitCursor`,
+   * the cursor of that move's `task.status_changed`: an answer to a
+   * conductor puts the status back only while that move is still the
+   * task's latest and nothing else waits on a person.
+   */
   QuestionAsked: "question.asked",
   QuestionAnswered: "question.answered",
+  /**
+   * A person wrote in a task's Chat, on its conductor's Run. Payload:
+   * `{ text, directiveId? }`: the first message has none (it is the
+   * conductor's briefing, with dude's note before it); each later one is
+   * delivered as the directive named.
+   */
+  ChatMessage: "chat.message",
+  /**
+   * dude briefed a task's new conductor: `{ text }` is its first prompt —
+   * dude's note on the task, then the first message. Written with the
+   * Run, after that message's `chat.message`.
+   */
+  ConductorBriefed: "conductor.briefed",
 
   // Artifacts
   ArtifactCreated: "artifact.created",

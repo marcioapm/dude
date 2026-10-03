@@ -175,7 +175,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       at: 1.2,
       apply: (s) => {
         s.status = "running";
-        s.turns.push({ id: "o1", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_1, shown: 0, thought: ORCH_THOUGHT_1, thoughtShown: 0, thoughtStartedAt: T(1.2), activity: "thinking", activitySince: T(1.2), startedAt: T(1.2), tools: [], costUsd: 0.004, contextTokens: 1_900 });
+        s.turns.push({ id: "o1", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_1, shown: 0, thought: ORCH_THOUGHT_1, thoughtShown: 0, thoughtStartedAt: T(1.2), activity: "thinking", activitySince: T(1.2), startedAt: T(1.2), tools: [], costUsd: 0.004, contextTokens: 1_900 });
       },
     },
     ...streamSteps("o1-thought", ORCH_THOUGHT_1, 1.4, 2.8, (s, shown, last) => {
@@ -275,7 +275,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       at: 15,
       apply: (s) => {
         upd(s.turns, "o1", { activity: "completed", endedAt: T(15), tool: undefined, costUsd: 0.06, contextTokens: 6_100 });
-        s.turns.push({ id: "o2", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_2, shown: 0, activity: "thinking", activitySince: T(15), startedAt: T(15), tools: [], costUsd: 0.001, contextTokens: 400 });
+        s.turns.push({ id: "o2", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_2, shown: 0, activity: "thinking", activitySince: T(15), startedAt: T(15), tools: [], costUsd: 0.001, contextTokens: 400 });
       },
     },
     ...streamSteps("o2", ORCH_TEXT_2, 16, 17.2, (s, shown, last) => {
@@ -413,7 +413,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       label: "Orchestrator asks a question",
       at: 46,
       apply: (s) => {
-        s.turns.push({ id: "o3", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_3, shown: 0, activity: "thinking", activitySince: T(46), startedAt: T(46), tools: [], costUsd: 0.002, contextTokens: 300 });
+        s.turns.push({ id: "o3", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_3, shown: 0, activity: "thinking", activitySince: T(46), startedAt: T(46), tools: [], costUsd: 0.002, contextTokens: 300 });
       },
     },
     ...streamSteps("o3", ORCH_TEXT_3, 47, 48, (s, shown, last) => {
@@ -421,7 +421,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       if (last) {
         s.status = "awaiting_input";
         s.question = { id: "q_44a1", text: QUESTION, askedBy: "Orchestrator", options: [...QUESTION_OPTIONS] };
-        s.turns.push({ id: "q1", kind: "question", role: "orchestrator", text: QUESTION, options: QUESTION_OPTIONS, answeredAt: null, shown: 999, startedAt: T(48), tools: [] });
+        s.turns.push({ id: "q1", kind: "question", role: "conductor", text: QUESTION, options: QUESTION_OPTIONS, answeredAt: null, shown: 999, startedAt: T(48), tools: [] });
       }
     }),
   ];
@@ -439,7 +439,7 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
         s.status = "running";
         upd(s.turns, "q1", { answeredAt: T(0) });
         s.turns.push({ id: "h1", kind: "human", role: "human", name: "marcio", intent: "answer", inReplyTo: QUESTION, text: answer, shown: 999, startedAt: T(0), tools: [] });
-        s.turns.push({ id: "o4", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
+        s.turns.push({ id: "o4", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
       },
     },
     ...streamSteps("o4", ORCH_TEXT_4, 1.2, 5.5, (s, shown, last) => {

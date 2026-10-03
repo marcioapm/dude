@@ -46,6 +46,7 @@ export const KEYS: readonly Key[] = [
   key("orchestrator.pr_reconcile", "DUDE_PR_RECONCILE", "duration", "orchestrator", "15m"),
   key("orchestrator.park_after", "DUDE_PARK_AFTER", "duration", "orchestrator", "0s"),
   key("orchestrator.idle_after", "DUDE_IDLE_AFTER", "duration", "orchestrator", "0s"),
+  key("orchestrator.conductor_warm", "DUDE_CONDUCTOR_WARM", "duration", "orchestrator", "0s"),
   key("orchestrator.diff_every", "DUDE_DIFF_EVERY", "duration", "orchestrator", "15s"),
   key("orchestrator.machine_usd_per_hour", "DUDE_MACHINE_USD_PER_HOUR", "float", "orchestrator", "0.20"),
   key("orchestrator.lux_cost_every", "DUDE_LUX_COST_EVERY", "duration", "orchestrator", "2m"),

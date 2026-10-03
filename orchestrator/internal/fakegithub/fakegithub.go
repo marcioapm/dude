@@ -76,7 +76,7 @@ type Server struct {
 	PermissionRefused bool
 	// Update-branch requests fail as GitHub does when it is down.
 	UpdateDown bool
-	// The check-runs listing refuses, as for a token without Checks: read.
+	// The check-runs listing refuses, as for a fine-grained token.
 	CheckRunsForbidden bool
 	// When set, the check-runs listing answers 403 with this message and
 	// no rate-limit headers, as GitHub's abuse-detection limit does.

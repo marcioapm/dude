@@ -17,8 +17,8 @@
   border-radius: 0;
   background: var(--rail-bg);
 }
-.orchestrator {
-  --rail: var(--ds-role-orchestrator-solid);
+.conductor {
+  --rail: var(--ds-role-conductor-solid);
 }
 .investigator {
   --rail: var(--ds-role-investigator-solid);
