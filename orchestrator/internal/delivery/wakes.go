@@ -46,13 +46,16 @@ func WakeNote(lines []string) string {
 // started, briefed with it. Returns the conductor woken, "" for none yet.
 // The caller holds the task's Chat lock.
 func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
-	rows, err := tx.Query(ctx, `SELECT id, kind, line FROM conductor_wakes
-		WHERE task_id = $1 AND delivered_at IS NULL ORDER BY created_at, id FOR UPDATE`, taskID)
-	if err != nil {
-		return "", err
-	}
 	type reason struct{ ID, Kind, Line string }
-	pending, err := pgx.CollectRows(rows, pgx.RowToStructByPos[reason])
+	pendingNow := func() ([]reason, error) {
+		rows, err := tx.Query(ctx, `SELECT id, kind, line FROM conductor_wakes
+			WHERE task_id = $1 AND delivered_at IS NULL ORDER BY created_at, id FOR UPDATE`, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return pgx.CollectRows(rows, pgx.RowToStructByPos[reason])
+	}
+	pending, err := pendingNow()
 	if err != nil || len(pending) == 0 {
 		return "", err
 	}
@@ -79,6 +82,10 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	}
 	if ending != "" {
 		if err := EndConductor(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: ending}, "its container stopped"); err != nil {
+			return "", err
+		}
+		// What it was told and never heard is pending again: told now too.
+		if pending, err = pendingNow(); err != nil {
 			return "", err
 		}
 	}
@@ -122,8 +129,12 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 			return "", err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now(), conductor_run_id = $2, directive_id = NULLIF($3, '')
-		WHERE id = ANY($1)`, ids, runID, directiveID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now(), conductor_run_id = $2 WHERE id = ANY($1)`,
+		ids, runID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id, directive_id)
+		SELECT $1, w, $3, NULLIF($4, '') FROM unnest($2::text[]) w`, org, ids, runID, directiveID); err != nil {
 		return "", err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorWoken, OrganizationID: org, ProjectID: projectID,
@@ -132,26 +143,117 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	return runID, err
 }
 
-// RequeueWakesTx puts the reasons a wake note carried back to pending once
-// its directive definitively failed (lux.input.failed, or its conductor
-// ended without reading it): the next sweep tells the live conductor, or
-// its replacement, again. A directive that was delivered — its consumption
-// receipt — keeps them delivered, so a note is never heard twice.
-func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
-	// The link is kept while they wait: a late consumption receipt finds
-	// them (WakesHeardTx) until another note carries them.
+// Recovery: each note that carried a reason is an attempt
+// (conductor_wake_attempts). A reason goes back to pending once an attempt
+// fails unheard and no other attempt holds it — heard, or still on its way.
+// Any attempt heard settles it, and withdraws its retries not yet sent to
+// lux. The guarantee is at least once: two attempts both sent before the
+// first was heard are both heard, a duplicate note accepted rather than a
+// reason lost.
+
+// attemptHolds (SQL, over conductor_wake_attempts o): o was heard, or may
+// still be — a briefing not failed; a directive delivered (its consumption
+// wins over a failure), or not failed.
+const attemptHolds = `(CASE WHEN o.directive_id IS NULL THEN o.failed_at IS NULL
+	ELSE EXISTS (SELECT 1 FROM directives od WHERE od.id = o.directive_id AND (od.delivered_at IS NOT NULL OR od.failed_at IS NULL)) END)`
+
+// requeueTx puts reasons back to pending once no attempt holds them.
+func requeueTx(ctx context.Context, tx pgx.Tx, wakeIDs []string) error {
+	if len(wakeIDs) == 0 {
+		return nil
+	}
 	_, err := tx.Exec(ctx, `UPDATE conductor_wakes c SET delivered_at = NULL, conductor_run_id = NULL
-		FROM directives d WHERE c.directive_id = $1 AND d.id = c.directive_id AND d.failed_at IS NOT NULL AND d.delivered_at IS NULL`,
-		directiveID)
+		WHERE c.id = ANY($1) AND c.delivered_at IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM conductor_wake_attempts o WHERE o.wake_id = c.id AND `+attemptHolds+`)`, wakeIDs)
 	return err
 }
 
-// WakesHeardTx marks the reasons a wake note carried delivered again once
-// its directive is delivered after a failure (a consumption receipt wins).
+// RequeueWakesTx puts the reasons a wake note carried back to pending once
+// its directive definitively failed (lux.input.failed, or its conductor
+// ended without reading it), unless a note holds them (attemptHolds): the
+// next sweep tells the live conductor, or its replacement, again. A
+// directive that was delivered — its consumption receipt — holds them.
+func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
+	rows, err := tx.Query(ctx, `SELECT wake_id FROM conductor_wake_attempts WHERE directive_id = $1`, directiveID)
+	if err != nil {
+		return err
+	}
+	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	return requeueTx(ctx, tx, wakes)
+}
+
+// WakesHeardTx settles the reasons a wake note carried once its directive
+// is delivered — after a failure too: a consumption receipt wins. Their
+// retries not yet sent are withdrawn, and what else those carried is
+// pending again.
 func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
-	_, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now() WHERE directive_id = $1 AND delivered_at IS NULL`,
-		directiveID)
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes c SET delivered_at = COALESCE(c.delivered_at, now())
+		FROM conductor_wake_attempts a WHERE a.directive_id = $1 AND c.id = a.wake_id`, directiveID); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT d.id, d.run_id, r.project_id, r.task_id, d.organization_id
+		FROM conductor_wake_attempts a
+		JOIN conductor_wake_attempts o ON o.wake_id = a.wake_id AND o.directive_id <> a.directive_id
+		JOIN directives d ON d.id = o.directive_id JOIN runs r ON r.id = d.run_id
+		WHERE a.directive_id = $1 AND d.sent_at IS NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL`, directiveID)
+	if err != nil {
+		return err
+	}
+	type retry struct{ ID, RunID, ProjectID, TaskID, Org string }
+	retries, err := pgx.CollectRows(rows, pgx.RowToStructByPos[retry])
+	if err != nil {
+		return err
+	}
+	const why = "an earlier note with its reasons was heard"
+	for _, d := range retries {
+		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2
+			WHERE id = $1 AND sent_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, d.ID, why)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		ref := RunRef{Org: d.Org, ProjectID: d.ProjectID, TaskID: d.TaskID, RunID: d.RunID}
+		if _, err := ledger.Append(ctx, tx, ref.Event(evDirectiveFailed, ledger.ActorSystem,
+			map[string]any{"directiveId": d.ID, "error": why})); err != nil {
+			return err
+		}
+		if err := RequeueWakesTx(ctx, tx, d.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BriefingHeardTx records that a conductor dude started with a wake note
+// has its first prompt (lux accepted it): its reasons are not told again.
+func BriefingHeardTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `UPDATE conductor_wake_attempts SET heard_at = now()
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL`, runID)
 	return err
+}
+
+// BriefingUnheardTx puts back to pending the reasons a conductor was
+// started with, once it ended without hearing its first prompt (it failed
+// to submit, its image was refused, its model is missing, or it stopped
+// before lux accepted the prompt), unless another note holds them.
+func BriefingUnheardTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	rows, err := tx.Query(ctx, `UPDATE conductor_wake_attempts a SET failed_at = now()
+		FROM runs r WHERE r.id = a.conductor_run_id AND a.conductor_run_id = $1 AND a.directive_id IS NULL
+		  AND a.heard_at IS NULL AND a.failed_at IS NULL AND r.status IN ('completed', 'failed', 'aborted')
+		RETURNING a.wake_id`, runID)
+	if err != nil {
+		return err
+	}
+	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	return requeueTx(ctx, tx, wakes)
 }
 
 // FailedForConductor (SQL, over runs r): a phase Run the task's conductor

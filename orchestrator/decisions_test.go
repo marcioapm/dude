@@ -800,15 +800,24 @@ func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
 		t.Errorf("%d notes, want the failed one and its retelling", n)
 	}
 
-	// Read: a failure reported after changes nothing.
+	// Read, then reported failed: the read wins, nothing is told again.
 	var second string
 	_ = w.owner.QueryRow(ctx, `SELECT payload->>'directiveId' FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
 		ORDER BY cursor DESC LIMIT 1`, task).Scan(&second)
+	mustExec(t, w.owner, `UPDATE directives SET failed_at = now() WHERE id = $1 AND delivered_at IS NOT NULL`, second)
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NOT NULL`, second); n != 1 {
+		t.Fatalf("the read note is not both delivered and failed")
+	}
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error { return delivery.RequeueWakesTx(ctx, tx, second) }); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
 		t.Errorf("%d reasons pending again after the conductor read their note", n)
+	}
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	w.sweep()
+	if n := len(w.woken(task)); n != 2 {
+		t.Errorf("%d notes after a failure reported for a read one, want 2", n)
 	}
 }
 

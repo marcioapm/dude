@@ -36,12 +36,11 @@ CREATE TABLE conductor_wakes (
   key              text NOT NULL,
   line             text NOT NULL CHECK (length(line) <= 300),
   created_at       timestamptz NOT NULL DEFAULT now(),
-  -- Set when a note carrying it was queued for a conductor, which it names,
-  -- and the directive that carries it (NULL when it was a new conductor's
-  -- briefing). The directive failing puts the reason back to pending.
+  -- Set when a note carrying it was queued for a conductor, which it names
+  -- (the latest); conductor_wake_attempts keeps every note that carried it.
+  -- Every attempt failing unheard puts the reason back to pending.
   delivered_at     timestamptz,
   conductor_run_id text REFERENCES runs(id) ON DELETE SET NULL,
-  directive_id     text REFERENCES directives(id) ON DELETE SET NULL,
   UNIQUE (task_id, key)
 );
 CREATE INDEX conductor_wakes_pending_idx ON conductor_wakes (task_id, created_at) WHERE delivered_at IS NULL;
@@ -55,3 +54,36 @@ GRANT SELECT, INSERT, UPDATE ON conductor_wakes TO dude_app;
 -- The syncer finds the tasks with reasons pending across organizations, and
 -- delivers each in its organization's own transaction.
 GRANT SELECT ON conductor_wakes TO dude_sweeper;
+
+-- Each note that carried a reason: the directive queued for a live
+-- conductor, or (directive NULL) the briefing a new conductor was started
+-- with. Heard: its consumption receipt, or the briefing's prompt accepted;
+-- failed: the directive failed, or the conductor ended without hearing its
+-- briefing. A reason heard by any attempt is settled, and a retry not yet
+-- sent is withdrawn.
+CREATE TABLE conductor_wake_attempts (
+  id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  organization_id  text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  wake_id          text NOT NULL REFERENCES conductor_wakes(id) ON DELETE CASCADE,
+  conductor_run_id text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  directive_id     text REFERENCES directives(id) ON DELETE CASCADE,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  heard_at         timestamptz,
+  failed_at        timestamptz
+);
+CREATE INDEX conductor_wake_attempts_wake_idx ON conductor_wake_attempts (wake_id);
+-- Receipts and failures find a directive's reasons; hand-over asks whether
+-- a directive is a wake note.
+CREATE INDEX conductor_wake_attempts_directive_idx ON conductor_wake_attempts (directive_id) WHERE directive_id IS NOT NULL;
+-- Briefings not yet heard: the syncer's scan for conductors that ended
+-- before hearing theirs, and the prompt's receipt.
+CREATE INDEX conductor_wake_attempts_briefing_idx ON conductor_wake_attempts (conductor_run_id)
+  WHERE directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL;
+
+ALTER TABLE conductor_wake_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conductor_wake_attempts FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON conductor_wake_attempts
+  USING (organization_id = current_organization_id())
+  WITH CHECK (organization_id = current_organization_id());
+GRANT SELECT, INSERT, UPDATE ON conductor_wake_attempts TO dude_app;
+GRANT SELECT ON conductor_wake_attempts TO dude_sweeper;
