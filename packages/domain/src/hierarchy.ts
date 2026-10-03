@@ -305,6 +305,31 @@ export const taskCriteriaInput = z.array(z.string()).refine(
   `acceptance criteria can be at most ${TASK_CRITERIA_MAX.toLocaleString("en-US")} characters in all`,
 );
 
+/** Who takes a task's delivery decisions: Deliver ("policy") or its conductor. */
+export const deciderSchema = z.enum(["policy", "conductor"]);
+export type Decider = z.infer<typeof deciderSchema>;
+
+/** Where a conducted delivery waits on its conductor (the orchestrator's decision points). */
+export const decisionPointSchema = z.enum([
+  "start",
+  "after_implement",
+  "after_review",
+  "after_fix",
+  "before_pull_request",
+  "pull_request_feedback",
+]);
+export type DecisionPoint = z.infer<typeof decisionPointSchema>;
+
+/** A decision point in a person's words. */
+export const DECISION_POINT_LABEL: Record<DecisionPoint, string> = {
+  start: "whether to start building",
+  after_implement: "what to do after the implementer",
+  after_review: "what to do with the review's findings",
+  after_fix: "what to do after the fix",
+  before_pull_request: "whether to open the pull request",
+  pull_request_feedback: "what to do with the pull request's feedback",
+};
+
 export const taskSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
@@ -327,6 +352,13 @@ export const taskSchema = z.object({
   owner: personRefSchema.nullable().default(null),
   /** Everyone on it, the owner first. */
   people: z.array(personRefSchema).default([]),
+  /**
+   * Who takes its delivery's decisions: Deliver's fixed rules ("policy"),
+   * or its conductor, in Chat with its people ("conductor").
+   */
+  decider: deciderSchema.default("policy"),
+  /** The decision its delivery waits on for the conductor, or null. */
+  awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
@@ -427,6 +459,8 @@ export const runSchema = z.object({
   category: z.string().nullable().default(null),
   /** The Run this one continues from. */
   parentRunId: z.string().nullable().default(null),
+  /** The task's conductor, when it started this Run; null for Deliver's. */
+  conductorRunId: z.string().nullable().default(null),
   /** The commit each repository started at, by name; one not named started at its default branch. */
   baseRefs: z.record(z.string(), z.string()).default({}),
   /** Where it left each repository it changed, by name: what the next phase builds on. */

@@ -227,6 +227,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "070_kept_runs.sql",
       "071_attachments.sql",
       "072_conductor.sql",
+      "073_conductor_decisions.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
