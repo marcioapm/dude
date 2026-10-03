@@ -18,8 +18,8 @@ import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, R
 import { egressProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -118,23 +118,20 @@ export class FixtureClient extends ApiClient {
 
   /**
    * `dude.fixtures.run` = aborted | failed: the implementer stopped (by Ana,
-   * or its host lost) and the task with it, kept to resume. `restarted`: and
-   * then started over — attempt 2's implementer at work, attempt 1 set aside.
+   * or its host lost) and the task with it, kept to resume. `restarted`: a
+   * task started over (data.ts's RESTART): attempt 1 ran its pipeline,
+   * opened a pull request and was stopped at its fix by Ana; attempt 2's
+   * fixer is at work, its own pull request open.
    */
   #stop(as: "aborted" | "failed" | "restarted") {
+    if (as === "restarted") return this.#restart();
     const at = new Date(Date.now() - 95 * 60_000).toISOString();
     const stopped = { ...RUN_IMPLEMENT, status: as === "failed" ? "failed" : "aborted", endedAt: at, branch: "dude/task_wc214/attempt-1",
       error: as === "failed" ? "the agent's run ended before finishing its task: host lost" : null } as Run;
     this.#runPatch = { status: stopped.status, endedAt: at, error: stopped.error };
-    if (as === "restarted") {
-      const next = { ...RUN_IMPLEMENT, id: "run_attempt2", attempt: 2, createdAt: new Date(Date.now() - 60_000).toISOString(),
-        startedAt: new Date(Date.now() - 60_000).toISOString(), heads: {}, branch: "dude/task_wc214/attempt-2" } as Run;
-      this.#task = { ...this.#task, status: "running", runs: [next, stopped] };
-    } else {
-      this.#task = { ...this.#task, status: as === "failed" ? "failed" : "aborted", runs: [stopped] };
-      this.#recovery = { taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1,
-        keptUntil: new Date(Date.now() + 6 * 24 * 3600_000).toISOString() };
-    }
+    this.#task = { ...this.#task, status: as === "failed" ? "failed" : "aborted", runs: [stopped] };
+    this.#recovery = { taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1,
+      keptUntil: new Date(Date.now() + 6 * 24 * 3600_000).toISOString() };
     const ana = { type: "human" as const, id: "u_ana", name: "Ana Ribeiro" };
     const extra: PersistedEvent[] = [];
     const push = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"], runId: string | null) =>
@@ -142,13 +139,41 @@ export class FixtureClient extends ApiClient {
         occurredAt: at, runId, actor, payload });
     if (as === "failed") push("run.failed", { status: "failed", error: stopped.error }, { type: "system", id: "dude" }, RUN_ID);
     else push("run.aborted", { reason: "It's rewriting the checkout's routing — that's not what we asked for." }, ana, RUN_ID);
-    if (as === "restarted") {
-      push("task.recovered", { action: "restart", attempt: 2, note: "Keep the routing as it is; split the form only." },
-        { type: "human", id: YOU, name: "Márcio Martins" }, null);
-    }
     this.#events = [...this.#events, ...extra];
   }
 
+  /** The task started over: two attempts, each with its Runs, pull request, findings and files, and the ledger of both. */
+  #restart() {
+    this.#restarted = true;
+    this.#task = { ...this.#task, status: "running", runs: RESTARTED_RUNS };
+    const minAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    const ana = { type: "human" as const, id: "u_ana", name: "Ana Ribeiro" };
+    const me = { type: "human" as const, id: YOU, name: "Márcio Martins" };
+    const dude = { type: "system" as const, id: "dude" };
+    const agent = (id: string) => ({ type: "agent" as const, id });
+    // [when, type, payload, actor, Run]: the persons' acts on no Run fall on either side of the start over.
+    type Act = [string, string, Record<string, unknown>, PersistedEvent["actor"], string | null];
+    const acts: Act[] = [
+      ...RESTARTED_RUNS.map((r): Act => [r.createdAt, "run.created", { phase: r.phase, role: r.role }, dude, r.id]),
+      [minAgo(170), "artifact.created", { artifactId: "art_a1_notes", name: "notes/routing.md" }, agent(RUN_ID), RUN_ID],
+      [minAgo(141.5), "review.completed", { phase: "review", count: 3 }, agent("run_a1_review"), "run_a1_review"],
+      [minAgo(129), "pull_request.opened", { number: 478, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[0]!.url }, dude, null],
+      [minAgo(112), "task.decided", { action: "retry", note: "Fix the CI first." }, me, null],
+      [minAgo(97), "run.aborted", { reason: RESTART.abortReason }, ana, "run_a1_fix"],
+      [minAgo(RESTART.setAsideMin), "task.recovered", { action: "restart", attempt: 2, note: RESTART.note }, me, null],
+      [minAgo(RESTART.setAsideMin - 0.1), "pull_request.closed", { number: 478, repo: "example/web-console" }, dude, null],
+      [minAgo(60), "artifact.created", { artifactId: "art_a2_notes", name: "notes/form-split.md" }, agent("run_attempt2"), "run_attempt2"],
+      [minAgo(50), "task.owner_changed", { to: YOU }, ana, null],
+      [minAgo(41.5), "review.completed", { phase: "review", count: 0 }, agent("run_a2_review"), "run_a2_review"],
+      [minAgo(31), "pull_request.opened", { number: 483, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[1]!.url }, dude, null],
+    ];
+    const extra = acts.sort((a, b) => a[0].localeCompare(b[0])).map(([occurredAt, eventType, payload, actor, runId], i): PersistedEvent => ({
+      ...this.#events[0]!, cursor: 10_000 + i, eventId: `evt_restart_${i}`, eventType, occurredAt, runId, sessionId: runId ? `${runId}-s` : null, actor, payload }));
+    // The task's creation, then both attempts: none of scenario a's single implementer.
+    this.#events = [this.#events[0]!, ...extra];
+  }
+
+  #restarted = false;
   #recovery: RecoveryOptions | null = null;
 
   override recoveryOptions(): Promise<RecoveryOptions> {
@@ -195,9 +220,10 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ projects: this.#nav });
   }
   override recentPullRequests() {
-    return Promise.resolve({ pullRequests: this.#scenario === "d" ? [PULL_REQUEST] : [] });
+    return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
   }
   override listPullRequests(taskId: string) {
+    if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });
     return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID ? [PULL_REQUEST] : [] });
   }
   override getTask(id: string): Promise<TaskDetail> {
@@ -217,13 +243,14 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });
   }
   override listFindings(taskId: string) {
+    if (this.#restarted) return Promise.resolve({ findings: taskId === TASK_ID ? RESTARTED_FINDINGS : [] });
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
   }
-  override listArtifacts() {
-    return Promise.resolve({ artifacts: [] });
+  override listArtifacts(): Promise<{ artifacts: Artifact[] }> {
+    return Promise.resolve({ artifacts: this.#restarted ? RESTARTED_ARTIFACTS : [] });
   }
-  override taskMetrics(): Promise<TaskMetrics> {
-    return Promise.resolve(METRICS);
+  override taskMetrics(_taskId: string, attempt?: number): Promise<TaskMetrics> {
+    return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
   override githubSettings() {
     return Promise.resolve({ whoCanWake: "members" as const, openAs: "ready" as const, requestReviewFrom: "codeowners" as const, reviewLogins: [], mergeMethod: "squash" as const, whenBehind: "update" as const, fixRoundsPerPr: 5, ciStuckMinutes: 30 });
