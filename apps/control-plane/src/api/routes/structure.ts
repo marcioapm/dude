@@ -20,6 +20,7 @@ import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
+import { syncTaskAttachments } from "./attachments.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -349,6 +350,10 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
         updated_at = now()
       WHERE id = ${id}`;
+    // Its images are what its text references: fixed with it while a delivery runs (refused above).
+    if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
+      await syncTaskAttachments(scope, id, input.goal ?? current[0].goal, input.acceptanceCriteria ?? current[0].acceptanceCriteria);
+    }
     if (Object.keys(input).length > 0) await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
     // The new owner goes first; everyone else on it stays, after them.
     if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);

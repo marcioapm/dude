@@ -222,7 +222,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-select" title="Select" note="Radix-backed: typeahead, arrow keys, groups. Below ~30 options only.">
+      <Block id="p-select" title="Select" note="Radix-backed: typeahead, arrow keys, groups. Below ~30 options only. The list is at most 560px wide and never wider than the screen less 16px: long descriptions wrap.">
         <Panes mode={mode}>
           <Row top>
             <Select
@@ -236,6 +236,12 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Select label="Status" placeholder="Any status" options={[{ value: "running", label: "Running" }, { value: "awaiting_input", label: "Needs you" }, { value: "done", label: "Done" }]} />
             <Select size="sm" aria-label="Density" defaultValue="default" options={[{ value: "compact", label: "Compact" }, { value: "default", label: "Default" }, { value: "comfortable", label: "Comfortable" }]} />
             <Select label="Disabled" disabled defaultValue="x" options={[{ value: "x", label: "Locked" }]} />
+            <Select size="sm" aria-label="Attempt" defaultValue="2" data-testid="gallery-select-long"
+              footer="The whole page shows the attempt chosen."
+              options={[
+                { value: "2", label: "Attempt 2", meta: "current", description: "Started 59m ago · dude/wi_2408/attempt-2 · PR #815 open · $4.10" },
+                { value: "1", label: "Attempt 1", meta: "set aside", description: "Set aside 1h ago · stopped at Fix, aborted by Ana · dude/wi_2408/attempt-1 · PR #812 closed · $13.40 · and a description long enough to wrap" },
+              ]} />
           </Row>
         </Panes>
       </Block>

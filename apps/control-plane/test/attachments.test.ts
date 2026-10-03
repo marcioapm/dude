@@ -411,6 +411,141 @@ describe("the sweeper", () => {
   });
 });
 
+describe("a task's images are the ones its text shows", () => {
+  const GOAL = "The header overlaps the menu on a narrow window; it should sit under it.";
+  const img = async (task: string, name = "shot.png") =>
+    ((await (await upload(anaKey, task, form(png(4, 4), "image/png", png(4, 4), "image/png", name))).json()) as Json).id as string;
+  const state = async (id: string) => (await owner`SELECT for_prompt, attached_at IS NOT NULL AS attached, position,
+      detached_at IS NOT NULL AS detached FROM attachments WHERE id = ${id}`)[0] as
+    { for_prompt: boolean; attached: boolean; position: number; detached: boolean };
+  const patch = (id: string, body: object) => call(anaKey, "PATCH", `/v1/tasks/${id}`, JSON.stringify(body));
+
+  test("an update attaches what the goal and criteria reference, in order, and lets go of what they no longer do", async () => {
+    const [a, b, c] = [await img(taskId, "a.png"), await img(taskId, "b.png"), await img(taskId, "c.png")];
+    const res = await patch(taskId, {
+      goal: `${GOAL}\n\n![b](attachment:${b}) then ![a](<attachment:${a}> "title")\n\n\`![c](attachment:${c})\``,
+      acceptanceCriteria: [`Matches ![b](attachment:${b})`],
+    });
+    expect(res.status).toBe(200);
+    expect(await state(b)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+    expect(await state(a)).toEqual({ for_prompt: true, attached: true, position: 1, detached: false });
+    // In a code span: text, not a reference.
+    expect(await state(c)).toEqual({ for_prompt: false, attached: false, position: 0, detached: false });
+
+    // Taken out of the text: unsent again, and the sweeper's from now.
+    expect((await patch(taskId, { goal: `${GOAL}\n\n![a](attachment:${a})`, acceptanceCriteria: [] })).status).toBe(200);
+    expect(await state(b)).toEqual({ for_prompt: false, attached: false, position: 0, detached: true });
+    expect(await state(a)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+    // Only the title changing leaves the images as they are.
+    expect((await patch(taskId, { title: "Fix VAT again" })).status).toBe(200);
+    expect((await state(a)).attached).toBe(true);
+  });
+
+  test("a create attaches what its text references", async () => {
+    const holder = await img(taskId, "held.png");
+    await owner`UPDATE projects SET next_task_number = 100 WHERE id = 'prj_att'`;
+    // Uploaded to a task first, as New task does after it creates one: a fresh task cannot hold another's image.
+    const res = await call(anaKey, "POST", "/v1/tasks", JSON.stringify({
+      projectId: "prj_att", title: "New", goal: `${GOAL} ![x](attachment:${holder})`,
+    }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as Json).error.code).toBe("invalid_attachment_reference");
+    const created: Json = await (await call(anaKey, "POST", "/v1/tasks", JSON.stringify({ projectId: "prj_att", title: "New", goal: GOAL }))).json();
+    const mine = await img(created.id, "mine.png");
+    expect((await patch(created.id, { goal: `${GOAL} ![m](attachment:${mine})` })).status).toBe(200);
+    expect((await state(mine)).attached).toBe(true);
+  });
+
+  test("a reference to another task's image is refused, and nothing is saved", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_att_x', ${ORG}, 'prj_att', 3, 'X', ${GOAL})`;
+    const theirs = await img("wi_att_x");
+    const res = await patch(taskId, { goal: `${GOAL} ![t](attachment:${theirs})` });
+    expect(res.status).toBe(400);
+    const body: Json = await res.json();
+    expect(body.error.code).toBe("invalid_attachment_reference");
+    expect(body.error.message).toBe(`image ${theirs} is another task's; upload it to this one`);
+    expect((await state(theirs)).attached).toBe(false);
+    expect((await owner`SELECT goal FROM tasks WHERE id = ${taskId}`)[0].goal).not.toContain(theirs);
+  });
+
+  test("a reference to an image that does not exist is kept as text", async () => {
+    const res = await patch(taskId, { goal: `${GOAL} ![gone](attachment:att_nowhere)` });
+    expect(res.status).toBe(200);
+  });
+
+  test("while a delivery runs the text, and so its images, cannot change; after a stop they can", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_att_run', ${ORG}, 'prj_att', 4, 'R', ${GOAL}, 'running')`;
+    await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, step)
+      VALUES ('wf_att_run', ${ORG}, 'delivery', 'delivery:wi_att_run', 'wi_att_run', 'implement')`;
+    const id = await img("wi_att_run");
+    expect((await patch("wi_att_run", { goal: `${GOAL} ![r](attachment:${id})` })).status).toBe(409);
+    expect((await state(id)).attached).toBe(false);
+    await owner`UPDATE tasks SET status = 'aborted' WHERE id = 'wi_att_run'`;
+    expect((await patch("wi_att_run", { goal: `${GOAL} ![r](attachment:${id})` })).status).toBe(200);
+    expect((await state(id)).attached).toBe(true);
+  });
+
+  test("the sweeper takes an image a day after its reference was removed, not before", async () => {
+    const id = await img(taskId, "old.png");
+    await owner`UPDATE attachments SET created_at = now() - interval '3 days' WHERE id = ${id}`;
+    expect((await patch(taskId, { goal: `${GOAL} ![o](attachment:${id})` })).status).toBe(200);
+    expect((await patch(taskId, { goal: GOAL })).status).toBe(200);
+    // Uploaded days ago, let go just now: kept for a day.
+    await sweepAttachments();
+    expect((await owner`SELECT count(*)::int AS n FROM attachments WHERE id = ${id}`)[0].n).toBe(1);
+    const [row] = await owner`SELECT object_key FROM attachments WHERE id = ${id}`;
+    await owner`UPDATE attachments SET detached_at = now() - interval '25 hours' WHERE id = ${id}`;
+    await sweepAttachments();
+    expect((await owner`SELECT count(*)::int AS n FROM attachments WHERE id = ${id}`)[0].n).toBe(0);
+    expect(objects.has(row.object_key)).toBe(false);
+  });
+
+  const goalOf = async (id: string) => (await owner`SELECT goal FROM tasks WHERE id = ${id}`)[0].goal as string;
+  const refused = async (id: string, goal: string) => {
+    const before = await goalOf(id);
+    const res = await patch(id, { goal });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as Json).error.code).toBe("invalid_attachment_reference");
+    expect(await goalOf(id)).toBe(before);
+  };
+
+  test("a reference to an image a message already carried is refused, and nothing is saved", async () => {
+    const sent = await img(taskId, "steer.png");
+    await owner`INSERT INTO directives (id, organization_id, task_id, text) VALUES ('dir_att_sent', ${ORG}, ${taskId}, 'look')`;
+    await owner`UPDATE attachments SET directive_id = 'dir_att_sent', attached_at = now() WHERE id = ${sent}`;
+    await refused(taskId, `${GOAL} ![s](attachment:${sent})`);
+    expect((await owner`SELECT directive_id FROM attachments WHERE id = ${sent}`)[0].directive_id).toBe("dir_att_sent");
+  });
+
+  test("more images than one message takes, or more bytes together, are refused, and nothing is saved", async () => {
+    const seven: string[] = [];
+    for (let i = 0; i < 7; i++) seven.push(await img(taskId, `n${i}.png`));
+    await refused(taskId, `${GOAL}\n\n${seven.map((id, i) => `![n${i}](attachment:${id})`).join("\n\n")}`);
+    for (const id of seven) expect((await state(id)).attached).toBe(false);
+
+    const big = [await img(taskId, "big1.png"), await img(taskId, "big2.png")];
+    // 6 MiB together: over the 5 MiB a message's images may be.
+    await owner`UPDATE attachments SET bytes = ${3 << 20} WHERE id IN ${owner(big)}`;
+    await refused(taskId, `${GOAL}\n\n![b1](attachment:${big[0]}) ![b2](attachment:${big[1]})`);
+    for (const id of big) expect((await state(id)).attached).toBe(false);
+  });
+
+  test("saving one task's text leaves another task's images attached", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_att_scope', ${ORG}, 'prj_att', 5, 'S', ${GOAL})`;
+    const theirs = await img("wi_att_scope", "theirs.png");
+    expect((await patch("wi_att_scope", { goal: `${GOAL} ![t](attachment:${theirs})` })).status).toBe(200);
+    expect((await patch(taskId, { goal: `${GOAL} and nothing else` })).status).toBe(200);
+    expect(await state(theirs)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+  });
+
+  test("an update of the criteria alone keeps the goal's images attached", async () => {
+    const shown = await img(taskId, "goal.png");
+    expect((await patch(taskId, { goal: `${GOAL} ![g](attachment:${shown})` })).status).toBe(200);
+    expect((await patch(taskId, { acceptanceCriteria: ["The header sits under the menu"] })).status).toBe(200);
+    expect(await state(shown)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+  });
+});
+
 describe("deleting a task", () => {
   test("takes its attachments with it, and their objects are deleted", async () => {
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_att_gone', ${ORG}, 'prj_att', 2, 'Gone')`;

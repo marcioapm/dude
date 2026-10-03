@@ -1,0 +1,92 @@
+/* An image being laid out in Preview: selectable, with its toolbar above it
+   and a handle on each side. The toolbar is anchored inside the image's own
+   box (left for a left or centred image, right for one floated right), so
+   it stays within the editor's frame. */
+
+.editable {
+  position: relative;
+  cursor: pointer;
+  border-radius: var(--ds-radius-mark);
+  outline: none;
+}
+.editable:focus-visible,
+.selected {
+  box-shadow: 0 0 0 2px var(--ds-color-accent);
+}
+.editable[draggable="true"] {
+  cursor: grab;
+}
+
+.toolbar {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + var(--ds-space-6));
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-2);
+  white-space: nowrap;
+  background: var(--ds-color-raised);
+  border-radius: var(--ds-radius-float);
+  box-shadow: var(--ds-shadow-2);
+}
+.toolbarRight {
+  left: auto;
+  right: 0;
+}
+.toolbarBelow {
+  bottom: auto;
+  top: calc(100% + var(--ds-space-6));
+}
+.sep {
+  width: 1px;
+  align-self: stretch;
+  margin: var(--ds-space-2) var(--ds-space-2);
+  background: var(--ds-color-border-subtle);
+}
+.on {
+  color: var(--ds-color-accent-text);
+  background: var(--ds-color-accent-subtle);
+}
+
+.handle {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 32px;
+  margin-top: -16px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.handleLeft {
+  left: -4px;
+}
+.handleRight {
+  right: -4px;
+}
+.sizeTip {
+  position: absolute;
+  bottom: var(--ds-space-6);
+  right: var(--ds-space-6);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  box-shadow: var(--ds-shadow-2);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Where a dragged image will land: a line across the column. */
+.slot {
+  position: absolute;
+  left: var(--ds-space-code-x);
+  right: var(--ds-space-code-x);
+  height: 2px;
+  margin-top: -1px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-accent);
+  pointer-events: none;
+}

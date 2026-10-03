@@ -9,7 +9,7 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  ATTACHMENT_LIMITS, BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId,
+  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId,
   resolveAgentModel, resolveTier,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy,
 } from "@dude/domain";
@@ -22,6 +22,7 @@ import { requireOrgAdmin } from "../access.ts";
 import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson } from "./people.ts";
+import { syncTaskAttachments } from "./attachments.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /**
@@ -142,6 +143,7 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     const missing = await setTaskRepositories(scope, organizationId, input.projectId, taskId, input.repositories ?? []);
     // Thrown, so the transaction and the task's number roll back.
     if (missing) throw notFound(`repository ${missing} is not in this project`);
+    await syncTaskAttachments(scope, taskId, input.goal ?? "", input.acceptanceCriteria ?? []);
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${taskId}`) as Array<Record<string, unknown>>;
 
@@ -167,9 +169,7 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
-  /** Images uploaded to the task, given with its prompt to every agent the task is the prompt of. */
-  attachmentIds: z.array(z.string().min(1)).max(ATTACHMENT_LIMITS.perMessage).optional(),
-});
+}).strict();
 
 /**
  * Start the delivery workflow for a task.

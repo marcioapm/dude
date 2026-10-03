@@ -835,9 +835,10 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 }
 
 func prBody(goal string, criteria []string, findings []struct{ Category, Severity, Status, Title string }, reviewers int) string {
-	sections := []string{strings.TrimSpace(goal)}
+	// An attachment: URL means nothing on the forge; the image is named instead.
+	sections := []string{strings.TrimSpace(ImagesAsText(goal))}
 	if len(criteria) > 0 {
-		sections = append(sections, "## Acceptance criteria\n"+bullets(criteria))
+		sections = append(sections, "## Acceptance criteria\n"+bullets(CriteriaImagesAsText(criteria)))
 	}
 	if len(findings) > 0 {
 		addressed := 0

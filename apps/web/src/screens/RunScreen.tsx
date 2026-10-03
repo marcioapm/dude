@@ -121,9 +121,11 @@ export interface RunCost {
  * A stopped session: the work went on elsewhere (a start over set its
  * attempt aside, or a new session took its step up again), or its task can
  * be picked back up from here — resumed while it is kept, until when.
+ * One of an attempt set aside is read-only whatever its state, and may
+ * offer the way to the current attempt.
  */
 export type StoppedRun =
-  | { readonly setAside: "restart" | "retry" }
+  | { readonly setAside: "restart" | "retry"; readonly toCurrent?: { readonly attempt: number; readonly go: () => void } | undefined }
   | { readonly onPickUp: (action: RecoverAction) => void; readonly keptUntil: string | null };
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
@@ -260,6 +262,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // The Run says so itself, so the agent's controls never flash (or a
   // parked preview's pause words go missing) before the servers are read.
   const isPreviewRun = run?.kind === "preview";
+  // A session of an attempt set aside is only to read: no Pause, Abort or composer.
+  const readOnly = stopped !== undefined && "setAside" in stopped && stopped.setAside === "restart";
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
   const diffSummary = useMemo(
@@ -401,19 +405,21 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   };
 
   // Images can be dropped while the composer takes a message.
-  const composerOpen = isLive && !isPreviewRun && !((run.status === "paused" && !conversation.openQuestion) ||
+  const composerOpen = isLive && !readOnly && !isPreviewRun && !((run.status === "paused" && !conversation.openQuestion) ||
     (conversation.openQuestion !== null && waitingOn !== undefined));
   const changed = diffSummary?.files ?? [];
   // The name dude signs this task's messages with.
   const dude = dudeName(run.taskId);
   // What a queued steer waits for, and the ways to act on one.
   const activeTool = conversation.activeTool?.name ?? null;
-  const steer: SteerActions | undefined = isLive ? {
+  // A set-aside session is ended to its transcript too, though its Run may
+  // still be recorded as running: no decisions, no Interrupt now or Retry.
+  const steer: SteerActions | undefined = isLive && !readOnly ? {
     wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands),
     resend: resteer,
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
-  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer, shown);
+  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -509,10 +515,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   // The terminal, while the Run is running: in the rail, and in the header
   // only where the rail is not (a narrow session, or a view other than the
-  // conversation), so it is always one click away and never shown twice.
-  const terminal = run.status === "running" ? terminalUrl : null;
+  // conversation), so it is always one click away and never shown twice. A
+  // set-aside session offers none: a shell there could push to its branch.
+  const terminal = run.status === "running" && !readOnly ? terminalUrl : null;
   // A branch preview has no agent to pause or abort: only its terminal.
-  const actions = isLive ? (
+  const actions = isLive && !readOnly ? (
     <>
       {terminal ? (
         <LinkButton size="sm" iconOnly leadingIcon="terminal" label="Open terminal in lux" href={terminal} className="runTerminalFallback" data-testid="terminal-icon" />
@@ -602,7 +609,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null
               }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
+              footer={!isLive || readOnly ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
                 stopped={stopped} /> : isPreviewRun ? (
                 // A preview run has no agent to steer: its servers are the whole of it,
                 // and they are on the task's Servers tab. A task this page could not
@@ -1090,6 +1097,7 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
 function RunEnded({ run, onOpenTask, stopped }: { run: RunDetail; onOpenTask?: (() => void) | undefined; stopped?: StoppedRun | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
   const setAside = stopped && "setAside" in stopped ? stopped.setAside : null;
+  const toCurrent = stopped && "setAside" in stopped ? stopped.toCurrent : undefined;
   const pickUp = stopped && "onPickUp" in stopped ? stopped : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
@@ -1109,6 +1117,11 @@ function RunEnded({ run, onOpenTask, stopped }: { run: RunDetail; onOpenTask?: (
                 {pickUp.keptUntil ? "Other ways…" : "Pick it back up…"}
               </Button>
             </>
+          ) : null}
+          {toCurrent ? (
+            <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={toCurrent.go} data-testid="run-ended-current">
+              Go to attempt {toCurrent.attempt}
+            </Button>
           ) : null}
           {/* On its task's page, the task is already here. */}
           {!onOpenTask ? null : (

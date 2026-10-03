@@ -1,12 +1,14 @@
 """Images a person sends an agent, end to end.
 
 Through the public API and the built web app, against the fake lux and the
-suite's S3: an image is uploaded to a task, sent with a steer, an answer or
-the task's prompt, read by the orchestrator from storage and given to lux
-with its words; the fake lux records what each input carried (name, type,
-size, sha256), and the transcript shows it. In the browser, every way in —
-the paperclip, paste, a drop on the conversation — makes a chip; an image
-that cannot go keeps Send off; the viewer says what the agent got.
+suite's S3: an image is uploaded to a task, sent with a steer or an answer,
+or shown in the task's goal or criteria, read by the orchestrator from
+storage and given to lux with its words; the fake lux records what each
+input carried (name, type, size, sha256), and the transcript shows it. In
+the browser, every way into a steer — the paperclip, paste, a drop on the
+conversation — makes a chip; an image that cannot go keeps Send off; the
+viewer says what the agent got. In the task dialog, an image goes into the
+text where it was pasted or dropped, and every agent is told where it was.
 
 Screenshots of each mockup screen, light and dark, go to
 $DUDE_TEST_SHOTS (default /var/tmp/cimg-dude-shots/).
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import struct
 import zlib
 from pathlib import Path
@@ -364,33 +367,429 @@ def test_an_answer_carries_a_screenshot(
     assert console_errors == []
 
 
+def lux_spec(env, lux_run: str) -> dict:
+    """The spec dude submitted for a lux Run, as the fake lux keeps it."""
+    res = requests.get(f"{env.lux_url}/v1/runs/{lux_run}", headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10)
+    res.raise_for_status()
+    return res.json()["spec"]
+
+
+def _real_models(client: ApiClient, project: dict, **roles: str) -> None:
+    """Roles on models whose prompt is dude's own: the scripted agent's (fake/*) prompt is its
+    script, while any other model gets the real prompt and is played by the fake lux as scripted.
+    The implementer is on one unless told otherwise."""
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": "llm-impl", "reviewer": "fake/scripted", "simplifier": "fake/scripted", **roles})})
+
+
+def _submitted(client: ApiClient, owner_dsn: str, task_id: str, phase: str) -> str:
+    """The lux Run of the task's first Run of `phase`, once it is submitted."""
+    def find():
+        run = next((r for r in client.task_runs(task_id) if r["phase"] == phase), None)
+        return run and lux_run_id(owner_dsn, run["id"])
+    return wait_until(find, timeout=90, message=f"no {phase} Run submitted")
+
+
+def _goal_value(page: Page) -> str:
+    return page.get_by_test_id("task-goal").input_value()
+
+
+def _references(text: str) -> list[str]:
+    return re.findall(r"!\[[^\]]*\]\(attachment:(att_[A-Za-z0-9]+)\)", text)
+
+
+def _attached(owner_dsn: str, task_id: str) -> list[str]:
+    """The task's images its text references, as the backend attached them, in their order."""
+    return [r["id"] for r in query(owner_dsn, "SELECT id FROM attachments WHERE task_id = %s AND for_prompt AND attached_at IS NOT NULL ORDER BY position",
+                                   (task_id,))]
+
+
+def _caret_after(page: Page, field: str, text: str) -> None:
+    """Puts the caret in `field` right after the first `text`, as a click there would."""
+    page.get_by_test_id(field).evaluate("(el, t) => { el.focus(); const at = el.value.indexOf(t) + t.length; el.setSelectionRange(at, at); }", text)
+
+
 @pytest.mark.ui
-def test_a_task_created_with_an_image_gives_it_to_its_first_agent(
+def test_an_image_pasted_mid_goal_goes_in_at_the_caret_and_reaches_the_agent_where_it_was(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/hang", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
-    page.set_viewport_size({"width": 1440, "height": 900})
-    sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("new-task").click()
+    _real_models(client, forge_project)
+    _open_new_task(page, web_url, org)
     page.get_by_test_id("task-title").fill("Build the summary from the design")
-    page.get_by_test_id("task-goal").fill("Match the design attached.")
-    page.get_by_test_id("task-attach-input").set_input_files([{"name": "Summary v3.png", "mimeType": "image/png", "buffer": png(900, 900, (160, 90, 250))}])
-    expect(page.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
-    expect(page.get_by_test_id("task-save")).to_be_disabled()
-    expect(page.get_by_test_id("task-create-deliver")).to_be_enabled()
-    _shoot(page, "5-task-prompt")
+    page.get_by_test_id("task-goal").fill("The summary should look like this: and keep the totals right-aligned.")
+    _caret_after(page, "task-goal", "like this:")
+    # Pasted at the caret: the paste is claimed, the image goes in where the caret was.
+    assert _paste_into(page.get_by_test_id("task-goal"), _files(page, [("Summary v3.png", png(900, 900, (160, 90, 250)), "image/png")]))
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"!\[Summary v3\.png\]\(attachment:att_local\d+\)"), timeout=20_000)
+    goal = _goal_value(page)
+    assert re.fullmatch(r"The summary should look like this:\n\n!\[Summary v3\.png\]\(attachment:att_local\d+\)\n\nand keep the totals right-aligned\.", goal), goal
+    # The tray is gone.
+    expect(page.get_by_test_id("task-images")).to_have_count(0)
+    expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
+    # Read shows the image, in its place in the text.
+    page.get_by_test_id("task-read").click()
+    reading = page.get_by_test_id("task-reading")
+    image = reading.get_by_test_id("markdown-image").locator("img")
+    expect(image).to_have_count(1)
+    expect(image).to_have_attribute("src", re.compile(r"^blob:"))
+    assert reading.evaluate("""el => {
+      const img = el.querySelector('[data-testid=markdown-image]');
+      const text = el.innerText;
+      return text.indexOf('like this:') < text.indexOf('and keep') && img.closest('p') !== null;
+    }""")
+    _shoot(page, "5-task-inline-read")
+    page.get_by_test_id("task-read").click()
+
     page.get_by_test_id("task-create-deliver").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible(timeout=30_000)
     task_id = wait_until(lambda: (query(owner_dsn, "SELECT id FROM tasks WHERE title = %s", ("Build the summary from the design",)) or [None])[0],
                          timeout=15, message="no task")["id"]
-    run = wait_until(lambda: next((r for r in client.task_runs(task_id) if r["phase"] == "implement" and r["status"] == "running"), None),
-                     timeout=60, message="the implementer never started")
-    images = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get("prompt"), timeout=30, message="no prompt images")
+    saved = client.get(f"/v1/tasks/{task_id}").json()["goal"]
+    ids = _references(saved)
+    assert len(ids) == 1 and not ids[0].startswith("att_local"), saved
+    assert _attached(owner_dsn, task_id) == ids
+    # The task screen shows it in place too, read through the API.
+    expect(page.get_by_test_id("markdown-image").locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+
+    lux_run = _submitted(client, owner_dsn, task_id, "implement")
+    images = wait_until(lambda: fake_lux_images(env, lux_run).get("prompt"), timeout=30, message="no prompt images")
     assert [a["name"] for a in images] == ["Summary v3.png"] and images[0]["contentType"] == "image/png"
-    page.goto(f"{web_url}#/session/{run['id']}")
-    expect(page.get_by_test_id("message-image")).to_have_count(1, timeout=30_000)
+    prompt = lux_spec(env, lux_run)["workload"]["prompt"]
+    assert "The summary should look like this:\n\n[Image 1: Summary v3.png]\n\nand keep the totals right-aligned." in prompt, prompt
+    assert "attachment:" not in prompt
     assert console_errors == []
+
+
+@pytest.mark.ui
+def test_an_image_dropped_on_the_criteria_goes_to_the_reviewers(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    # The implementer finishes, so reviewers run, on a model given dude's real prompt.
+    _real_models(client, forge_project, implementer="fake/scripted", reviewer="llm-review")
+    _open_new_task(page, web_url, org)
+    page.get_by_test_id("task-title").fill("Totals line up")
+    page.get_by_test_id("task-goal").fill("Totals in the summary should be right-aligned.")
+    page.get_by_test_id("task-criteria").fill("- [ ] Totals line up, as in ")
+    dt = _files(page, [("evidence.png", png(300, 200, (200, 40, 40)), "image/png")])
+    _caret_after(page, "task-criteria", "as in ")
+    assert _drop_on(page.get_by_test_id("task-criteria"), dt, page=page, shoot="5-task-inline-drop")
+    expect(page.get_by_test_id("task-criteria")).to_have_value(re.compile(r"^- \[ \] Totals line up, as in !\[evidence\.png\]\(attachment:att_local\d+\)$"),
+                                                               timeout=20_000)
+    expect(page.get_by_test_id("task-goal")).to_have_value("Totals in the summary should be right-aligned.")
+    # Off the dialog, on its backdrop, the window claims the drag too, so the browser does not open the file.
+    body = page.locator("body")
+    assert _drag(body, "dragover", dt)
+    assert _drag(body, "drop", dt)
+    page.get_by_test_id("task-create-deliver").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible(timeout=30_000)
+    task_id = wait_until(lambda: (query(owner_dsn, "SELECT id FROM tasks WHERE title = %s", ("Totals line up",)) or [None])[0],
+                         timeout=15, message="no task")["id"]
+    lux_run = _submitted(client, owner_dsn, task_id, "review")
+    images = wait_until(lambda: fake_lux_images(env, lux_run).get("prompt"), timeout=30, message="the reviewer got no images")
+    assert [a["name"] for a in images] == ["evidence.png"]
+    assert "- Totals line up, as in [Image 1: evidence.png]" in lux_spec(env, lux_run)["workload"]["prompt"]
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_task_created_with_an_image_keeps_it_and_an_edit_can_take_it_out(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    _open_new_task(page, web_url, org)
+    page.get_by_test_id("task-title").fill("Saved with a picture")
+    page.get_by_test_id("task-goal").fill("The header overlaps the menu on a narrow window.")
+    page.get_by_test_id("task-goal").focus()
+    with page.expect_file_chooser() as chooser:
+        page.get_by_test_id("task-attach").click()
+    chooser.value.set_files([{"name": "header.png", "mimeType": "image/png", "buffer": png(400, 120)}])
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"attachment:att_local\d+"), timeout=20_000)
+    # Plain Create, not delivered: the image stays with the saved task.
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    task_id = wait_until(lambda: (query(owner_dsn, "SELECT id FROM tasks WHERE title = %s", ("Saved with a picture",)) or [None])[0],
+                         timeout=15, message="no task")["id"]
+    ids = _references(client.get(f"/v1/tasks/{task_id}").json()["goal"])
+    assert len(ids) == 1 and _attached(owner_dsn, task_id) == ids
+
+    page.goto(f"{web_url}#/task/{task_id}")
+    page.get_by_test_id("edit-task").click()
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(re.escape(f"(attachment:{ids[0]})")))
+    page.get_by_test_id("task-goal").fill("The header overlaps the menu on a narrow window, at any width under 600px.")
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    assert _attached(owner_dsn, task_id) == []
+    row = query(owner_dsn, "SELECT attached_at, detached_at FROM attachments WHERE id = %s", (ids[0],))[0]
+    assert row["attached_at"] is None and row["detached_at"] is not None
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_edit_task_takes_an_image_at_once_and_delivery_gives_it_to_the_agent(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    # The implementer is given the real prompt and finishes; the reviewers hang, so the delivery runs on.
+    _real_models(client, forge_project, reviewer="fake/hang")
+    task = client.create_task(forge_project["id"], "Not started yet", goal="The checkout button is hidden behind the cookie banner.")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+    _caret_after(page, "task-goal", "hidden")
+    dt = _files(page, [("banner.png", png(500, 300, (40, 160, 90)), "image/png")])
+    assert _drop_on(page.get_by_test_id("task-goal"), dt, page=page)
+    # Uploaded at once: the task exists, so the reference is a real attachment's.
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"hidden\n\n!\[banner\.png\]\(attachment:att_(?!local)[A-Za-z0-9]+\)\n\nbehind"),
+                                                           timeout=20_000)
+    uploaded = query(owner_dsn, "SELECT id, attached_at FROM attachments WHERE task_id = %s", (task["id"],))
+    assert len(uploaded) == 1 and uploaded[0]["attached_at"] is None
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    assert _attached(owner_dsn, task["id"]) == [uploaded[0]["id"]]
+
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    lux_run = _submitted(client, owner_dsn, task["id"], "implement")
+    images = wait_until(lambda: fake_lux_images(env, lux_run).get("prompt"), timeout=30, message="no prompt images")
+    assert [a["name"] for a in images] == ["banner.png"]
+    assert "hidden\n\n[Image 1: banner.png]\n\nbehind" in lux_spec(env, lux_run)["workload"]["prompt"]
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review" and r["status"] == "running"), None),
+                     timeout=90, message="no reviewer running")
+
+    # While it runs, the text and so its images are fixed: the drop zone, paste and button say so.
+    page.reload()
+    page.get_by_test_id("edit-task").click()
+    attach = page.get_by_test_id("task-attach")
+    expect(attach).to_be_disabled()
+    reason = "Delivery is running, so what the task asks for is fixed, and its images too."
+    attach.locator("xpath=..").hover()
+    expect(page.get_by_role("tooltip")).to_contain_text(reason)
+    title = page.get_by_test_id("task-title")
+    dt = _files(page, [("late.png", png(50, 50), "image/png")])
+    _drag(title, "dragenter", dt)
+    assert _drag(title, "dragover", dt)
+    expect(page.get_by_test_id("drop-overlay")).to_contain_text(reason)
+    assert _drag(title, "drop", dt)
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+    # A paste is not claimed (nothing taken), and nothing is uploaded.
+    assert _paste_into(title, _files(page, [("late.png", png(50, 50), "image/png")])) is False
+    assert len(query(owner_dsn, "SELECT id FROM attachments WHERE task_id = %s", (task["id"],))) == 1
+    _shoot(page, "5-task-inline-locked")
+    page.keyboard.press("Escape")
+
+    # Aborted: what it asks for can change again, images included.
+    assert client.post(f"/v1/runs/{run['id']}/abort", {}).status_code == 200
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "aborted", timeout=30, message="never aborted")
+    page.reload()
+    page.get_by_test_id("edit-task").click()
+    expect(page.get_by_test_id("task-attach")).to_be_enabled()
+    page.get_by_test_id("task-goal").focus()
+    page.get_by_test_id("task-goal").press("End")
+    assert _drop_on(page.get_by_test_id("task-goal"), _files(page, [("after.png", png(60, 60), "image/png")]))
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"!\[after\.png\]\(attachment:att_(?!local)[A-Za-z0-9]+\)"), timeout=20_000)
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    assert len(_attached(owner_dsn, task["id"])) == 2
+    assert console_errors == []
+
+
+def _image_drag(page: Page, source, target_panel, li_index: int) -> None:
+    """Drags an image in Preview (HTML5 DnD, as the browser fires it) onto a criteria panel,
+    level with the bottom of its `li_index`-th criterion: the slot under it."""
+    page.evaluate("""([fig, panel, i]) => {
+      const dt = new DataTransfer();
+      const r = fig.getBoundingClientRect();
+      fig.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + 5, clientY: r.top + 5 }));
+      const li = panel.querySelectorAll(':scope li')[i];
+      const y = li.getBoundingClientRect().bottom;
+      const x = panel.getBoundingClientRect().left + 40;
+      panel.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      panel.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      panel.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: x, clientY: y }));
+      fig.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    }""", [source.element_handle(), target_panel.element_handle(), li_index])
+
+
+@pytest.mark.ui
+def test_an_image_laid_out_in_preview_keeps_its_place_and_size_and_the_agent_reads_only_where_it_is(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    # The implementer is given the real prompt and finishes; the reviewers hang, so the delivery runs on.
+    _real_models(client, forge_project, reviewer="fake/hang")
+    task = client.create_task(forge_project["id"], "Lay out the mock", goal="The receipt should look like the mock below.",
+                              acceptanceCriteria=["Totals are right-aligned", "The logo sits top left", "Prints on one page"])
+    res = upload(client, task["id"], png(600, 400, (30, 90, 200)), png(600, 400, (30, 90, 200)), "mock.png")
+    assert res.status_code == 201, res.text
+    att = res.json()["id"]
+    goal = f"The receipt should look like the mock below.\n\n![mock.png](attachment:{att})\n\nKeep the paper size A4."
+    assert client.patch(f"/v1/tasks/{task['id']}", {"goal": goal}).status_code == 200
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+
+    # Preview: select it, then Wrap right and Small, each a toolbar button.
+    page.get_by_test_id("task-goal-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    preview = page.get_by_test_id("task-goal-preview")
+    figure = preview.locator("[data-image-n='0']")
+    expect(figure.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    figure.click()
+    toolbar = page.get_by_role("toolbar", name="Image layout")
+    expect(toolbar).to_be_visible()
+    toolbar.get_by_role("button", name="Wrap right").click()
+    toolbar.get_by_role("button", name="Small").click()
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal.replace(f"{att})", f'{att} "small right")'))
+    _shoot(page, "6-image-layout-selected")
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    assert client.get(f"/v1/tasks/{task['id']}").json()["goal"] == goal.replace(f"{att})", f'{att} "small right")')
+    assert _attached(owner_dsn, task["id"]) == [att]
+
+    # Reloaded, the task screen draws it floated right at 200 px.
+    page.reload()
+    shown = page.get_by_test_id("task-screen").get_by_test_id("markdown-figure")
+    expect(shown.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    style = shown.evaluate("el => { const s = getComputedStyle(el); return [s.float, el.getBoundingClientRect().width]; }")
+    assert style[0] == "right" and abs(style[1] - 200) < 1, style
+    # A phone-wide column (under 480 px) wraps nothing: the same image stands on its own line.
+    page.set_viewport_size({"width": 390, "height": 1000})
+    expect(shown).to_have_css("float", "none")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    expect(shown).to_have_css("float", "right")
+
+    # Dragged under criterion 2: a continuation line there; the list keeps its length.
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-goal-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    page.get_by_test_id("task-criteria-preview").evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    source = page.get_by_test_id("task-goal-preview").locator("[data-image-n='0']")
+    expect(source.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    _image_drag(page, source, page.get_by_test_id("task-criteria-preview"), 1)
+    ref = f'![mock.png](attachment:{att} "small right")'
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        f"- [ ] Totals are right-aligned\n- [ ] The logo sits top left\n  {ref}\n- [ ] Prints on one page")
+    expect(page.get_by_test_id("task-goal")).to_have_value("The receipt should look like the mock below.\n\nKeep the paper size A4.")
+    expect(page.get_by_test_id("task-criteria-count")).to_have_text("3 criteria")
+    # Floated right in criterion 2, it ends inside that criterion: the next one starts below it.
+    # Plain `- ` items, whose bodies are ordinary blocks (a `- [ ]` item is a flex row, which holds it anyway).
+    page.get_by_test_id("task-criteria").evaluate("""el => {
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      set.call(el, el.value.replaceAll('- [ ] ', '- '));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }""")
+    expect(page.get_by_test_id("task-criteria-preview").locator("li").nth(2)).to_be_visible()
+    fit = page.get_by_test_id("task-criteria-preview").evaluate("""el => {
+      const fig = el.querySelector('[data-testid=markdown-figure]');
+      const items = [...el.querySelectorAll('li')];
+      const f = fig.getBoundingClientRect();
+      return { float: getComputedStyle(fig).float, inItem: items.indexOf(fig.closest('li')),
+               figBottom: f.bottom, itemBottom: items[1].getBoundingClientRect().bottom, nextTop: items[2].getBoundingClientRect().top };
+    }""")
+    assert fit["float"] == "right" and fit["inItem"] == 1, fit
+    assert fit["figBottom"] <= fit["itemBottom"] + 0.5 and fit["figBottom"] <= fit["nextTop"] + 0.5, fit
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
+    saved = client.get(f"/v1/tasks/{task['id']}").json()
+    assert saved["acceptanceCriteria"] == ["Totals are right-aligned", f"The logo sits top left\n{ref}", "Prints on one page"], saved
+    assert _attached(owner_dsn, task["id"]) == [att]
+
+    # Delivered: the agent reads the image inside criterion 2, with no layout words.
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    lux_run = _submitted(client, owner_dsn, task["id"], "implement")
+    images = wait_until(lambda: fake_lux_images(env, lux_run).get("prompt"), timeout=30, message="no prompt images")
+    assert [a["name"] for a in images] == ["mock.png"]
+    prompt = lux_spec(env, lux_run)["workload"]["prompt"]
+    assert "- The logo sits top left\n  [Image 1: mock.png]\n- Prints on one page" in prompt, prompt
+    assert "small" not in prompt and "attachment:" not in prompt, prompt
+    wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review" and r["status"] == "running"), None),
+               timeout=90, message="no reviewer running")
+
+    # While it runs: a click opens the viewer, and no toolbar appears.
+    page.reload()
+    page.get_by_test_id("edit-task").click()
+    locked = page.get_by_test_id("task-criteria-preview").get_by_test_id("markdown-figure")
+    expect(locked.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    expect(locked).not_to_have_attribute("draggable", "true")
+    locked.locator("img").click()
+    expect(page.get_by_test_id("image-viewer")).to_be_visible()
+    expect(page.get_by_role("toolbar", name="Image layout")).to_have_count(0)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_an_image_dragged_in_preview_by_the_browser_raises_no_drop_overlay(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list, tmp_path: Path
+):
+    intro = "The receipt should look like the mock below."
+    task = client.create_task(forge_project["id"], "Move the mock", goal=intro,
+                              acceptanceCriteria=["Totals are right-aligned", "The logo sits top left", "Prints on one page"])
+    res = upload(client, task["id"], png(300, 200, (30, 90, 200)), png(300, 200, (30, 90, 200)), "mock.png")
+    assert res.status_code == 201, res.text
+    att = res.json()["id"]
+    goal = f"{intro}\n\n![mock.png](attachment:{att})\n\nKeep the paper size A4."
+    assert client.patch(f"/v1/tasks/{task['id']}", {"goal": goal}).status_code == 200
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+    for field in ("task-goal-preview", "task-criteria-preview"):
+        page.get_by_test_id(field).evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    source = page.get_by_test_id("task-goal-preview").locator("[data-image-n='0']")
+    expect(source.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    # Every overlay that appears, and the drag's types as the page sees them.
+    page.evaluate("""() => {
+      window.__drag = { overlays: 0, types: [] };
+      new MutationObserver(() => {
+        if (document.querySelector('[data-testid=drop-overlay]')) window.__drag.overlays++;
+      }).observe(document.body, { childList: true, subtree: true });
+      window.addEventListener('dragenter', (e) => { window.__drag.types = [...e.dataTransfer.types]; }, true);
+    }""")
+    crit = page.get_by_test_id("task-criteria-preview")
+    box, li = crit.bounding_box(), crit.locator("li").nth(1).bounding_box()
+    assert box and li
+    source.drag_to(crit, target_position={"x": 40, "y": li["y"] + li["height"] - box["y"]})
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        f"- [ ] Totals are right-aligned\n- [ ] The logo sits top left\n  ![mock.png](attachment:{att})\n- [ ] Prints on one page")
+    expect(page.get_by_test_id("task-goal")).to_have_value(f"{intro}\n\nKeep the paper size A4.")
+    drag = page.evaluate("window.__drag")
+    # Playwright's drag lists no "Files"; Chrome's own image drags do.
+    assert "application/x-dude-image" in drag["types"] and "Files" not in drag["types"], drag
+    assert drag["overlays"] == 0, drag
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+
+    # Back to the goal as Chrome drags an image: the browser's own drag data, with the image offered as a file.
+    moved = page.get_by_test_id("task-criteria-preview").locator("[data-image-n='0']")
+    expect(moved.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    _drag_with_files(page, moved, page.get_by_test_id("task-goal-preview").locator("p").nth(1), tmp_path / "mock.png")
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+    drag = page.evaluate("window.__drag")
+    assert "Files" in drag["types"] and "application/x-dude-image" in drag["types"], drag
+    assert drag["overlays"] == 0, drag
+    assert console_errors == []
+
+
+def _drag_with_files(page: Page, source, target, file: Path) -> None:
+    """A real Chromium drag from `source` to the top of `target`, its data captured from the browser
+    (Input.setInterceptDrags) and replayed with `file` added, so `types` include "Files"."""
+    file.write_bytes(png(40, 40))
+    cdp = page.context.new_cdp_session(page)
+    captured: list[dict] = []
+    cdp.on("Input.dragIntercepted", lambda e: captured.append(e["data"]))
+    cdp.send("Input.setInterceptDrags", {"enabled": True})
+    s, t = source.bounding_box(), target.bounding_box()
+    assert s and t
+    sx, sy = s["x"] + s["width"] / 2, s["y"] + s["height"] / 2
+    tx, ty = t["x"] + 20, t["y"] + 1
+    mouse = lambda kind, x, y: cdp.send("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left", "buttons": 1 if kind != "mouseReleased" else 0, "clickCount": 1})
+    mouse("mousePressed", sx, sy)
+    for i in range(1, 6):
+        mouse("mouseMoved", sx, sy + i * 4)
+    wait_until(lambda: captured, timeout=5, message="no drag intercepted")
+    data = {**captured[0], "files": [str(file)]}
+    for kind, x, y in (("dragEnter", tx, ty), ("dragOver", tx, ty), ("dragOver", tx, ty + 1), ("drop", tx, ty + 1)):
+        cdp.send("Input.dispatchDragEvent", {"type": kind, "x": x, "y": y, "data": data})
+    mouse("mouseReleased", tx, ty + 1)
+    cdp.send("Input.setInterceptDrags", {"enabled": False})
+    cdp.detach()
 
 
 def _open_new_task(page: Page, web_url: str, org: dict) -> None:
@@ -402,32 +801,13 @@ def _open_new_task(page: Page, web_url: str, org: dict) -> None:
 
 
 @pytest.mark.ui
-def test_an_image_dropped_on_the_goal_goes_to_the_tray(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+def test_an_image_dropped_on_the_title_goes_to_the_end_of_the_goal(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
     _open_new_task(page, web_url, org)
-    page.get_by_test_id("task-goal").fill("Match the design attached.")
-    dt = _files(page, [("design.png", png(600, 400), "image/png")])
-    assert _drop_on(page.get_by_test_id("task-goal"), dt, page=page, shoot="5-task-prompt-drop")
-    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
-    chips = page.get_by_test_id("attachment-chip")
-    expect(chips).to_have_count(1)
-    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
-    expect(page.get_by_test_id("task-goal")).to_have_value("Match the design attached.")
-    # Off the dialog, on its backdrop, the window claims the drag too, so the browser does not open the file.
-    body = page.locator("body")
-    assert _drag(body, "dragover", dt)
-    assert _drag(body, "drop", dt)
-    expect(chips).to_have_count(1)
-    assert console_errors == []
-
-
-@pytest.mark.ui
-def test_an_image_dropped_on_the_title_goes_to_the_tray(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
-    _open_new_task(page, web_url, org)
+    page.get_by_test_id("task-goal").fill("The menu overlaps the header.")
     dt = _files(page, [("bug.png", png(300, 200, (200, 40, 40)), "image/png")])
     assert _drop_on(page.get_by_test_id("task-title"), dt, page=page)
-    chips = page.get_by_test_id("attachment-chip")
-    expect(chips).to_have_count(1)
-    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"^The menu overlaps the header\.\n\n!\[bug\.png\]\(attachment:att_local\d+\)$"),
+                                                           timeout=20_000)
     # A text drag is left to the field: no overlay, nothing claimed.
     assert not _drag(page.get_by_test_id("task-title"), "dragenter", _files(page, [], "words"))
     expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
@@ -435,50 +815,43 @@ def test_an_image_dropped_on_the_title_goes_to_the_tray(page: Page, web_url: str
 
 
 @pytest.mark.ui
-def test_an_image_pasted_in_the_title_goes_to_the_tray_and_text_does_not(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+def test_text_alone_pastes_as_text_and_a_files_own_name_is_not_text(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
     _open_new_task(page, web_url, org)
     title = page.get_by_test_id("task-title")
     title.fill("Summary")
     # Text alone: left to the field.
     assert not _paste_into(title, _files(page, [], " page"))
-    expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
     expect(title).to_have_value("Summary")
-    # An image: to the tray, the paste claimed so nothing lands in the title.
-    assert _paste_into(title, _files(page, [("pasted.png", png(400, 300, (160, 90, 250)), "image/png")]))
-    chips = page.get_by_test_id("attachment-chip")
-    expect(chips).to_have_count(1)
-    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
-    expect(title).to_have_value("Summary")
-    # An image with a caption beside it: the image is taken, the caption let through.
     goal = page.get_by_test_id("task-goal")
-    assert not _paste_into(goal, _files(page, [("both.png", png(200, 200), "image/png")], "see the header"))
-    expect(chips).to_have_count(2)
+    goal.fill("Before.")
     # A file copied in a file manager carries its own name as text: that is not text, and the paste is claimed.
     assert _paste_into(goal, _files(page, [("copied.png", png(200, 200), "image/png")], "copied.png"))
-    expect(chips).to_have_count(3)
+    expect(goal).to_have_value(re.compile(r"^Before\.\n\n!\[copied\.png\]\(attachment:att_local\d+\)$"), timeout=20_000)
     assert console_errors == []
 
 
 @pytest.mark.ui
-def test_attach_images_is_a_labelled_button(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
+def test_attach_images_is_a_labelled_button_that_inserts_where_the_person_was_writing(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
     _open_new_task(page, web_url, org)
     attach = page.get_by_role("button", name="Attach images")
     expect(attach).to_be_visible()
     expect(attach).to_have_attribute("data-testid", "task-attach")
-    expect(page.get_by_test_id("task-images")).to_contain_text("Paste, drop or attach.")
-    _shoot(page, "5-task-prompt-empty")
+    _shoot(page, "5-task-inline-empty")
     attach.hover()
     expect(page.get_by_role("tooltip")).to_contain_text("up to 10 MB each")
+    # Last written in: the criteria. The button inserts there.
+    page.get_by_test_id("task-criteria").fill("- [ ] Matches ")
+    page.get_by_test_id("task-criteria").press("End")
     # Pressed from the keyboard, it opens the file picker.
-    # The title is autofocused when the dialog opens; the button must hold focus before Enter.
     attach.focus()
     expect(attach).to_be_focused()
     with page.expect_file_chooser() as chooser:
         page.keyboard.press("Enter")
     chooser.value.set_files([{"name": "picked.png", "mimeType": "image/png", "buffer": png(200, 120)}])
-    chips = page.get_by_test_id("attachment-chip")
-    expect(chips).to_have_count(1)
-    expect(chips.first).to_have_attribute("data-state", "ready", timeout=20_000)
+    expect(page.get_by_test_id("task-criteria")).to_have_value(re.compile(r"^- \[ \] Matches !\[picked\.png\]\(attachment:att_local\d+\)$"), timeout=20_000)
+    expect(page.get_by_test_id("task-goal")).to_have_value("")
     assert console_errors == []
 
 
@@ -496,7 +869,7 @@ def test_a_file_dropped_on_the_dialog_without_storage_is_refused_in_place(page: 
     expect(page.get_by_test_id("drop-overlay")).to_contain_text("Image storage isn't set up")
     # Claimed, so the browser does not open the file in place of the page.
     assert _drag(goal, "drop", dt)
-    expect(page.get_by_test_id("attachment-chip")).to_have_count(0)
+    expect(goal).to_have_value("")
     # Outside the dialog, on its backdrop, too.
     body = page.locator("body")
     assert _drag(body, "dragover", dt)
