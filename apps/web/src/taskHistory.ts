@@ -27,7 +27,7 @@ const DOER: Record<string, string> = {
  * (reviewers in parallel) folded into "reviewers ×3", each pull request,
  * then the findings and how they stand, and the cost when known.
  */
-export function taskHistory(task: { status: TaskStatus; runs: readonly Run[] }, findings: readonly Finding[],
+export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string }, findings: readonly Finding[],
   pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string): TaskHistoryLine {
   const phases = task.runs.filter((r) => r.phase);
   const attempt = Math.max(0, ...phases.map((r) => r.attempt));
@@ -56,15 +56,20 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[] }, 
   }
   if (costUsd !== null && costUsd > 0) facts.push(format(costUsd));
 
-  return { lead: leadFor(task.status, ran), steps, facts };
+  const byConductor = task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
+  return { lead: leadFor(task.status, ran, byConductor), steps, facts };
 }
 
-function leadFor(status: TaskStatus, ran: readonly Run[]): string {
-  if (ran.length === 0) return status === "done" ? "Done" : status === "aborted" ? "Stopped" : "Not started";
-  if (status === "done") return "Delivered automatically, merged";
-  if (status === "aborted") return "Delivered automatically, then closed";
+function leadFor(status: TaskStatus, ran: readonly Run[], byConductor: boolean): string {
+  if (ran.length === 0) {
+    if (byConductor && !["done", "aborted", "failed"].includes(status)) return "Planning with the conductor";
+    return status === "done" ? "Done" : status === "aborted" ? "Stopped" : "Not started";
+  }
+  const how = byConductor ? "Conducted" : "Delivered automatically";
+  if (status === "done") return `${how}, merged`;
+  if (status === "aborted") return `${how}, then closed`;
   if (status === "failed") return "Delivery failed";
-  if (status === "awaiting_input") return "Delivering automatically, waiting on you";
-  if (ran.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status))) return "Delivering automatically";
-  return "Delivered automatically";
+  if (status === "awaiting_input") return byConductor ? "Conducting, waiting on you" : "Delivering automatically, waiting on you";
+  if (ran.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status))) return byConductor ? "Conducting" : "Delivering automatically";
+  return how;
 }

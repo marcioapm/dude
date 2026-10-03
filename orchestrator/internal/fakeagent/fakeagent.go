@@ -149,7 +149,8 @@ func ConductorReply(task, input string) string {
 // ConductorScript is the scripted conductor's first turn, from the
 // briefing dude wrote it: the reply to the message the briefing ends with.
 // It is the Run's prompt in place of the briefing, as every scripted
-// phase's script is (for a real lux, a lux-fake script).
+// phase's script is (for a real lux, a lux-fake script). The tools the
+// message names (ConductorCalls) are called first.
 func ConductorScript(briefing string) string {
 	task := ""
 	if _, after, ok := strings.Cut(briefing, "## The task\n\n"); ok {
@@ -159,13 +160,43 @@ func ConductorScript(briefing string) string {
 	if i := strings.LastIndex(briefing, "'s message\n\n"); i >= 0 {
 		message = briefing[i+len("'s message\n\n"):]
 	}
-	return "echo " + ConductorReply(task, message)
+	var b strings.Builder
+	for _, c := range ConductorCalls(message) {
+		fmt.Fprintf(&b, "http dude POST /tools/%s %s\n", c[0], c[1])
+	}
+	return b.String() + "echo " + ConductorReply(task, message)
+}
+
+// ConductorCallPrefix starts a line of a person's message that the
+// scripted conductor carries out: "tool: NAME {json}" calls dude's tool
+// NAME with those arguments, as a real conductor would decide to — what
+// lets a test drive the conductor's decisions through Chat.
+const ConductorCallPrefix = "tool: "
+
+// ConductorCalls are the tool calls an input asks the scripted conductor
+// for, in order: each line "tool: NAME {json}" ([name, JSON arguments]).
+func ConductorCalls(input string) [][2]string {
+	var out [][2]string
+	for _, line := range strings.Split(input, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), ConductorCallPrefix)
+		if !ok {
+			continue
+		}
+		name, args, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		if args = strings.TrimSpace(args); args == "" {
+			args = "{}"
+		}
+		if name != "" {
+			out = append(out, [2]string{name, args})
+		}
+	}
+	return out
 }
 
 // ConductorTurn is the scripted conductor's reply to a later input, from
 // its script (ConductorScript): the same task, the new input.
 func ConductorTurn(script, input string) string {
-	first := strings.TrimPrefix(script, "echo ")
+	first := script[strings.LastIndex(script, "echo ")+len("echo "):]
 	var task string
 	if _, err := fmt.Sscanf(first, "Briefed on %q.", &task); err != nil {
 		return first

@@ -216,7 +216,9 @@ describe("the Chat tab", () => {
     expect(history.textContent).toContain("implementer → reviewer → fixer → reviewer → simplifier → PR #");
     const composer = page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")!;
     expect(composer.placeholder).toBe("Ask about this task…");
-    expect(page.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · read-only");
+    // Deliver is still delivering it: the first message hands the decisions over, so the composer is not read-only.
+    expect(page.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor");
+    expect(page.querySelector("[data-testid=task-chat]")?.textContent).toContain("hands this delivery's decisions to its conductor");
 
     // Sending goes to the task's Chat.
     await write(page, "why 8s?");

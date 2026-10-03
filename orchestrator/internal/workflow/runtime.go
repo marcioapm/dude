@@ -81,6 +81,24 @@ type Definition struct {
 	Steps       map[string]Step
 	// Attempts before a failing step is dead-lettered.
 	MaxAttempts int
+	// Top-level state keys written from outside the steps (a person's
+	// request, while a step may be running): a step's transition keeps
+	// what the row holds for them, so a step that read the state before
+	// the write cannot undo it.
+	Owned []string
+	// Top-level boolean keys both a step and an outside writer may set:
+	// true once either set it. A step that read false before the outside
+	// write keeps the row's true; a step setting true is kept too.
+	Latched []string
+	// Recheck, when set, runs inside the transition's transaction, before
+	// the step's result is written: it may read the row as it is now
+	// (locking it) and replace the result (changed), so a decision a step
+	// took on the state it claimed follows a write made while the step ran.
+	// It must only read and write the database; slow work belongs to steps.
+	Recheck func(ctx context.Context, tx pgx.Tx, sc StepContext, res Result) (next Result, changed bool, err error)
+	// Test hook: called after a step returns, with the step it chose, and
+	// before its transition commits.
+	BeforeCommit func(runID, step, next string)
 }
 
 // Run is a workflow run's durable state.
@@ -203,26 +221,40 @@ func (r *Runtime) Signal(ctx context.Context, organizationID, runID, name string
 		return err
 	}
 	return r.db.InOrg(ctx, organizationID, func(tx pgx.Tx) error {
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs WHERE id = $1)`, runID).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return ErrNotFound
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
-			VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-			ON CONFLICT (workflow_run_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-			ids.New(ids.WorkflowSignal), organizationID, runID, name, body, db.Nullable(idempotencyKey)); err != nil {
-			return err
-		}
-		// Wake a run parked on this signal. One parked on a timer keeps it.
-		_, err := tx.Exec(ctx, `
-			UPDATE workflow_runs SET status = 'running', wake_at = NULL
-			WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? $2`, runID, name)
-		return err
+		return signalTx(ctx, tx, organizationID, runID, name, body, idempotencyKey)
 	})
+}
+
+// SignalTx is Signal in the caller's transaction (in organizationID's
+// scope), for a signal that must commit with what it reports.
+func SignalTx(ctx context.Context, tx pgx.Tx, organizationID, runID, name string, payload any, idempotencyKey string) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return signalTx(ctx, tx, organizationID, runID, name, body, idempotencyKey)
+}
+
+func signalTx(ctx context.Context, tx pgx.Tx, organizationID, runID, name string, body []byte, idempotencyKey string) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs WHERE id = $1)`, runID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+		ON CONFLICT (workflow_run_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+		ids.New(ids.WorkflowSignal), organizationID, runID, name, body, db.Nullable(idempotencyKey)); err != nil {
+		return err
+	}
+	// Wake a run parked on this signal. One parked on a timer keeps it.
+	_, err := tx.Exec(ctx, `
+		UPDATE workflow_runs SET status = 'running', wake_at = NULL
+		WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? $2`, runID, name)
+	return err
 }
 
 // Abort stops a live workflow run.
@@ -436,8 +468,30 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 		}
 	}
 	awaiting, _ := json.Marshal(db.NonNil(result.AwaitSignals))
+	if def.BeforeCommit != nil {
+		def.BeforeCommit(run.ID, run.Step, result.Next)
+	}
+	owned := db.NonNil(def.Owned)
+	latched := db.NonNil(def.Latched)
 
 	err = r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
+		if def.Recheck != nil {
+			sc := StepContext{WorkflowRunID: run.ID, OrganizationID: run.OrganizationID, Step: run.Step, State: run.State}
+			next, changed, err := def.Recheck(ctx, tx, sc, result)
+			if err != nil {
+				return err
+			}
+			if changed {
+				result = next
+				state = nil
+				if result.State != nil {
+					if state, err = json.Marshal(result.State); err != nil {
+						return err
+					}
+				}
+				awaiting, _ = json.Marshal(db.NonNil(result.AwaitSignals))
+			}
+		}
 		// Guarded on this poller still holding the lease and the run still
 		// being live: if it was aborted mid-step, or the lease lapsed and
 		// another poller took over, this transition must not land.
@@ -447,9 +501,9 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 			qerr = tx.QueryRow(ctx, `
 				UPDATE workflow_runs
 				SET status = 'completed', wake_at = NULL, awaiting_signals = '[]'::jsonb, attempt = 0,
-				    locked_by = NULL, locked_until = NULL, state = COALESCE($3::jsonb, state)
+				    locked_by = NULL, locked_until = NULL, state = `+keepOwned+`
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
-				RETURNING id`, run.ID, r.pollerID, nullableJSON(state)).Scan(&tag)
+				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched).Scan(&tag)
 		} else {
 			status := "running"
 			var wake *time.Time
@@ -461,11 +515,11 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 			}
 			qerr = tx.QueryRow(ctx, `
 				UPDATE workflow_runs
-				SET step = $3, state = COALESCE($4::jsonb, state), status = $5::workflow_run_status,
-				    wake_at = $6, awaiting_signals = $7::jsonb, attempt = 0, last_error = NULL,
+				SET step = $6, state = `+keepOwned+`, status = $7::workflow_run_status,
+				    wake_at = $8, awaiting_signals = $9::jsonb, attempt = 0, last_error = NULL,
 				    locked_by = NULL, locked_until = NULL
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
-				RETURNING id`, run.ID, r.pollerID, result.Next, nullableJSON(state), status, wake, awaiting).Scan(&tag)
+				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched, result.Next, status, wake, awaiting).Scan(&tag)
 		}
 		if db.IsNotFound(qerr) {
 			return errLeaseLost
@@ -498,6 +552,13 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 }
 
 var errLeaseLost = errors.New("lease lost")
+
+// keepOwned (SQL; $3 the step's new state or NULL, $4 the definition's
+// owned keys, $5 its latched keys): the new state, with each owned key as
+// the row holds it, and each latched key true where the row holds true.
+const keepOwned = `(COALESCE($3::jsonb, state) - $4::text[])
+	|| COALESCE((SELECT jsonb_object_agg(k, state->k) FROM unnest($4::text[]) k WHERE state ? k), '{}'::jsonb)
+	|| COALESCE((SELECT jsonb_object_agg(k, true) FROM unnest($5::text[]) k WHERE state->k = 'true'::jsonb), '{}'::jsonb)`
 
 // runStep runs a step, turning a panic into an error so one bad step fails
 // its own run rather than the poller.

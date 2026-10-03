@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -82,6 +85,40 @@ type State struct {
 	// A person picking a stopped task back up (Recover), while the workflow
 	// carries it out.
 	Recover *Recover `json:"recover,omitempty"`
+
+	// Who takes the decisions: DeciderPolicy ("" from before the conductor
+	// decided anything) or DeciderConductor. Written from outside the steps
+	// (Chat, the hand-back), so a step's transition keeps the row's.
+	Decider string `json:"decider,omitempty"`
+	// Decisions were handed back to the policy on this delivery: a later
+	// message in Chat does not take them over again.
+	HandedBack bool `json:"handedBack,omitempty"`
+	// The decision the workflow is parked on for the conductor.
+	Decision *Pending `json:"decision,omitempty"`
+	// Decisions taken so far: what makes each one's Runs and wake its own.
+	Decisions int `json:"decisions,omitempty"`
+	// The conductor's direction for the step it sent the workflow to.
+	Directed *Directed `json:"directed,omitempty"`
+	// Open the pull requests as drafts: the person answered Draft.
+	Draft bool `json:"draft,omitempty"`
+	// The person's Open or Draft, taken by the conductor (or confirmed at a
+	// hand-back): under the conductor, the pull requests open only with it.
+	GateOpened bool `json:"gateOpened,omitempty"`
+	// The conductor entered the pull request gate on this delivery: the
+	// opening needs an authorization at the current heads (gateHeld), or
+	// an Open or Draft at them, whoever decides by then.
+	GateRequired bool `json:"gateRequired,omitempty"`
+	// Authorization heads and draft mode, owned by the row. GateOpened and
+	// Draft are latched and outlive a head change; gateHeld checks these heads.
+	GateAt *GateAt `json:"gateAt,omitempty"`
+	// The step read an answer authorizing the gate: its transition records
+	// it (recheck). Never persisted.
+	authorizeGate bool
+	// Escalations told to the conductor: each one's wake its own.
+	Escalations int `json:"escalations,omitempty"`
+	// A decision point the policy took in the step committing (next): set
+	// only between the step and its transition, which re-checks it.
+	Routed *Routed `json:"routed,omitempty"`
 }
 
 // Recover is a person picking a stopped task back up: resume the Runs that
@@ -205,23 +242,31 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
+		Owned:       []string{"decider", "handedBack", "gateAt"},
+		// The gate's authorization: set by the conductor's decision, or by
+		// a hand-back while a step runs.
+		Latched: []string{"draft", "gateOpened"},
+		Recheck: w.recheck,
 		Steps: map[string]workflow.Step{
-			"implement":        w.implement,
-			"awaitImplement":   w.awaitImplement,
-			"review":           w.review,
-			"awaitReview":      w.awaitReview,
-			"fix":              w.fix,
-			"awaitFix":         w.awaitFix,
-			"simplify":         w.simplify,
-			"awaitSimplify":    w.awaitSimplify,
-			"test":             w.test,
-			"awaitTest":        w.awaitTest,
-			"openPullRequest":  w.openPullRequest,
-			"awaitPullRequest": w.awaitPullRequest,
-			"prFix":            w.prFix,
-			"awaitPRFix":       w.awaitPRFix,
-			"decide":           w.decide,
-			"recover":          w.recover,
+			"implement":         w.implement,
+			"implementRun":      w.implementRun,
+			"reviewExit":        w.reviewExit,
+			"conductorDecision": w.conductorDecision,
+			"awaitImplement":    w.awaitImplement,
+			"review":            w.review,
+			"awaitReview":       w.awaitReview,
+			"fix":               w.fix,
+			"awaitFix":          w.awaitFix,
+			"simplify":          w.simplify,
+			"awaitSimplify":     w.awaitSimplify,
+			"test":              w.test,
+			"awaitTest":         w.awaitTest,
+			"openPullRequest":   w.openPullRequest,
+			"awaitPullRequest":  w.awaitPullRequest,
+			"prFix":             w.prFix,
+			"awaitPRFix":        w.awaitPRFix,
+			"decide":            w.decide,
+			"recover":           w.recover,
 		},
 	}
 }
@@ -294,10 +339,33 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	// The conductor plans with the person before anything is built: the
+	// first implementer is its call. A person's "try again" is not.
+	if st.conducted() && st.Retries == 0 {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
+			return workflow.Result{}, err
+		}
+		return w.next(ctx, sc, st, PointStart, "implementRun", "")
+	}
+	return w.implementRun(ctx, sc)
+}
+
+// implementRun starts the implementer: at once under the policy, at the
+// conductor's word under the conductor.
+func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseImplement, key(sc, st, ":implement"), nil)
+	k := key(sc, st, ":implement")
+	d := directed(st, PhaseImplement)
+	if d != nil {
+		k = conductorKey(sc, st, d, ":implement")
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseImplement, k, d.apply)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -332,7 +400,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
 	}
 	st.HeadRunID, st.Heads, st.ChangedPaths, st.PendingRunIDs = runID, out.advance(st.Heads), out.ChangedPaths, nil
-	return workflow.Result{Next: "review", State: st}, nil
+	return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement"))
 }
 
 // review fans reviewers out over the current head. Parallel Runs rather than
@@ -347,6 +415,10 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
+	d := directed(st, PhaseReview)
+	if d != nil && len(d.Categories) > 0 {
+		categories = d.Categories
+	}
 	// A re-review judges what the fixer was sent: the open findings of its
 	// category that a fix has attempted.
 	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
@@ -355,9 +427,14 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	var runIDs []string
 	for _, c := range categories {
-		id, err := w.phase(ctx, sc, st, PhaseReview, key(sc, st, ":review:", st.Iteration, ":", c),
+		k := key(sc, st, ":review:", st.Iteration, ":", c)
+		if d != nil {
+			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
+		}
+		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
+				d.apply(p)
 			})
 		if err != nil {
 			return workflow.Result{}, err
@@ -387,9 +464,28 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	}
 	st.Iteration++
 	st.PendingRunIDs = nil
+	exit := w.loopExit(st, findings)
+	if exit == nil || exit.Reason == "clear" {
+		// Past a bound it escalates as the policy does; short of one, the
+		// round's findings are the conductor's to triage, if it decides as
+		// the transition commits (recheck).
+		res, err := w.afterLoop(ctx, sc, st, exit)
+		st.Routed = &Routed{Point: PointReviewed, Policy: "reviewExit", Next: res.Next, Line: findingsLine(st, findings)}
+		return res, err
+	}
+	return w.afterLoop(ctx, sc, st, exit)
+}
+
+// loopExit is the review loop's exit for the findings, with the fix
+// attempts a person granted beyond the policy's.
+func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
-	exit := Exit(policy, findings, st.Iteration)
+	return Exit(policy, findings, st.Iteration)
+}
+
+// afterLoop goes where the review loop's exit says.
+func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *State, exit *LoopExit) (workflow.Result, error) {
 	switch {
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
@@ -400,6 +496,45 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 		return workflow.Result{Next: "test", State: st}, nil
 	}
 	return w.escalate(ctx, sc, st, exit.Reason, exit)
+}
+
+// reviewExit is "what the policy would do" after a review round the
+// conductor triaged: the exit for the findings as they are now — some may
+// have been dismissed since.
+func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings))
+}
+
+// findingsLine is a review round's findings in a note: how many are open,
+// by severity, and the round. Counts only, never a finding's text.
+func findingsLine(st *State, findings []FindingState) string {
+	bySeverity := map[string]int{}
+	open := 0
+	for _, f := range findings {
+		if f.Status == "open" {
+			open++
+			bySeverity[f.Severity]++
+		}
+	}
+	var parts []string
+	for _, s := range []string{"blocking", "high", "medium", "low", "note"} {
+		if n := bySeverity[s]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, s))
+		}
+	}
+	line := fmt.Sprintf("Review round %d of %d done: %d open findings", st.Iteration, st.Policy.MaxReviewIterations, open)
+	if len(parts) > 0 {
+		line += " (" + strings.Join(parts, ", ") + ")"
+	}
+	return line + "."
 }
 
 // fix: one fix Run for every unresolved finding. Findings overlap, a fixer
@@ -424,6 +559,14 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		}
 	}
 	k := key(sc, st, ":fix:", st.Iteration)
+	d := directed(st, PhaseFix)
+	if d != nil {
+		k = conductorKey(sc, st, d, ":fix:", st.Iteration)
+		if len(d.FindingIDs) > 0 {
+			// Only those of the conductor's that are still open.
+			open = slices.DeleteFunc(slices.Clone(d.FindingIDs), func(id string) bool { return !slices.Contains(open, id) })
+		}
+	}
 	// Counted once per fix step, however often the step is replayed: the
 	// Run's creation key doubles as the marker that it was counted.
 	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
@@ -435,7 +578,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			return workflow.Result{}, err
 		}
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs = open })
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs = open; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -459,7 +602,7 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
-	return workflow.Result{Next: "review", State: st}, nil
+	return w.next(ctx, sc, st, PointFixed, "review", out.line(runID, "fix"))
 }
 
 // simplify runs once blocking findings are clear (plan §11.4). It may
@@ -472,7 +615,12 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseSimplify, key(sc, st, ":simplify"), nil)
+	k := key(sc, st, ":simplify")
+	d := directed(st, PhaseSimplify)
+	if d != nil {
+		k = conductorKey(sc, st, d, ":simplify")
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseSimplify, k, d.apply)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -506,10 +654,15 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if !st.Policy.Test {
-		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	d := directed(st, PhaseTest)
+	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
+		return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseTest, key(sc, st, ":test"), nil)
+	k := key(sc, st, ":test")
+	if d != nil {
+		k = conductorKey(sc, st, d, ":test")
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseTest, k, d.apply)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -535,13 +688,37 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 		return w.escalate(ctx, sc, st, "test_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.PendingRunIDs = nil
-	return workflow.Result{Next: "openPullRequest", State: st}, nil
+	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", out.line(runID, "test"))
 }
 
 func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// The gate holds at the opening itself: a delivery taken over after the
+	// policy chose to open waits for the person's answer like any other, and
+	// one handed back after the conductor entered the gate opens only with
+	// the person's Open or Draft at the heads it opens.
+	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
+		if st.conducted() {
+			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
+		}
+		ok, err := w.gateAuthorized(ctx, sc, st)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if !ok {
+			return w.parkAtGate(ctx, sc, st, true)
+		}
+		if st.authorizeGate {
+			// Opened by the next run of this step, on the authorization
+			// its transition records.
+			return workflow.Result{Next: "openPullRequest", State: st}, nil
+		}
+	}
+	if st.GateRequired && st.GateAt != nil {
+		st.Draft = st.GateAt.Draft
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if err != nil {
@@ -644,7 +821,24 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		return waitAgain, nil
 	}
 	st.PRFeedback = actionable
-	return workflow.Result{Next: "prFix", State: st}, nil
+	return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackLine(actionable))
+}
+
+// feedbackLine counts pull request feedback by kind, without its words.
+func feedbackLine(feedback []forge.ActionableFeedback) string {
+	kinds := map[string]int{}
+	for _, f := range feedback {
+		kind := f.Source
+		if len(f.Checks) > 0 {
+			kind = "failing check"
+		}
+		kinds[kind]++
+	}
+	var parts []string
+	for _, k := range slices.Sorted(maps.Keys(kinds)) {
+		parts = append(parts, fmt.Sprintf("%d %s", kinds[k], k))
+	}
+	return fmt.Sprintf("%d actionable items (%s): read them with pull_requests.", len(feedback), strings.Join(parts, ", "))
 }
 
 // stillStuck says whether what a conflict or ci_stuck signal reported is
@@ -715,7 +909,8 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 	}
 	// Several comments arriving together cost one fix Run, not one each.
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback })
+	d := directed(st, PhaseFix)
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -900,6 +1095,21 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
 		return workflow.Result{}, err
+	}
+	if st.conducted() {
+		// The person still decides; the conductor is told, to explain and
+		// propose in Chat. Once per escalation, however often replayed.
+		st.Decision, st.Directed = nil, nil
+		st.Escalations++
+		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides; explain and propose.",
+			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
+				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	return workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}, nil
 }

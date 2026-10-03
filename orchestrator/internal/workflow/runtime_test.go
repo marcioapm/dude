@@ -368,3 +368,38 @@ func TestASignalSurvivesAStepThatFails(t *testing.T) {
 		t.Fatalf("signals seen per attempt = %v, want the retry to see the approval", seen)
 	}
 }
+
+// A key the definition owns is written from outside the steps: a step
+// that read the state before the write returns it without the write, and
+// its transition must not undo it. Keys it does not own are the step's.
+func TestAStepDoesNotUndoAnOwnedKeyWrittenWhileItRan(t *testing.T) {
+	h := newHarness(t)
+	var id string
+	h.rt.Register(&Definition{Type: "test.owned", InitialStep: "work", Owned: []string{"decider"},
+		Steps: map[string]Step{
+			"work": func(ctx context.Context, sc StepContext) (Result, error) {
+				var st map[string]any
+				_ = json.Unmarshal(sc.State, &st)
+				// A person's write lands while the step runs.
+				if _, err := h.owner.Exec(ctx, `UPDATE workflow_runs SET state = state || '{"decider":"conductor","note":"theirs"}'
+					WHERE id = $1`, id); err != nil {
+					return Result{}, err
+				}
+				st["step"], st["note"] = "done", "the step's"
+				return Result{Next: "wait", State: st, AwaitSignals: []string{"never"}}, nil
+			},
+		}})
+	id = h.start("test.owned")
+	h.tick()
+	var decider, step, note string
+	if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(state->>'decider', ''), state->>'step', state->>'note'
+		FROM workflow_runs WHERE id = $1`, id).Scan(&decider, &step, &note); err != nil {
+		t.Fatal(err)
+	}
+	if decider != "conductor" {
+		t.Errorf("the owned key written mid-step is %q after the transition, want conductor", decider)
+	}
+	if step != "done" || note != "the step's" {
+		t.Errorf("the step's own keys: step %q note %q", step, note)
+	}
+}

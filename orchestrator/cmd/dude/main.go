@@ -15,6 +15,10 @@
 //	                                      what a Run of this task changed
 //	dude findings [ID...]                 a conductor's: the task's findings
 //	dude prs                              a conductor's: the task's pull requests
+//	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
+//	dude decide ACTION [--note N]         a conductor's: the decision waited on
+//	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
+//	dude task update [--goal G] [--criterion C]... [--no-criteria]
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
 //
@@ -73,7 +77,8 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory") {
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
+		cmd == "phase" || cmd == "finding") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -255,6 +260,70 @@ func run(args []string, out io.Writer) error {
 			return errors.New("usage: dude prs")
 		}
 		return show(out, *asJSON, call("pull_requests", map[string]any{}))
+	case "phase start":
+		var categories, findings many
+		fs.Var(&categories, "category", "review: a reviewer to run (repeatable); none runs those the change warrants")
+		fs.Var(&findings, "finding", "fix: an open finding to fix (repeatable); none fixes every open one")
+		note := fs.String("note", "", "what you ask of the Run")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude phase start implement|review|fix|simplify|test [--category C]... [--finding ID]... [--note N]")
+		}
+		body := map[string]any{"phase": args[0]}
+		if len(categories) > 0 {
+			body["categories"] = []string(categories)
+		}
+		if len(findings) > 0 {
+			body["findings"] = []string(findings)
+		}
+		if *note != "" {
+			body["note"] = *note
+		}
+		return show(out, *asJSON, call("start_phase", body))
+	case "decide":
+		note := fs.String("note", "", "why; for ask_person, the question")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude decide next|ask_person|wait|open_pull_request [--note N]")
+		}
+		return show(out, *asJSON, call("decide", map[string]any{"action": args[0], "note": *note}))
+	case "finding dismiss":
+		reason := fs.String("reason", "", "why it is left as it is")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || *reason == "" {
+			return errors.New(`usage: dude finding dismiss ID --reason "why"`)
+		}
+		return show(out, *asJSON, call("dismiss_finding", map[string]any{"id": args[0], "reason": *reason}))
+	case "task update":
+		goal := fs.String("goal", "", "the task's goal, whole")
+		clear := fs.Bool("no-criteria", false, "clear the acceptance criteria")
+		var criteria many
+		fs.Var(&criteria, "criterion", "an acceptance criterion (repeatable): the whole list")
+		if _, err := parse(fs, rest); err != nil {
+			return err
+		}
+		body := map[string]any{}
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "goal" {
+				body["goal"] = *goal
+			}
+		})
+		if len(criteria) > 0 || *clear {
+			body["acceptanceCriteria"] = list(criteria)
+		}
+		if len(body) == 0 {
+			return errors.New(`usage: dude task update [--goal G] [--criterion C]... [--no-criteria]`)
+		}
+		return show(out, *asJSON, call("update_task", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
 		args, err := parse(fs, rest)
@@ -267,6 +336,14 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(args[0], *name) })
 	}
 	return fmt.Errorf("unknown command %q (dude help)", cmd)
+}
+
+// list is a repeatable flag's values as JSON reads them: [] for none.
+func list(m many) []string {
+	if m == nil {
+		return []string{}
+	}
+	return m
 }
 
 // parse parses flags wherever they are among the arguments — `publish FILE
@@ -455,6 +532,15 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              was settled; with IDs (fnd_…), those in full
   dude prs                                   a conductor's: the task's pull requests, their checks,
                                              reviews and feedback
+  dude phase start PHASE [--category C]... [--finding ID]... [--note N]
+                                             a conductor's: take the decision the delivery waits on
+                                             by starting implement, review, fix, simplify or test
+  dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
+                                             open_pull_request (after the person answered Open)
+  dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is
+  dude task update [--goal G] [--criterion C]... [--no-criteria]
+                                             a conductor's: write what Chat settled into the task,
+                                             before the implementer starts
   dude publish FILE [--name NAME]            keep a file for people, shown with the task
   dude tools                                 the tools this run may use
   dude --version                             this CLI's version
