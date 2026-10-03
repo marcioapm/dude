@@ -290,6 +290,26 @@ def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page
     assert console_errors == []
 
 
+def test_a_select_list_with_long_descriptions_fits_a_phone(gallery_page: Page, console_errors: list):
+    """At 390px the list stays on the screen and its descriptions wrap; on a wide screen it stops at 560px."""
+    for width, most in ((390, 390 - 16), (1440, 560)):
+        gallery_page.set_viewport_size({"width": width, "height": 844})
+        gallery_page.get_by_role("link", name="Select").click()
+        # The light pane's: the dark pane's row runs under it at some widths.
+        trigger = gallery_page.locator("[data-testid=gallery-select-long]").last
+        trigger.click()
+        expect(trigger).to_have_attribute("aria-expanded", "true")
+        listbox = gallery_page.locator(f"[id='{trigger.get_attribute('aria-controls')}']")
+        expect(listbox).to_be_visible()
+        box = listbox.bounding_box()
+        assert box is not None
+        assert box["width"] <= most + 0.5, f"list is {box['width']}px wide at {width}px"
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width, f"list runs off a {width}px screen: {box}"
+        gallery_page.keyboard.press("Escape")
+        expect(listbox).to_be_hidden()
+    assert console_errors == []
+
+
 def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_errors: list):
     """Write / Preview is a tablist: Home and End reach its ends, as ← → do its neighbours."""
     gallery_page.get_by_role("link", name="MarkdownEditor").click()

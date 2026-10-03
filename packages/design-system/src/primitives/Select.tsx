@@ -28,6 +28,8 @@ export interface SelectProps<T extends string = string> {
   readonly value?: T | undefined;
   readonly defaultValue?: T | undefined;
   readonly onValueChange?: ((value: T) => void) | undefined;
+  /** The list opened or closed: to read what its options say only when someone looks. */
+  readonly onOpenChange?: ((open: boolean) => void) | undefined;
   readonly options: ReadonlyArray<SelectOption<T>> | ReadonlyArray<SelectGroup<T>>;
   readonly placeholder?: string | undefined;
   readonly label?: string | undefined;
@@ -60,6 +62,7 @@ export function Select<T extends string = string>({
   value,
   defaultValue,
   onValueChange,
+  onOpenChange,
   options,
   placeholder = "Select…",
   label,
@@ -114,6 +117,7 @@ export function Select<T extends string = string>({
           value,
           defaultValue,
           onValueChange: onValueChange as ((v: string) => void) | undefined,
+          onOpenChange,
           name,
         })}
       >
