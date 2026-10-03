@@ -403,6 +403,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shows each conversation in order, one after the other in the same
   transcript: an ended one's turns with nothing to answer, closed by
   dude's notice that it ended; only the latest has the composer.
+- **A conducted task.** When the conductor takes the task's decisions,
+  each Run it started is a **`ChatRunLine`** where it started: one
+  collapsed line on a 2px rail in the Run's role colour — face, role,
+  what it is, `StatusMark`, its facts — the whole line a button that opens
+  the Run's session. A decision the delivery waits on is dude's notice,
+  `ChatNotice kind="decision"`; something that wakes nobody (an approval, a
+  green check) is `kind="notice"`. **`DeciderLine`** sits above the
+  composer on the raised shade: who decides ("The conductor decides ·
+  waiting on it: …", or "Deliver decides"), and one quiet action — Let
+  Deliver finish it.
+- **Starting is a choice.** **`StartChoice`** lays the ways to start side
+  by side, equal cards on the raised shade, each its own button: no
+  primary, nothing preselected. Narrow, they stack.
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
@@ -1331,6 +1344,11 @@ MarkdownCheatsheet.
   (the caller shows why). A person's draft is never lost to a failed send.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
+- **ChatRunLine** — a Run the conductor started, one line in its Chat on
+  its role's rail, opening its session.
+- **DeciderLine** — who takes a task's decisions, and the way to hand
+  them back.
+- **StartChoice** — the ways to start a task, equal, side by side.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `title` renders a plain-text name as the first `h1` (blank: `untitled`,
