@@ -333,5 +333,8 @@ describe("a conductor's session on an earlier attempt", () => {
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
     expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
     writable(page);
+    // Off Sessions, the conductor is no longer under the bar: it speaks for the attempt alone.
+    await openTab(page, "Overview");
+    await until(() => (page.querySelector("[data-testid=earlier-bar]")?.textContent?.includes("resumed or steered.") ? true : null), "the bar's full sentence");
   });
 });
