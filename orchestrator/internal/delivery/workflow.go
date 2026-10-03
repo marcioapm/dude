@@ -339,7 +339,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
 			return workflow.Result{}, err
 		}
-		return w.toConductor(ctx, sc, st, PointStart, "implementRun", "")
+		return w.next(ctx, sc, st, PointStart, "implementRun", "")
 	}
 	return w.implementRun(ctx, sc)
 }
@@ -461,10 +461,8 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	exit := w.loopExit(st, findings)
 	if exit == nil || exit.Reason == "clear" {
 		// Past a bound it escalates as the policy does; short of one, the
-		// round's findings are the conductor's to triage.
-		if st.conducted() {
-			return w.toConductor(ctx, sc, st, PointReviewed, "reviewExit", findingsLine(st, findings))
-		}
+		// round's findings are the conductor's to triage, if it decides as
+		// the transition commits (recheck).
 		res, err := w.afterLoop(ctx, sc, st, exit)
 		st.Routed = &Routed{Point: PointReviewed, Policy: "reviewExit", Next: res.Next, Line: findingsLine(st, findings)}
 		return res, err
@@ -698,7 +696,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	// the person's Open or Draft.
 	if !st.GateOpened && len(st.PullRequestIDs) == 0 {
 		if st.conducted() {
-			return w.toConductor(ctx, sc, st, PointBeforePR, "openPullRequest", "")
+			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 		}
 		if st.GateRequired {
 			ok, err := w.gateAuthorized(ctx, sc, st)

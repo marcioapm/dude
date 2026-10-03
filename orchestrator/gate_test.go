@@ -96,8 +96,10 @@ func TestAHandBackWhileEnteringTheGateStillAsks(t *testing.T) {
 			w := conducting(t)
 			task := w.task()
 			var once sync.Once
+			// The step's result is the policy's (openPullRequest); the
+			// transition's checkpoint parks it at the conductor's gate.
 			armed := w.gated(func(step, next string) {
-				if step != "test" || next != "conductorDecision" {
+				if step != "test" || next == step {
 					return
 				}
 				once.Do(func() {
