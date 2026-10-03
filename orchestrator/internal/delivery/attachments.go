@@ -157,6 +157,64 @@ func TaskImages(ctx context.Context, tx pgx.Tx, taskID, goal string, criteria []
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[SentAttachment])
 }
 
+// SyncTaskImagesTx makes the task's images the ones its goal and criteria
+// reference, in tx after the text is written: the backend's
+// syncTaskAttachments (apps/control-plane/src/api/routes/attachments.ts)
+// in Go, for a text the conductor writes. Each referenced image becomes the
+// prompt's (for_prompt, attached, position its first appearance), and each
+// no longer referenced is let go (detached_at), for the sweeper. Another
+// task's image, one a message carried, or more than a message's count or
+// bytes is an AttachmentError; an id with no row stays text.
+func SyncTaskImagesTx(ctx context.Context, tx pgx.Tx, taskID, goal string, criteria []string) error {
+	ids := TaskImageIDs(goal, criteria)
+	rows, err := tx.Query(ctx, `SELECT id, task_id, directive_id IS NOT NULL, bytes FROM attachments
+		WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		ID, TaskID string
+		Sent       bool
+		Bytes      int64
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+	if err != nil {
+		return err
+	}
+	var total int64
+	for _, r := range found {
+		if r.TaskID != taskID {
+			return AttachmentError{fmt.Sprintf("image %s is another task's; upload it to this one", r.ID)}
+		}
+		if r.Sent {
+			return AttachmentError{fmt.Sprintf("image %s was sent with a message; upload it again to use it here", r.ID)}
+		}
+		total += r.Bytes
+	}
+	if len(found) > MaxAttachmentsPerMessage {
+		return AttachmentError{fmt.Sprintf("a task's text shows at most %d images", MaxAttachmentsPerMessage)}
+	}
+	if total > MaxMessageAttachmentBytes {
+		return AttachmentError{fmt.Sprintf("a task's images are at most %d MiB together", MaxMessageAttachmentBytes>>20)}
+	}
+	// Never nil: NOT (id = ANY(NULL)) is NULL, which would let none go.
+	kept := []string{}
+	for _, id := range ids {
+		if slices.ContainsFunc(found, func(r row) bool { return r.ID == id }) {
+			kept = append(kept, id)
+		}
+	}
+	for pos, id := range kept {
+		if _, err := tx.Exec(ctx, `UPDATE attachments SET for_prompt = true, attached_at = COALESCE(attached_at, now()),
+			detached_at = NULL, position = $2 WHERE id = $1`, id, pos); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE attachments SET for_prompt = false, attached_at = NULL, position = 0, detached_at = now()
+		WHERE task_id = $1 AND for_prompt AND NOT (id = ANY($2))`, taskID, kept)
+	return err
+}
+
 // PromptImages are the images as the prompt numbers them.
 func PromptImages(images []SentAttachment) []PromptImage {
 	out := make([]PromptImage, len(images))

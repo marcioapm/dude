@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -576,6 +577,14 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 	next, _ := json.Marshal(db.NonNil(criteria))
 	if _, err := tx.Exec(ctx, `UPDATE tasks SET goal = $2, acceptance_criteria = $3::jsonb, updated_at = now() WHERE id = $1`,
 		ref.TaskID, goal, next); err != nil {
+		return err
+	}
+	// The images it shows follow the text, as on a person's edit.
+	if err := SyncTaskImagesTx(ctx, tx, ref.TaskID, goal, criteria); err != nil {
+		var refused AttachmentError
+		if errors.As(err, &refused) {
+			return refusef("%s; nothing was saved", refused.Message)
+		}
 		return err
 	}
 	// The shape a person's edit records (the fields changed, as they are
