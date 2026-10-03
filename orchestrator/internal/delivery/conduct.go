@@ -235,6 +235,15 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		return nil, refusef("no open finding to fix")
 	}
 	limit := st.Policy.MaxAttemptsPerFinding + st.ExtraFixAttempts
+	// The policy's checkpoint: a blocking finding still open after its last
+	// allowed fix stops the loop until a review says whether that fix worked,
+	// or the person decides. Another fix, of any finding, waits for that.
+	for _, f := range all {
+		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(st.Policy.BlockingSeverities, f.Severity) {
+			return nil, refusef("%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) "+
+				"or ask the person how to go on (ask_person) before another fix", f.ID, f.FixAttempts)
+		}
+	}
 	for _, id := range named {
 		f, ok := byID[id]
 		switch {
