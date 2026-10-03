@@ -436,9 +436,23 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 		w.must(task, "decide", `{"action":"next"}`)
 		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-		w.must(task, "start_phase", `{"phase":"fix"}`)
+		// A is the reviewer's; B another blocking finding of the round.
+		var a, run string
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, run_id FROM review_findings WHERE task_id = $1`, task).Scan(&a, &run)
+		mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title,
+				description, suggested_fix)
+			SELECT 'fnd_b_'||$1, organization_id, task_id, run_id, category, severity, 'B', 'b', 'b'
+			FROM review_findings WHERE id = $2`, task, a)
+		w.must(task, "start_phase", `{"phase":"fix","findings":["`+a+`"]}`)
 		w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.refused(task, "start_phase", `{"phase":"fix"}`, "the bound per finding")
+		w.refused(task, "start_phase", `{"phase":"fix","findings":["`+a+`"]}`, "the bound per finding")
+		fixes := w.phaseRuns(task, "fix")
+		w.refused(task, "start_phase", `{"phase":"fix","findings":["fnd_b_`+task+`"]}`, "re-review")
+		w.refused(task, "start_phase", `{"phase":"fix"}`, "re-review")
+		if n := w.phaseRuns(task, "fix"); n != fixes {
+			t.Errorf("a fix started past the stuck finding")
+		}
+		w.must(task, "start_phase", `{"phase":"review"}`)
 	})
 	t.Run("pull request fix rounds", func(t *testing.T) {
 		w := conducting(t)
