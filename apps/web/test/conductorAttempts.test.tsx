@@ -224,6 +224,14 @@ describe("a conductor's session, from its URL", () => {
     expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
     expect(window.location.hash).toBe(`#/task/${TASK_ID}?attempt=1`);
   });
+
+  test("the task's own URL on a started-over task with a conductor opens on Chat", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}`);
+    await until(() => picker(page), "the task page with its picker");
+    await settle(50);
+    expect(shown(page)).toBe("2");
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Chat");
+  });
 });
 
 describe("a conductor's session on an earlier attempt", () => {
