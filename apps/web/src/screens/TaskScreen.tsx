@@ -461,7 +461,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       {item.escalation || stop || aside || problem ? (
         <div className="taskNotices">
-          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
+          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               onOpenRun={onOpenRun} onDecided={() => void load()} />
@@ -714,7 +714,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
  * when, their note, how it had ended, and the way to the current one.
  * Neutral: nothing is wrong and nobody is needed.
  */
-function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; current: number; aside: SetAside; onCurrent: () => void }) {
+function EarlierBar({ attempt, current, aside, conductorOpen, onCurrent }: { attempt: number; current: number; aside: SetAside; conductorOpen: boolean; onCurrent: () => void }) {
   return (
     <Callout tone="neutral" data-testid="earlier-bar">
       <div className="escalation">
@@ -725,7 +725,8 @@ function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; c
           {aside.note ? <>: “{aside.note}”</> : "."}
         </p>
         <p className="earlierSecond">
-          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be merged, resumed or steered.{" "}
+          {/* The task's conductor, open under the bar, is not the attempt's and can still be steered. */}
+          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be {conductorOpen ? "merged or resumed" : "merged, resumed or steered"}.{" "}
           <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onCurrent} data-testid="go-current">
             Go to attempt {current} (current)
           </Button>
