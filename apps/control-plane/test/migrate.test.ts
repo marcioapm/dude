@@ -227,7 +227,8 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "070_kept_runs.sql",
       "071_attachments.sql",
       "072_conductor.sql",
-      "073_task_inline_images.sql",
+      "073_attempt_metrics.sql",
+      "074_task_inline_images.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -272,7 +273,7 @@ test("073 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["073_task_inline_images.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },

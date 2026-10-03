@@ -35,7 +35,7 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   const cutoff = new Date(now.getTime() - UNATTACHED_TTL_HOURS * 3600_000);
   const expired = await withoutTenant(async ({ sql }) => {
     await sql`SET LOCAL ROLE dude_sweeper`;
-    // A task's image removed from its text is unsent again from then (detached_at, migration 073).
+    // A task's image removed from its text is unsent again from then (detached_at, migration 074).
     const rows = await sql`DELETE FROM attachments WHERE attached_at IS NULL AND COALESCE(detached_at, created_at) < ${cutoff} RETURNING id`;
     return rows.length as number;
   });
