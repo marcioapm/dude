@@ -224,6 +224,12 @@ describe("a conductor's session, from its URL", () => {
     await until(() => (window.location.hash === `#/task/${TASK_ID}` ? true : null), "the task's own URL");
     await settle(100);
     expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
+    // Once there, the record is spent: a later return to the task's URL reads the default again.
+    await act(async () => { window.location.hash = `#/task/${TASK_ID}/findings`; });
+    await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent?.startsWith("Findings") ? true : null), "Findings");
+    await act(async () => { window.location.hash = `#/task/${TASK_ID}`; });
+    await settle(100);
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Chat");
   });
 
   test("a URL naming attempt 1 and no tab opens on Overview of attempt 1, not Chat", async () => {
