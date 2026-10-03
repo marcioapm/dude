@@ -108,10 +108,8 @@ type State struct {
 	// opening needs an authorization at the current heads (gateHeld), or
 	// an Open or Draft at them, whoever decides by then.
 	GateRequired bool `json:"gateRequired,omitempty"`
-	// The heads the gate was authorized at, and as a draft or not: written
-	// with GateOpened, outside the steps (AuthorizeGateTx) or in a step's
-	// transition (authorizeAtCommitTx). GateOpened and Draft are latched
-	// and outlive a head change; this decides.
+	// Authorization heads and draft mode, owned by the row. GateOpened and
+	// Draft are latched and outlive a head change; gateHeld checks these heads.
 	GateAt *GateAt `json:"gateAt,omitempty"`
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
@@ -826,8 +824,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackLine(actionable))
 }
 
-// feedbackLine is pull request feedback in a note: how much, of what kind,
-// on which pull requests. Never its words.
+// feedbackLine counts pull request feedback by kind, without its words.
 func feedbackLine(feedback []forge.ActionableFeedback) string {
 	kinds := map[string]int{}
 	for _, f := range feedback {
