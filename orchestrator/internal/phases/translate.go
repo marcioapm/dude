@@ -290,6 +290,13 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			if phase := str("phase"); str("error") != "" || (phase != "" && phase != lux.InputAccepted) {
 				return nil
 			}
+			// A conductor started with dude's wake note has heard it: its
+			// reasons are not told again (delivery.BriefingUnheardTx).
+			if t.run.conductor() {
+				if err := delivery.BriefingHeardTx(ctx, tx, t.run.ID); err != nil {
+					return err
+				}
+			}
 			// Once per Run: an agent resumed on another host is not given its
 			// task again, but a lux that acknowledged it again would repeat it.
 			if t.promptSeen {
