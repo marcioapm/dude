@@ -148,3 +148,59 @@ func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
 		t.Errorf("%d reasons delivered while more were arriving", n)
 	}
 }
+
+// Among many ended conductors, the sweep finds both kinds left with
+// something unheard: one with a message it never read, one whose wake
+// briefing it never heard. Both are settled in one sweep.
+func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(sql string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, 302) n`, org)
+	// 300 ended conductors with nothing left, each having heard its briefing.
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, ended_at)
+		SELECT 'run_h'||n, $1, 'prj_'||$1, 'wi_'||n, 1, 'conductor', 'agent', 'completed', now() - interval '1 day'
+		FROM generate_series(1, 300) n`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, delivered_at, conductor_run_id)
+		SELECT 'cwk_h'||n, $1, 'wi_'||n, 'decision', 'k', 'heard', now(), 'run_h'||n FROM generate_series(1, 300) n`, org)
+	exec(`INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id, heard_at)
+		SELECT $1, 'cwk_h'||n, 'run_h'||n, now() FROM generate_series(1, 300) n`, org)
+	// Aborted by a person: what it never read fails, saying it was stopped.
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, ended_at)
+		VALUES ('run_msg', $1, 'prj_'||$1, 'wi_301', 1, 'conductor', 'agent', 'aborted', now()),
+		       ('run_brief', $1, 'prj_'||$1, 'wi_302', 1, 'conductor', 'agent', 'aborted', now())`, org)
+	exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_unread', $1, 'wi_301', 'run_msg', 'hello')`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, delivered_at, conductor_run_id)
+		VALUES ('cwk_brief', $1, 'wi_302', 'decision', 'k', 'never heard', now(), 'run_brief')`, org)
+	exec(`INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id) VALUES ($1, 'cwk_brief', 'run_brief')`, org)
+
+	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := s.handOverUnheard(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT count(*) FROM directives WHERE id = 'dir_unread' AND failed_at IS NOT NULL`); n != 1 {
+		t.Errorf("the unread message is not settled")
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_brief' AND delivered_at IS NULL`); n != 1 {
+		t.Errorf("the unheard briefing's reason is not pending again")
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id LIKE 'cwk_h%' AND delivered_at IS NULL`); n != 0 {
+		t.Errorf("%d heard reasons put back to pending", n)
+	}
+}
