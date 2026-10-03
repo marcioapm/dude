@@ -147,10 +147,11 @@ beforeAll(async () => {
   // implementer ran 4 h to 3 h ago.
   await taskWith("wi_7", 7, "Asked first", "running", 360,
     [["run_g1", 1, 240, 180, "aborted"], ["run_g2", 2, 120, null, "running"]], []);
-  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, created_at, started_at, ended_at, status)
-              VALUES ('run_g_cond1', ${ORG}, ${PROJECT}, 'wi_7', 1, 'conductor',
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, agent_cost_usd, input_tokens, output_tokens,
+                                created_at, started_at, ended_at, status)
+              VALUES ('run_g_cond1', ${ORG}, ${PROJECT}, 'wi_7', 1, 'conductor', 0.50, 300, 30,
                       now() - interval '300 minutes', now() - interval '300 minutes', now() - interval '290 minutes', 'completed'),
-                     ('run_g_cond2', ${ORG}, ${PROJECT}, 'wi_7', 2, 'conductor',
+                     ('run_g_cond2', ${ORG}, ${PROJECT}, 'wi_7', 2, 'conductor', 0.25, 200, 20,
                       now() - interval '200 minutes', now() - interval '200 minutes', now() - interval '190 minutes', 'completed')`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
@@ -260,6 +261,16 @@ test("a conductor's Run is counted in its attempt but neither begins it nor ends
   near(one.leadMs, 2 * HOUR);
   // From attempt 2's first agent, 2 h ago, until now.
   near((await get("/v1/tasks/wi_7/metrics?attempt=2")).leadMs, 2 * HOUR);
+});
+
+test("a conductor's Run costs its own attempt, and no other", async () => {
+  // The conductors cost $0.50 (attempt 1) and $0.25 (attempt 2); the agents cost nothing.
+  const one = await get("/v1/tasks/wi_7/metrics?attempt=1");
+  expect(one.costUsd).toBeCloseTo(0.5, 9);
+  expect(one.tokens).toEqual({ input: 300, output: 30 });
+  const two = await get("/v1/tasks/wi_7/metrics?attempt=2");
+  expect(two.costUsd).toBeCloseTo(0.25, 9);
+  expect(two.tokens).toEqual({ input: 200, output: 20 });
 });
 
 test("a question or a repository request still waiting on a person counts until now", async () => {
