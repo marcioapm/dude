@@ -30,6 +30,7 @@ import {
   PullRequestPanel,
   SessionItem,
   SessionList,
+  StartChoice,
   StatusMark,
   StepList,
   StepRow,
@@ -96,6 +97,9 @@ function changesRun(payload: unknown): boolean {
   const p = (payload ?? {}) as { change?: unknown; luxState?: unknown };
   return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
 }
+
+/** Both ways to start a task look alike: no project or button prefers one. */
+const START_VARIANT = "secondary" as const;
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: openTab, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open; the task's URL is
@@ -239,6 +243,22 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
     }
   };
 
+  // Talk it through: the conductor starts, in Chat, and plans with the
+  // person; nothing is built until it decides to.
+  const talk = async () => {
+    setDelivering(true);
+    setProblem(null);
+    try {
+      await client.talk(taskId);
+      setTab("chat");
+      await load();
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.message : "Could not start the conductor.");
+    } finally {
+      setDelivering(false);
+    }
+  };
+
   // Phases of the current attempt, in the order they ran.
   const phases = useMemo(() => {
     const runs = [...(item?.runs ?? [])].filter((r) => r.phase);
@@ -290,6 +310,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   // turn, and the latest takes the next message.
   const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const conductor = conductors.at(-1) ?? null;
+  // Where Deliver is offered, Talk it through is beside it: a task nothing
+  // has started, neither delivered nor talked through.
+  const startable = !started && item.decider === "policy" && ["received", "intake", "awaiting_confirmation", "queued"].includes(item.status);
   const tab = asked ?? (conductor ? "chat" : "overview");
   const stopped = item.status === "aborted" || item.status === "failed";
   const stop = stopped ? stopOfTask : null;
@@ -320,10 +343,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
-          {!started ? (
-            <Button variant="primary" leadingIcon="zap" onClick={() => void deliver()} disabled={delivering} data-testid="deliver">
-              {delivering ? "Starting…" : "Deliver"}
-            </Button>
+          {startable ? (
+            <>
+              {/* Two equal ways to start, chosen each time: neither is the default. */}
+              <Button variant={START_VARIANT} leadingIcon="message" onClick={() => void talk()} disabled={delivering} data-testid="talk" data-variant={START_VARIANT}>
+                Talk it through
+              </Button>
+              <Button variant={START_VARIANT} leadingIcon="zap" onClick={() => void deliver()} disabled={delivering} data-testid="deliver" data-variant={START_VARIANT}>
+                {delivering ? "Starting…" : "Deliver"}
+              </Button>
+            </>
           ) : null}
           {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
           {item.status === "review" && prs.length === 0 && phases.length > 0 && phases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
@@ -407,7 +436,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
-            events={events} owner={sessionTask} version={version} onSent={reload} onBack={onBack} />
+            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack} />
         </TabPanel>
 
         <TabPanel value="overview" className="taskPane">
@@ -445,6 +474,22 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                       <PullRequestStep key={pr.id} pr={pr} named={mine.length > 1} />
                     ))}
                   </StepList>
+                ) : startable ? (
+                  <StartChoice data-testid="start-choice" options={[
+                    { id: "talk", icon: "message", title: "Talk it through",
+                      description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
+                      points: ["Nothing is built until you agree", "It asks you before the pull request"],
+                      foot: "The conductor, in Chat",
+                      action: <Button size="sm" onClick={() => void talk()} disabled={delivering} data-testid="start-talk">Talk it through</Button> },
+                    { id: "deliver", icon: "zap", title: "Deliver",
+                      description: "The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request. Nobody needs to be here.",
+                      points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"],
+                      foot: "The project's pipeline",
+                      action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
+                  ]} />
+                ) : item.decider === "conductor" ? (
+                  <EmptyState compact icon="conductor" title="Planning with the conductor"
+                    description="Nothing is built until the conductor and you agree: talk it through in Chat." />
                 ) : (
                   <EmptyState compact icon="git-pr" title="Not started"
                     description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request." />
@@ -505,15 +550,26 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
               <div className="taskSessionList" data-testid="sessions">
                 {(attempts.length > 1 ? attempts : [null]).map((n) => {
                   const mine = n === null ? sessions : sessions.filter((r) => r.attempt === n);
+                  const item = (run: Run, under: boolean) => (
+                    <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session"
+                      data-under={under ? (run.conductorRunId ? "conductor" : "delivered") : undefined}
+                      className={under ? "sessionUnder" : undefined}
+                      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+                      title={runLabel(run) + (againOf(run, mine) ? " · again" : "")}
+                      detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
+                      trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
+                  );
+                  // A tree: each conductor, the Runs it started under it;
+                  // the rest under "Delivered automatically".
+                  const tops = mine.filter(isConductor);
+                  const delivered = mine.filter((r) => !isConductor(r) && !(r.conductorRunId && tops.some((c) => c.id === r.conductorRunId)));
                   const list = (
                     <SessionList key={n ?? "all"}>
-                      {mine.map((run) => (
-                        <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session"
-                          avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
-                          title={runLabel(run) + (againOf(run, mine) ? " · again" : "")}
-                          detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
-                          trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
-                      ))}
+                      {tops.flatMap((c) => [item(c, false), ...mine.filter((r) => r.conductorRunId === c.id).map((r) => item(r, true))])}
+                      {delivered.length > 0 && tops.length > 0 ? (
+                        <li key="delivered" className="ds-label sessionGroupHead" data-testid="delivered-automatically">Delivered automatically</li>
+                      ) : null}
+                      {delivered.map((r) => item(r, tops.length > 0))}
                     </SessionList>
                   );
                   // One attempt: the list alone. Several: each under its head.

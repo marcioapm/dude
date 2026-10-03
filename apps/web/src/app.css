@@ -810,6 +810,10 @@ body {
   text-transform: none;
   letter-spacing: normal;
 }
+/* A Run under the conductor that started it, or under "Delivered automatically". */
+.sessionUnder {
+  padding-left: var(--ds-space-24);
+}
 
 /* An image field: the picker, and under it an image typed before the library. */
 .imageField {
