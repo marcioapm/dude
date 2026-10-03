@@ -3,6 +3,8 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -73,31 +75,37 @@ func TestWhatAConductorIsSubmittedWith(t *testing.T) {
 	t.Run("the image chain", func(t *testing.T) {
 		w := newWorld(t)
 		w.useLayer(imageLayer)
-		w.libraryImage("img_role", "role-image", true)
-		w.libraryImage("img_proj", "project-image", true)
-		w.libraryImage("img_org", "org-image", true)
+		// Each link's image finished to a ref of its own, so the spec says
+		// which link it was submitted from.
+		finals := map[string]string{}
+		for i, id := range []string{"img_role", "img_proj", "img_org"} {
+			version := w.libraryImage(id, strings.TrimPrefix(id, "img_")+"-image", false)
+			finals[id] = fmt.Sprintf("registry.test/dude/%s@sha256:%064d", id, i+3)
+			mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref)
+				VALUES ($1, $2, $3, $4)`, w.org, version, imageLayer, finals[id])
+		}
 		mustExec(t, w.owner, `UPDATE organizations SET default_image_id = 'img_org' WHERE id = $1`, w.org)
 		mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_proj',
 			agent_models = jsonb_set(agent_models, '{conductor}', COALESCE(agent_models->'conductor', '{}') || '{"image":"img_role"}')
 			WHERE id = $1`, w.project)
-		ran := func(task string) string {
+		ran := func(want string) {
 			t.Helper()
-			w.conductorSubmitted(task)
+			task := w.task()
+			spec := w.conductorSubmitted(task)
 			id, _, _ := w.conductor(task)
 			var image string
 			_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(image->>'imageId', '') FROM runs WHERE id = $1`, id).Scan(&image)
-			return image
+			if image != want {
+				t.Errorf("ran in %q, want %q", image, want)
+			}
+			if spec.Image.Ref != finals[want] {
+				t.Errorf("submitted image %q, want %s's %q", spec.Image.Ref, want, finals[want])
+			}
 		}
-		if got := ran(w.task()); got != "img_role" {
-			t.Errorf("with a role image, ran in %q", got)
-		}
+		ran("img_role")
 		mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models #- '{conductor,image}' WHERE id = $1`, w.project)
-		if got := ran(w.task()); got != "img_proj" {
-			t.Errorf("with the project's library image, ran in %q", got)
-		}
+		ran("img_proj")
 		mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = NULL WHERE id = $1`, w.project)
-		if got := ran(w.task()); got != "img_org" {
-			t.Errorf("with the organisation's default, ran in %q", got)
-		}
+		ran("img_org")
 	})
 }
