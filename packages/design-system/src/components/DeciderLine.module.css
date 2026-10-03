@@ -1,0 +1,38 @@
+/*
+ * DeciderLine: who decides, on one line on the raised shade, between the
+ * conversation and the composer. The conductor's colour marks its icon when
+ * the conductor decides.
+ */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: var(--ds-space-4) var(--ds-space-chat-pad-x);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.icon {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.conductor .icon {
+  color: var(--ds-role-conductor-fg);
+}
+.line {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.who {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.detail {
+  color: var(--ds-color-text-secondary);
+}
+.action {
+  flex-shrink: 0;
+}
