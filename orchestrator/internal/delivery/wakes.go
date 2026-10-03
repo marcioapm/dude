@@ -152,9 +152,9 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 // reason lost.
 
 // attemptHolds (SQL, over conductor_wake_attempts o): o was heard, or may
-// still be — a briefing not failed; a directive delivered (its consumption
-// wins over a failure), or not failed.
-const attemptHolds = `(CASE WHEN o.directive_id IS NULL THEN o.failed_at IS NULL
+// still be — a briefing heard, or not failed; a directive delivered (its
+// consumption wins over a failure), or not failed.
+const attemptHolds = `(CASE WHEN o.directive_id IS NULL THEN o.heard_at IS NOT NULL OR o.failed_at IS NULL
 	ELSE EXISTS (SELECT 1 FROM directives od WHERE od.id = o.directive_id AND (od.delivered_at IS NOT NULL OR od.failed_at IS NULL)) END)`
 
 // requeueTx puts reasons back to pending once no attempt holds them.
@@ -186,19 +186,35 @@ func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
 }
 
 // WakesHeardTx settles the reasons a wake note carried once its directive
-// is delivered — after a failure too: a consumption receipt wins. Their
-// retries not yet sent are withdrawn, and what else those carried is
-// pending again.
+// is delivered — after a failure too: a consumption receipt wins.
 func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
-	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes c SET delivered_at = COALESCE(c.delivered_at, now())
-		FROM conductor_wake_attempts a WHERE a.directive_id = $1 AND c.id = a.wake_id`, directiveID); err != nil {
+	rows, err := tx.Query(ctx, `SELECT wake_id FROM conductor_wake_attempts WHERE directive_id = $1`, directiveID)
+	if err != nil {
+		return err
+	}
+	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	return heardTx(ctx, tx, wakes, directiveID)
+}
+
+// heardTx settles reasons an attempt was heard for (heard, the directive
+// it was, "" for a briefing). Their retries not yet sent are withdrawn,
+// and what else those carried is pending again.
+func heardTx(ctx context.Context, tx pgx.Tx, wakeIDs []string, heard string) error {
+	if len(wakeIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = COALESCE(delivered_at, now()) WHERE id = ANY($1)`,
+		wakeIDs); err != nil {
 		return err
 	}
 	rows, err := tx.Query(ctx, `SELECT DISTINCT d.id, d.run_id, r.project_id, r.task_id, d.organization_id
-		FROM conductor_wake_attempts a
-		JOIN conductor_wake_attempts o ON o.wake_id = a.wake_id AND o.directive_id <> a.directive_id
+		FROM conductor_wake_attempts o
 		JOIN directives d ON d.id = o.directive_id JOIN runs r ON r.id = d.run_id
-		WHERE a.directive_id = $1 AND d.sent_at IS NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL`, directiveID)
+		WHERE o.wake_id = ANY($1) AND o.directive_id <> $2
+		  AND d.sent_at IS NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL`, wakeIDs, heard)
 	if err != nil {
 		return err
 	}
@@ -233,21 +249,22 @@ func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
 // has heard its first prompt: lux's consumption receipt for it, or, with
 // no receipt to follow, its acceptance (or an older lux's handoff). Its
 // reasons are not told again. overridesFailure: a consumption or handoff,
-// the agent's own report, counts after the briefing was failed too.
+// the agent's own report, counts after the briefing was failed too; the
+// failure stays recorded, and the hearing holds the reasons (attemptHolds).
 func BriefingHeardTx(ctx context.Context, tx pgx.Tx, runID string, overridesFailure bool) error {
-	rows, err := tx.Query(ctx, `UPDATE conductor_wake_attempts SET heard_at = now(), failed_at = NULL
+	rows, err := tx.Query(ctx, `UPDATE conductor_wake_attempts SET heard_at = now()
 		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND (failed_at IS NULL OR $2)
 		RETURNING wake_id`, runID, overridesFailure)
 	if err != nil {
 		return err
 	}
 	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil || len(wakes) == 0 {
+	if err != nil {
 		return err
 	}
-	// Heard after its failure put them back to pending: settled again.
-	_, err = tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = COALESCE(delivered_at, now()) WHERE id = ANY($1)`, wakes)
-	return err
+	// Settled, also when its failure had put them back to pending, and
+	// their retries not yet sent withdrawn.
+	return heardTx(ctx, tx, wakes, "")
 }
 
 // BriefingFailedTx puts back to pending the reasons a conductor was started
