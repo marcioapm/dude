@@ -251,7 +251,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
   try {
     await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
       checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
-    for (const file of (await listMigrationFiles()).filter((f) => f.version < "073")) {
+    for (const file of (await listMigrationFiles()).filter((f) => f.version < "074")) {
       const contents = await file.contents();
       await sql.begin(async (tx) => {
         await tx.unsafe(contents);
