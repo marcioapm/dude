@@ -249,10 +249,12 @@ func TestUpdateTaskOnlyBeforeTheImplementer(t *testing.T) {
 	if before != `["it greets"]` {
 		t.Errorf("the event's before: %s", before)
 	}
-	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.must(task, "start_phase", `{"phase":"implement","note":"Use the existing greeter module."}`)
 	w.until("the implementer", func() bool { return w.specOf("implement") != nil })
 	if p := w.specOf("implement").Workload.Prompt; !strings.Contains(p, "it greets in Portuguese") {
 		t.Errorf("the implementer's prompt lacks the agreed criterion")
+	} else if !strings.Contains(p, "## From the task's conductor") || !strings.Contains(p, "Use the existing greeter module.") {
+		t.Errorf("the implementer's prompt lacks the conductor's note")
 	}
 	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 	w.refused(task, "update_task", `{"goal":"Something else entirely, now."}`, "an implementer has started")
