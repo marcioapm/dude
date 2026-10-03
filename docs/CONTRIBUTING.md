@@ -122,6 +122,15 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.
+- **Who decides** is the delivery's `State.Decider`: `policy` (Deliver: the
+  rules above) or `conductor` (`delivery/decisions.go`, `conduct.go`). Under
+  the conductor the workflow still does the mechanics, and where it would
+  apply a rule it parks on `conductor.decision` and records a reason to wake
+  the conductor (`conductor_wakes`); the syncer delivers a task's reasons as
+  one bounded note (`delivery/wakes.go`). The same bounds refuse the
+  conductor's `start_phase` and `decide`. A person's first Chat message
+  hands a delivery in progress to the conductor; Talk it through starts one
+  it decides; "Let Deliver finish it" hands it back.
 - A clean re-review resolves open findings **of its own category that a fixer
   has already attempted** (`phases.RecordFindings`). That rule is what lets
   the loop converge.
