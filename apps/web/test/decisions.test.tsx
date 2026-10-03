@@ -10,6 +10,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Decider, PersistedEvent, Run } from "@dude/domain";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
@@ -237,6 +238,88 @@ describe("a conducted task's Chat", () => {
     const rows = [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
       li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
     expect(rows).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
+  });
+});
+
+// A conducted task started over: the conductor is the task's, its Runs
+// are each an attempt's. Attempt 1 had a conducted implementer and a
+// Deliver reviewer; attempt 2 has a conducted implementer and fixer and a
+// Deliver simplifier.
+describe("a conducted task with two attempts", () => {
+  const two = [
+    run({ id: CONDUCTOR, attempt: 1, phase: null, role: "conductor", status: "running", createdAt: at(0) }),
+    run({ id: "run_a1_impl", attempt: 1, status: "aborted", conductorRunId: CONDUCTOR, createdAt: at(10), endedAt: at(20) }),
+    run({ id: "run_a1_rev", attempt: 1, phase: "review", role: "reviewer", category: "correctness", createdAt: at(15) }),
+    run({ id: "run_a2_impl", attempt: 2, conductorRunId: CONDUCTOR, createdAt: at(30) }),
+    run({ id: "run_a2_fix", attempt: 2, phase: "fix", status: "running", conductorRunId: CONDUCTOR, createdAt: at(40) }),
+    run({ id: "run_a2_simp", attempt: 2, phase: "simplify", role: "simplifier", createdAt: at(35) }),
+  ];
+  const restart = () => {
+    cursor = 0;
+    return [ev("task.recovered", { action: "restart", attempt: 2 }, 25)];
+  };
+  async function showing(attempt: number | undefined, tab: string | undefined, opened: string[] = [], runId?: string, expect = attempt ?? 2) {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs: two }, restart());
+    const { container, unmount } = await mount(
+      <TooltipProvider>
+        <ToastProvider>
+          <PeopleProvider client={client}>
+            <TaskScreen client={client} taskId={TASK_ID} tab={tab as never} attempt={attempt} runId={runId}
+              onOpenRun={(id) => opened.push(id)} onBack={() => {}} />
+          </PeopleProvider>
+        </ToastProvider>
+      </TooltipProvider>,
+    );
+    mounted.push(unmount);
+    await until(() => container.querySelector(`[data-testid=task-screen][data-attempt="${expect}"]`), `attempt ${expect}`);
+    await settle();
+    return { p: container, client };
+  }
+  const tree = (p: HTMLElement) => [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
+    li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically"
+      : `${li.getAttribute("data-under") ?? "top"}:${li.getAttribute("data-run")}`);
+
+  test("Sessions on the current attempt: the conductor, its Runs of this attempt under it, the attempt's others under Delivered automatically", async () => {
+    const { p } = await showing(undefined, "sessions");
+    const rows = await until(() => (tree(p).length > 0 ? tree(p) : null), "the sessions");
+    expect(rows).toEqual([`top:${CONDUCTOR}`, "conductor:run_a2_fix", "conductor:run_a2_impl", "— Delivered automatically", "delivered:run_a2_simp"]);
+  });
+
+  test("Sessions on the earlier attempt: the conductor first, and under it only the Runs it started in that attempt", async () => {
+    const { p } = await showing(1, "sessions");
+    const rows = await until(() => (tree(p).length > 0 ? tree(p) : null), "the sessions");
+    expect(rows).toEqual([`top:${CONDUCTOR}`, "conductor:run_a1_impl", "— Delivered automatically", "delivered:run_a1_rev"]);
+  });
+
+  const toTab = async (p: HTMLElement, name: string) => {
+    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith(name))!;
+    await act(async () => void tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+    await settle();
+  };
+
+  test("Chat is the task's: a line for every Run the conductor started, whichever attempt is shown, each opening its session", async () => {
+    for (const attempt of [undefined, 1]) {
+      const opened: string[] = [];
+      // Chat's URL names no attempt: attempt 1 is picked on Findings, and kept on Chat.
+      const { p } = await showing(attempt, "findings", opened);
+      await toTab(p, "Chat");
+      expect(p.querySelector("[data-testid=task-screen]")?.getAttribute("data-attempt")).toBe(String(attempt ?? 2));
+      const lines = await until(() => {
+        const l = [...p.querySelectorAll<HTMLElement>("[data-testid=chat-run]")];
+        return l.length === 3 ? l : null;
+      }, `three Run lines, attempt ${attempt ?? "current"} shown`);
+      expect(lines.map((l) => l.getAttribute("data-run"))).toEqual(["run_a1_impl", "run_a2_impl", "run_a2_fix"]);
+      await click(lines[0]!.querySelector("button")!);
+      await click(lines[2]!.querySelector("button")!);
+      expect(opened).toEqual(["run_a1_impl", "run_a2_fix"]);
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+    }
+  });
+
+  test("a session opened from a Chat line opens on its Run's own attempt", async () => {
+    // The URL a line opens names the session alone: attempt 1 is the Run's, not the current one.
+    await showing(undefined, undefined, [], "run_a1_impl", 1);
   });
 });
 
