@@ -245,7 +245,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
   }
 }, 120_000);
 
-test("073 gives each task's tray images a place at the end of its goal, so they stay its own", async () => {
+test("074 gives each task's tray images a place at the end of its goal, so they stay its own", async () => {
   const url = await ownedByANonSuperuser();
   const sql = new SQL(url);
   try {
