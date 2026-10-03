@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
@@ -612,6 +614,52 @@ func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
 	}
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("the safety net woke it %d times", n)
+	}
+}
+
+// A take-over that commits while a step's mechanics run, between the
+// step's claim and its transition: the decision that step reaches is the
+// conductor's, not the policy's it read when it was claimed.
+func TestATakeOverWhileAStepRunsTakesItsDecision(t *testing.T) {
+	for _, c := range []struct{ step, point, nextPhase string }{
+		{"awaitImplement", delivery.PointImplemented, "review"},
+		{"awaitReview", delivery.PointReviewed, "fix"},
+		{"awaitFix", delivery.PointFixed, "review"},
+		{"test", delivery.PointBeforePR, ""},
+	} {
+		t.Run(c.step, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			var once sync.Once
+			def := delivery.Workflow(&delivery.Store{DB: w.app}, forge.Resolver{DB: w.app})
+			def.BeforeCommit = func(_, step, next string) {
+				if step == c.step && next != step {
+					once.Do(func() {
+						if status, out := w.chat(task, "I'll take it from here"); status != 201 || out["decider"] != "conductor" {
+							t.Errorf("chat: %d %v", status, out)
+						}
+					})
+				}
+			}
+			w.runtime.Register(def)
+			w.deliver(task)
+			before := 0
+			if c.nextPhase != "" {
+				w.until("the step", func() bool { return w.decider(task) == "conductor" })
+				before = w.phaseRuns(task, c.nextPhase)
+			}
+			w.until(c.point, func() bool { return w.decisionAt(task) == c.point })
+			for range 3 {
+				w.pump()
+			}
+			if c.nextPhase != "" && w.phaseRuns(task, c.nextPhase) != before {
+				t.Errorf("a %s Run started without the conductor's decision", c.nextPhase)
+			}
+			if len(w.gh.Pulls()) != 0 {
+				t.Errorf("a pull request opened without the conductor's decision")
+			}
+			w.wokenWith(task, "Decision waiting")
+		})
 	}
 }
 

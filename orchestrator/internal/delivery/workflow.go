@@ -106,6 +106,9 @@ type State struct {
 	GateOpened bool `json:"gateOpened,omitempty"`
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
+	// A decision point the policy took in the step committing (next): set
+	// only between the step and its transition, which re-checks it.
+	Routed *Routed `json:"routed,omitempty"`
 }
 
 // Recover is a person picking a stopped task back up: resume the Runs that
@@ -230,6 +233,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 		Type:        WorkflowType,
 		InitialStep: "implement",
 		Owned:       []string{"decider", "handedBack"},
+		Recheck:     w.recheck,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
 			"implementRun":      w.implementRun,
@@ -448,10 +452,15 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	st.Iteration++
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings)
-	if st.conducted() && (exit == nil || exit.Reason == "clear") {
+	if exit == nil || exit.Reason == "clear" {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage.
-		return w.toConductor(ctx, sc, st, PointReviewed, "reviewExit", findingsLine(st, findings))
+		if st.conducted() {
+			return w.toConductor(ctx, sc, st, PointReviewed, "reviewExit", findingsLine(st, findings))
+		}
+		res, err := w.afterLoop(ctx, sc, st, exit)
+		st.Routed = &Routed{Point: PointReviewed, Policy: "reviewExit", Next: res.Next, Line: findingsLine(st, findings)}
+		return res, err
 	}
 	return w.afterLoop(ctx, sc, st, exit)
 }

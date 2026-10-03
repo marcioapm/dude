@@ -367,7 +367,9 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 // GateAnswer is the pull request gate as a hand-back reads it: whether the
 // person's answer opens the pull request (a draft for Draft), or a Refusal
 // saying why it does not.
-func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) { return gate(ctx, tx, st) }
+func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {
+	return gate(ctx, tx, st)
+}
 
 // AtGate says the delivery is parked at the pull request gate, untaken.
 func (d *Delivery) AtGate() bool {

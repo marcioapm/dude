@@ -86,6 +86,15 @@ type Definition struct {
 	// what the row holds for them, so a step that read the state before
 	// the write cannot undo it.
 	Owned []string
+	// Recheck, when set, runs inside the transition's transaction, before
+	// the step's result is written: it may read the row as it is now
+	// (locking it) and replace the result (changed), so a decision a step
+	// took on the state it claimed follows a write made while the step ran.
+	// It must only read and write the database; slow work belongs to steps.
+	Recheck func(ctx context.Context, tx pgx.Tx, sc StepContext, res Result) (next Result, changed bool, err error)
+	// Test hook: called after a step returns, with the step it chose, and
+	// before its transition commits.
+	BeforeCommit func(runID, step, next string)
 }
 
 // Run is a workflow run's durable state.
@@ -455,9 +464,29 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 		}
 	}
 	awaiting, _ := json.Marshal(db.NonNil(result.AwaitSignals))
+	if def.BeforeCommit != nil {
+		def.BeforeCommit(run.ID, run.Step, result.Next)
+	}
 	owned := db.NonNil(def.Owned)
 
 	err = r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
+		if def.Recheck != nil {
+			sc := StepContext{WorkflowRunID: run.ID, OrganizationID: run.OrganizationID, Step: run.Step, State: run.State}
+			next, changed, err := def.Recheck(ctx, tx, sc, result)
+			if err != nil {
+				return err
+			}
+			if changed {
+				result = next
+				state = nil
+				if result.State != nil {
+					if state, err = json.Marshal(result.State); err != nil {
+						return err
+					}
+				}
+				awaiting, _ = json.Marshal(db.NonNil(result.AwaitSignals))
+			}
+		}
 		// Guarded on this poller still holding the lease and the run still
 		// being live: if it was aborted mid-step, or the lease lapsed and
 		// another poller took over, this transition must not land.

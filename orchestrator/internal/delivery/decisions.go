@@ -126,12 +126,50 @@ var pointLabel = map[string]string{
 
 // next goes to step, as the policy decides, or under decider conductor
 // parks for the conductor's decision at point, saying line (bounded facts).
-// A policy delivery's transition is exactly what it was before decisions.
+// A policy delivery's transition is exactly what it was before decisions,
+// marked (Routed) so the transition's commit re-routes it to the conductor
+// if a take-over committed while the step ran (recheck).
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
 	if !st.conducted() {
+		st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
 		return workflow.Result{Next: step, State: st}, nil
 	}
 	return w.toConductor(ctx, sc, st, point, step, line)
+}
+
+// Routed is a decision point the policy took in a step: the step it chose
+// (Next), and what the conductor would have been asked (Point, Policy:
+// where its "next" goes).
+type Routed struct {
+	Point  string `json:"point"`
+	Policy string `json:"policy"`
+	Next   string `json:"next"`
+	Line   string `json:"line,omitempty"`
+}
+
+// recheck is the delivery's decision checkpoint (workflow.Definition.
+// Recheck): in the transition's transaction, a decision the policy took
+// on the state the step claimed is the conductor's instead when the row,
+// locked now, says the conductor decides — a take-over that committed
+// while the step's mechanics ran.
+func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
+	st, ok := res.State.(*State)
+	if !ok || st.Routed == nil {
+		return res, false, nil
+	}
+	r := st.Routed
+	st.Routed = nil
+	var decider string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', '') FROM workflow_runs WHERE id = $1 FOR UPDATE`,
+		sc.WorkflowRunID).Scan(&decider); err != nil {
+		return res, false, err
+	}
+	if decider != DeciderConductor || res.Next != r.Next {
+		return res, true, nil
+	}
+	st.Decider = decider
+	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
+	return out, true, err
 }
 
 // toConductor parks the workflow on a decision for the conductor, and
@@ -140,21 +178,28 @@ func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, po
 // Talk it through decides it, whose message in Chat is the conductor's
 // turn already.
 func (w *steps) toConductor(ctx context.Context, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
-	st.Directed, st.PendingRunIDs = nil, nil
+	var res workflow.Result
+	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var err error
+		res, err = toConductorTx(ctx, tx, sc, st, point, policy, line)
+		return err
+	})
+	return res, err
+}
+
+func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
+	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy}
 	note := fmt.Sprintf("Decision waiting: %s.", pointLabel[point])
 	if line != "" {
 		note += " " + line
 	}
-	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
-			fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
-		if err != nil || !added {
-			return err
-		}
-		return emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": point, "policy": policy,
+	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
+		fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
+	if err == nil && added {
+		err = emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": point, "policy": policy,
 			"actions": st.Decision.Actions(), "phases": st.Decision.Phases(), "note": note})
-	})
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
