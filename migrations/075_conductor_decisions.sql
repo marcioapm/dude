@@ -6,7 +6,7 @@
 -- sit under it in the task's sessions and Chat, and one of them asking a
 -- question wakes it. NULL for the workflow's own. conductor_note is what
 -- the conductor asked of the Run, added to its prompt. Nullable with no
--- default, so adding them changes no row; their index is 074's, built
+-- default, so adding them changes no row; their index is 076's, built
 -- without holding this table's lock. The note's bound is NOT VALID: it
 -- holds for every write from here, and checking it would read every
 -- existing Run (all NULL) under this table's exclusive lock.

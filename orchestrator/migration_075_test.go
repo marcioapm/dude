@@ -14,12 +14,12 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// 073 on an installation with Runs: its transaction, which holds the Runs
+// 075 on an installation with Runs: its transaction, which holds the Runs
 // table's exclusive lock, reads none of them. The conductor's note is
 // still bounded for every write after it.
 func TestTheConductorNoteMigrationReadsNoRun(t *testing.T) {
 	ctx := context.Background()
-	owner, _ := dbtest.Upgrade(t, "073")
+	owner, _ := dbtest.Upgrade(t, "075")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES ('org_u', 'U', 'u')`)
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_u', 'org_u', 'P', 'p', 'P')`)
 	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_u', 'org_u', 'prj_u', 1, 'T', 'G')`)
@@ -39,7 +39,7 @@ func TestTheConductorNoteMigrationReadsNoRun(t *testing.T) {
 	for _, f := range files {
 		base := filepath.Base(f)
 		switch {
-		case strings.HasPrefix(base, "073_"):
+		case strings.HasPrefix(base, "075_"):
 			sql, err := os.ReadFile(f)
 			if err != nil {
 				t.Fatal(err)
@@ -47,7 +47,7 @@ func TestTheConductorNoteMigrationReadsNoRun(t *testing.T) {
 			if _, err := tx.Exec(ctx, string(sql)); err != nil {
 				t.Fatalf("%s: %v", base, err)
 			}
-		case base > "073":
+		case base > "075":
 			rest = append(rest, f)
 		}
 	}
@@ -57,7 +57,7 @@ func TestTheConductorNoteMigrationReadsNoRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scanned != 0 {
-		t.Errorf("073 read %d Runs under the table's lock, want none", scanned)
+		t.Errorf("075 read %d Runs under the table's lock, want none", scanned)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
