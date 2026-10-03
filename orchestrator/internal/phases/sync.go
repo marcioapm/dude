@@ -513,7 +513,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, machine, err := s.spec(ctx, r, nil, image)
+	spec, machine, sent, err := s.spec(ctx, r, nil, image)
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -524,16 +524,8 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
-	// The images given with the task's prompt, when this Run's prompt is
-	// the task (delivery.TaskPromptPhases).
-	var sent []delivery.SentAttachment
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var err error
-		sent, err = delivery.PromptAttachments(ctx, tx, r.ID)
-		return err
-	}); err != nil {
-		return err
-	}
+	// The images the task's text shows, as spec numbered them: every
+	// phase's prompt carries the task (delivery.PromptAttachments).
 	images, reason, err := s.readAttachments(ctx, sent)
 	if err != nil {
 		return s.retryLater(ctx, r, err)
@@ -658,8 +650,10 @@ const EvImagePreparing = "run.image_preparing"
 // (Syncer.image).
 //
 // Also returns the size the Run's role resolves to now (nil: the
-// organization has none); submit records it, a resume does not.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
+// organization has none); submit records it, a resume does not. And the
+// task's images in the order the prompt numbers them, read in the same
+// transaction as its text: submit sends exactly these.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, []delivery.SentAttachment, error) {
 	var in specInput
 	var title, goal string
 	var repos []delivery.Repository
@@ -672,6 +666,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var briefing string
 	var tier delivery.Tier
 	var noTier string
+	var taskImages []delivery.SentAttachment
 	settingsRole := delivery.PromptRoleFor(r.Phase, r.Role)
 	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
@@ -686,6 +681,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		var err error
 		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
+		// The images the prompt numbers, as submit sends them.
+		if taskImages, err = delivery.PromptAttachments(ctx, tx, r.ID); err != nil {
+			return err
+		}
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
@@ -733,10 +732,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, nil, nil, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, nil, errNoModel(noTier)
+		return lux.Spec{}, nil, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
 	if r.conductor() {
@@ -766,14 +765,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r),
+		Branch: runBranch(r), Images: delivery.PromptImages(taskImages),
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -797,11 +796,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, nil, errForge{err}
+		return lux.Spec{}, nil, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, nil, errForge{err}
+			return lux.Spec{}, nil, nil, errForge{err}
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -809,7 +808,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, nil, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
@@ -823,18 +822,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, `SELECT tool_starts FROM runs WHERE id = $1`, r.ID).Scan(&start)
 		}); err != nil {
-			return lux.Spec{}, nil, err
+			return lux.Spec{}, nil, nil, err
 		}
 		token, hash := agenttools.RunToken(s.Agent.ToolsKey, r.ID, start)
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, r.ID, hash)
 			return err
 		}); err != nil {
-			return lux.Spec{}, nil, err
+			return lux.Spec{}, nil, nil, err
 		}
 		in.ToolsToken = token
 	}
-	return buildSpec(s.Agent, in), in.Machine, nil
+	return buildSpec(s.Agent, in), in.Machine, taskImages, nil
 }
 
 // runBranch is where one phase Run's commits are pushed. Every Run has its
@@ -1468,7 +1467,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, err := s.spec(ctx, r, &lr.Spec, "")
+	spec, _, _, err := s.spec(ctx, r, &lr.Spec, "")
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}

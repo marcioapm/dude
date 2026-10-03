@@ -1,7 +1,8 @@
-import { useMemo, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { outline as buildOutline, parseMarkdown, type Block, type Inline } from "../util/markdown.ts";
+import { layoutWidth, parseLayout, type ImageLayout } from "../util/imageLayout.ts";
 import { DiffView, parseUnifiedDiff } from "./DiffView.tsx";
 import { isPromptVariable } from "@dude/domain";
 import styles from "./Markdown.module.css";
@@ -58,6 +59,30 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly linkTarget?: "_blank" | "_self" | undefined;
   /** Render fenced ```diff / ```patch blocks with DiffView (default true). */
   readonly diffs?: boolean | undefined;
+  /**
+   * Draws `![alt](attachment:id)`, an image of the caller's own (a task's
+   * upload), in place: usually a `MarkdownImage` over bytes the caller
+   * fetched. Without it such an image is its alt text. Every other image
+   * stays a link: an <img> to an arbitrary host is a tracking pixel. `title`
+   * is the reference's title, where a task keeps the image's layout; `n`
+   * is the image's place among the attachment images drawn, in order.
+   */
+  readonly attachmentImage?: ((id: string, alt: string, title?: string, n?: number) => ReactNode) | undefined;
+  /**
+   * In place of the frame that lays an attachment image out (`ImageFigure`):
+   * an editor's, which adds selection and handles around the same frame.
+   */
+  readonly attachmentFrame?: ((image: AttachmentFrameProps) => ReactNode) | undefined;
+}
+
+/** One attachment image as Markdown frames it: what it is, its place, its layout, and what the resolver drew. */
+export interface AttachmentFrameProps {
+  readonly id: string;
+  readonly alt: string;
+  readonly title: string | undefined;
+  readonly n: number;
+  readonly layout: ImageLayout;
+  readonly children: ReactNode;
 }
 
 /**
@@ -79,6 +104,8 @@ export function Markdown({
   untitled = "Untitled",
   linkTarget = "_blank",
   diffs = true,
+  attachmentImage,
+  attachmentFrame,
   className,
   ...rest
 }: MarkdownProps) {
@@ -92,10 +119,11 @@ export function Markdown({
     [source, streaming, breaks],
   );
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
-  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
+  const imageOrder = useMemo(() => (attachmentImage ? numberAttachmentImages(blocks) : new Map<Inline, number>()), [blocks, attachmentImage]);
+  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt", attachmentImage, attachmentFrame, imageOrder };
 
   const body = (
-    <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], className)} {...rest}>
+    <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], imageOrder.size > 0 && styles["figures"], className)} {...rest}>
       {title !== undefined ? (
         <h1 className={cx(styles["h"], styles["h1"], !title.trim() && styles["untitled"])}>{title.trim() || untitled}</h1>
       ) : null}
@@ -131,6 +159,34 @@ interface RenderCtx {
   readonly streaming: boolean;
   /** Draw `{{name}}` as a variable chip (prompts). */
   readonly variables: boolean;
+  readonly attachmentImage: MarkdownProps["attachmentImage"];
+  readonly attachmentFrame: MarkdownProps["attachmentFrame"];
+  /** Each attachment image node's place among them, in reading order. */
+  readonly imageOrder: ReadonlyMap<Inline, number>;
+}
+
+/** The attachment image nodes in reading order, numbered from 0: a block's inlines before the next block's, list items and table cells in order. */
+function numberAttachmentImages(blocks: readonly Block[]): Map<Inline, number> {
+  const order = new Map<Inline, number>();
+  const inl = (nodes: readonly Inline[]): void => {
+    for (const n of nodes) {
+      if (n.t === "image" && n.src.startsWith(ATTACHMENT_URL)) order.set(n, order.size);
+      else if (n.t === "strong" || n.t === "em" || n.t === "del" || n.t === "link") inl(n.c);
+    }
+  };
+  const blk = (bs: readonly Block[]): void => {
+    for (const b of bs) {
+      if (b.t === "heading" || b.t === "paragraph") inl(b.c);
+      else if (b.t === "quote") blk(b.c);
+      else if (b.t === "list") for (const it of b.items) blk(it.c);
+      else if (b.t === "table") {
+        for (const c of b.head) inl(c);
+        for (const r of b.rows) for (const c of b.head.keys()) inl(r[c] ?? []);
+      }
+    }
+  };
+  blk(blocks);
+  return order;
 }
 
 /** The streaming caret. Base style is solid so reduced motion leaves it visible. */
@@ -270,6 +326,61 @@ function CodeBlock({ lang, value, open, ctx, tail }: { readonly lang: string; re
 }
 
 const VARIABLE = /\{\{\s*([\w.]+)\s*\}\}/g;
+const ATTACHMENT_URL = "attachment:";
+
+export interface MarkdownImageProps {
+  /** The bytes' URL (a blob: URL the caller read); none while they load. */
+  readonly src?: string | undefined;
+  readonly alt: string;
+  /** Opens it full size (`ImageViewer`). */
+  readonly onOpen?: (() => void) | undefined;
+  /** Shown in place of the image: it cannot be shown ("Image unavailable"). */
+  readonly unavailable?: boolean | undefined;
+}
+
+/**
+ * An image a person put in their Markdown, in its place in the text: its
+ * natural size up to the column's width, a button that opens it.
+ */
+export function MarkdownImage({ src, alt, onOpen, unavailable }: MarkdownImageProps) {
+  if (unavailable) {
+    return (
+      <span className={styles["imageMissing"]} data-testid="markdown-image-missing">
+        <Icon name="file" size={11} />
+        {alt || "image"} · unavailable
+      </span>
+    );
+  }
+  const img = src ? <img src={src} alt={alt} className={styles["image"]} /> : <span className={styles["imageLoading"]} aria-label={`Loading ${alt}`} />;
+  return onOpen ? (
+    <button type="button" className={styles["imageButton"]} onClick={onOpen} aria-label={`Open ${alt || "image"}`} data-testid="markdown-image">
+      {img}
+    </button>
+  ) : (
+    <span className={styles["imageButton"]} data-testid="markdown-image">{img}</span>
+  );
+}
+
+/**
+ * Lays an attachment image out by its title: a width from its size (never
+ * wider than the column), on its own line when centred, floated with the
+ * text beside it when left or right. A column under 480 px centres every
+ * image. The field and each list item hold their floats.
+ */
+export function ImageFigure({ layout, width, className, style, children, ...rest }: HTMLAttributes<HTMLSpanElement> & {
+  readonly layout: ImageLayout;
+  /** A width being dragged, in px, in place of the layout's. */
+  readonly width?: number | undefined;
+  readonly ref?: Ref<HTMLSpanElement> | undefined;
+}) {
+  return (
+    <span className={cx(styles["figure"], className)} data-align={layout.align} data-size={String(layout.size)}
+      style={{ width: width !== undefined ? `${width}px` : layoutWidth(layout.size), ...style } as CSSProperties}
+      data-testid="markdown-figure" {...rest}>
+      {children}
+    </span>
+  );
+}
 
 /**
  * Text with each `{{name}}` the orchestrator fills in as a chip. Anything
@@ -330,6 +441,14 @@ function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: Render
         </a>
       );
     case "image":
+      if (node.src.startsWith(ATTACHMENT_URL)) {
+        if (!ctx.attachmentImage) return <>{node.alt}</>;
+        const id = node.src.slice(ATTACHMENT_URL.length);
+        const n = ctx.imageOrder.get(node) ?? 0;
+        const drawn = ctx.attachmentImage(id, node.alt, node.title, n);
+        const frame = { id, alt: node.alt, title: node.title, n, layout: parseLayout(node.title), children: drawn };
+        return <>{ctx.attachmentFrame ? ctx.attachmentFrame(frame) : <ImageFigure layout={frame.layout}>{drawn}</ImageFigure>}</>;
+      }
       // Images are shown as a link, not fetched: an <img> to an arbitrary
       // host is a tracking pixel and a layout jump. The consumer can opt in
       // by rendering artifacts itself.

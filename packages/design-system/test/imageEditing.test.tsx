@@ -1,0 +1,281 @@
+/**
+ * Laying out an image in MarkdownEditor's Preview: the toolbar's buttons,
+ * the keys, resize and drag each rewrite the source through onChange. A
+ * locked field draws no toolbar. Mounted in happy-dom.
+ */
+
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { act, useState } from "react";
+import { createRoot } from "react-dom/client";
+import * as markdownModule from "../src/components/Markdown.tsx";
+import * as layoutModule from "../src/util/imageLayout.ts";
+import { MarkdownImage } from "../src/components/Markdown.tsx";
+import { MarkdownEditor } from "../src/primitives/MarkdownEditor.tsx";
+import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
+import type { FieldKind } from "../src/util/imageLayout.ts";
+import { imageDrag, rect, stackRects } from "./imageDrag.ts";
+
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const c of cleanups.splice(0)) c();
+});
+
+const A = "![a.png](attachment:att_a)";
+
+const pointer = (type: string, clientX: number, pointerType = "mouse") => new PointerEvent(type, { bubbles: true, cancelable: true, clientX, button: 0, pointerId: 1, pointerType });
+
+type Field = { kind: FieldKind; value: string; locked?: boolean; id: string };
+
+async function mountFields(fields: Field[]) {
+  const values = new Map(fields.map((f) => [f.id, f.value]));
+  const opened: string[] = [];
+  function Field({ f }: { f: Field }) {
+    const [value, setValue] = useState(f.value);
+    return (
+      <MarkdownEditor label={f.id} value={value} onChange={(v) => {
+        values.set(f.id, v);
+        setValue(v);
+      }} defaultMode="preview" locked={f.locked} imageField={f.kind} data-testid={f.id}
+      attachmentImage={(id, alt) => <MarkdownImage src={`blob:${id}`} alt={alt} onOpen={() => opened.push(id)} />} />
+    );
+  }
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider>{fields.map((f) => <Field key={f.id} f={f} />)}</TooltipProvider>));
+  cleanups.push(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+  const figure = (id: string, n = 0) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"] [data-image-n="${n}"]`);
+  const button = (label: string) => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`);
+  const panel = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"]`)!;
+  const key = async (el: Element, key: string, init: KeyboardEventInit = {}) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })));
+  return {
+    container,
+    opened,
+    value: (id: string) => values.get(id)!,
+    figure,
+    select: async (id: string, n = 0) => act(async () => figure(id, n)!.click()),
+    button,
+    press: async (label: string) => act(async () => button(label)!.click()),
+    key,
+    panel,
+    undo: async (id: string) => key(panel(id), "z", { ctrlKey: true }),
+    // A change from outside the image editing: typing, or an upload replacing its placeholder.
+    type: async (id: string, next: string) => act(async () => {
+      const area = container.querySelector<HTMLTextAreaElement>(`textarea[data-testid="${id}"]`)!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, next);
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    }),
+  };
+}
+
+test("Wrap right then Small write the title; Full disables the wraps and drops the alignment", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  await f.select("goal");
+  expect(f.container.querySelectorAll("[data-image-toolbar] button")).toHaveLength(10);
+  await f.press("Wrap right");
+  expect(f.value("goal")).toBe('Intro.\n\n![a.png](attachment:att_a "right")\n\nOutro.');
+  await f.press("Small");
+  expect(f.value("goal")).toBe('Intro.\n\n![a.png](attachment:att_a "small right")\n\nOutro.');
+  expect(f.figure("goal")!.style.width).toBe("200px");
+  expect(f.figure("goal")!.getAttribute("data-align")).toBe("right");
+  await f.press("Full width");
+  expect(f.value("goal")).toBe('Intro.\n\n![a.png](attachment:att_a "full")\n\nOutro.');
+  expect(f.button("Wrap left")!.disabled).toBe(true);
+  expect(f.button("Wrap right")!.disabled).toBe(true);
+  await f.press("Medium");
+  expect(f.value("goal")).toBe(`Intro.\n\n${A}\n\nOutro.`);
+});
+
+test("Ctrl+Z in Preview takes back one edit at a time", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  await f.select("goal");
+  await f.press("Wrap right");
+  await f.press("Small");
+  await f.undo("goal");
+  expect(f.value("goal")).toBe('Intro.\n\n![a.png](attachment:att_a "right")\n\nOutro.');
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(`Intro.\n\n${A}\n\nOutro.`);
+});
+
+test("after a change from outside, Ctrl+Z restores nothing, and later edits survive", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n${A}` }]);
+  await f.select("goal");
+  await f.press("Small");
+  const typed = 'One.\n\n![a.png](attachment:att_a "small")\n\nTyped in Write.';
+  await f.type("goal", typed);
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
+  await f.select("goal");
+  await f.press("Wrap left");
+  expect(f.value("goal")).toBe('One.\n\n![a.png](attachment:att_a "small left")\n\nTyped in Write.');
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
+  await f.undo("goal");
+  expect(f.value("goal")).toBe(typed);
+});
+
+test("Move up and down step past a paragraph, and past a criterion as a continuation", async () => {
+  const f = await mountFields([
+    { id: "goal", kind: "goal", value: `One.\n\nTwo.\n\n${A}` },
+    { id: "crit", kind: "criteria", value: "- [ ] First\n  ![b.png](attachment:att_b)\n- [ ] Second" },
+  ]);
+  await f.select("goal");
+  expect(f.button("Move down")!.disabled).toBe(true);
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`One.\n\n${A}\n\nTwo.`);
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`${A}\n\nOne.\n\nTwo.`);
+  expect(f.button("Move up")!.disabled).toBe(true);
+  await f.select("crit");
+  await f.press("Move down");
+  expect(f.value("crit")).toBe("- [ ] First\n- [ ] Second\n  ![b.png](attachment:att_b)");
+});
+
+test("keys: Alt+↑ moves, Delete removes, Esc deselects; Open opens the viewer", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n${A}\n\nTwo.` }]);
+  await f.select("goal");
+  await f.press("Open");
+  expect(f.opened).toEqual(["att_a"]);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  await f.key(f.figure("goal")!, "ArrowUp", { altKey: true });
+  expect(f.value("goal")).toBe(`${A}\n\nOne.\n\nTwo.`);
+  await f.select("goal");
+  // Esc from outside the panel is not this field's.
+  await f.key(document.body, "Escape");
+  expect(f.container.querySelector("[data-image-toolbar]")).not.toBeNull();
+  await f.key(f.figure("goal")!, "Escape");
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  await f.select("goal");
+  await f.key(f.figure("goal")!, "Delete");
+  expect(f.value("goal")).toBe("One.\n\nTwo.");
+});
+
+test("locked: no toolbar, no handles, not draggable; a click opens the image", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n${A}`, locked: true }]);
+  expect(f.figure("goal")).toBeNull();
+  const figure = f.container.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!;
+  expect(figure.getAttribute("draggable")).toBeNull();
+  await act(async () => figure.querySelector<HTMLElement>("button")!.click());
+  expect(f.opened).toEqual(["att_a"]);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelector('[data-testid="image-resize-right"]')).toBeNull();
+});
+
+test("a resize handle snaps to Small within 10 px and writes it", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n![a.png](attachment:att_a "300 left")` }]);
+  await f.select("goal");
+  const fig = f.figure("goal")!;
+  fig.getBoundingClientRect = () => rect(0, 100, 300);
+  Object.defineProperty(fig.parentElement!, "clientWidth", { value: 700, configurable: true });
+  const handle = f.container.querySelector<HTMLElement>('[data-testid="image-resize-right"]')!;
+  const pe = (type: string, clientX: number) => pointer(type, clientX, "pen");
+  await act(async () => void handle.dispatchEvent(pe("pointerdown", 300)));
+  await act(async () => void handle.dispatchEvent(pe("pointermove", 205)));
+  expect(f.container.querySelector('[data-testid="image-size-tip"]')?.textContent).toBe("Small");
+  await act(async () => void handle.dispatchEvent(pe("pointerup", 205)));
+  expect(f.value("goal")).toBe('One.\n\n![a.png](attachment:att_a "small left")');
+});
+
+test("a change from outside clears the selection, steals no focus, and Backspace elsewhere removes nothing", async () => {
+  const B = "![b.png](attachment:att_b)";
+  const f = await mountFields([{ id: "crit", kind: "criteria", value: `- [ ] One\n- [ ] Two ${A}` }]);
+  const input = document.createElement("input");
+  document.body.appendChild(input);
+  cleanups.push(() => input.remove());
+  await f.select("crit");
+  expect(f.container.querySelector("[data-image-toolbar]")).not.toBeNull();
+  input.focus();
+  // An upload finishing in front of the selected image: reference 0 is now another image.
+  await f.type("crit", `- [ ] One ${B}\n- [ ] Two ${A}`);
+  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelector("[data-selected]")).toBeNull();
+  expect(document.activeElement).toBe(input);
+  await f.key(document.activeElement!, "Backspace");
+  expect(f.value("crit")).toBe(`- [ ] One ${B}\n- [ ] Two ${A}`);
+});
+
+test("focus: after Move up it is on Move up again; after Remove, on the preview panel", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\nTwo.\n\nThree.\n\n${A}` }]);
+  await f.select("goal");
+  f.button("Move up")!.focus();
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`One.\n\nTwo.\n\n${A}\n\nThree.`);
+  expect(document.activeElement).toBe(f.button("Move up"));
+  await f.press("Move up");
+  expect(f.value("goal")).toBe(`One.\n\n${A}\n\nTwo.\n\nThree.`);
+  expect(document.activeElement).toBe(f.button("Move up"));
+  f.button("Remove")!.focus();
+  await f.press("Remove");
+  expect(f.value("goal")).toBe("One.\n\nTwo.\n\nThree.");
+  expect(document.activeElement).toBe(f.panel("goal"));
+});
+
+test("twenty dragovers at one height render the preview at most once", async () => {
+  // Spied before mounting, so the preview's component is the spy throughout and is never remounted.
+  const renders = spyOn(markdownModule, "Markdown");
+  cleanups.push(() => renders.mockRestore());
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  const panel = f.panel("goal");
+  stackRects(panel.querySelector(":scope > div")!.children, 40, 30);
+  const dnd = imageDrag({ "application/x-dude-image": "{}" });
+  const before = renders.mock.calls.length;
+  for (let i = 0; i < 20; i++) await act(async () => dnd("dragover", panel, 41));
+  expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
+  // The first sets the slot line; the other nineteen find it unchanged.
+  expect(renders.mock.calls.length - before).toBeLessThanOrEqual(1);
+});
+
+test("twenty resize moves on a selected image try no move", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  await f.select("goal");
+  const fig = f.figure("goal")!;
+  fig.getBoundingClientRect = () => rect(0, 100, 420);
+  Object.defineProperty(fig.parentElement!, "clientWidth", { value: 700, configurable: true });
+  const handle = f.container.querySelector<HTMLElement>('[data-testid="image-resize-right"]')!;
+  const pe = (type: string, clientX: number) => pointer(type, clientX);
+  await act(async () => void handle.dispatchEvent(pe("pointerdown", 420)));
+  const moves = spyOn(layoutModule, "moveReference");
+  for (let i = 1; i <= 20; i++) await act(async () => void handle.dispatchEvent(pe("pointermove", 420 + i * 5)));
+  expect(f.container.querySelector('[data-testid="image-size-tip"]')?.textContent).toBe("620 px");
+  expect(moves).toHaveBeenCalledTimes(0);
+  moves.mockRestore();
+  await act(async () => void handle.dispatchEvent(pe("pointerup", 520)));
+});
+
+test("a drag within the goal drops the image between two of its paragraphs", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\nTwo.\n\n${A}` }]);
+  const dnd = imageDrag();
+  const panel = f.panel("goal");
+  // Three blocks, 40 px apart: slot 1 is the top of "Two.", at 40.
+  stackRects(panel.querySelector(":scope > div")!.children, 40, 30);
+  await act(async () => dnd("dragstart", f.figure("goal")!));
+  await act(async () => dnd("dragover", panel, 38));
+  expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
+  await act(async () => dnd("drop", panel, 38));
+  expect(f.value("goal")).toBe(`One.\n\n${A}\n\nTwo.`);
+});
+
+test("a drag from the goal drops under a criterion as its continuation line", async () => {
+  const f = await mountFields([
+    { id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` },
+    { id: "crit", kind: "criteria", value: "- [ ] One\n- [ ] Two\n- [ ] Three" },
+  ]);
+  const dnd = imageDrag();
+  // happy-dom lays nothing out: give each criterion a place, 20 px tall.
+  stackRects(f.container.querySelectorAll('[data-testid="crit-preview"] li'), 20, 20);
+  const panel = f.panel("crit");
+  await act(async () => dnd("dragstart", f.figure("goal")!));
+  await act(async () => dnd("dragover", panel, 41));
+  expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
+  await act(async () => dnd("drop", panel, 41));
+  expect(f.value("goal")).toBe("Intro.\n\nOutro.");
+  expect(f.value("crit")).toBe(`- [ ] One\n- [ ] Two\n  ${A}\n- [ ] Three`);
+  // Not an undo step: undoing in one field alone would leave the image in neither.
+  await f.undo("crit");
+  expect(f.value("crit")).toBe(`- [ ] One\n- [ ] Two\n  ${A}\n- [ ] Three`);
+  expect(f.value("goal")).toBe("Intro.\n\nOutro.");
+});
