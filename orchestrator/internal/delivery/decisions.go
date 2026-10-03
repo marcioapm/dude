@@ -127,15 +127,17 @@ var pointLabel = map[string]string{
 
 // next goes to step, as the policy decides, or under decider conductor
 // parks for the conductor's decision at point, saying line (bounded facts).
-// A policy delivery's transition is exactly what it was before decisions,
-// marked (Routed) so the transition's commit re-routes it to the conductor
-// if a take-over committed while the step ran (recheck).
+// Whoever decides is read as the transition commits, not as the step was
+// claimed: the step returns the policy's step marked (Routed), and the
+// transition's checkpoint (recheck) parks it for the conductor there, its
+// wake and event in the transition's transaction. A conductor that was
+// deciding as the step entered the pull request gate leaves it required.
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
-	if !st.conducted() {
-		st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
-		return workflow.Result{Next: step, State: st}, nil
+	if st.conducted() && point == PointBeforePR {
+		st.GateRequired = true
 	}
-	return w.toConductor(ctx, sc, st, point, step, line)
+	st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
+	return workflow.Result{Next: step, State: st}, nil
 }
 
 // Routed is a decision point the policy took in a step: the step it chose
@@ -149,10 +151,10 @@ type Routed struct {
 }
 
 // recheck is the delivery's decision checkpoint (workflow.Definition.
-// Recheck): in the transition's transaction, a decision the policy took
-// on the state the step claimed is the conductor's instead when the row,
-// locked now, says the conductor decides — a take-over that committed
-// while the step's mechanics ran.
+// Recheck): in the transition's transaction, a decision point the step
+// reached is the conductor's when the row, locked now, says the conductor
+// decides — whether it did when the step was claimed, or took over while
+// the step's mechanics ran — and the policy's otherwise.
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	st, ok := res.State.(*State)
 	if !ok || st.Routed == nil {
@@ -165,29 +167,19 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		sc.WorkflowRunID).Scan(&decider); err != nil {
 		return res, false, err
 	}
+	st.Decider = decider
 	if decider != DeciderConductor || res.Next != r.Next {
 		return res, true, nil
 	}
-	st.Decider = decider
 	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
 	return out, true, err
 }
 
-// toConductor parks the workflow on a decision for the conductor, and
-// records the reason to wake it. Keyed on the decision's number, so a step
-// replayed after a crash records it once. The start wakes nobody: only
-// Talk it through decides it, whose message in Chat is the conductor's
-// turn already.
-func (w *steps) toConductor(ctx context.Context, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
-	var res workflow.Result
-	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		var err error
-		res, err = toConductorTx(ctx, tx, sc, st, point, policy, line)
-		return err
-	})
-	return res, err
-}
-
+// toConductorTx parks the workflow on a decision for the conductor, and
+// records the reason to wake it, in the transition's transaction. Keyed on
+// the decision's number, so a step replayed after a crash records it once.
+// The start wakes nobody: only Talk it through decides it, whose message
+// in Chat is the conductor's turn already.
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy}
