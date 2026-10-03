@@ -160,6 +160,18 @@ func RecordFailedTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) e
 	return err
 }
 
+// Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
+// with pending reasons that can be delivered now — none arrived within the
+// window, and its live conductor can hear a note (between turns, or
+// paused), or it has none (one is started), or the one it has is ending
+// (it is ended first). Selected before the sweep's batch limit, so tasks
+// that must wait (a conductor mid-turn) cannot fill the batch.
+const Wakeable = `c.delivered_at IS NULL
+	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
+		AND n.created_at >= now() - make_interval(secs => $1))
+	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT ` + Ending + `
+		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))`
+
 // SafetyNet (SQL, over runs r, $1 seconds): a task's conductor whose last
 // turn ended that long ago, with a phase Run it started still in flight
 // that has not woken it yet. Returns that Run as k.id.
