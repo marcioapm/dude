@@ -74,12 +74,17 @@ export interface QuestionTurn {
   answeredAt: string | null;
 }
 
-/** The task, as the agent received it. Written by the factory, not a person. */
+/**
+ * The task, as the agent received it. Written by the factory, not a
+ * person. For a task's conductor, dude's briefing (`briefing`).
+ */
 export interface PromptTurn {
   kind: "prompt";
   id: string;
   text: string;
   at: string;
+  /** dude's briefing of a task's conductor, not a phase's task. */
+  briefing?: true;
   /** Images a person gave with the task. */
   attachments: AttachmentInfo[];
 }
@@ -107,8 +112,11 @@ export interface ActorRef {
 export interface HumanTurn {
   kind: "human";
   id: string;
-  /** Steering interrupts; an answer unblocks. They read differently. */
-  intent: Extract<HumanIntent, "steer" | "answer">;
+  /**
+   * Steering interrupts; an answer unblocks. They read differently. A
+   * message is a person talking with a task's conductor, in its Chat.
+   */
+  intent: Extract<HumanIntent, "steer" | "answer" | "message">;
   /** Who said it. */
   by: ActorRef | null;
   text: string;
@@ -230,6 +238,10 @@ export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }
   unused: {
     parked: "Parked: nobody opened the preview for a while. Starting a server wakes it.",
     composer: "A parked branch preview: start a server to wake it.",
+  },
+  conductor: {
+    parked: "Parked while nobody is writing — nothing is held; your next message resumes it.",
+    composer: "Parked: your next message resumes it.",
   },
 };
 
@@ -411,6 +423,8 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
+  briefed: boolean;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -436,6 +450,7 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    briefed: false,
     cursor: 0,
   };
 }
@@ -574,8 +589,33 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (lands) state.lands = lands;
         const text = typeof payload.text === "string" ? payload.text : "";
         const attachments = attachmentsOf(payload.attachments);
-        if (!text.trim() && attachments.length === 0) break;
+        if ((!text.trim() && attachments.length === 0) || state.briefed) break;
         turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments });
+        break;
+      }
+
+      case EventTypes.ConductorBriefed: {
+        // dude's note to a new conductor, which ends with the message that
+        // started it (shown just before, as its person's turn).
+        const text = typeof payload.text === "string" ? payload.text : "";
+        state.briefed = true;
+        if (!text.trim()) break;
+        turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] });
+        break;
+      }
+
+      case EventTypes.ChatMessage: {
+        // A person's message to a task's conductor: the first is in its
+        // briefing; each later one is delivered as a steer is (a directive).
+        const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const turn: HumanTurn = {
+          ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
+          directiveId,
+          // A message handed on from an earlier conductor keeps its images.
+          attachments: attachmentsOf(payload.attachments),
+        };
+        if (directiveId) state.steersByDirective.set(directiveId, turn);
+        turns.push(turn);
         break;
       }
 
@@ -976,6 +1016,15 @@ function withoutQuestion(text: string): string {
   const last = blocks[blocks.length - 1];
   if (!last || last.index === undefined) return text;
   return (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trimEnd();
+}
+
+/**
+ * dude's briefing without the message it ends with ("## Ana's message"),
+ * which the transcript shows as Ana's own turn just before it.
+ */
+function withoutMessage(briefing: string): string {
+  const at = briefing.search(/\n## [^\n]*'s message\n/);
+  return at < 0 ? briefing : briefing.slice(0, at).trimEnd();
 }
 
 /**

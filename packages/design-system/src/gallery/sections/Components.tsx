@@ -98,7 +98,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="c-avatar" title="AgentAvatar" note="Who did it. Each role has a glyph and a hue; the orchestrator is additionally round. Humans are round with a ring, system is hollow, integrations are outlined. The live dot means 'running right now'.">
+      <Block id="c-avatar" title="AgentAvatar" note="Who did it. Each role has a glyph and a hue; the conductor is additionally round. Humans are round with a ring, system is hollow, integrations are outlined. The live dot means 'running right now'.">
         <Panes mode={mode}>
           <Col>
             <Row style={{ gap: 16 }}>

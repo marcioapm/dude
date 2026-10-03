@@ -304,7 +304,7 @@ var PromptRoleForPhase = map[string]string{
 
 // PromptRoles are the prompts a person can edit, in the order they are
 // shown.
-var PromptRoles = []string{"implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
+var PromptRoles = []string{"conductor", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
 
 // builtinInstructions is what each role is told to do, before the work it
 // is given: the part of a phase's prompt a person may rewrite (an
@@ -313,6 +313,15 @@ var PromptRoles = []string{"implementer", "reviewer", "fixer", "simplifier", "qa
 // tester's recording — is dude's, and every phase gets it whatever its
 // instructions say, because the workflow depends on it.
 var builtinInstructions = map[string][]string{
+	"conductor": {"You are this task's conductor. The people on the task talk to you in its Chat: answer " +
+		"their questions about the task, its code and how it was delivered, with the evidence — the file " +
+		"and line, the Run, the finding, the pull request comment.",
+		"You are read-only. Read the code in your checkout, and dude's records with the dude tools (run_diff, " +
+			"findings, pull_requests, list_tasks, search_memory), but change nothing: do not edit files, commit, " +
+			"push or start work. When someone asks for a change, say that changing this task's work from Chat is " +
+			"not available yet, and offer to create a task for it (create_task) — create it only once they agree.",
+		"Your machine is small and does not run the code: never build, install or run tests. Whether tests " +
+			"passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
@@ -343,13 +352,22 @@ func BuiltinPrompt(role string) string {
 	return strings.Join(builtinInstructions[role], "\n\n")
 }
 
-// instructions is what the phase's role is told to do: the organization's
+// PromptRoleFor is whose prompt and settings a Run runs with: its phase's,
+// or the conductor's for a task's conductor, which is no phase.
+func PromptRoleFor(phase, role string) string {
+	if phase == "" && role == RoleConductor {
+		return RoleConductor
+	}
+	return PromptRoleForPhase[phase]
+}
+
+// instructions is what the role is told to do: the organization's
 // prompt if it has one, else dude's; then the project's, added after it or
 // in its place. dude's own fixer instructions come in two parts, either
 // side of the feedback it is given (tail); a person's come in one piece,
 // before it.
-func (in PromptInput) instructions(phase string) (lead, tail []string) {
-	lead = builtinInstructions[PromptRoleForPhase[phase]]
+func (in PromptInput) instructions(role string) (lead, tail []string) {
+	lead = builtinInstructions[role]
 	custom := in.OrgPrompt != nil
 	if custom {
 		lead = []string{*in.OrgPrompt}
@@ -362,10 +380,52 @@ func (in PromptInput) instructions(phase string) (lead, tail []string) {
 		lead, custom = append(slices.Clone(lead), project), true
 	}
 	lead = slices.DeleteFunc(slices.Clone(lead), func(s string) bool { return strings.TrimSpace(s) == "" })
-	if !custom && phase == PhaseFix && len(lead) > 1 {
+	if !custom && role == "fixer" && len(lead) > 1 {
 		return lead[:1], lead[1:]
 	}
 	return lead, nil
+}
+
+// conductorToolsNote is the conductor's own tools: the read ones, and
+// create_task for a change it is asked for.
+const conductorToolsNote = "The dude tools read what dude knows about this task: run_diff (what a Run changed: " +
+	"the files, then the lines of those you name), findings (the review findings and how each was settled; " +
+	"name ids for their text), pull_requests (state, checks, reviews and feedback), list_tasks, " +
+	"list_repositories, search_memory and get_memory. ask_person asks the person a question and waits for " +
+	"the answer; end your turn after it. create_task records a change as a new task, for a person to " +
+	"deliver. From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, `dude prs`, " +
+	"`dude task list`, `dude memory search QUERY`, `dude task create`."
+
+// ConductorPrompt is a conductor's first prompt: dude's briefing and the
+// person's message (written once, when it was created), then how it works.
+//
+// The briefing quotes the task's goal and criteria as written: each image
+// reference in it reads as the image the Run is given (in.Images), as in a
+// phase's prompt, and a saved prompt's {{task.goal}} does too.
+func ConductorPrompt(briefing string, in PromptInput) string {
+	in = in.withImages()
+	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), "## How you work"}
+	lead, _ := in.instructions(RoleConductor)
+	for _, s := range lead {
+		sections = append(sections, in.fill(s))
+	}
+	if len(in.Repositories) == 0 {
+		sections = append(sections, "No repository is checked out for this task: it changes no code.")
+	} else {
+		var b strings.Builder
+		b.WriteString("Your checkout is the task's head, read-only by intent:")
+		for _, r := range in.Repositories {
+			fmt.Fprintf(&b, "\n- `%s` at `%s`", r.Name, r.Path)
+		}
+		sections = append(sections, b.String())
+	}
+	if in.Tools {
+		sections = append(sections, conductorToolsNote)
+	}
+	if c := strings.TrimSpace(in.Context); c != "" {
+		sections = append(sections, "## Project notes\n\n"+c)
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // Prompt composes one phase's prompt.
@@ -376,7 +436,7 @@ func Prompt(phase string, in PromptInput) string {
 	// Before anything reads the goal or criteria: a saved prompt's
 	// {{task.goal}} reads them as the task section does.
 	in = in.withImages()
-	lead, tail := in.instructions(phase)
+	lead, tail := in.instructions(PromptRoleForPhase[phase])
 	for i, s := range lead {
 		lead[i] = in.fill(s)
 	}

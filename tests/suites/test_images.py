@@ -278,8 +278,10 @@ def test_the_library_its_image_page_history_and_builds(page: Page, web_url: str,
     expect(page.get_by_test_id("lint-errors")).to_have_count(0)
     publish = page.get_by_test_id("build-publish")
     expect(publish).to_be_enabled()
-    assert publish.evaluate("b => getComputedStyle(b).backgroundColor") != page.get_by_test_id("save-draft").evaluate(
-        "b => getComputedStyle(b).backgroundColor")
+    # The button eases from its disabled wash to its fill: wait for the fill
+    # rather than reading the colour once, mid-transition.
+    save_bg = page.get_by_test_id("save-draft").evaluate("b => getComputedStyle(b).backgroundColor")
+    expect(publish).not_to_have_css("background-color", save_bg)
     _shoot(page, "image-containerfile-ready")
 
     # History: a diff, and Publish again.

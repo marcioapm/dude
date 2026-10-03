@@ -44,26 +44,26 @@ def test_agent_models_round_trip_as_an_object(client: ApiClient):
     When that happens every per-role lookup silently misses and roles fall
     back to defaults, which is hard to notice and easy to reintroduce.
     """
-    models = {"orchestrator": {"tier": client.tier_for("claude-opus-5"), "costLimitUsd": 5}}
+    models = {"conductor": {"tier": client.tier_for("claude-opus-5"), "costLimitUsd": 5}}
     created = client.create_project(name="Models", slug="models", agentModels=models)
 
     assert isinstance(created["agentModels"], dict)
-    assert created["agentModels"]["orchestrator"] == models["orchestrator"]
+    assert created["agentModels"]["conductor"] == models["conductor"]
 
 
 def test_agent_models_can_be_replaced(client: ApiClient):
     project = client.create_project(
-        name="Models", slug="models-update", agentModels=client.on_models({"orchestrator": "old"})
+        name="Models", slug="models-update", agentModels=client.on_models({"conductor": "old"})
     )
 
-    new = client.on_models({"orchestrator": "new"})
+    new = client.on_models({"conductor": "new"})
     resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": new})
     assert resp.status_code == 200
     assert resp.json()["agentModels"] == new
 
 
 def test_a_role_names_a_tier_never_a_model(client: ApiClient):
-    resp = client.post("/v1/projects", {"name": "M", "slug": "m-model", "agentModels": {"orchestrator": {"model": "claude-opus-5"}}})
+    resp = client.post("/v1/projects", {"name": "M", "slug": "m-model", "agentModels": {"conductor": {"model": "claude-opus-5"}}})
     assert resp.status_code == 400
     assert "a role names a model tier" in resp.json()["error"]["message"]
 
@@ -128,9 +128,9 @@ def test_session_uses_the_project_model_for_the_role(client: ApiClient, project:
     task = client.create_task(project["id"], "Model resolution")
     run = client.create_run(task["id"])
 
-    resp = client.create_session(run["id"], "orchestrator")
+    resp = client.create_session(run["id"], "conductor")
     assert resp.status_code == 201
-    assert resp.json()["model"] == "project-orchestrator"
+    assert resp.json()["model"] == "project-conductor"
 
 
 def test_session_falls_back_to_the_organization_default(client: ApiClient, project: dict):
@@ -161,7 +161,7 @@ def test_explicit_tier_overrides_configuration(client: ApiClient, project: dict)
     task = client.create_task(project["id"], "Override")
     run = client.create_run(task["id"])
 
-    resp = client.create_session(run["id"], "orchestrator", tier=client.tier_for("explicit-model"))
+    resp = client.create_session(run["id"], "conductor", tier=client.tier_for("explicit-model"))
     assert resp.json()["model"] == "explicit-model"
 
 
@@ -189,7 +189,7 @@ def test_subagents_are_linked_to_their_parent(client: ApiClient, project: dict):
     task = client.create_task(project["id"], "Session tree")
     run = client.create_run(task["id"])
 
-    parent = client.create_session(run["id"], "orchestrator").json()
+    parent = client.create_session(run["id"], "conductor").json()
     child = client.create_session(
         run["id"], "reviewer", parentSessionId=parent["id"]
     ).json()
@@ -201,8 +201,8 @@ def test_subagents_are_linked_to_their_parent(client: ApiClient, project: dict):
 def test_run_exposes_its_sessions(client: ApiClient, project: dict):
     task = client.create_task(project["id"], "Run sessions")
     run = client.create_run(task["id"])
-    client.create_session(run["id"], "orchestrator")
+    client.create_session(run["id"], "conductor")
     client.create_session(run["id"], "implementer")
 
     sessions = client.get_run(run["id"])["sessions"]
-    assert {s["role"] for s in sessions} == {"orchestrator", "implementer"}
+    assert {s["role"] for s in sessions} == {"conductor", "implementer"}

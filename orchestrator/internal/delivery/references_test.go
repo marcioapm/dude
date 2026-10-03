@@ -144,3 +144,56 @@ func TestAPullRequestNamesTheImages(t *testing.T) {
 		t.Errorf("pull request body:\n%s", body)
 	}
 }
+
+// The conductor's briefing clips the goal and each criterion. A cut never
+// leaves half a reference for its prompt to pass on raw, and a fence it
+// leaves open is closed, so the references after it stay references.
+func TestTheBriefingsClipKeepsReferencesWhole(t *testing.T) {
+	ref := "![shot.png](attachment:att_s)"
+	text := strings.Repeat("a", 20) + ref + " tail"
+	for n := 21; n < 20+len(ref)+2; n++ {
+		got := clipTaskText(text, n)
+		if strings.Contains(got, "attachment:") && !strings.Contains(got, ref) {
+			t.Errorf("clip at %d splits the reference: %q", n, got)
+		}
+	}
+	if got := clipTaskText(text, len(text)); got != text {
+		t.Errorf("a text within the limit changed: %q", got)
+	}
+	briefing := "Goal:\n\n" + closeFence(clipTaskText("```go\nx := 1\n"+strings.Repeat("y", 50), 30)) + "\n\n- Matches " + ref
+	got := ConductorPrompt(briefing, PromptInput{Images: []PromptImage{{"att_s", "shot.png"}}})
+	if !strings.Contains(got, "- Matches [Image 1: shot.png]") || strings.Contains(got, "attachment:") {
+		t.Errorf("the conductor's prompt:\n%s", got)
+	}
+}
+
+// A goal under the limit that leaves a fence open is closed too; a
+// criterion starting with backticks is a code span on its line, not a
+// fence, so nothing is appended after it and the next criterion's image
+// is still read.
+func TestOnlyTheGoalsOpenFenceIsClosed(t *testing.T) {
+	ref := "![shot.png](attachment:att_s)"
+	images := PromptInput{Images: []PromptImage{{"att_s", "shot.png"}}}
+	goal := "Goal:\n\n" + briefGoal("```go\nx := 1") + "\n\n- Matches " + ref
+	if got := ConductorPrompt(goal, images); !strings.Contains(got, "- Matches [Image 1: shot.png]") || strings.Contains(got, "attachment:") {
+		t.Errorf("an open fence in a goal under the limit:\n%s", got)
+	}
+	crit := "- " + clipTaskText(oneLine("```make test``` passes"), 300) + "\n- Matches " + ref
+	if got := ConductorPrompt(crit, images); !strings.Contains(got, "- Matches [Image 1: shot.png]") || strings.Contains(got, "attachment:") {
+		t.Errorf("a criterion starting with backticks:\n%s", got)
+	}
+	if got := clipTaskText(oneLine("```make test``` passes"), 300); got != "```make test``` passes" {
+		t.Errorf("a criterion within the limit changed: %q", got)
+	}
+}
+
+// A cut that drops a code span's closing backtick does not turn the
+// literal inside it into an image reference.
+func TestACutInsideACodeSpanMakesNoReference(t *testing.T) {
+	text := "see `![shot.png](attachment:att_s) is literal` and more text here"
+	for n := 6; n < len(text); n++ {
+		if got := clipTaskText(text, n); len(ImageRefs(got)) != 0 {
+			t.Errorf("clip at %d made a reference: %q", n, got)
+		}
+	}
+}

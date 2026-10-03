@@ -548,7 +548,7 @@ func forbidden(w http.ResponseWriter) {
 
 const codeRabbitPassed = `{"state":"success","total_count":1,"statuses":[{"context":"CodeRabbit","state":"success"}]}`
 
-// A token without Checks: read still reads the pull request, but never as
+// A token that may not read check runs still reads the pull request, but never as
 // passing: there may be CI it cannot see. The list says why, beside every
 // check it could read, and the entry saying so is no check that failed.
 func TestCheckRunsItCannotReadArePendingAndSayWhy(t *testing.T) {
@@ -603,7 +603,7 @@ func TestCheckRunsItCannotReadArePendingAndSayWhy(t *testing.T) {
 			if Ready(st) {
 				t.Error("ready with check runs unreadable")
 			}
-			want := []string{"GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"}
+			want := []string{"GitHub refused the check-runs read; a fine-grained token cannot read check runs, so use a classic token with the repo scope (or a GitHub App once supported), and check SSO authorization, organization token approval and the token's repository access"}
 			if tc.checks == ChecksFailing {
 				want = append([]string{"checks are failing"}, want...)
 			}
