@@ -33,6 +33,8 @@ import type { RequestContext, Router } from "../router.ts";
 const DECIDING_JSON = `
   COALESCE((SELECT w.state->>'decider' FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), 'policy') AS decider,
+  COALESCE((SELECT (w.state->>'handedBack')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
+    ORDER BY w.created_at DESC LIMIT 1), false) AS "handedBack",
   (SELECT json_build_object('point', w.state->'decision'->>'point')
    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.status IN ('running', 'waiting')
      AND w.step = 'conductorDecision' AND w.state ? 'decision' AND NOT w.state->'decision' ? 'taken'
@@ -217,7 +219,7 @@ async function talkTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`, "{}", ctx.principal);
 }
 
-const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]) }).strict();
+const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
 
 /**
  * Who takes the delivery's decisions from the next one on: "policy" is Let

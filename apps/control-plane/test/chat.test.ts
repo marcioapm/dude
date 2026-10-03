@@ -100,9 +100,11 @@ test("Talk it through and Let Deliver finish it go to the orchestrator as who as
   forwarded.length = 0;
   expect((await call("POST", "/v1/tasks/wi_1/talk")).status).toBe(201);
   expect((await call("POST", "/v1/tasks/wi_1/decider", { decider: "policy" })).status).toBe(201);
+  expect((await call("POST", "/v1/tasks/wi_1/decider", { decider: "policy", openPullRequest: true })).status).toBe(201);
   expect(forwarded).toEqual([
     { path: "/internal/tasks/wi_1/talk", body: {}, actor: key.id, person: key.personId },
     { path: "/internal/tasks/wi_1/decider", body: { decider: "policy" }, actor: key.id, person: key.personId },
+    { path: "/internal/tasks/wi_1/decider", body: { decider: "policy", openPullRequest: true }, actor: key.id, person: key.personId },
   ]);
   forwarded.length = 0;
   for (const body of [{}, { decider: "someone" }, { decider: "policy", extra: 1 }]) {

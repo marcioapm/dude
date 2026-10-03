@@ -18,7 +18,8 @@ import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { conductedLines } from "../src/conducted.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { interleaved } from "../src/screens/RunScreen.tsx";
-import type { ChatSent, RunDetail, TaskDetail } from "../src/api/client.ts";
+import { ApiError, type ChatSent, type RunDetail, type TaskDetail } from "../src/api/client.ts";
+import { firstMessage } from "../src/screens/ChatSection.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -68,11 +69,13 @@ class DecisionsClient extends FixtureClient {
     this.patch = { ...this.patch, decider: "conductor", runs: [run({ id: CONDUCTOR, phase: null, role: "conductor", status: "running" })] };
     return { runId: CONDUCTOR, taskId, created: true, decider: "conductor" };
   }
-  override async setDecider(taskId: string, decider: Decider) {
-    this.deciders.push(decider);
+  override async setDecider(taskId: string, decider: Decider, openPullRequest = false) {
+    this.deciders.push(openPullRequest ? `${decider}+open` as Decider : decider);
+    if (this.refuse && !(this.refuse.code === "pull_request_gate" && openPullRequest)) throw this.refuse;
     this.patch = { ...this.patch, decider };
     return { taskId, decider };
   }
+  refuse: ApiError | null = null;
 }
 
 async function page(client: DecisionsClient, opened: string[] = []) {
@@ -149,6 +152,30 @@ describe("a conducted task's Chat", () => {
     await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "the line gone once Deliver decides");
   });
 
+  test("at the pull request gate, Deliver opens it only once the person confirms", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "before_pull_request" } }, events());
+    client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
+    const p = await page(client);
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
+    const open = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-open]"), "the confirmation");
+    expect(document.body.textContent).toContain("Deliver will open the pull request now.");
+    expect(client.deciders).toEqual(["policy"]);
+    await click(open);
+    expect(client.deciders).toEqual(["policy", "policy+open"]);
+    await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "Deliver decides");
+  });
+
+  test("a hand-back that fails says why beside the conductor's Chat", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs }, events());
+    client.refuse = new ApiError(403, "forbidden", "only the task's owner decides");
+    const p = await page(client);
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
+    const problem = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-problem]"), "the problem");
+    expect(problem.textContent).toBe("Could not hand it back: only the task's owner decides");
+  });
+
   test("each Run it started is a line that opens its session; the decision waited on and an approval are dude's notices", async () => {
     const opened: string[] = [];
     const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs }, events()), opened);
@@ -184,6 +211,26 @@ describe("a conducted task's Chat", () => {
 });
 
 describe("what the Chat is made of", () => {
+  test("a first message: planning on a task not started, taking over a delivery Deliver runs, read-only only where Chat is", async () => {
+    const phase = run({ id: "run_p", status: "running" });
+    const p = await page(new DecisionsClient({ status: "received", runs: [], decider: "policy" }));
+    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Chat"))!;
+    await act(async () => {
+      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      tab.click();
+    });
+    await settle();
+    const chat = await until(() => p.querySelector<HTMLElement>("[data-testid=task-chat]"), "Chat");
+    expect(chat.textContent).toContain("starts planning this task with its conductor (Talk it through)");
+    expect(chat.textContent).not.toContain("read-only");
+    expect(firstMessage({ status: "running", decider: "policy", runs: [phase] }, true).readOnly).toBe(false);
+    expect(firstMessage({ status: "running", decider: "policy", runs: [phase] }, true).empty).toContain("hands this delivery's decisions to its conductor");
+    expect(firstMessage({ status: "running", decider: "policy", runs: [phase], handedBack: true }, true).readOnly).toBe(true);
+    expect(firstMessage({ status: "done", decider: "policy", runs: [phase] }, false).readOnly).toBe(true);
+    expect(firstMessage({ status: "aborted", decider: "policy", runs: [phase] }, false).readOnly).toBe(true);
+    expect(firstMessage({ status: "review", decider: "policy", runs: [] }, false).readOnly).toBe(true);
+  });
+
   test("nothing for a task its conductor never decided for", () => {
     expect(conductedLines({ decider: "policy", runs: [run({ id: "a" })] }, [ev("conductor.decision_awaited", { point: "start" }, 1)])).toEqual([]);
   });

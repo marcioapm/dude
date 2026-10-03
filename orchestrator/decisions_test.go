@@ -17,6 +17,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // conducting is a world whose conductor has dude's tools, stays warm for
@@ -612,4 +613,96 @@ func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("the safety net woke it %d times", n)
 	}
+}
+
+// stepTo advances the task's delivery one workflow step at a time, the
+// syncer running between, until it is about to run step.
+func (w *world) stepTo(task, step string) {
+	w.t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var at string
+		_ = w.owner.QueryRow(ctx, `SELECT step FROM workflow_runs WHERE task_id = $1`, task).Scan(&at)
+		if at == step {
+			return
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("the delivery never reached %s (at %s)\n%s", step, at, w.describeRuns())
+		}
+		if _, err := w.runtime.Tick(ctx, 1); err != nil {
+			w.t.Fatal(err)
+		}
+		if _, err := w.syncer.Sweep(ctx); err != nil {
+			w.t.Fatal(err)
+		}
+		if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status, key string) error {
+			return w.runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished, map[string]string{"runId": runID, "status": status}, key)
+		}); err != nil {
+			w.t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The pull request gate holds at the opening itself: a policy delivery
+// that chose to open, taken over before it did, parks at the gate and
+// asks; Draft carries to the opening.
+func TestATakeOverBeforeTheOpeningAsksFirst(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.deliver(task)
+	w.stepTo(task, "openPullRequest")
+	if status, out := w.chat(task, "hold on before it opens"); status != 201 || out["decider"] != "conductor" {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the gate", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened after the take-over", n)
+	}
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not been asked")
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	w.chat(task, "Draft")
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if !w.gh.Pulls()[0].Draft {
+		t.Error("Draft opened a pull request ready for review")
+	}
+}
+
+// Let Deliver finish it at the gate: refused while the person has not
+// answered Open or Draft, unless they confirm Deliver opens it now.
+func TestHandingBackAtTheGateNeedsTheOpening(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	handBack := func(body map[string]any) (int, map[string]any) {
+		return w.call("/internal/tasks/"+task+"/decider", body)
+	}
+	gateRefused := func(out map[string]any) bool {
+		e, _ := out["error"].(map[string]any)
+		return e["code"] == "pull_request_gate"
+	}
+	if status, out := handBack(map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
+		t.Fatalf("hand-back with the gate unasked: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	w.chat(task, "Show me the diff")
+	if status, out := handBack(map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
+		t.Fatalf("hand-back after Show me the diff: %d %v", status, out)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.decider(task) != "conductor" || len(w.gh.Pulls()) != 0 {
+		t.Fatalf("a refused hand-back changed the delivery: decider %s, %d pull requests", w.decider(task), len(w.gh.Pulls()))
+	}
+	if status, out := handBack(map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+		t.Fatalf("confirmed hand-back: %d %v", status, out)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 }
