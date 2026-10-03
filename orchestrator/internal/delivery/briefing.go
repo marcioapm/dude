@@ -224,7 +224,7 @@ func briefFindingsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, ta
 	}
 	// Open first, most severe first: what a person most likely asks about.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(file, ''), COALESCE(line, 0), status::text,
-			COALESCE(resolved_by_run_id, ''), fix_attempts
+			COALESCE(resolved_by_run_id, ''), fix_attempts, COALESCE(resolution_note, '')
 		FROM review_findings WHERE task_id = $1
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $2`, taskID, briefFindings)
@@ -236,6 +236,7 @@ func briefFindingsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, ta
 		Line                         int
 		Status, ResolvedBy           string
 		Attempts                     int
+		Note                         string
 	}
 	fs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[finding])
 	if err != nil {
@@ -253,14 +254,14 @@ func briefFindingsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, ta
 		if where != "" {
 			line += " · " + clip(where, 80)
 		}
-		line += " · " + settled(f.Status, f.ResolvedBy, f.Attempts)
+		line += " · " + settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)
 		fmt.Fprintf(b, "\n- %s", line)
 	}
 	return nil
 }
 
 // settled says how a finding stands, in a few words.
-func settled(status, by string, attempts int) string {
+func settled(status, by string, attempts int, note string) string {
 	switch status {
 	case "resolved":
 		if by != "" {
@@ -268,7 +269,7 @@ func settled(status, by string, attempts int) string {
 		}
 		return "fixed"
 	case "accepted":
-		return "accepted by a person"
+		return AcceptedBy(note)
 	case "superseded":
 		return "superseded"
 	}

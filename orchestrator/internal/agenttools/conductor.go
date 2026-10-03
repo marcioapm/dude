@@ -41,8 +41,9 @@ type findingOut struct {
 	// file:line, or the file alone.
 	Where  string `json:"where,omitempty"`
 	Status string `json:"status"`
-	// How it was settled: fixed by a Run, accepted by a person, or still
-	// open after so many fix attempts.
+	// How it was settled: fixed by a Run, accepted by a person, dismissed
+	// by the conductor (with its reason), or still open after so many fix
+	// attempts.
 	Settled    string `json:"settled"`
 	RaisedBy   string `json:"raisedBy,omitempty"`
 	ResolvedBy string `json:"resolvedBy,omitempty"`
@@ -73,9 +74,9 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	// The text only when asked for by id: a list of up to findingsMax reads
 	// none of it.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
-			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''),
+			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
-			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(resolution_note, '') ELSE '' END
+			CASE WHEN $2 THEN suggested_fix ELSE '' END
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
@@ -85,17 +86,20 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	seen := map[string]bool{}
 	for rows.Next() {
 		var f findingOut
-		var file string
+		var file, note string
 		var line, attempts int
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
-			&f.Title, &f.Description, &f.SuggestedFix, &f.ResolutionNote); err != nil {
+			&note, &f.Title, &f.Description, &f.SuggestedFix); err != nil {
 			return nil, err
+		}
+		if full {
+			f.ResolutionNote = note
 		}
 		f.Where = file
 		if file != "" && line > 0 {
 			f.Where = fmt.Sprintf("%s:%d", file, line)
 		}
-		f.Settled = settledAs(f.Status, f.ResolvedBy, attempts)
+		f.Settled = settledAs(f.Status, f.ResolvedBy, attempts, note)
 		seen[f.ID] = true
 		out.Findings = append(out.Findings, f)
 	}
@@ -110,7 +114,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	return out, nil
 }
 
-func settledAs(status, by string, attempts int) string {
+func settledAs(status, by string, attempts int, note string) string {
 	switch status {
 	case "resolved":
 		if by != "" {
@@ -118,7 +122,7 @@ func settledAs(status, by string, attempts int) string {
 		}
 		return "fixed"
 	case "accepted":
-		return "accepted by a person"
+		return delivery.AcceptedBy(note)
 	case "superseded":
 		return "superseded: the code it described is gone"
 	}
