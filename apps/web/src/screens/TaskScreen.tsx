@@ -330,7 +330,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Only ever the current attempt's: what stopped the task is a Run of it.
   const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
   // The task's conductor is never set aside with an attempt: it stays as on any attempt.
-  const shownConductor = shownRun !== null && isConductor(byId.get(shownRun) ?? {});
+  const shownRow = shownRun !== null ? byId.get(shownRun) : undefined;
+  const shownConductor = shownRow !== undefined && isConductor(shownRow);
   const openStopped = useMemo<StoppedRun | undefined>(
     () => (earlier && !shownConductor ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
       : retried ? { setAside: "retry" }
