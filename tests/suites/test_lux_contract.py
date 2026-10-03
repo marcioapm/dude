@@ -209,6 +209,175 @@ def test_an_image_steer_and_an_image_prompt_on_real_lux(client: ApiClient, lux_p
     assert client.post(f"/v1/runs/{run['id']}/abort", {}).status_code == 200
 
 
+# ---------------------------------------------------------------------------
+# A real model on real lux: does the agent see a task's inline images?
+# Opt-in twice over: --lux, and DUDE_LLM_KEY (with DUDE_LLM_URL) for the
+# orchestrator. DUDE_TEST_AGENT_IMAGE is dude's runtime image as lux's hosts
+# hold it (scripts/runtime-image.sh, preloaded with lux's --serve --image);
+# DUDE_TEST_VISION_MODEL the model, as the proxy names it.
+# ---------------------------------------------------------------------------
+
+AGENT_IMAGE = os.environ.get("DUDE_TEST_AGENT_IMAGE", "localhost/dude-runtime:dev")
+VISION_MODEL = os.environ.get("DUDE_TEST_VISION_MODEL", "claude-sonnet-5")
+IMAGES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures", "images")
+needs_model = pytest.mark.skipif(not os.environ.get("DUDE_LLM_KEY"), reason="needs DUDE_LLM_KEY and DUDE_LLM_URL: a real model")
+
+# What the agent is asked; the images' content is in no text it is given.
+SEEN_GOAL = (
+    "Create a file SEEN.md at the root of the repository that describes exactly what each image given "
+    "with this task shows: every shape, its colour, the background colour, and any text, word for word. "
+    "Put each image under its own heading, `## Image N`, with the number the task gives it. If you were "
+    "given no images, say so in SEEN.md instead. Change nothing else, and commit SEEN.md."
+)
+
+
+def _vision_project(client: ApiClient, env, lux_project) -> tuple[dict, FakeGitHub]:
+    """lux_project with every role on the real model, in dude's runtime image."""
+    project, gh = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models(
+        {r: VISION_MODEL for r in ("implementer", "reviewer", "simplifier")})})
+    # The API takes a library image only; a typed ref is the operator's.
+    query(env.owner_dsn, "UPDATE projects SET runtime_image = %s WHERE id = %s RETURNING id", (AGENT_IMAGE, project["id"]))
+    return project, gh
+
+
+def _fixture_png(name: str) -> bytes:
+    with open(os.path.join(IMAGES, name), "rb") as f:
+        return f.read()
+
+
+def _lux_inputs(env, lux_run_id: str) -> list[dict]:
+    """The lux.input records of a lux Run's output, as its shim wrote them."""
+    res = _lux(env, "GET", f"/v1/runs/{lux_run_id}/output")
+    assert res.status_code == 200, res.text
+    out, event = [], ""
+    # text/event-stream names no charset; requests would read it as Latin-1.
+    for line in res.content.decode("utf-8").splitlines():
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:") and event == "record":
+            rec = json.loads(line[5:])
+            if (rec.get("event") or {}).get("type") == "lux.input":
+                out.append(rec["event"]["data"])
+    return out
+
+
+def _messages(client: ApiClient, run_id: str) -> str:
+    return "\n".join(e["payload"].get("text", "") for e in client.events(runId=run_id, limit=1000)
+                     if e["eventType"] == "agent.message")
+
+
+def _plumbing(client: ApiClient, env, run: dict, ids: list[str]) -> dict:
+    """What dude sent lux for a Run and what lux and dude recorded of it: the
+    prompt, agent.prompt.delivered's attachments, lux's prompt input record."""
+    lux_run_id = query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
+    prompt = _lux(env, "GET", f"/v1/runs/{lux_run_id}").json()["spec"]["workload"]["prompt"]
+    delivered = [e["payload"] for e in client.events(runId=run["id"], limit=1000) if e["eventType"] == "agent.prompt.delivered"]
+    inputs = [r for r in _lux_inputs(env, lux_run_id) if r.get("requestId") == "prompt"]
+    print(f"--- {run['phase']} {run['id']} (lux {lux_run_id})")
+    print("prompt:", prompt)
+    print("agent.prompt.delivered attachments:", json.dumps([d.get("attachments") for d in delivered]))
+    print("lux.input prompt:", json.dumps(inputs))
+    assert len(delivered) == 1, delivered
+    assert [a["id"] for a in delivered[0].get("attachments", [])] == ids, delivered
+    assert len(inputs) == 1 and inputs[0].get("phase") == "accepted", inputs
+    assert [a["name"] for a in inputs[0].get("attachments", [])] == ["a.png", "b.png"][:len(ids)], inputs
+    return {"prompt": prompt, "delivered": delivered[0], "input": inputs[0]}
+
+
+def _section(text: str, n: int) -> str:
+    """What SEEN.md says under its Image n heading, up to the next one."""
+    m = re.search(rf"^#+[^\n]*Image\s*{n}\b[^\n]*\n(.*?)(?=^#+[^\n]*Image\s*\d|\Z)", text, re.M | re.S)
+    assert m, f"no Image {n} heading in SEEN.md:\n{text}"
+    return m.group(1).lower()
+
+
+@needs_model
+@pytest.mark.timeout(1500)
+def test_a_real_model_describes_a_tasks_inline_images(client: ApiClient, env, lux_project):
+    """The agent is told about two images only by their place in the task's
+    text; what they show is in their pixels alone. It writes down what it
+    sees, and that is right: so the images reached the model, numbered as the
+    prompt numbers them. The reviewer is given them too."""
+    project, gh = _vision_project(client, env, lux_project)
+    task = client.create_task(project["id"], "Describe the images")
+    a = _upload_png(client, task["id"], "a.png", _fixture_png("inline-a.png"))
+    b = _upload_png(client, task["id"], "b.png", _fixture_png("inline-b.png"))
+    res = client.patch(f"/v1/tasks/{task['id']}", {
+        "goal": f'{SEEN_GOAL}\n\nThe first image ![a.png](attachment:{a["id"]} "small right") is the one to start with.',
+        "acceptanceCriteria": ["SEEN.md has a section for each image",
+                               f"The second image's words are in SEEN.md\n![b.png](attachment:{b['id']})"],
+    })
+    assert res.status_code == 200, res.text
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def pr_open():
+        return client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"]
+
+    try:
+        pr = wait_until(pr_open, timeout=1200, interval=5, message="no pull request from the real model")[0]
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+    seen = gh._git_out("show", f"refs/heads/{pr['headBranch']}:SEEN.md")
+    print("SEEN.md:\n" + seen)
+
+    runs = client.task_runs(task["id"])
+    implement = next(r for r in runs if r["phase"] == "implement")
+    plumbing = _plumbing(client, env, implement, [a["id"], b["id"]])
+    # Each reference is its number and name, in place; the layout words and the URL are not the agent's.
+    assert "The first image [Image 1: a.png] is the one to start with." in plumbing["prompt"], plumbing["prompt"]
+    assert "[Image 2: b.png]" in plumbing["prompt"], plumbing["prompt"]
+    assert "small" not in plumbing["prompt"] and "attachment:" not in plumbing["prompt"], plumbing["prompt"]
+    # Nothing it was told names what the images show.
+    for word in ("pelican", "7342", "orbit", "5150", "triangle", "circle"):
+        assert word not in plumbing["prompt"].lower(), word
+
+    first, second = _section(seen, 1), _section(seen, 2)
+    assert "7342" in first and "triangle" in first, first
+    assert any(c in first for c in ("red", "green")), first
+    assert "5150" in second and "circle" in second, second
+    assert any(c in second for c in ("blue", "white")), second
+    assert "7342" not in second and "5150" not in first, seen
+
+    # The reviewer checks the work against the same task, images and all.
+    review = next(r for r in runs if r["phase"] == "review")
+    _plumbing(client, env, review, [a["id"], b["id"]])
+    print("reviewer said:\n" + _messages(client, review["id"]))
+
+
+@needs_model
+@pytest.mark.timeout(900)
+def test_without_references_a_real_model_is_given_no_images(client: ApiClient, env, lux_project):
+    """The negative control: the same images uploaded to the task, but no
+    text shows them. The agent is given none, and cannot know their words."""
+    project, _ = _vision_project(client, env, lux_project)
+    task = client.create_task(project["id"], "Describe no images")
+    _upload_png(client, task["id"], "a.png", _fixture_png("inline-a.png"))
+    _upload_png(client, task["id"], "b.png", _fixture_png("inline-b.png"))
+    res = client.patch(f"/v1/tasks/{task['id']}", {"goal": SEEN_GOAL, "acceptanceCriteria": ["SEEN.md has a section for each image"]})
+    assert res.status_code == 200, res.text
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def implemented():
+        run = next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None)
+        return run if run and run["status"] in ("completed", "failed", "aborted") else None
+
+    try:
+        run = wait_until(implemented, timeout=600, interval=5, message="the implementer never finished")
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+    said = _messages(client, run["id"])
+    print("implementer said:\n" + said)
+    lux_run_id = query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
+    inputs = [r for r in _lux_inputs(env, lux_run_id) if r.get("requestId") == "prompt"]
+    print("lux.input prompt:", json.dumps(inputs))
+    assert inputs and not inputs[0].get("attachments"), inputs
+    assert not any(w in said.lower() for w in ("7342", "5150", "pelican", "orbit")), said
+    for r in client.task_runs(task["id"]):
+        if r["status"] not in ("completed", "failed", "aborted"):
+            client.post(f"/v1/runs/{r['id']}/abort", {})
+
+
 @pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")
 def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
     """lux hands the agent dude's MCP server, authenticated as its Run; the

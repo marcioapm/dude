@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web  # noqa: E402
-from env import TestEnvironment, lux_env, require_bun  # noqa: E402
+from env import TestEnvironment, llm_env, lux_env, require_bun  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -47,7 +47,9 @@ def main() -> None:
         build_gallery(force=args.build)
         build_web()
 
-    env = TestEnvironment(real_lux=lux_env() if args.lux else None)
+    # A real lux may run a real model (the opt-in tests that need
+    # DUDE_LLM_KEY): its URL and key go to the orchestrator, never printed.
+    env = TestEnvironment(real_lux=lux_env() if args.lux else None, orchestrator_env=llm_env() if args.lux else {})
     print(f"run id:        {env.run_id}")
     print(f"database:      {env.db_name}")
     print(f"control plane: {env.control_plane_url}")
