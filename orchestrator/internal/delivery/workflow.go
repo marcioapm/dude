@@ -791,10 +791,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		return waitAgain, nil
 	}
 	st.PRFeedback = actionable
-	if st.conducted() {
-		return w.toConductor(ctx, sc, st, PointPRFeedback, "prFix", feedbackLine(actionable))
-	}
-	return workflow.Result{Next: "prFix", State: st}, nil
+	return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackLine(actionable))
 }
 
 // feedbackLine is pull request feedback in a note: how much, of what kind,
