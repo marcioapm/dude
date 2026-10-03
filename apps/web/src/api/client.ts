@@ -12,6 +12,7 @@ import { escalationWords } from "../escalation.ts";
 import type {
   AgentRole,
   TaskRepository,
+  Decider,
   DeliveryPolicy,
   Directive,
   DirectiveScope,
@@ -225,6 +226,8 @@ export interface ChatSent {
   created: boolean;
   directiveId?: string;
   questionId?: string;
+  /** Who decides the task's delivery after the message: it hands a delivery in progress to the conductor. */
+  decider?: Decider;
 }
 
 /**
@@ -991,6 +994,19 @@ export class ApiClient {
    */
   chat(taskId: string, text: string): Promise<ChatSent> {
     return this.#request("POST", `/v1/tasks/${taskId}/chat`, { text });
+  }
+
+  /**
+   * Talk it through: a task not started gets its conductor, which plans it
+   * with the person; nothing is built until it decides to.
+   */
+  talk(taskId: string): Promise<ChatSent> {
+    return this.#request("POST", `/v1/tasks/${taskId}/talk`, {});
+  }
+
+  /** Who takes the delivery's decisions from the next one on: "policy" is Let Deliver finish it. */
+  setDecider(taskId: string, decider: Decider): Promise<{ taskId: string; decider: Decider }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/decider`, { decider });
   }
 
   // -- servers: a project's recipes, and what a run serves ---------------
