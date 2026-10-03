@@ -740,7 +740,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
-	var briefing string
+	var briefing, conductorNote string
 	var tier delivery.Tier
 	var noTier string
 	settingsRole := delivery.PromptRoleFor(r.Phase, r.Role)
@@ -749,10 +749,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
-				COALESCE((SELECT prompt FROM runs WHERE id = $2), '')
+				COALESCE((SELECT prompt FROM runs WHERE id = $2), ''), COALESCE((SELECT conductor_note FROM runs WHERE id = $2), '')
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID, r.ID).
-			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing); err != nil {
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -844,7 +844,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r),
+		Branch: runBranch(r), ConductorNote: conductorNote,
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
