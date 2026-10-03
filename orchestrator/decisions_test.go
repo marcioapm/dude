@@ -402,7 +402,7 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w := conducting(t)
 		task := w.task()
 		w.talk(task)
-		setPolicy(w, task, `{"maxAttemptsPerFinding":1}`)
+		setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
 		w.must(task, "start_phase", `{"phase":"implement"}`)
 		w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 		w.must(task, "decide", `{"action":"next"}`)
