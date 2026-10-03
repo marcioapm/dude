@@ -121,3 +121,71 @@ func TestAFailedWakeReadAfterAllIsNotToldAgain(t *testing.T) {
 		t.Errorf("told again: %s", b)
 	}
 }
+
+// briefed makes the world's Run a conductor dude started with its reason
+// in its first prompt: running, the reason delivered to it as its
+// briefing.
+func (w *wakeWorld) briefed() {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET status = 'running', dude_pause = NULL, turn_done_at = NULL WHERE id = 'run_'||$1`)
+	w.exec(`UPDATE conductor_wakes SET delivered_at = now(), conductor_run_id = 'run_'||$1 WHERE organization_id = $1`)
+	w.exec(`INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id)
+		SELECT $1, id, 'run_'||$1 FROM conductor_wakes WHERE organization_id = $1`)
+}
+
+// ends ends the briefed conductor, as the syncer settles it (HandOver).
+func (w *wakeWorld) ends() {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE id = 'run_'||$1`)
+	if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.HandOver(context.Background(), tx, delivery.RunRef{Org: w.org, ProjectID: "prj_" + w.org,
+			TaskID: "wi_" + w.org, RunID: "run_" + w.org}, true)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// A briefing lux accepted with a read receipt to follow is heard only when
+// the agent reads it. Accepted and then lost — the prompt failed, or the
+// conductor ended before reading it — its reason is told again; read, it
+// is not, and a read after a failure wins.
+func TestABriefingIsHeardWhenRead(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		after   func(w *wakeWorld)
+		pending int
+	}{
+		{"accepted then failed", func(w *wakeWorld) { w.receive(failedAfterAccepted("prompt", "the harness died")) }, 1},
+		{"accepted then ended", func(w *wakeWorld) { w.ends() }, 1},
+		{"accepted then read", func(w *wakeWorld) { w.receive(consumed("prompt")); w.ends() }, 0},
+		{"failed then read", func(w *wakeWorld) {
+			w.receive(failedAfterAccepted("prompt", "the harness died"))
+			w.receive(consumed("prompt"))
+		}, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWakeWorld(t)
+			w.briefed()
+			w.receive(accepted("prompt", true, "next_step"))
+			if n := w.pending(); n != 0 {
+				t.Fatalf("%d reasons pending while the briefing is on its way", n)
+			}
+			c.after(w)
+			if n := w.pending(); n != c.pending {
+				t.Errorf("%d reasons pending, want %d", n, c.pending)
+			}
+		})
+	}
+	// With no receipt to follow, accepted is heard, and a failure after
+	// it changes nothing.
+	t.Run("accepted without a receipt", func(t *testing.T) {
+		w := newWakeWorld(t)
+		w.briefed()
+		w.receive(accepted("prompt", false, "next_step"))
+		w.ends()
+		if n := w.pending(); n != 0 {
+			t.Errorf("%d reasons pending after a receipt-less acceptance", n)
+		}
+	})
+}

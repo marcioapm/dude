@@ -278,24 +278,20 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 		return t.activity(ctx, tx, s, str("activity"), epoch)
 	case lux.RecordInputConsumed, lux.RecordInputFailed:
 		if str("requestId") == promptRequestID {
-			return nil
+			return t.briefingReceipt(ctx, tx, typ, data)
 		}
 		return t.directiveReceipt(ctx, tx, s, typ, data)
 	case lux.RecordInput:
 		// The task itself: recorded when the agent has it, as lux delivered
 		// it — from its first answer.
 		if str("requestId") == promptRequestID {
+			if err := t.briefingReceipt(ctx, tx, typ, data); err != nil {
+				return err
+			}
 			// Only a first answer that has the task: accepted, or an older
 			// lux's phase-less handoff. Failed and unknown phases are not.
 			if phase := str("phase"); str("error") != "" || (phase != "" && phase != lux.InputAccepted) {
 				return nil
-			}
-			// A conductor started with dude's wake note has heard it: its
-			// reasons are not told again (delivery.BriefingUnheardTx).
-			if t.run.conductor() {
-				if err := delivery.BriefingHeardTx(ctx, tx, t.run.ID); err != nil {
-					return err
-				}
 			}
 			// Once per Run: an agent resumed on another host is not given its
 			// task again, but a lux that acknowledged it again would repeat it.
@@ -323,6 +319,32 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
 		return t.directiveReceipt(ctx, tx, s, typ, data)
+	}
+	return nil
+}
+
+// briefingReceipt applies a receipt for a conductor's first prompt to the
+// wake note dude started it with, on directiveReceipt's precedence: heard
+// on consumption, or on an acceptance with no receipt to follow, or an
+// older lux's handoff; an acceptance with a receipt to follow is not
+// heard yet. A failure puts its reasons back to pending. A consumption or
+// handoff after a failure wins; an acceptance does not.
+func (t *translator) briefingReceipt(ctx context.Context, tx pgx.Tx, typ string, data map[string]any) error {
+	if !t.run.conductor() {
+		return nil
+	}
+	phase, _ := data["phase"].(string)
+	msg, _ := data["error"].(string)
+	receipt, _ := data["receipt"].(bool)
+	switch {
+	case typ == lux.RecordInputConsumed:
+		return delivery.BriefingHeardTx(ctx, tx, t.run.ID, true)
+	case typ == lux.RecordInputFailed, phase == lux.InputFailed, phase == "" && msg != "":
+		return delivery.BriefingFailedTx(ctx, tx, t.run.ID)
+	case phase == "":
+		return delivery.BriefingHeardTx(ctx, tx, t.run.ID, true)
+	case phase == lux.InputAccepted && !receipt:
+		return delivery.BriefingHeardTx(ctx, tx, t.run.ID, false)
 	}
 	return nil
 }

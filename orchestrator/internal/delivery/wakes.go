@@ -230,22 +230,46 @@ func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
 }
 
 // BriefingHeardTx records that a conductor dude started with a wake note
-// has its first prompt (lux accepted it): its reasons are not told again.
-func BriefingHeardTx(ctx context.Context, tx pgx.Tx, runID string) error {
-	_, err := tx.Exec(ctx, `UPDATE conductor_wake_attempts SET heard_at = now()
-		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL`, runID)
+// has heard its first prompt: lux's consumption receipt for it, or, with
+// no receipt to follow, its acceptance (or an older lux's handoff). Its
+// reasons are not told again. overridesFailure: a consumption or handoff,
+// the agent's own report, counts after the briefing was failed too.
+func BriefingHeardTx(ctx context.Context, tx pgx.Tx, runID string, overridesFailure bool) error {
+	rows, err := tx.Query(ctx, `UPDATE conductor_wake_attempts SET heard_at = now(), failed_at = NULL
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND (failed_at IS NULL OR $2)
+		RETURNING wake_id`, runID, overridesFailure)
+	if err != nil {
+		return err
+	}
+	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(wakes) == 0 {
+		return err
+	}
+	// Heard after its failure put them back to pending: settled again.
+	_, err = tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = COALESCE(delivered_at, now()) WHERE id = ANY($1)`, wakes)
 	return err
+}
+
+// BriefingFailedTx puts back to pending the reasons a conductor was started
+// with, once lux says its first prompt will not reach the agent, unless
+// another note holds them.
+func BriefingFailedTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	return failBriefingTx(ctx, tx, runID, false)
 }
 
 // BriefingUnheardTx puts back to pending the reasons a conductor was
 // started with, once it ended without hearing its first prompt (it failed
 // to submit, its image was refused, its model is missing, or it stopped
-// before lux accepted the prompt), unless another note holds them.
+// before the agent read the prompt), unless another note holds them.
 func BriefingUnheardTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	return failBriefingTx(ctx, tx, runID, true)
+}
+
+func failBriefingTx(ctx context.Context, tx pgx.Tx, runID string, ended bool) error {
 	rows, err := tx.Query(ctx, `UPDATE conductor_wake_attempts a SET failed_at = now()
 		FROM runs r WHERE r.id = a.conductor_run_id AND a.conductor_run_id = $1 AND a.directive_id IS NULL
-		  AND a.heard_at IS NULL AND a.failed_at IS NULL AND r.status IN ('completed', 'failed', 'aborted')
-		RETURNING a.wake_id`, runID)
+		  AND a.heard_at IS NULL AND a.failed_at IS NULL AND (NOT $2 OR r.status IN ('completed', 'failed', 'aborted'))
+		RETURNING a.wake_id`, runID, ended)
 	if err != nil {
 		return err
 	}
