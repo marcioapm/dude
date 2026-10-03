@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -190,6 +191,9 @@ func (w *steps) toConductor(ctx context.Context, sc workflow.StepContext, st *St
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy}
+	if point == PointBeforePR {
+		st.GateRequired = true
+	}
 	note := fmt.Sprintf("Decision waiting: %s.", pointLabel[point])
 	if line != "" {
 		note += " " + line
@@ -220,6 +224,17 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return workflow.Result{}, fmt.Errorf("no decision to carry out")
 	}
 	if d.Taken == nil && !st.conducted() {
+		// A gate the conductor entered stays one handed back: Deliver goes
+		// on only with the person's Open or Draft, or their confirmation.
+		if d.Point == PointBeforePR && st.GateRequired && !st.GateOpened {
+			ok, err := w.gateAuthorized(ctx, sc, st)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if !ok {
+				return w.parkAtGate(ctx, sc, st, false)
+			}
+		}
 		st.Decision = nil
 		st.Decisions++
 		return workflow.Result{Next: d.Policy, State: st}, nil
@@ -245,6 +260,49 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return workflow.Result{Next: phaseStep(t.Phase, d.Point), State: st}, nil
 	}
 	return workflow.Result{}, fmt.Errorf("decision %q cannot be carried out", t.Action)
+}
+
+// gateAuthorized says whether a gate the conductor entered may open under
+// Deliver: the person's Open or Draft at the heads now (taken into the
+// state, Draft as the draft), or a confirmed hand-back (GateOpened).
+func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+	if st.GateOpened {
+		return true, nil
+	}
+	var draft bool
+	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var err error
+		draft, err = gate(ctx, tx, st)
+		return err
+	})
+	var refused Refusal
+	if errors.As(err, &refused) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	st.Draft, st.GateOpened = st.Draft || draft, true
+	return true, nil
+}
+
+// parkAtGate parks a delivery Deliver decides at the pull request gate the
+// conductor entered, asking the person, until they answer Open or Draft or
+// confirm the opening at a hand-back. entering: it parks there now, which
+// is recorded once.
+func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *State, entering bool) (workflow.Result, error) {
+	st.Decision = &Pending{Point: PointBeforePR, Policy: "openPullRequest"}
+	note := "Deliver waits for the person's Open or Draft before it opens the pull request."
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := askGateTx(ctx, tx, sc.OrganizationID, st); err != nil || !entering {
+			return err
+		}
+		return emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": PointBeforePR,
+			"policy": "openPullRequest", "actions": []string{}, "phases": []string{}, "note": note})
+	}); err != nil {
+		return workflow.Result{}, err
+	}
+	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
 }
 
 // phaseStep is the step that creates a phase's Runs; a fix of pull request

@@ -290,7 +290,8 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 		handedBack := body.Decider == delivery.DeciderPolicy
 		if handedBack && d.AtGate() {
 			// Handed back at the gate, Deliver opens the pull request at once:
-			// only on the person's Open or Draft, or their confirmation.
+			// only on the person's Open or Draft, or their confirmation,
+			// written as the opening's authorization (the step keeps it).
 			draft, err := delivery.GateAnswer(r.Context(), tx, &d.State)
 			var refused delivery.Refusal
 			switch {
@@ -299,11 +300,11 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 					"Deliver will open the pull request now, and the person has not answered Open or Draft; confirm with openPullRequest")
 			case err != nil && !errors.As(err, &refused):
 				return err
-			case err == nil && draft:
-				if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = jsonb_set(state, '{draft}', 'true') WHERE id = $1`,
-					d.WorkflowID); err != nil {
-					return err
-				}
+			}
+			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = state || jsonb_build_object('gateOpened', true)
+					|| CASE WHEN $2 THEN '{"draft": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
+				d.WorkflowID, err == nil && draft); err != nil {
+				return err
 			}
 		}
 		why := "a person let Deliver finish it"

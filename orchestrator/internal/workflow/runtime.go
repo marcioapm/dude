@@ -86,6 +86,10 @@ type Definition struct {
 	// what the row holds for them, so a step that read the state before
 	// the write cannot undo it.
 	Owned []string
+	// Top-level boolean keys both a step and an outside writer may set:
+	// true once either set it. A step that read false before the outside
+	// write keeps the row's true; a step setting true is kept too.
+	Latched []string
 	// Recheck, when set, runs inside the transition's transaction, before
 	// the step's result is written: it may read the row as it is now
 	// (locking it) and replace the result (changed), so a decision a step
@@ -468,6 +472,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 		def.BeforeCommit(run.ID, run.Step, result.Next)
 	}
 	owned := db.NonNil(def.Owned)
+	latched := db.NonNil(def.Latched)
 
 	err = r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
 		if def.Recheck != nil {
@@ -498,7 +503,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 				SET status = 'completed', wake_at = NULL, awaiting_signals = '[]'::jsonb, attempt = 0,
 				    locked_by = NULL, locked_until = NULL, state = `+keepOwned+`
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
-				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned).Scan(&tag)
+				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched).Scan(&tag)
 		} else {
 			status := "running"
 			var wake *time.Time
@@ -510,11 +515,11 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 			}
 			qerr = tx.QueryRow(ctx, `
 				UPDATE workflow_runs
-				SET step = $5, state = `+keepOwned+`, status = $6::workflow_run_status,
-				    wake_at = $7, awaiting_signals = $8::jsonb, attempt = 0, last_error = NULL,
+				SET step = $6, state = `+keepOwned+`, status = $7::workflow_run_status,
+				    wake_at = $8, awaiting_signals = $9::jsonb, attempt = 0, last_error = NULL,
 				    locked_by = NULL, locked_until = NULL
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
-				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, result.Next, status, wake, awaiting).Scan(&tag)
+				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched, result.Next, status, wake, awaiting).Scan(&tag)
 		}
 		if db.IsNotFound(qerr) {
 			return errLeaseLost
@@ -549,9 +554,11 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 var errLeaseLost = errors.New("lease lost")
 
 // keepOwned (SQL; $3 the step's new state or NULL, $4 the definition's
-// owned keys): the new state, with each owned key as the row holds it.
+// owned keys, $5 its latched keys): the new state, with each owned key as
+// the row holds it, and each latched key true where the row holds true.
 const keepOwned = `(COALESCE($3::jsonb, state) - $4::text[])
-	|| COALESCE((SELECT jsonb_object_agg(k, state->k) FROM unnest($4::text[]) k WHERE state ? k), '{}'::jsonb)`
+	|| COALESCE((SELECT jsonb_object_agg(k, state->k) FROM unnest($4::text[]) k WHERE state ? k), '{}'::jsonb)
+	|| COALESCE((SELECT jsonb_object_agg(k, true) FROM unnest($5::text[]) k WHERE state->k = 'true'::jsonb), '{}'::jsonb)`
 
 // runStep runs a step, turning a panic into an error so one bad step fails
 // its own run rather than the poller.

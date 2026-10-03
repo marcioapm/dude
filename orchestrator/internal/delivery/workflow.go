@@ -104,6 +104,10 @@ type State struct {
 	// The person's Open or Draft, taken by the conductor (or confirmed at a
 	// hand-back): under the conductor, the pull requests open only with it.
 	GateOpened bool `json:"gateOpened,omitempty"`
+	// The conductor entered the pull request gate on this delivery: the
+	// opening needs GateOpened, or an Open or Draft at the current heads,
+	// whoever decides by then.
+	GateRequired bool `json:"gateRequired,omitempty"`
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -233,7 +237,10 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 		Type:        WorkflowType,
 		InitialStep: "implement",
 		Owned:       []string{"decider", "handedBack"},
-		Recheck:     w.recheck,
+		// The gate's authorization: set by the conductor's decision, or by
+		// a hand-back while a step runs.
+		Latched: []string{"draft", "gateOpened"},
+		Recheck: w.recheck,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
 			"implementRun":      w.implementRun,
@@ -686,9 +693,22 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		return workflow.Result{}, err
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
-	// policy chose to open waits for the person's answer like any other.
-	if st.conducted() && !st.GateOpened && len(st.PullRequestIDs) == 0 {
-		return w.toConductor(ctx, sc, st, PointBeforePR, "openPullRequest", "")
+	// policy chose to open waits for the person's answer like any other, and
+	// one handed back after the conductor entered the gate opens only with
+	// the person's Open or Draft.
+	if !st.GateOpened && len(st.PullRequestIDs) == 0 {
+		if st.conducted() {
+			return w.toConductor(ctx, sc, st, PointBeforePR, "openPullRequest", "")
+		}
+		if st.GateRequired {
+			ok, err := w.gateAuthorized(ctx, sc, st)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if !ok {
+				return w.parkAtGate(ctx, sc, st, true)
+			}
+		}
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if err != nil {
