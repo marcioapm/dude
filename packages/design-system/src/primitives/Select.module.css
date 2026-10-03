@@ -92,6 +92,8 @@
 .content {
   z-index: var(--ds-z-popover);
   min-width: var(--radix-select-trigger-width);
+  /* Long descriptions wrap rather than run off a narrow screen. */
+  max-width: min(560px, calc(var(--radix-select-content-available-width) - 16px));
   max-height: var(--radix-select-content-available-height);
   background: var(--ds-color-overlay);
   border-radius: var(--ds-radius-float);

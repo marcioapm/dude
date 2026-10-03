@@ -75,6 +75,21 @@ is one phase of work, executed as one lux Run. A single *attempt* at a work
 item is several Runs — one per phase — and each is shown as an agent in the
 UI.
 
+A task gets a new attempt only by **Start over** (a new branch, the whole
+pipeline again); **Try again** is a new Run in the same attempt. The task
+page shows one attempt at a time, picked in its header when there is more
+than one: the branch, pull requests, pipeline, time and cost
+(`/v1/tasks/:id/metrics?attempt=N`), findings, sessions and files are that
+attempt's, and an earlier one is read-only. A finding, file or pull request
+belongs to the attempt of the Run that made it. A pull request whose Run is
+unknown goes to the attempt its branch names (`dude/<task>/attempt-N`), else
+the current one; a finding or file whose Run is unknown, to the current
+attempt (`apps/web/src/attempts.ts`). Chat, Activity and Servers
+are the whole task's. The task's conductor is no attempt's: its Run makes,
+ends and begins no attempt, and its session is listed, live, on every
+attempt's Sessions. The URL names the attempt (`?attempt=1`) only when it
+is not the current one.
+
 ### Delivery, end to end
 
 `orchestrator/internal/delivery/workflow.go` is the state machine;
