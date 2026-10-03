@@ -15,11 +15,11 @@ import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
 
 /** A Run that is an attempt's own work: neither a branch preview nor the task's conductor. */
-const ofAttempt = (r: Run) => r.kind !== "preview" && !isConductor(r);
+const isAttemptWork = (r: Run) => r.kind !== "preview" && !isConductor(r);
 
 /** Every attempt the task has had, newest first: distinct `attempt` over its agent Runs. */
 export function attemptsOf(runs: readonly Run[]): number[] {
-  return [...new Set(runs.filter(ofAttempt).map((r) => r.attempt))].sort((a, b) => b - a);
+  return [...new Set(runs.filter(isAttemptWork).map((r) => r.attempt))].sort((a, b) => b - a);
 }
 
 /** The attempt a Run's session is listed under: a branch preview serves the task now, so the current one. */
@@ -77,7 +77,7 @@ export function closedAtStartOver(pr: PullRequest, events: readonly PersistedEve
 export function attemptStarts(runs: readonly Run[]): Map<number, string> {
   const starts = new Map<number, string>();
   for (const r of runs) {
-    if (!ofAttempt(r)) continue;
+    if (!isAttemptWork(r)) continue;
     const at = starts.get(r.attempt);
     if (at === undefined || r.createdAt < at) starts.set(r.attempt, r.createdAt);
   }
@@ -109,7 +109,7 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
 
 /** An earlier attempt's last aborted or failed Run: where it stopped. */
 function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
-  return runs.filter((r) => r.attempt === attempt && ofAttempt(r) && (r.status === "aborted" || r.status === "failed"))
+  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && (r.status === "aborted" || r.status === "failed"))
     .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
 }
 
