@@ -64,11 +64,7 @@ func TestAHandBackDraftSurvivesAClaimedGateTick(t *testing.T) {
 					}
 				})
 			})
-			w.talk(task)
-			w.must(task, "start_phase", `{"phase":"implement"}`)
-			w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-			w.must(task, "start_phase", `{"phase":"simplify"}`)
-			w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+			w.reachGate(task)
 			w.must(task, "decide", `{"action":"ask_person"}`)
 			w.chat(task, c.answer)
 			ctx := context.Background()
@@ -151,11 +147,7 @@ func TestAGateAuthorizationIsForItsHeads(t *testing.T) {
 		t.Run(c.first+" then "+c.again, func(t *testing.T) {
 			w := conducting(t)
 			task := w.task()
-			w.talk(task)
-			w.must(task, "start_phase", `{"phase":"implement"}`)
-			w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-			w.must(task, "start_phase", `{"phase":"simplify"}`)
-			w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+			w.reachGate(task)
 			w.must(task, "decide", `{"action":"ask_person"}`)
 			w.chat(task, c.first)
 			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {

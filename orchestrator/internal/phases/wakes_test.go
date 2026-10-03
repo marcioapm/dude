@@ -7,8 +7,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
+
+type wakeSweepWorld struct {
+	t     *testing.T
+	owner *pgx.Conn
+	org   string
+	s     *Syncer
+}
+
+func newWakeSweepWorld(t *testing.T) *wakeSweepWorld {
+	app, owner := dbtest.Open(t)
+	w := &wakeSweepWorld{t: t, owner: owner, org: dbtest.Org(t, owner),
+		s: &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, w.org)
+	return w
+}
+
+func (w *wakeSweepWorld) exec(sql string, args ...any) {
+	w.t.Helper()
+	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *wakeSweepWorld) count(sql string, args ...any) int {
+	w.t.Helper()
+	var n int
+	if err := w.owner.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
+}
 
 // At the batch's boundary: 200 tasks whose reasons must wait (their
 // conductors mid-turn), 200 sleeping conductors whose Run in flight has
@@ -17,23 +50,8 @@ import (
 // safety wake twice.
 func TestAReadyWakeIsNotCrowdedOutOfTheSweep(t *testing.T) {
 	ctx := context.Background()
-	app, owner := dbtest.Open(t)
-	org := dbtest.Org(t, owner)
-	exec := func(sql string, args ...any) {
-		t.Helper()
-		if _, err := owner.Exec(ctx, sql, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	count := func(sql string, args ...any) int {
-		t.Helper()
-		var n int
-		if err := owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
+	w := newWakeSweepWorld(t)
+	org, exec, count := w.org, w.exec, w.count
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
 		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, 400) n`, org)
 	// The ready task's id sorts after every other's: no accident of order
@@ -70,7 +88,8 @@ func TestAReadyWakeIsNotCrowdedOutOfTheSweep(t *testing.T) {
 	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_ready', $1, 'wi_zready', 'decision', 'k', 'ready to decide', now() - interval '1 minute')`, org)
 
-	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), WakeWindow: 15 * time.Second, SafetyAfter: time.Minute}
+	s := w.s
+	s.WakeWindow, s.SafetyAfter = 15*time.Second, time.Minute
 	if err := s.wakeConductors(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -103,23 +122,8 @@ func TestAReadyWakeIsNotCrowdedOutOfTheSweep(t *testing.T) {
 // is told in one sweep, and none of the 200.
 func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
 	ctx := context.Background()
-	app, owner := dbtest.Open(t)
-	org := dbtest.Org(t, owner)
-	exec := func(sql string, args ...any) {
-		t.Helper()
-		if _, err := owner.Exec(ctx, sql, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	count := func(sql string, args ...any) int {
-		t.Helper()
-		var n int
-		if err := owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
+	w := newWakeSweepWorld(t)
+	org, exec, count := w.org, w.exec, w.count
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
 		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, 200) n`, org)
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zready', $1, 'prj_'||$1, 201, 'T', 'G')`, org)
@@ -137,7 +141,8 @@ func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
 	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_ready', $1, 'wi_zready', 'decision', 'k', 'ready to decide', now() - interval '1 minute')`, org)
 
-	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), WakeWindow: 15 * time.Second, SafetyAfter: time.Hour}
+	s := w.s
+	s.WakeWindow, s.SafetyAfter = 15*time.Second, time.Hour
 	if err := s.wakeConductors(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -154,23 +159,8 @@ func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
 // briefing it never heard. Both are settled in one sweep.
 func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
 	ctx := context.Background()
-	app, owner := dbtest.Open(t)
-	org := dbtest.Org(t, owner)
-	exec := func(sql string, args ...any) {
-		t.Helper()
-		if _, err := owner.Exec(ctx, sql, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	count := func(sql string, args ...any) int {
-		t.Helper()
-		var n int
-		if err := owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
+	w := newWakeSweepWorld(t)
+	org, exec, count := w.org, w.exec, w.count
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
 		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, 302) n`, org)
 	// 300 ended conductors with nothing left, each having heard its briefing.
@@ -190,7 +180,7 @@ func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
 		VALUES ('cwk_brief', $1, 'wi_302', 'decision', 'k', 'never heard', now(), 'run_brief')`, org)
 	exec(`INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id) VALUES ($1, 'cwk_brief', 'run_brief')`, org)
 
-	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := w.s
 	if err := s.handOverUnheard(ctx); err != nil {
 		t.Fatal(err)
 	}

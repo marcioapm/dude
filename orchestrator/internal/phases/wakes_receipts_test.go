@@ -177,8 +177,8 @@ func TestABriefingIsHeardWhenRead(t *testing.T) {
 			}
 		})
 	}
-	// With no receipt to follow, accepted is heard, and a failure after
-	// it changes nothing.
+	// With no receipt to follow, accepted is heard; ending the conductor
+	// does not requeue its reason.
 	t.Run("accepted without a receipt", func(t *testing.T) {
 		w := newWakeWorld(t)
 		w.briefed()

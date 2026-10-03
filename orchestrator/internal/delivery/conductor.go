@@ -41,8 +41,7 @@ func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	return startConductor(ctx, tx, org, projectID, taskID, w, message, false)
 }
 
-// startConductor is StartConductor; with woken, the message is dude's wake
-// note, not a person's.
+// With woken, the message is dude's wake note, not a person's.
 func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
