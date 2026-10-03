@@ -89,8 +89,8 @@ export function attachmentWarning(attachments: ReadonlyArray<ComposerAttachment>
 // -------------------------------------------------------------------------
 
 export interface AttachDropZoneProps {
-  /** Files dropped or pasted on it. */
-  readonly onFiles: (files: File[]) => void;
+  /** Files dropped or pasted on it, and the element they were dropped or pasted on. */
+  readonly onFiles: (files: File[], on: EventTarget | null) => void;
   /** Off: no overlay, nothing taken, drags left to the browser (a finished session, another view). */
   readonly disabled?: boolean | undefined;
   /**
@@ -170,11 +170,11 @@ export function AttachDropZone({ onFiles, disabled, disabledReason, detail, take
         e.preventDefault();
         reset();
         const files = Array.from(e.dataTransfer.files);
-        if (!refused && files.length > 0) onFiles(files);
+        if (!refused && files.length > 0) onFiles(files, e.target);
       }}
       onPaste={takePaste ? (e) => {
         if (disabled || refused) return;
-        takePastedFiles(e, onFiles);
+        takePastedFiles(e, (files) => onFiles(files, e.target));
       } : undefined}
     >
       {children}

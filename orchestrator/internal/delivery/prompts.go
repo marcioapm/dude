@@ -47,6 +47,10 @@ type PromptInput struct {
 	// The branch the Run works on, and what it started from: what a saved
 	// prompt's {{run.branch}} and {{run.base_ref}} say.
 	Branch, BaseRef string
+	// The images the Run is given with its prompt, in the order lux gets
+	// them (TaskImages): each reference in the goal and criteria is
+	// written as its place in this list.
+	Images []PromptImage
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -302,12 +306,6 @@ var PromptRoleForPhase = map[string]string{
 // shown.
 var PromptRoles = []string{"conductor", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
 
-// TaskPromptPhases are the phases whose prompt is the task itself (Prompt:
-// the task, then what to do with it), so every Run of one — a retry
-// included — is given the images the task was described with. The other
-// phases are asked about the work done, with the task as context.
-var TaskPromptPhases = []string{PhaseInvestigate, PhaseImplement}
-
 // builtinInstructions is what each role is told to do, before the work it
 // is given: the part of a phase's prompt a person may rewrite (an
 // organization's prompt replaces it, a project's adds to or replaces that).
@@ -400,8 +398,13 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
+//
+// The briefing quotes the task's goal and criteria as written: each image
+// reference in it reads as the image the Run is given (in.Images), as in a
+// phase's prompt, and a saved prompt's {{task.goal}} does too.
 func ConductorPrompt(briefing string, in PromptInput) string {
-	sections := []string{briefing, "## How you work"}
+	in = in.withImages()
+	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), "## How you work"}
 	lead, _ := in.instructions(RoleConductor)
 	for _, s := range lead {
 		sections = append(sections, in.fill(s))
@@ -430,6 +433,9 @@ func Prompt(phase string, in PromptInput) string {
 	var sections []string
 	add := func(s ...string) { sections = append(sections, s...) }
 
+	// Before anything reads the goal or criteria: a saved prompt's
+	// {{task.goal}} reads them as the task section does.
+	in = in.withImages()
 	lead, tail := in.instructions(PromptRoleForPhase[phase])
 	for i, s := range lead {
 		lead[i] = in.fill(s)

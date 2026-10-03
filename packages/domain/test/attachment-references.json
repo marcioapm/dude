@@ -1,0 +1,22 @@
+[
+  ["See ![a](attachment:att_a) here", ["att_a"]],
+  ["![a](attachment:att_a \"title\") ![b](<attachment:att_b>) ![c](attachment:att_c 'x') ![d](<attachment:att_d> (t))", ["att_a", "att_b", "att_c", "att_d"]],
+  ["![a \\] b](attachment:att_esc)", ["att_esc"]],
+  ["![a\\\u2028b](attachment:att_ls)", ["att_ls"]],
+  ["![a](attachment:att_x\u00a0\"small\")", []],
+  ["![a](\u00a0attachment:att_x)", []],
+  ["![a](attachment:att_x\u000b)", []],
+  ["![a](attachment:att_x\u2003\"small\")", []],
+  ["![a](\tattachment:att_tab\t\"small\" )", ["att_tab"]],
+  ["![a [b] c](attachment:att_n)", []],
+  ["![a [b](attachment:att_open)", []],
+  ["![a \\[b\\] c](attachment:att_escn)", ["att_escn"]],
+  ["![shot.png](attachment:att_l1 \"small right\")", ["att_l1"]],
+  ["![shot.png](attachment:att_l2 \"320 left\")", ["att_l2"]],
+  ["![shot.png](attachment:att_l3 \"full\")", ["att_l3"]],
+  ["text ![shot.png](<attachment:att_l4> 'medium center wobbly') text", ["att_l4"]],
+  ["`![a](attachment:att_in)` and ![b](attachment:att_out)", ["att_out"]],
+  ["```\n![a](attachment:att_fence)\n```\t\n![b](attachment:att_after)", ["att_after"]],
+  ["```\n![a](attachment:att_fence)\n```\u00a0\n![b](attachment:att_still)", []],
+  ["![x](https://e.com/a.png) [y](attachment:att_l) ![z](attachment:other) ![w]()", []]
+]

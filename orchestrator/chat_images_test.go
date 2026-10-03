@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 )
@@ -43,18 +44,25 @@ func (w *world) upload(b bucket, id, task, name string, data []byte) {
 		id, w.org, task, name, len(data), key)
 }
 
-// The task's first prompt carries its images as workload.attachments, to
-// its first agent only.
-func TestATaskStartedWithAnImageGivesItToItsFirstAgent(t *testing.T) {
-	w := newWorld(t)
-	b := w.withImages()
-	wi := w.task()
-	w.upload(b, "att_design", wi, "design.png", screenshot)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	var spec struct {
+// describe sets a task's goal and criteria and attaches the images they
+// reference, as the backend's save does (syncTaskAttachments).
+func (w *world) describe(task, goal string, criteria ...string) {
+	w.t.Helper()
+	raw, _ := json.Marshal(criteria)
+	mustExec(w.t, w.owner, `UPDATE tasks SET goal = $2, acceptance_criteria = $3::jsonb WHERE id = $1`, task, goal, string(raw))
+	mustExec(w.t, w.owner, `UPDATE attachments SET for_prompt = false, attached_at = NULL WHERE task_id = $1 AND for_prompt`, task)
+	mustExec(w.t, w.owner, `UPDATE attachments SET for_prompt = true, attached_at = now() WHERE task_id = $1 AND id = ANY($2)`,
+		task, delivery.TaskImageIDs(goal, criteria))
+}
+
+// specImages are the images a lux Run's spec carried with its prompt, with
+// their bytes.
+func specImages(t *testing.T, spec []byte) []struct {
+	Name, ContentType string
+	Data              []byte
+} {
+	t.Helper()
+	var s struct {
 		Workload struct {
 			Attachments []struct {
 				Name, ContentType string
@@ -62,30 +70,111 @@ func TestATaskStartedWithAnImageGivesItToItsFirstAgent(t *testing.T) {
 			} `json:"attachments"`
 		} `json:"workload"`
 	}
-	if err := json.Unmarshal(w.lux.Runs()[0].Spec, &spec); err != nil {
+	if err := json.Unmarshal(spec, &s); err != nil {
 		t.Fatal(err)
 	}
-	got := spec.Workload.Attachments
-	if len(got) != 1 || got[0].Name != "design.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
-		t.Fatalf("the first agent's spec carried %+v", got)
+	return s.Workload.Attachments
+}
+
+// The images a task's text shows go with its first prompt as
+// workload.attachments, the goal's then the criteria's, each once, in
+// order of first appearance; the prompt names each by its place there.
+func TestATaskStartedWithImagesInItsTextGivesThemToItsFirstAgent(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	// A model of its own: the scripted agent's prompt is its script.
+	w.onModel("implementer", "llm-impl")
+	wi := w.task()
+	w.upload(b, "att_header", wi, "header.png", screenshot)
+	w.upload(b, "att_mock", wi, "mock.png", append([]byte("\x89PNG\r\n\x1a\n"), 1, 2, 3))
+	w.upload(b, "att_after", wi, "after.png", screenshot)
+	w.describe(wi, "The header ![header.png](attachment:att_header) overlaps the menu.\n\n"+
+		"It should look like ![mock.png](attachment:att_mock), and ![header.png](attachment:att_header) again.",
+		"Matches ![mock.png](attachment:att_mock)", "No overlap, as ![after.png](attachment:att_after) shows")
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
 	}
-	// The transcript's prompt turn names it.
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	got := specImages(t, w.lux.Runs()[0].Spec)
+	var names []string
+	for _, a := range got {
+		names = append(names, a.Name)
+	}
+	if want := []string{"header.png", "mock.png", "after.png"}; !slices.Equal(names, want) {
+		t.Fatalf("the first agent's spec carried %v, want %v", names, want)
+	}
+	if got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Errorf("the first image is %+v", got[0])
+	}
+	prompt := w.lux.Runs()[0].Prompt()
+	for _, want := range []string{
+		"The header [Image 1: header.png] overlaps the menu.\n\nIt should look like [Image 2: mock.png], and [Image 1: header.png] again.",
+		"- Matches [Image 2: mock.png]\n- No overlap, as [Image 3: after.png] shows",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	// The transcript's prompt turn names them, in the same order.
 	w.until("the prompt to reach the ledger", func() bool {
 		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
-			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
+			AND payload->'attachments'->0->>'id' = 'att_header' AND payload->'attachments'->2->>'id' = 'att_after'`, wi) == 1
 	})
-	// The reviewer after it is asked about the work, and not shown them.
-	w.until("a second phase", func() bool { return len(w.lux.Runs()) >= 2 })
-	if !strings.Contains(string(w.lux.Runs()[1].Spec), `"dude.phase":"review"`) {
-		t.Fatalf("the second Run is not the reviewer: %s", w.lux.Runs()[1].Spec)
+}
+
+// A reviewer checks the work against the goal and criteria: its Run is
+// given the images they show, numbered as the implementer's were.
+func TestAReviewerIsGivenTheTasksImages(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	w.onModel("reviewer", "llm-review")
+	wi := w.task()
+	w.upload(b, "att_goal", wi, "goal.png", screenshot)
+	w.upload(b, "att_crit", wi, "evidence.png", screenshot)
+	w.describe(wi, "Make the page look right: ![goal.png](attachment:att_goal)", "Matches ![evidence.png](attachment:att_crit)")
+	w.deliver(wi)
+	w.until("a reviewer", func() bool {
+		for _, r := range w.lux.Runs() {
+			if strings.Contains(string(r.Spec), `"dude.phase":"review"`) {
+				return true
+			}
+		}
+		return false
+	})
+	for _, r := range w.lux.Runs() {
+		if !strings.Contains(string(r.Spec), `"dude.phase":"review"`) {
+			continue
+		}
+		if got := promptImages(t, r.Spec); !slices.Equal(got, []string{"goal.png", "evidence.png"}) {
+			t.Errorf("the reviewer was given %v", got)
+		}
+		if p := r.Prompt(); !strings.Contains(p, "- Matches [Image 2: evidence.png]") || !strings.Contains(p, "[Image 1: goal.png]") {
+			t.Errorf("the reviewer's prompt:\n%s", p)
+		}
 	}
-	if got := promptImages(t, w.lux.Runs()[1].Spec); len(got) != 0 {
-		t.Errorf("the reviewer was given the prompt's images: %v", got)
+}
+
+// A reference to an image that is not the task's to show — another
+// task's, or one never attached — is no error: the agent reads that it is
+// unavailable, and is given none.
+func TestAReferenceToAnImageNotTheTasksReadsAsUnavailable(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	w.onModel("implementer", "llm-impl")
+	wi, other := w.task(), w.task()
+	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
+	w.describe(other, "Theirs: ![theirs.png](attachment:att_theirs)")
+	w.describe(wi, "See ![theirs.png](attachment:att_theirs) and ![gone.png](attachment:att_gone) and ![unsent.png](attachment:att_unsent).")
+	// This task's own upload, referenced but not attached: liable to be swept, so not the agent's.
+	w.upload(b, "att_unsent", wi, "unsent.png", screenshot)
+	w.deliver(wi)
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	if got := promptImages(t, w.lux.Runs()[0].Spec); len(got) != 0 {
+		t.Errorf("the agent was given %v", got)
 	}
-	// Once given, the prompt takes no more.
-	w.upload(b, "att_late", wi, "late.png", screenshot)
-	if status, _ := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_late"}}); status != 409 {
-		t.Errorf("images were added to a prompt already given: %d", status)
+	if p := w.lux.Runs()[0].Prompt(); !strings.Contains(p,
+		"See [Image unavailable: theirs.png] and [Image unavailable: gone.png] and [Image unavailable: unsent.png].") {
+		t.Errorf("the prompt:\n%s", p)
 	}
 }
 
@@ -276,16 +365,17 @@ func promptImages(t *testing.T, spec []byte) []string {
 	return names
 }
 
-// The task's images go with every Run given the task as its prompt: an
-// implementer that failed before its agent saw them is retried with them.
+// The task's images go with every Run given the task: an implementer that
+// failed before its agent saw them is retried with them.
 func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
 	w := newWorld(t)
 	b := w.withImages()
 	wi := w.task()
 	w.upload(b, "att_design", wi, "design.png", screenshot)
+	w.describe(wi, "Build ![design.png](attachment:att_design)")
 	// Missing the first time: the first implementer fails at submit.
 	delete(b, "attachments/att_design")
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
 		t.Fatalf("deliver: %d %v", status, body)
 	}
 	w.until("delivery to stop for a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
@@ -312,84 +402,15 @@ func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
 	})
 }
 
-// A delivery whose workflow could not start is asked again: its images are
-// the last set named, in its order — already the prompt's ones go again,
-// and those no longer named are let go, as if never sent.
-func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
+// An image the task's text shows is the prompt's: a steer cannot take it.
+func TestASteerCannotTakeTheTasksImage(t *testing.T) {
 	w := newWorld(t)
 	b := w.withImages()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.upload(b, "att_design", wi, "design.png", screenshot)
-	w.upload(b, "att_a", wi, "a.png", screenshot)
-	w.upload(b, "att_b", wi, "b.png", screenshot)
-	// The workflow cannot start, for this organization only.
-	mustExec(t, w.owner, fmt.Sprintf(`CREATE FUNCTION refuse_%[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'workflow store down'; END $$;
-		CREATE TRIGGER refuse_%[1]s BEFORE INSERT ON workflow_runs FOR EACH ROW
-		WHEN (NEW.organization_id = '%[1]s') EXECUTE FUNCTION refuse_%[1]s()`, w.org))
-	failing := func(ids ...string) {
-		t.Helper()
-		if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": ids}); status != 500 {
-			t.Fatalf("deliver %v with the workflow store down: %d %v", ids, status, body)
-		}
-	}
-	// What the chip's ✕ (DELETE /v1/attachments/{id}) needs: not sent.
-	unsent := func(id string) bool {
-		return w.count(`SELECT count(*) FROM attachments WHERE id = $1 AND NOT for_prompt AND attached_at IS NULL`, id) == 1
-	}
-	// A different set: a.png goes back to the tray's.
-	failing("att_a")
-	failing("att_b")
-	if !unsent("att_a") {
-		t.Error("an image no longer named is still the prompt's")
-	}
-	// A smaller set: a.png goes back again.
-	failing("att_a", "att_b")
-	failing("att_b")
-	if !unsent("att_a") {
-		t.Error("an image left out of a smaller set is still the prompt's")
-	}
-	failing("att_design")
-	// Every image removed: a delivery asked again with none sends none —
-	// whether it names an empty list or, as the web app does, none at all.
-	bare := w.task()
-	w.upload(b, "att_removed", bare, "removed.png", screenshot)
-	deliverBare := func(body map[string]any, want int) {
-		t.Helper()
-		if status, out := w.call("/internal/tasks/"+bare+"/deliver", body); status != want {
-			t.Fatalf("deliver %v: %d %v, want %d", body, status, out, want)
-		}
-	}
-	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
-	deliverBare(map[string]any{}, 500)
-	if !unsent("att_removed") {
-		t.Error("an image removed from a delivery asked again naming none is still the prompt's")
-	}
-	deliverBare(map[string]any{"attachmentIds": []string{"att_removed"}}, 500)
-	mustExec(t, w.owner, fmt.Sprintf(`DROP TRIGGER refuse_%[1]s ON workflow_runs; DROP FUNCTION refuse_%[1]s()`, w.org))
-	deliverBare(map[string]any{"attachmentIds": []string{}}, 201)
-	if !unsent("att_removed") {
-		t.Error("an image removed from a delivery asked again with none is still the prompt's")
-	}
-	w.until("the bare task's implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); len(got) != 0 {
-		t.Fatalf("a delivery asked again with no images gave the implementer %v", got)
-	}
-
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_b", "att_design"}}); status != 201 {
-		t.Fatalf("deliver again: %d %v", status, body)
-	}
-	// Deliver pressed again at once (no images: the task's own button)
-	// is the same delivery, and does not take its images away.
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 200 {
-		t.Fatalf("deliver a delivery already started: %d %v", status, body)
-	}
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 2 })
-	if got := promptImages(t, w.lux.Runs()[1].Spec); !slices.Equal(got, []string{"b.png", "design.png"}) {
-		t.Fatalf("the implementer was given %v", got)
-	}
-	// It was sent, with the prompt: a steer cannot take it.
+	w.describe(wi, "Build ![design.png](attachment:att_design)")
+	w.deliver(wi)
 	var runID string
 	w.until("the implementer to run", func() bool {
 		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
@@ -399,7 +420,7 @@ func TestADeliveryAskedAgainKeepsItsImages(t *testing.T) {
 	if want := "image att_design was already sent"; status != 400 || errorMessage(body) != want {
 		t.Errorf("a steer naming the prompt's image: %d %q, want 400 %q", status, errorMessage(body), want)
 	}
-	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_design' AND for_prompt AND attached_at IS NOT NULL`); n != 1 {
+	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_design' AND for_prompt AND directive_id IS NULL`); n != 1 {
 		t.Errorf("the image is not the prompt's")
 	}
 }
@@ -538,5 +559,46 @@ func TestAnImageSteerToAPausedRunGoesAfterTheResume(t *testing.T) {
 	}
 	if bodies := w.lux.InputBodies(lr.ID, dir); len(bodies) != 1 || !strings.Contains(bodies[0], "look at this") {
 		t.Errorf("/input for the steer got %q", bodies)
+	}
+}
+
+// A task's conductor is briefed with the task's goal and criteria, so it
+// is given their images as a phase is: workload.attachments in order of
+// first appearance, each reference read as its place there, a missing one
+// as unavailable, and no `attachment:` URL anywhere in its prompt.
+func TestAConductorIsGivenTheTasksImages(t *testing.T) {
+	// A model of its own: the scripted agent's prompt is its script.
+	w := conductorWorld(t, "llm-conductor")
+	b := w.withImages()
+	wi := w.task()
+	w.upload(b, "att_cgoal", wi, "goal.png", screenshot)
+	w.upload(b, "att_ccrit", wi, "evidence.png", screenshot)
+	w.describe(wi, "Make it look like ![goal.png](attachment:att_cgoal), not ![gone.png](attachment:att_cgone).",
+		"Matches ![evidence.png](attachment:att_ccrit)")
+	if status, out := w.chat(wi, "what does the mock show?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the conductor to be submitted", func() bool { return w.conductorSpec() != nil })
+	var conductor []byte
+	for _, r := range w.lux.Runs() {
+		if strings.Contains(string(r.Spec), `"dude.role":"conductor"`) {
+			conductor = r.Spec
+		}
+	}
+	if got := promptImages(t, conductor); !slices.Equal(got, []string{"goal.png", "evidence.png"}) {
+		t.Errorf("the conductor was given %v", got)
+	}
+	prompt := w.conductorSpec().Workload.Prompt
+	for _, want := range []string{
+		"Make it look like [Image 1: goal.png], not [Image unavailable: gone.png].",
+		"- Matches [Image 2: evidence.png]",
+		"what does the mock show?",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the conductor's prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "attachment:") {
+		t.Errorf("the conductor's prompt carries a raw reference:\n%s", prompt)
 	}
 }

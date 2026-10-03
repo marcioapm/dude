@@ -72,7 +72,7 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
 		"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
 	fmt.Fprintf(&b, "\n\n## The task\n\n%s · %s · status %s", key, taskID, status)
-	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", clip(strings.TrimSpace(goal), briefGoalChars))
+	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", briefGoal(goal))
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
 	if len(ac) > 0 {
@@ -82,7 +82,7 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 				fmt.Fprintf(&b, "\n- … and %d more", len(ac)-briefCriteria)
 				break
 			}
-			fmt.Fprintf(&b, "\n- %s", clip(oneLine(c), briefCriterionChars))
+			fmt.Fprintf(&b, "\n- %s", clipTaskText(oneLine(c), briefCriterionChars))
 		}
 	}
 
@@ -279,6 +279,47 @@ func clip(s string, n int) string {
 	}
 	r := []rune(s)
 	return string(r[:n-1]) + "…"
+}
+
+// clipTaskText is clip for a task's goal or criterion, which
+// ConductorPrompt reads image references in: a cut never splits a
+// reference, and never makes one out of a code span whose closer it cut
+// off; either way it cuts before that reference instead.
+func clipTaskText(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	cut := len(string([]rune(s)[:n-1]))
+	whole := map[int]bool{}
+	for _, r := range ImageRefs(s) {
+		whole[r.From] = true
+		if r.From < cut && cut < r.To {
+			cut = r.From
+		}
+	}
+	for _, r := range ImageRefs(s[:cut]) {
+		if !whole[r.From] {
+			cut = r.From
+			break
+		}
+	}
+	return s[:cut] + "…"
+}
+
+// briefGoal is the task's goal as the briefing shows it: clipped, with a
+// fence it leaves open closed.
+func briefGoal(goal string) string {
+	return closeFence(clipTaskText(strings.TrimSpace(goal), briefGoalChars))
+}
+
+// closeFence closes a fence the goal leaves open, cut or not, so the
+// briefing after it is not read as code. Only the goal keeps its lines: a
+// criterion is one line after "- ", which never opens a fence.
+func closeFence(s string) string {
+	if f := UnclosedFence(s); f != "" {
+		return s + "\n" + f
+	}
+	return s
 }
 
 func firstLine(s string) string {
