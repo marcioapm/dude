@@ -5,6 +5,12 @@
  * ./schema.ts mirrors them for typed queries but never drives DDL). Each file
  * runs once, inside a transaction, and is recorded in schema_migrations.
  *
+ * A file whose first line is `-- dude:no-transaction` runs outside one, for
+ * a statement Postgres refuses in a transaction (CREATE INDEX CONCURRENTLY):
+ * one statement, recorded once it succeeded. It must be safe to run again
+ * (IF NOT EXISTS), as a crash between the statement and its record runs it
+ * again on the next migrate.
+ *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
  *
@@ -104,6 +110,13 @@ function checksum(contents: string): string {
   return createHash("sha256").update(contents).digest("hex");
 }
 
+/** The marker on a migration's first line that runs it outside a transaction. */
+export const NO_TRANSACTION = "-- dude:no-transaction";
+
+export function outsideTransaction(contents: string): boolean {
+  return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION;
+}
+
 export async function migrate(
   databaseUrl: string,
   opts: { log?: (msg: string) => void } = {},
@@ -137,6 +150,13 @@ export async function migrate(
       }
 
       log(`applying ${file.name}`);
+      if (outsideTransaction(contents)) {
+        await sql.unsafe(contents);
+        await sql`INSERT INTO schema_migrations (version, name, checksum)
+                  VALUES (${file.version}, ${file.name}, ${sum})`;
+        applied.push(file.name);
+        continue;
+      }
       await sql.begin(async (tx) => {
         await tx.unsafe(contents);
         await tx`INSERT INTO schema_migrations (version, name, checksum)

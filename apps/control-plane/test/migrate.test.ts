@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listMigrationFiles, migrate, repoMigrationsDir } from "../src/db/migrate.ts";
+import { listMigrationFiles, migrate, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -190,6 +190,40 @@ test("002 strips every privilege from a dude_app that already holds them", async
   }
 }, 120_000);
 
+test("074 builds the Runs index outside a transaction, records it, and runs again after a crash before its record", async () => {
+  const url = await createDatabase();
+  const sql = new SQL(url);
+  try {
+    await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
+      checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
+    for (const file of (await listMigrationFiles()).filter((f) => f.version < "074")) {
+      const contents = await file.contents();
+      await sql.begin(async (tx) => {
+        await tx.unsafe(contents);
+        await tx`INSERT INTO schema_migrations (version, name, checksum)
+          VALUES (${file.version}, ${file.name}, ${createHash("sha256").update(contents).digest("hex")})`;
+      });
+    }
+    // A concurrent build refuses a transaction: applied in one, 074 fails.
+    const file074 = (await listMigrationFiles()).find((f) => f.version === "074")!;
+    expect(outsideTransaction(await file074.contents())).toBe(true);
+    await expect(sql.begin(async (tx) => { await tx.unsafe(await file074.contents()); })).rejects.toThrow();
+
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_runs_conductor_run_idx.sql"]);
+    const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
+    expect(await valid()).toEqual([true]);
+    expect((await recorded(url)).at(-1)?.name).toBe("074_runs_conductor_run_idx.sql");
+
+    // Built, then the process died before it was recorded: the next migrate builds nothing twice.
+    await sql`DELETE FROM schema_migrations WHERE version = '074'`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_runs_conductor_run_idx.sql"]);
+    expect(await valid()).toEqual([true]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
 test("063 makes waiting work due on any clock, and keeps a refusal's backoff", async () => {
   // Seed work under 062 before upgrading as the non-superuser owner.
   const url = await ownedByANonSuperuser();
@@ -228,6 +262,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "071_attachments.sql",
       "072_conductor.sql",
       "073_conductor_decisions.sql",
+      "074_runs_conductor_run_idx.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.

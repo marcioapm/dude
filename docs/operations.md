@@ -323,6 +323,14 @@ mode.
    what is new, each file in a transaction, and is safe to run again. It
    refuses a migration whose file changed after it was applied.
    `dude-migrate --status` lists applied and pending migrations.
+   A file whose first line is `-- dude:no-transaction` runs outside a
+   transaction: one statement Postgres refuses inside one, such as
+   `CREATE INDEX CONCURRENTLY` (074 builds `runs_conductor_run_idx` so,
+   without blocking Runs). It is recorded once it succeeds; if the process
+   dies in between, the next run repeats it, which its `IF NOT EXISTS`
+   makes a no-op. A concurrent build interrupted part-way leaves an invalid
+   index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`) and run
+   `dude-migrate` again.
 3. Switch to the new release and, if the agent image was rebuilt with the
    new `dude` CLI, set `DUDE_AGENT_IMAGE` to its digest; then restart
    `dude-orchestrator` and `dude-backend`.

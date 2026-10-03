@@ -5,10 +5,11 @@
 -- The phase Runs a task's conductor started (start_phase), by its Run: they
 -- sit under it in the task's sessions and Chat, and one of them asking a
 -- question wakes it. NULL for the workflow's own. conductor_note is what
--- the conductor asked of the Run, added to its prompt.
+-- the conductor asked of the Run, added to its prompt. Nullable with no
+-- default, so adding them changes no row; their index is 074's, built
+-- without holding this table's lock.
 ALTER TABLE runs ADD COLUMN conductor_run_id text REFERENCES runs(id) ON DELETE SET NULL;
 ALTER TABLE runs ADD COLUMN conductor_note text CHECK (length(conductor_note) <= 4000);
-CREATE INDEX runs_conductor_run_idx ON runs (conductor_run_id) WHERE conductor_run_id IS NOT NULL;
 
 -- The pull request gate's question: the heads (repository → commit) it was
 -- asked at. Its answer opens the pull request only while the task is still
