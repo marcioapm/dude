@@ -1,4 +1,4 @@
--- 073_task_inline_images.sql — a task's images sit in its text.
+-- 074_task_inline_images.sql — a task's images sit in its text.
 --
 -- A task's goal and acceptance criteria are Markdown, and an image belongs
 -- at a place in them: `![name](attachment:att_…)`. The backend parses the
