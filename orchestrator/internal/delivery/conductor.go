@@ -124,16 +124,19 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 	return err
 }
 
-// Unheard (SQL, over runs r): an ended conductor holding input it never
-// read, or a wake note it was started with and never heard, for the syncer
-// to hand over (HandOver). The candidates come from unsettled directives
-// (directives_unsettled_idx) and unheard briefings
-// (conductor_wake_attempts_briefing_idx) and are joined to runs by key.
-// One IN over their UNION: an OR of two INs makes the planner scan all runs.
-const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', 'aborted')
-	AND r.id IN (SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
+// Unheard (SQL, a FROM source yielding r with id, organization_id,
+// project_id, task_id, status and ended_at): an ended conductor holding
+// input it never read, or a wake note it was started with and never heard,
+// for the syncer to hand over (HandOver). The candidates come from
+// unsettled directives (directives_unsettled_idx) and unheard briefings
+// (conductor_wake_attempts_briefing_idx). Each reaches runs through a
+// LATERAL primary-key lookup; OFFSET 0 keeps the planner from flattening it
+// into a join, which with retained attempt history it hashes over all runs.
+const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
 	  UNION SELECT a.conductor_run_id FROM conductor_wake_attempts a
-	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL))`
+	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL) c
+	CROSS JOIN LATERAL (SELECT u.id, u.organization_id, u.project_id, u.task_id, u.status, u.ended_at FROM runs u
+	  WHERE u.id = c.run_id AND u.role = 'conductor' AND u.status IN ('completed', 'failed', 'aborted') OFFSET 0) r`
 
 // HandOver settles what a person sent an ended conductor and it never
 // read. With replace, each message goes to the task's live conductor, or
