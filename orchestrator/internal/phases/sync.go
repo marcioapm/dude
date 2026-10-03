@@ -1768,6 +1768,23 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 				return true, s.failDirective(ctx, r, d.ID, reason)
 			}
 		}
+		// Claimed just before the send, against its state now, not the
+		// batch's: a wake note's retry withdrawn since is not sent, and one
+		// claimed is not withdrawn (delivery.heardTx). A claim survives a
+		// failed send, so the retry with the same request id may go. Not
+		// guarded on delivered_at: an interrupt alone is delivered with its
+		// words' read and is still sent.
+		var claimed bool
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `WITH c AS (UPDATE directives SET claimed_at = COALESCE(claimed_at, now())
+				WHERE id = $1 AND sent_at IS NULL AND failed_at IS NULL RETURNING 1)
+				SELECT EXISTS (SELECT 1 FROM c)`, d.ID).Scan(&claimed)
+		}); err != nil {
+			return true, err
+		}
+		if !claimed {
+			continue
+		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
 		err := s.Lux.Input(ctx, r.LuxRunID, lux.InputRequest{Text: text, RequestID: d.ID, Interrupt: d.Interrupt, Attachments: images})
