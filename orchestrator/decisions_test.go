@@ -895,6 +895,7 @@ func TestATakeOverWhileAStepRunsTakesItsDecision(t *testing.T) {
 		{"awaitReview", delivery.PointReviewed, "fix"},
 		{"awaitFix", delivery.PointFixed, "review"},
 		{"test", delivery.PointBeforePR, ""},
+		{"awaitPullRequest", delivery.PointPRFeedback, "fix"},
 	} {
 		t.Run(c.step, func(t *testing.T) {
 			w := conducting(t)
@@ -913,7 +914,14 @@ func TestATakeOverWhileAStepRunsTakesItsDecision(t *testing.T) {
 			w.runtime.Register(def)
 			w.deliver(task)
 			before := 0
-			if c.nextPhase != "" {
+			if c.step == "awaitPullRequest" {
+				// The feedback arrives on the open pull request; its fixes
+				// before are the review loop's.
+				w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+				before = w.phaseRuns(task, c.nextPhase)
+				w.gh.Comment(1, "alice", "Please rename the greeting.")
+				w.until(c.point, func() bool { w.sync(); return w.decisionAt(task) == c.point })
+			} else if c.nextPhase != "" {
 				w.until("the step", func() bool { return w.decider(task) == "conductor" })
 				before = w.phaseRuns(task, c.nextPhase)
 			}
@@ -924,7 +932,7 @@ func TestATakeOverWhileAStepRunsTakesItsDecision(t *testing.T) {
 			if c.nextPhase != "" && w.phaseRuns(task, c.nextPhase) != before {
 				t.Errorf("a %s Run started without the conductor's decision", c.nextPhase)
 			}
-			if len(w.gh.Pulls()) != 0 {
+			if c.step != "awaitPullRequest" && len(w.gh.Pulls()) != 0 {
 				t.Errorf("a pull request opened without the conductor's decision")
 			}
 			w.wokenWith(task, "Decision waiting")
