@@ -214,7 +214,7 @@ func heardTx(ctx context.Context, tx pgx.Tx, wakeIDs []string, heard string) err
 		FROM conductor_wake_attempts o
 		JOIN directives d ON d.id = o.directive_id JOIN runs r ON r.id = d.run_id
 		WHERE o.wake_id = ANY($1) AND o.directive_id <> $2
-		  AND d.sent_at IS NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL`, wakeIDs, heard)
+		  AND d.sent_at IS NULL AND d.claimed_at IS NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL`, wakeIDs, heard)
 	if err != nil {
 		return err
 	}
@@ -223,10 +223,13 @@ func heardTx(ctx context.Context, tx pgx.Tx, wakeIDs []string, heard string) err
 	if err != nil {
 		return err
 	}
+	// A retry the sender claimed may be in flight: it counts as sent, two
+	// notes heard rather than a reason lost. The claim's row lock orders
+	// the two, and whichever commits second sees the other.
 	const why = "an earlier note with its reasons was heard"
 	for _, d := range retries {
 		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2
-			WHERE id = $1 AND sent_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, d.ID, why)
+			WHERE id = $1 AND sent_at IS NULL AND claimed_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, d.ID, why)
 		if err != nil {
 			return err
 		}

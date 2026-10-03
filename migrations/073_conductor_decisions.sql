@@ -19,6 +19,11 @@ ALTER TABLE runs ADD CONSTRAINT runs_conductor_note_len CHECK (length(conductor_
 -- at those heads. NULL for every other question.
 ALTER TABLE questions ADD COLUMN pr_gate_heads jsonb;
 
+-- A directive the sender took to send to lux, before lux has it (sent_at):
+-- claimed, it may be in flight, so withdrawing a wake note's retry leaves
+-- it to be heard. Nullable with no default: adding it changes no row.
+ALTER TABLE directives ADD COLUMN claimed_at timestamptz;
+
 -- Why a task's conductor is to be woken, one row per line of its note,
 -- until a note listing them is queued for it: reasons arriving within the
 -- window, or while it is mid-turn, are one turn. A line is fixed-size facts
@@ -57,10 +62,11 @@ GRANT SELECT ON conductor_wakes TO dude_sweeper;
 
 -- Each note that carried a reason: the directive queued for a live
 -- conductor, or (directive NULL) the briefing a new conductor was started
--- with. Heard: its consumption receipt, or the briefing's prompt accepted;
--- failed: the directive failed, or the conductor ended without hearing its
--- briefing. A reason heard by any attempt is settled, and a retry not yet
--- sent is withdrawn.
+-- with. Heard: its consumption receipt, or the briefing's prompt read (or
+-- accepted with no read receipt to follow); failed: the directive failed,
+-- or the conductor ended without hearing its briefing. A reason heard by
+-- any attempt is settled, and a retry not yet claimed for sending is
+-- withdrawn.
 CREATE TABLE conductor_wake_attempts (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   organization_id  text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
