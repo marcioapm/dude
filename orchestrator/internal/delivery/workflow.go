@@ -109,9 +109,13 @@ type State struct {
 	// an Open or Draft at them, whoever decides by then.
 	GateRequired bool `json:"gateRequired,omitempty"`
 	// The heads the gate was authorized at, and as a draft or not: written
-	// with GateOpened, outside the steps (AuthorizeGateTx). GateOpened and
-	// Draft are latched and outlive a head change; this decides.
+	// with GateOpened, outside the steps (AuthorizeGateTx) or in a step's
+	// transition (authorizeAtCommitTx). GateOpened and Draft are latched
+	// and outlive a head change; this decides.
 	GateAt *GateAt `json:"gateAt,omitempty"`
+	// The step read an answer authorizing the gate: its transition records
+	// it (recheck). Never persisted.
+	authorizeGate bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -708,6 +712,11 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 		if !ok {
 			return w.parkAtGate(ctx, sc, st, true)
+		}
+		if st.authorizeGate {
+			// Opened by the next run of this step, on the authorization
+			// its transition records.
+			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
 	}
 	if st.GateRequired && st.GateAt != nil {

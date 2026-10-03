@@ -156,11 +156,21 @@ type Routed struct {
 // Recheck): in the transition's transaction, a decision point the step
 // reached is the conductor's when the row, locked now, says the conductor
 // decides — whether it did when the step was claimed, or took over while
-// the step's mechanics ran — and the policy's otherwise.
+// the step's mechanics ran — and the policy's otherwise. A gate
+// authorization the step asked for (gateAuthorized) is recorded here too.
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	st, ok := res.State.(*State)
-	if !ok || st.Routed == nil {
+	if !ok || st.Routed == nil && !st.authorizeGate {
 		return res, false, nil
+	}
+	if st.authorizeGate {
+		st.authorizeGate = false
+		if err := authorizeAtCommitTx(ctx, tx, sc, st); err != nil {
+			return res, false, err
+		}
+		if st.Routed == nil {
+			return res, true, nil
+		}
 	}
 	r := st.Routed
 	st.Routed = nil
@@ -258,18 +268,17 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 
 // gateAuthorized says whether a gate the conductor entered may open under
 // Deliver: an authorization at the heads now (gateHeld), or the person's
-// Open or Draft at them, recorded as one (Draft as the draft).
+// Open or Draft at them. The answer is only read here; the step's result
+// asks for it to be recorded (authorizeGate), which the transition does
+// under the row lock and the step's lease (authorizeAtCommitTx). Until
+// then gateHeld is false: the opening waits for the recorded one.
 func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
 	if st.gateHeld() {
 		return true, nil
 	}
-	var draft bool
 	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		var err error
-		if draft, err = gate(ctx, tx, st); err != nil {
-			return err
-		}
-		return AuthorizeGateTx(ctx, tx, sc.WorkflowRunID, st, draft)
+		_, err := gate(ctx, tx, st)
+		return err
 	})
 	var refused Refusal
 	if errors.As(err, &refused) {
@@ -278,8 +287,44 @@ func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil {
 		return false, err
 	}
-	st.Draft, st.GateOpened = draft, true
+	if w.s.GateRead != nil {
+		w.s.GateRead()
+	}
+	st.authorizeGate = true
 	return true, nil
+}
+
+// authorizeAtCommitTx records the gate authorization a step asked for, in
+// its transition's transaction: the row locked, the person's answer read
+// again (the latest gate question, at the heads the row holds), so an
+// answer given since the step read it wins. A transition whose lease was
+// lost fails its guarded UPDATE, rolling this back with it. Heads moved
+// since the step's read, or an answer that no longer authorizes, record
+// nothing.
+func authorizeAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State) error {
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT state->'heads' FROM workflow_runs WHERE id = $1 FOR UPDATE`,
+		sc.WorkflowRunID).Scan(&raw); err != nil {
+		return err
+	}
+	var heads map[string]string
+	_ = json.Unmarshal(raw, &heads)
+	if !maps.Equal(nonNilMap(heads), nonNilMap(st.Heads)) {
+		return nil
+	}
+	draft, err := gate(ctx, tx, st)
+	var refused Refusal
+	if errors.As(err, &refused) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := AuthorizeGateTx(ctx, tx, sc.WorkflowRunID, st, draft); err != nil {
+		return err
+	}
+	st.Draft, st.GateOpened = draft, true
+	return nil
 }
 
 // gateHeld says the gate was authorized at the heads the delivery is at
