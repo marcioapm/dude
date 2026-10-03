@@ -32,9 +32,12 @@ CREATE TABLE conductor_wakes (
   key              text NOT NULL,
   line             text NOT NULL CHECK (length(line) <= 300),
   created_at       timestamptz NOT NULL DEFAULT now(),
-  -- Set when a note carrying it was queued for a conductor, which it names.
+  -- Set when a note carrying it was queued for a conductor, which it names,
+  -- and the directive that carries it (NULL when it was a new conductor's
+  -- briefing). The directive failing puts the reason back to pending.
   delivered_at     timestamptz,
   conductor_run_id text REFERENCES runs(id) ON DELETE SET NULL,
+  directive_id     text REFERENCES directives(id) ON DELETE SET NULL,
   UNIQUE (task_id, key)
 );
 CREATE INDEX conductor_wakes_pending_idx ON conductor_wakes (task_id, created_at) WHERE delivered_at IS NULL;

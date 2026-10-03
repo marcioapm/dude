@@ -123,23 +123,50 @@ func (w *world) woken(task string) []string {
 	return out
 }
 
-// wokenWith waits for a note to the conductor saying want, and that the
-// conductor heard it (its input).
+// wokenWith waits for a note to the conductor saying want, and for the
+// conductor to have read it: lux's read receipt for the note's input, or,
+// for a conductor dude started with it, its first prompt carrying it.
 func (w *world) wokenWith(task, want string) string {
 	w.t.Helper()
-	var note string
+	var note, runID, directive string
 	w.until("a note saying "+want, func() bool {
-		for _, n := range w.woken(task) {
+		rows, err := w.owner.Query(context.Background(), `SELECT payload->>'text', run_id, COALESCE(payload->>'directiveId', '')
+			FROM events WHERE task_id = $1 AND event_type = 'conductor.woken' ORDER BY cursor DESC`, task)
+		if err != nil {
+			w.t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n, r, d string
+			if err := rows.Scan(&n, &r, &d); err != nil {
+				w.t.Fatal(err)
+			}
 			if strings.Contains(n, want) {
-				note = n
+				note, runID, directive = n, r, d
 				return true
 			}
 		}
 		return false
 	})
-	w.until("the conductor to hear it", func() bool {
-		return w.count(`SELECT count(*) FROM directives d JOIN events e ON e.task_id = d.task_id AND e.event_type = 'conductor.woken'
-			AND e.payload->>'directiveId' = d.id WHERE d.task_id = $1 AND d.delivered_at IS NULL`, task) == 0
+	w.until("the conductor to read it", func() bool {
+		lr := w.luxRunOf(runID)
+		if lr == "" {
+			return false
+		}
+		if directive == "" {
+			for _, r := range w.lux.Runs() {
+				if r.ID == lr {
+					return strings.Contains(r.Prompt(), note)
+				}
+			}
+			return false
+		}
+		for _, rec := range w.lux.Records(lr) {
+			if data, _ := rec["data"].(map[string]any); rec["type"] == lux.RecordInputConsumed && data["requestId"] == directive {
+				return true
+			}
+		}
+		return false
 	})
 	return note
 }
@@ -614,6 +641,54 @@ func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
 	}
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("the safety net woke it %d times", n)
+	}
+}
+
+// A wake note lux fails before the conductor read it gives its reasons
+// back: the next sweep tells the conductor again. A note the conductor
+// read is never told twice, even if a failure is reported after.
+func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	conductor := w.talk(task)
+	w.lux.InputGate = make(chan struct{})
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:lost", "the note lux lost")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	w.until("the first note", func() bool {
+		_ = w.owner.QueryRow(ctx, `SELECT COALESCE(payload->>'directiveId', '') FROM events WHERE task_id = $1
+			AND event_type = 'conductor.woken' ORDER BY cursor LIMIT 1`, task).Scan(&first)
+		return first != "" && w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, first) == 1
+	})
+	w.lux.FailInput(w.luxRunOf(conductor), first, "the agent stopped before reading it")
+	w.until("the note again", func() bool { return len(w.woken(task)) == 2 })
+	notes := w.woken(task)
+	if !strings.Contains(notes[1], "the note lux lost") {
+		t.Errorf("the second note: %q", notes[1])
+	}
+	close(w.lux.InputGate)
+	w.wokenWith(task, "the note lux lost")
+	for range 3 {
+		w.pump()
+	}
+	if n := len(w.woken(task)); n != 2 {
+		t.Errorf("%d notes, want the failed one and its retelling", n)
+	}
+
+	// Read: a failure reported after changes nothing.
+	var second string
+	_ = w.owner.QueryRow(ctx, `SELECT payload->>'directiveId' FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		ORDER BY cursor DESC LIMIT 1`, task).Scan(&second)
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error { return delivery.RequeueWakesTx(ctx, tx, second) }); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d reasons pending again after the conductor read their note", n)
 	}
 }
 
