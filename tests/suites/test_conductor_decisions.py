@@ -145,7 +145,8 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     assert changes == [{"from": "policy", "to": "conductor", "why": "a person wrote in Chat"}]
 
     # Feedback now waits on the conductor: no fixer until it decides.
-    fixes = len(_phases(client, task["id"], "fix"))
+    before = {r["id"] for r in _phases(client, task["id"], "fix")}
+    fixes = len(before)
     fake_github.comment(pr["number"], "Please also note the date in FIXED.md.", path="FIXED.md")
     _waiting_on(client, task["id"], "pull_request_feedback", "the feedback never waited on the conductor")
     assert len(_phases(client, task["id"], "fix")) == fixes
@@ -153,6 +154,13 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
                message="the conductor was never woken for the feedback")
     _say(client, task["id"], "Fix it.", _tool("start_phase", {"phase": "fix"}))
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 1, timeout=60, message="the conductor's fix never ran")
+    # The new fixer is the conductor's, and its decision was recorded.
+    conducted = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
+    assert len(conducted) == 1 and conducted[0]["conductorRunId"] == resp["runId"], conducted
+    decisions = [(e["payload"]["point"], e["payload"]["action"]) for e in client.events(taskId=task["id"], limit=1000)
+                 if e["eventType"] == "conductor.decided"]
+    assert decisions == [("pull_request_feedback", "start_phase")], decisions
+    before |= {conducted[0]["id"]}
 
     # Let Deliver finish it: the next feedback is the policy's again.
     wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=60, message="not back in review")
@@ -161,3 +169,5 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     fake_github.comment(pr["number"], "And the time, please.", path="FIXED.md")
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 2, timeout=60,
                message="after the hand-back, Deliver never fixed the feedback")
+    policy_fix = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
+    assert len(policy_fix) == 1 and policy_fix[0]["conductorRunId"] is None, policy_fix
