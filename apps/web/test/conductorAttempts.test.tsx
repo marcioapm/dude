@@ -235,6 +235,39 @@ describe("a conductor's session, from its URL", () => {
 });
 
 describe("a conductor's session on an earlier attempt", () => {
+  async function app(client: FixtureClient, hash: string) {
+    window.history.replaceState(null, "", hash);
+    const { container, unmount } = await mount(
+      <TooltipProvider>
+        <ToastProvider>
+          <PeopleProvider client={client}>
+            <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+          </PeopleProvider>
+        </ToastProvider>
+      </TooltipProvider>,
+    );
+    mounted.push(unmount);
+    return container;
+  }
+  const rows = (page: HTMLElement) => [...page.querySelectorAll<HTMLElement>("[data-testid=sessions] [data-testid=session]")];
+  const openRow = (page: HTMLElement) => until(() => rows(page).find((l) => l.querySelector("[aria-current=true]")), "the open session's row");
+  const writable = (page: HTMLElement) => {
+    expect(count(page, "[data-testid=abort]")).toBe(1);
+    expect(count(page, "[data-testid=run-ended]")).toBe(0);
+    expect(count(page, "textarea")).toBe(1);
+  };
+  // The tree lists the conductor's session with its task, as the server's does
+  // for the attempts it keeps: the page then stays mounted when it is opened.
+  const inTheTree = (client: FixtureClient) => {
+    const navigation = client.navigation.bind(client);
+    client.navigation = async () => {
+      const nav = await navigation();
+      return { projects: nav.projects.map((p) => ({ ...p, epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map((t) => t.id !== TASK_ID ? t
+        : { ...t, runs: t.runs!.map((r, i) => i > 0 ? r : { ...r, sessions: [{ id: COND, role: "conductor", status: "running", title: "Conductor" }, ...r.sessions] }) }) })) })) };
+    };
+    return client;
+  };
+
   test("stays on the attempt the place names, and keeps its composer and Abort", async () => {
     const page = await taskPage(restartedWith(conductor(2)), { runId: COND, attempt: 1 });
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
@@ -242,5 +275,39 @@ describe("a conductor's session on an earlier attempt", () => {
     expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
     expect(count(page, "[data-testid=run-ended]")).toBe(0);
     expect(count(page, "textarea")).toBe(1);
+  });
+
+  test("Sessions on attempt 1 first opens one of attempt 1's, not the task's ended conductor", async () => {
+    const page = await app(restartedWith(conductor(2, { status: "completed", endedAt: at(20) })), `#/task/${TASK_ID}/sessions`);
+    expect((await openRow(page)).textContent).toContain("Fix");
+    await pick(page, 1);
+    const open = await openRow(page);
+    expect(rows(page)[0]!.textContent).toContain("Conductor");
+    expect(open.textContent).not.toContain("Conductor");
+    // Attempt 1's newest: its aborted Fix.
+    expect(open.textContent).toContain("Fix");
+  });
+
+  test("the live conductor opened from attempt 1's list keeps its composer and Abort", async () => {
+    const page = await app(inTheTree(restartedWith(conductor(2))), `#/task/${TASK_ID}/sessions?attempt=1`);
+    await until(() => (shown(page) === "1" ? true : null), "attempt 1 from the URL");
+    expect((await openRow(page)).textContent).not.toContain("Conductor");
+    await click(rows(page).find((l) => l.textContent?.includes("Conductor"))!.querySelector("button")!);
+    await until(() => (window.location.hash === `#/session/${COND}` ? true : null), "the conductor's URL");
+    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
+    expect(shown(page)).toBe("1");
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
+    writable(page);
+  });
+
+  test("the live conductor open on the current attempt stays writable once attempt 1 is picked", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/sessions`);
+    expect((await openRow(page)).textContent).toContain("Conductor");
+    await pick(page, 1);
+    expect(window.location.hash).toBe(`#/task/${TASK_ID}/sessions?attempt=1`);
+    expect((await openRow(page)).textContent).toContain("Conductor");
+    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
+    writable(page);
   });
 });
