@@ -73,9 +73,24 @@ func Ended(taskStatus string) bool {
 	return taskStatus == "done" || taskStatus == "aborted" || taskStatus == "failed"
 }
 
-// parked loads the task's delivery and refuses unless its conductor takes
-// its decisions and it waits on one now.
-func parked(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, error) {
+// parked loads the task's delivery and refuses unless the caller is the
+// task's live conductor, its conductor takes the delivery's decisions,
+// and the delivery waits on one now. The task's Chat lock, which ending
+// and replacing a conductor take, serialises the check with them: a call
+// from a conductor superseded since it was authenticated is refused.
+func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
+	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+		return nil, err
+	}
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
+		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
+		return nil, err
+	}
+	if !live {
+		return nil, refusef("you are no longer this task's conductor: another took over from you. Decide nothing")
+	}
+	taskID := ref.TaskID
 	d, err := LoadDelivery(ctx, tx, taskID)
 	if err != nil {
 		return nil, err
@@ -151,7 +166,7 @@ type StartPhase struct {
 
 // ConductStartPhase takes start_phase as the decision the delivery waits on.
 func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase) (string, error) {
-	d, err := parked(ctx, tx, ref.TaskID)
+	d, err := parked(ctx, tx, ref)
 	if err != nil {
 		return "", err
 	}
@@ -295,7 +310,7 @@ var GateChoices = []string{GateOpen, GateDraft, "Show me the diff", "Another rou
 // ConductDecide is decide: the next step, asking the person, waiting on the
 // pull request, or opening it.
 func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note string) (map[string]any, error) {
-	d, err := parked(ctx, tx, ref.TaskID)
+	d, err := parked(ctx, tx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +434,7 @@ func gate(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {
 // ConductDismiss is dismiss_finding: an open finding of the task left as
 // it is, with the reason, as a person accepting it is.
 func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reason string) error {
-	if _, err := parked(ctx, tx, ref.TaskID); err != nil {
+	if _, err := parked(ctx, tx, ref); err != nil {
 		return err
 	}
 	reason = strings.TrimSpace(reason)
@@ -464,7 +479,7 @@ type TaskSpec struct {
 // ConductUpdateTask is update_task: what Chat settled, written into the
 // task before the implementer is started, so its prompt has it.
 func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) error {
-	d, err := parked(ctx, tx, ref.TaskID)
+	d, err := parked(ctx, tx, ref)
 	if err != nil {
 		return err
 	}

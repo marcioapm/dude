@@ -183,7 +183,7 @@ func RecordFailedTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) e
 const Wakeable = `c.delivered_at IS NULL
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
-	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT ` + Ending + `
+	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
 		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))`
 
 // SafetyNet (SQL, over runs r, $1 seconds): a task's conductor whose last

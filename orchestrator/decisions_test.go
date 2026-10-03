@@ -8,6 +8,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -725,6 +727,55 @@ func TestAWakeReplacesAConductorWhoseContainerStopped(t *testing.T) {
 	w.wokenWith(task, "decide after the stop")
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message'`, task); n != 1 {
 		t.Errorf("%d chat messages: the replacement needed a person", n)
+	}
+}
+
+// A conductor replaced after its call was authenticated, before the tool
+// ran, cannot take its successor's decision: its call is refused, and the
+// decision waits for the new one.
+func TestASupersededConductorDecidesNothing(t *testing.T) {
+	w := conducting(t)
+	paused, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, BeforeCall: func(tool string) {
+		if tool == "start_phase" {
+			once.Do(func() { close(paused); <-resume })
+		}
+	}}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	task := w.task()
+	w.talk(task)
+	oldSpec := w.conductorSpecOf(task)
+	first, _, _ := w.conductor(task)
+	type result struct {
+		status int
+		body   string
+	}
+	done := make(chan result, 1)
+	go func() {
+		status, body := w.callTool(tools.URL, oldSpec, "start_phase", `{"phase":"implement"}`)
+		done <- result{status, body}
+	}()
+	<-paused
+	// Meanwhile its container stops, and the next message replaces it.
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
+	if status, out := w.chat(task, "are you there?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	if second, _, _ := w.conductor(task); second == first {
+		t.Fatal("no replacement conductor")
+	}
+	close(resume)
+	r := <-done
+	if r.status != 422 || !strings.Contains(r.body, "no longer this task's conductor") {
+		t.Fatalf("the replaced conductor's call: %d %s", r.status, r.body)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.decisionAt(task) != delivery.PointStart || w.phaseRuns(task, "implement") != 0 {
+		t.Errorf("the replaced conductor took the decision")
 	}
 }
 
