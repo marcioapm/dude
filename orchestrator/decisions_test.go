@@ -8,7 +8,9 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -298,6 +300,115 @@ func TestUpdateTaskOnlyBeforeTheImplementer(t *testing.T) {
 	}
 	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 	w.refused(task, "update_task", `{"goal":"Something else entirely, now."}`, "an implementer has started")
+}
+
+// taskImages are the task's images its prompt is given, in order, and
+// those let go since (detached_at).
+func (w *world) taskImages(task string) (prompt, letGo []string) {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id, for_prompt AND attached_at IS NOT NULL, detached_at IS NOT NULL
+		FROM attachments WHERE task_id = $1 ORDER BY position, id`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var attached, detached bool
+		if err := rows.Scan(&id, &attached, &detached); err != nil {
+			w.t.Fatal(err)
+		}
+		if attached {
+			prompt = append(prompt, id)
+		}
+		if detached {
+			letGo = append(letGo, id)
+		}
+	}
+	return prompt, letGo
+}
+
+// update_task writes a task's images as a person's edit does: the ones its
+// text references are attached, in order of first appearance (goal, then
+// criteria), one no longer referenced is let go, and a reference to an
+// image that does not exist stays in the text.
+func TestTheConductorsTaskUpdateAttachesTheImagesItsTextShows(t *testing.T) {
+	w := conducting(t)
+	b := w.withImages()
+	task := w.task()
+	w.upload(b, "att_crit", task, "crit.png", screenshot)
+	w.upload(b, "att_goal", task, "goal.png", screenshot)
+	w.talk(task)
+	goal := "Make it look like ![goal.png](attachment:att_goal), not ![gone.png](attachment:att_gone)."
+	args, _ := json.Marshal(map[string]any{"goal": goal, "acceptanceCriteria": []string{"Matches ![crit.png](attachment:att_crit)"}})
+	w.must(task, "update_task", string(args))
+	if prompt, letGo := w.taskImages(task); !slices.Equal(prompt, []string{"att_goal", "att_crit"}) || len(letGo) != 0 {
+		t.Fatalf("after the first update: the prompt's %v, let go %v", prompt, letGo)
+	}
+	var saved string
+	_ = w.owner.QueryRow(context.Background(), `SELECT goal FROM tasks WHERE id = $1`, task).Scan(&saved)
+	if saved != goal {
+		t.Errorf("the goal saved is %q", saved)
+	}
+
+	w.must(task, "update_task", `{"acceptanceCriteria":["Matches the mock"]}`)
+	if prompt, letGo := w.taskImages(task); !slices.Equal(prompt, []string{"att_goal"}) || !slices.Equal(letGo, []string{"att_crit"}) {
+		t.Errorf("after the criterion's image was removed: the prompt's %v, let go %v", prompt, letGo)
+	}
+	// The last image removed: none is the prompt's.
+	w.must(task, "update_task", `{"goal":"Make it look like the mock, nothing else."}`)
+	if prompt, letGo := w.taskImages(task); len(prompt) != 0 || !slices.Equal(letGo, []string{"att_crit", "att_goal"}) {
+		t.Errorf("after every image was removed: the prompt's %v, let go %v", prompt, letGo)
+	}
+}
+
+// update_task refuses an image the task may not show — another task's, one
+// a message carried, more than a message may carry — and saves nothing.
+func TestTheConductorsTaskUpdateRefusesImagesNotTheTasksToShow(t *testing.T) {
+	w := conducting(t)
+	b := w.withImages()
+	task, other := w.task(), w.task()
+	w.upload(b, "att_mine", task, "mine.png", screenshot)
+	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
+	w.talk(task)
+	conductorID, _, _ := w.conductor(task)
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_img', $1, $2, $3, 'see')`,
+		w.org, task, conductorID)
+	w.upload(b, "att_sent", task, "sent.png", screenshot)
+	mustExec(t, w.owner, `UPDATE attachments SET directive_id = 'dir_img', attached_at = now() WHERE id = 'att_sent'`)
+	var seven []string
+	for i := range 7 {
+		id := fmt.Sprintf("att_many%d", i)
+		w.upload(b, id, task, id+".png", screenshot)
+		seven = append(seven, "![x](attachment:"+id+")")
+	}
+	// 5 MiB together and one more byte.
+	w.uploadSized(b, "att_big1", task, 3<<20)
+	w.uploadSized(b, "att_big2", task, 2<<20+1)
+
+	for _, c := range []struct{ goal, want string }{
+		{"Mine ![mine.png](attachment:att_mine) and ![theirs.png](attachment:att_theirs).", "image att_theirs is another task's"},
+		{"Mine ![mine.png](attachment:att_mine) and ![sent.png](attachment:att_sent).", "image att_sent was sent with a message"},
+		{"All of them: " + strings.Join(seven, " "), "a task's text shows at most 6 images"},
+		{"Big: ![a](attachment:att_big1) ![b](attachment:att_big2)", "a task's images are at most 5 MiB together"},
+	} {
+		args, _ := json.Marshal(map[string]any{"goal": c.goal})
+		w.refused(task, "update_task", string(args), c.want)
+		var goal string
+		_ = w.owner.QueryRow(context.Background(), `SELECT goal FROM tasks WHERE id = $1`, task).Scan(&goal)
+		if goal != "Say hello" {
+			t.Errorf("%s: the goal was saved: %q", c.want, goal)
+		}
+		if prompt, _ := w.taskImages(task); len(prompt) != 0 {
+			t.Errorf("%s: images attached %v", c.want, prompt)
+		}
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.updated'`, task); n != 0 {
+			t.Errorf("%s: %d task.updated recorded", c.want, n)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM attachments WHERE id = 'att_sent' AND directive_id = 'dir_img' AND NOT for_prompt`); n != 1 {
+		t.Error("the message's image was taken from it")
+	}
 }
 
 // Taking over a delivered task: the first message mid-delivery hands the
