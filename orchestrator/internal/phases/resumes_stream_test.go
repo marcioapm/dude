@@ -189,16 +189,28 @@ func TestWhatEndsAResumesTimingIsTheAgentSayingOrDoingSomething(t *testing.T) {
 			w := newResumeWorld(t)
 			w.resume(stoppedOnHost1(time.Now()))
 			w.lux.set(runningAgain(time.Now(), "host-a"), nil)
-			w.follow(append([]lux.Frame{running(2), busy(2)}, notOutput...)...)
-			if row := w.row(2); row["first_output_at"] != nil {
-				t.Fatalf("a plan, usage or commands list ended the timing")
+			// Each frame on its own, so one that ends the timing and a later
+			// one that hides it are both caught; nothing is published yet.
+			for _, f := range append([]lux.Frame{running(2), busy(2)}, notOutput...) {
+				w.follow(f)
+				if row := w.row(2); row["first_output_at"] != nil {
+					t.Fatalf("a plan, usage or commands list ended the timing")
+				}
+				if n := len(w.timed()); n != 0 {
+					t.Fatalf("%d run.resume.timed before the agent said or did anything, want 0", n)
+				}
 			}
 			w.follow(record(2, "acp."+kind, update(kind, data)))
 			if row := w.row(2); row["first_output_at"] == nil {
 				t.Errorf("%s did not end the timing", kind)
 			}
-			if n := len(w.timed()); n != 1 {
-				t.Errorf("%d run.resume.timed, want 1", n)
+			timed := w.timed()
+			if len(timed) != 1 {
+				t.Fatalf("%d run.resume.timed, want 1", len(timed))
+			}
+			phases, _ := timed[0]["phases"].(map[string]any)
+			if timed[0]["totalMs"] == nil || phases == nil || phases["firstOutput"] == nil {
+				t.Errorf("the timing has no total or first output: %v", timed[0])
 			}
 		})
 	}

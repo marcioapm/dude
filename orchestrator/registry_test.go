@@ -419,9 +419,9 @@ func (w *world) retried(runID string, want time.Duration, taken func() bool) {
 	}
 	// The setter's now() plus want, read against this query's now(): both
 	// the database host's clock, which a VM's time sync steps back ~100 ms
-	// every 30 s, so got can exceed want by that much. A second covers it;
-	// the lower bound still pins the delay itself.
-	const clockStep = time.Second
+	// every 30 s, so got can exceed want by that much. The allowance covers
+	// that step and no more: a delay a second too long still fails here.
+	const clockStep = 250 * time.Millisecond
 	if got := time.Duration(left * float64(time.Second)); got > want+clockStep || got < want-3*time.Second {
 		w.t.Fatalf("backed off %v, want about %v", got, want)
 	}
