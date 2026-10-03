@@ -106,6 +106,8 @@ export interface ChatVariant {
   lines?: ReadonlyArray<{ id: string; at: string; node: ReactNode }>;
   /** Above the composer: who decides, and the way to hand it back. */
   above?: ReactNode;
+  /** The conductor only reads and answers, though there is a line above (Deliver decides). */
+  readOnly?: boolean;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -442,7 +444,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
-                  to={chat.above ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
+                  to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
                 />
                 </>
               }

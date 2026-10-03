@@ -135,13 +135,17 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       setHanding(false);
     }
   }, [client, task.id, onSent]);
+  // A gate the conductor entered that Deliver now holds, parked until the
+  // person's Open or Draft, or their confirmation here: whether or not a
+  // conductor is live to ask them.
+  const gateHeld = task.decider !== "conductor" && task.awaitingDecision?.point === "before_pull_request";
   const above = useMemo(() => {
-    if (task.decider !== "conductor" || !inProgress) return null;
-    return <DeciderLine data-testid="decider-line" decider="conductor" waiting={waiting}
+    if (!inProgress || (task.decider !== "conductor" && !gateHeld)) return null;
+    return <DeciderLine data-testid="decider-line" decider={gateHeld ? "policy" : "conductor"} waiting={waiting}
       action={<Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
-  }, [task.decider, inProgress, waiting, handing, handBack]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost, lines, above }),
-    [head, send, briefedWith, before, conductorCost, lines, above]);
+  }, [task.decider, gateHeld, inProgress, waiting, handing, handBack]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
+    [head, send, briefedWith, before, conductorCost, lines, above, gateHeld]);
 
   if (conductorId) {
     return (
