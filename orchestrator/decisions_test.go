@@ -493,6 +493,24 @@ func TestAnEscalationGoesToAPersonAndWakesTheConductor(t *testing.T) {
 	}
 }
 
+// The scripted conductor carries out the tool calls a message names
+// ("tool: NAME {json}"), in its first turn and later ones: what the e2e
+// suites drive its decisions with.
+func TestTheScriptedConductorDecidesWhatItIsTold(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	status, out := w.chat(task, "Plan it with me.\ntool: update_task {\"acceptanceCriteria\":[\"it says olá\"]}")
+	if status != 201 || out["decider"] != "conductor" {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the criteria written", func() bool {
+		return w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND acceptance_criteria = '["it says olá"]'`, task) == 1
+	})
+	w.until("the start's decision", func() bool { return w.decisionAt(task) == delivery.PointStart })
+	w.chat(task, "Go.\ntool: start_phase {\"phase\":\"implement\"}")
+	w.until("the implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+}
+
 // Coalesced: reasons arriving within the window are one note, one turn.
 // A decision and the Run it followed are one wake, not two.
 func TestWakesArrivingTogetherAreOneNote(t *testing.T) {

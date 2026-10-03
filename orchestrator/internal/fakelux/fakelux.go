@@ -1153,6 +1153,17 @@ func (s *Server) turn(run *Run) {
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
 	}
+	if b.Conductor {
+		// The tools the input asks the scripted conductor for: its first
+		// prompt's (its script), then each later input's.
+		input := run.Prompt()
+		if !first {
+			input = run.Inputs[len(run.Inputs)-1]
+		}
+		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
+			s.callTool(run, c[0], c[1])
+		}
+	}
 	if b.Hang && !run.woken {
 		return
 	}
@@ -1165,7 +1176,7 @@ func (s *Server) turn(run *Run) {
 	}
 	reply := b.Reply
 	if b.Conductor {
-		reply = strings.TrimPrefix(run.Prompt(), "echo ")
+		reply = run.Prompt()[strings.LastIndex(run.Prompt(), "echo ")+len("echo "):]
 		if !first {
 			reply = fakeagent.ConductorTurn(run.Prompt(), run.Inputs[len(run.Inputs)-1])
 		}
@@ -1197,6 +1208,23 @@ func (s *Server) turn(run *Run) {
 		return
 	}
 	s.deliverQueued(run)
+}
+
+// conductorAsked is what a scripted conductor's input asks of it, as
+// fakeagent.ConductorCalls reads it: a later input as it came; the first,
+// its script's tool calls (lux-fake's "http dude POST /tools/NAME ARGS"
+// lines) put back as "tool: NAME ARGS".
+func conductorAsked(input string, first bool) string {
+	if !first {
+		return input
+	}
+	var lines []string
+	for _, line := range strings.Split(input, "\n") {
+		if rest, ok := strings.CutPrefix(line, "http dude POST /tools/"); ok {
+			lines = append(lines, fakeagent.ConductorCallPrefix+rest)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // callTool calls one of dude's tools as the agent's container would through
