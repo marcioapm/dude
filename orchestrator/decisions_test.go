@@ -48,6 +48,17 @@ func (w *world) talk(task string) string {
 	return runID
 }
 
+func (w *world) reachGate(task string) {
+	w.t.Helper()
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	// Straight on to the pull request: a simplifier, then (the test step is
+	// off) the gate.
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+}
+
 // decisionAt is the decision point the task's delivery is parked on for
 // its conductor, "" for none.
 func (w *world) decisionAt(task string) string {
@@ -383,13 +394,7 @@ func TestAFinishedTasksConductorIsReadOnly(t *testing.T) {
 func TestThePullRequestGateFollowsTheHead(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
-	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-	// Straight on to the pull request: a simplifier, then (the test step is
-	// off) the gate.
-	w.must(task, "start_phase", `{"phase":"simplify"}`)
-	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	w.reachGate(task)
 	w.must(task, "decide", `{"action":"ask_person"}`)
 	w.chat(task, "Open")
 	// Another round moves the head.
@@ -1009,20 +1014,13 @@ func TestATakeOverBeforeTheOpeningAsksFirst(t *testing.T) {
 func TestHandingBackAtTheGateNeedsTheOpening(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
-	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-	w.must(task, "start_phase", `{"phase":"simplify"}`)
-	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
-	handBack := func(body map[string]any) (int, map[string]any) {
-		return w.handBack(task, body)
-	}
-	if status, out := handBack(map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
+	w.reachGate(task)
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
 		t.Fatalf("hand-back with the gate unasked: %d %v", status, out)
 	}
 	w.must(task, "decide", `{"action":"ask_person"}`)
 	w.chat(task, "Show me the diff")
-	if status, out := handBack(map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
 		t.Fatalf("hand-back after Show me the diff: %d %v", status, out)
 	}
 	for range 3 {
@@ -1031,7 +1029,7 @@ func TestHandingBackAtTheGateNeedsTheOpening(t *testing.T) {
 	if w.decider(task) != "conductor" || len(w.gh.Pulls()) != 0 {
 		t.Fatalf("a refused hand-back changed the delivery: decider %s, %d pull requests", w.decider(task), len(w.gh.Pulls()))
 	}
-	if status, out := handBack(map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+	if status, out := w.handBack(task, map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
 		t.Fatalf("confirmed hand-back: %d %v", status, out)
 	}
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })

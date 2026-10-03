@@ -146,10 +146,9 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 // Recovery: each note that carried a reason is an attempt
 // (conductor_wake_attempts). A reason goes back to pending once an attempt
 // fails unheard and no other attempt holds it — heard, or still on its way.
-// Any attempt heard settles it, and withdraws its retries not yet sent to
-// lux. The guarantee is at least once: two attempts both sent before the
-// first was heard are both heard, a duplicate note accepted rather than a
-// reason lost.
+// Any attempt heard settles it, and withdraws retries not yet claimed by
+// the sender. The guarantee is at least once: attempts already claimed
+// may both be heard, a duplicate note accepted rather than a reason lost.
 
 // attemptHolds (SQL, over conductor_wake_attempts o): o was heard, or may
 // still be — a briefing heard, or not failed; a directive delivered (its
@@ -174,11 +173,7 @@ func requeueTx(ctx context.Context, tx pgx.Tx, wakeIDs []string) error {
 // next sweep tells the live conductor, or its replacement, again. A
 // directive that was delivered — its consumption receipt — holds them.
 func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
-	rows, err := tx.Query(ctx, `SELECT wake_id FROM conductor_wake_attempts WHERE directive_id = $1`, directiveID)
-	if err != nil {
-		return err
-	}
-	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	wakes, err := directiveWakesTx(ctx, tx, directiveID)
 	if err != nil {
 		return err
 	}
@@ -188,19 +183,23 @@ func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
 // WakesHeardTx settles the reasons a wake note carried once its directive
 // is delivered — after a failure too: a consumption receipt wins.
 func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
-	rows, err := tx.Query(ctx, `SELECT wake_id FROM conductor_wake_attempts WHERE directive_id = $1`, directiveID)
-	if err != nil {
-		return err
-	}
-	wakes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	wakes, err := directiveWakesTx(ctx, tx, directiveID)
 	if err != nil {
 		return err
 	}
 	return heardTx(ctx, tx, wakes, directiveID)
 }
 
+func directiveWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT wake_id FROM conductor_wake_attempts WHERE directive_id = $1`, directiveID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // heardTx settles reasons an attempt was heard for (heard, the directive
-// it was, "" for a briefing). Their retries not yet sent are withdrawn,
+// it was, "" for a briefing). Their retries not yet claimed are withdrawn,
 // and what else those carried is pending again.
 func heardTx(ctx context.Context, tx pgx.Tx, wakeIDs []string, heard string) error {
 	if len(wakeIDs) == 0 {
@@ -334,7 +333,7 @@ const Wakeable = `c.delivered_at IS NULL
 
 // SafetyNet (SQL, over runs r, $1 seconds): a task's conductor whose last
 // turn ended that long ago, with a phase Run it started still in flight
-// that has not woken it yet. Returns that Run as k.id.
+// that has not woken it yet.
 const SafetyNet = `r.role = 'conductor' AND r.kind = 'agent' AND r.status IN ('running', 'paused')
 	AND r.turn_done_at < now() - make_interval(secs => $1)
 	AND EXISTS (SELECT 1 FROM runs k WHERE k.conductor_run_id = r.id
