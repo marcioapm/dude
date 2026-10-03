@@ -253,6 +253,25 @@ describe("laying out a task's images in Preview", () => {
     expect(document.querySelector("[data-testid=task-criteria-count]")!.textContent).toBe("3 criteria");
   });
 
+  test("a drag from the goal to the criteria, listed as Files as Chrome does, raises no drop overlay", async () => {
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`, ["One", "Two", "Three"]));
+    await preview("task-goal");
+    const crit = await preview("task-criteria");
+    await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
+    stackRects(crit.querySelectorAll("li"), 20, 20);
+    const overlay = () => document.querySelector('[data-testid="drop-overlay"]');
+    const dnd = imageDrag({ Files: "" });
+    const goal = figure("task-goal")!;
+    await act(async () => dnd("dragstart", goal));
+    for (const [type, el] of [["dragenter", goal], ["dragleave", goal], ["dragenter", crit], ["dragover", crit]] as const) {
+      await act(async () => dnd(type, el, 40));
+      expect(overlay()).toBeNull();
+    }
+    await act(async () => dnd("drop", crit, 40));
+    expect(criteriaValue()).toBe(`- [ ] One\n- [ ] Two\n  ${IMG}\n- [ ] Three`);
+    expect(overlay()).toBeNull();
+  });
+
   test("Esc on a selected image deselects it, and the dialog stays open", async () => {
     let closed = 0;
     await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`), new EpicsClient("a"), () => closed++);

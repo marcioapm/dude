@@ -714,6 +714,84 @@ def test_an_image_laid_out_in_preview_keeps_its_place_and_size_and_the_agent_rea
     assert console_errors == []
 
 
+@pytest.mark.ui
+def test_an_image_dragged_in_preview_by_the_browser_raises_no_drop_overlay(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list, tmp_path: Path
+):
+    intro = "The receipt should look like the mock below."
+    task = client.create_task(forge_project["id"], "Move the mock", goal=intro,
+                              acceptanceCriteria=["Totals are right-aligned", "The logo sits top left", "Prints on one page"])
+    res = upload(client, task["id"], png(300, 200, (30, 90, 200)), png(300, 200, (30, 90, 200)), "mock.png")
+    assert res.status_code == 201, res.text
+    att = res.json()["id"]
+    goal = f"{intro}\n\n![mock.png](attachment:{att})\n\nKeep the paper size A4."
+    assert client.patch(f"/v1/tasks/{task['id']}", {"goal": goal}).status_code == 200
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+    for field in ("task-goal-preview", "task-criteria-preview"):
+        page.get_by_test_id(field).evaluate("el => document.getElementById(el.getAttribute('aria-labelledby')).click()")
+    source = page.get_by_test_id("task-goal-preview").locator("[data-image-n='0']")
+    expect(source.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    # Every overlay that appears, and the drag's types as the page sees them.
+    page.evaluate("""() => {
+      window.__drag = { overlays: 0, types: [] };
+      new MutationObserver(() => {
+        if (document.querySelector('[data-testid=drop-overlay]')) window.__drag.overlays++;
+      }).observe(document.body, { childList: true, subtree: true });
+      window.addEventListener('dragenter', (e) => { window.__drag.types = [...e.dataTransfer.types]; }, true);
+    }""")
+    crit = page.get_by_test_id("task-criteria-preview")
+    box, li = crit.bounding_box(), crit.locator("li").nth(1).bounding_box()
+    assert box and li
+    source.drag_to(crit, target_position={"x": 40, "y": li["y"] + li["height"] - box["y"]})
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        f"- [ ] Totals are right-aligned\n- [ ] The logo sits top left\n  ![mock.png](attachment:{att})\n- [ ] Prints on one page")
+    expect(page.get_by_test_id("task-goal")).to_have_value(f"{intro}\n\nKeep the paper size A4.")
+    drag = page.evaluate("window.__drag")
+    # Playwright's drag lists no "Files"; Chrome's own image drags do.
+    assert "application/x-dude-image" in drag["types"] and "Files" not in drag["types"], drag
+    assert drag["overlays"] == 0, drag
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+
+    # Back to the goal as Chrome drags an image: the browser's own drag data, with the image offered as a file.
+    moved = page.get_by_test_id("task-criteria-preview").locator("[data-image-n='0']")
+    expect(moved.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
+    _drag_with_files(page, moved, page.get_by_test_id("task-goal-preview").locator("p").nth(1), tmp_path / "mock.png")
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+    expect(page.get_by_test_id("drop-overlay")).to_have_count(0)
+    drag = page.evaluate("window.__drag")
+    assert "Files" in drag["types"] and "application/x-dude-image" in drag["types"], drag
+    assert drag["overlays"] == 0, drag
+    assert console_errors == []
+
+
+def _drag_with_files(page: Page, source, target, file: Path) -> None:
+    """A real Chromium drag from `source` to the top of `target`, its data captured from the browser
+    (Input.setInterceptDrags) and replayed with `file` added, so `types` include "Files"."""
+    file.write_bytes(png(40, 40))
+    cdp = page.context.new_cdp_session(page)
+    captured: list[dict] = []
+    cdp.on("Input.dragIntercepted", lambda e: captured.append(e["data"]))
+    cdp.send("Input.setInterceptDrags", {"enabled": True})
+    s, t = source.bounding_box(), target.bounding_box()
+    assert s and t
+    sx, sy = s["x"] + s["width"] / 2, s["y"] + s["height"] / 2
+    tx, ty = t["x"] + 20, t["y"] + 1
+    mouse = lambda kind, x, y: cdp.send("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left", "buttons": 1 if kind != "mouseReleased" else 0, "clickCount": 1})
+    mouse("mousePressed", sx, sy)
+    for i in range(1, 6):
+        mouse("mouseMoved", sx, sy + i * 4)
+    wait_until(lambda: captured, timeout=5, message="no drag intercepted")
+    data = {**captured[0], "files": [str(file)]}
+    for kind, x, y in (("dragEnter", tx, ty), ("dragOver", tx, ty), ("dragOver", tx, ty + 1), ("drop", tx, ty + 1)):
+        cdp.send("Input.dispatchDragEvent", {"type": kind, "x": x, "y": y, "data": data})
+    mouse("mouseReleased", tx, ty + 1)
+    cdp.send("Input.setInterceptDrags", {"enabled": False})
+    cdp.detach()
+
+
 def _open_new_task(page: Page, web_url: str, org: dict) -> None:
     """The New task dialog, on the board of the org's project (the `forge_project` fixture makes it)."""
     page.set_viewport_size({"width": 1440, "height": 900})

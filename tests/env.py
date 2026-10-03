@@ -114,6 +114,12 @@ def lux_env() -> dict:
     return env
 
 
+def llm_env() -> dict:
+    """DUDE_LLM_URL / DUDE_LLM_KEY from this process, for an orchestrator
+    that is to run a real model. Never printed: the key is a secret."""
+    return {k: os.environ[k] for k in ("DUDE_LLM_URL", "DUDE_LLM_KEY") if os.environ.get(k)}
+
+
 def _signal(proc: subprocess.Popen, sig: int, group: bool) -> None:
     """Signal a process, or its whole process group."""
     try:
