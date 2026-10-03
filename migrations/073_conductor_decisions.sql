@@ -7,9 +7,12 @@
 -- question wakes it. NULL for the workflow's own. conductor_note is what
 -- the conductor asked of the Run, added to its prompt. Nullable with no
 -- default, so adding them changes no row; their index is 074's, built
--- without holding this table's lock.
+-- without holding this table's lock. The note's bound is NOT VALID: it
+-- holds for every write from here, and checking it would read every
+-- existing Run (all NULL) under this table's exclusive lock.
 ALTER TABLE runs ADD COLUMN conductor_run_id text REFERENCES runs(id) ON DELETE SET NULL;
-ALTER TABLE runs ADD COLUMN conductor_note text CHECK (length(conductor_note) <= 4000);
+ALTER TABLE runs ADD COLUMN conductor_note text;
+ALTER TABLE runs ADD CONSTRAINT runs_conductor_note_len CHECK (length(conductor_note) <= 4000) NOT VALID;
 
 -- The pull request gate's question: the heads (repository → commit) it was
 -- asked at. Its answer opens the pull request only while the task is still
