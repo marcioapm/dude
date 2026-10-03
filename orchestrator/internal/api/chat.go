@@ -260,6 +260,9 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 	taskID := r.PathValue("id")
 	var body struct {
 		Decider string `json:"decider"`
+		// The person confirmed that Deliver opens the pull request now,
+		// though the conductor's gate question is unanswered or not Open.
+		OpenPullRequest bool `json:"openPullRequest"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -284,6 +287,25 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "decide"); err != nil {
 			return err
 		}
+		handedBack := body.Decider == delivery.DeciderPolicy
+		if handedBack && d.AtGate() {
+			// Handed back at the gate, Deliver opens the pull request at once:
+			// only on the person's Open or Draft, or their confirmation.
+			draft, err := delivery.GateAnswer(r.Context(), tx, &d.State)
+			var refused delivery.Refusal
+			switch {
+			case errors.As(err, &refused) && !body.OpenPullRequest:
+				return fail(http.StatusConflict, "pull_request_gate",
+					"Deliver will open the pull request now, and the person has not answered Open or Draft; confirm with openPullRequest")
+			case err != nil && !errors.As(err, &refused):
+				return err
+			case err == nil && draft:
+				if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = jsonb_set(state, '{draft}', 'true') WHERE id = $1`,
+					d.WorkflowID); err != nil {
+					return err
+				}
+			}
+		}
 		why := "a person let Deliver finish it"
 		if body.Decider == delivery.DeciderConductor {
 			why = "a person gave the decisions to the conductor"
@@ -292,7 +314,6 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			p.ActorType, p.Actor); err != nil {
 			return err
 		}
-		handedBack := body.Decider == delivery.DeciderPolicy
 		if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = jsonb_set(state, '{handedBack}', to_jsonb($2::boolean))
 			WHERE id = $1`, d.WorkflowID, handedBack); err != nil {
 			return err

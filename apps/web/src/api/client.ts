@@ -1004,9 +1004,12 @@ export class ApiClient {
     return this.#request("POST", `/v1/tasks/${taskId}/talk`, {});
   }
 
-  /** Who takes the delivery's decisions from the next one on: "policy" is Let Deliver finish it. */
-  setDecider(taskId: string, decider: Decider): Promise<{ taskId: string; decider: Decider }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/decider`, { decider });
+  /**
+   * Who takes the delivery's decisions from the next one on: "policy" is Let Deliver finish it.
+   * openPullRequest confirms that Deliver opens the pull request now, past the conductor's gate question.
+   */
+  setDecider(taskId: string, decider: Decider, openPullRequest = false): Promise<{ taskId: string; decider: Decider }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/decider`, openPullRequest ? { decider, openPullRequest } : { decider });
   }
 
   // -- servers: a project's recipes, and what a run serves ---------------

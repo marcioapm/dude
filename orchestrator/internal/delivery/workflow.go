@@ -101,6 +101,9 @@ type State struct {
 	Directed *Directed `json:"directed,omitempty"`
 	// Open the pull requests as drafts: the person answered Draft.
 	Draft bool `json:"draft,omitempty"`
+	// The person's Open or Draft, taken by the conductor (or confirmed at a
+	// hand-back): under the conductor, the pull requests open only with it.
+	GateOpened bool `json:"gateOpened,omitempty"`
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 }
@@ -672,6 +675,11 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// The gate holds at the opening itself: a delivery taken over after the
+	// policy chose to open waits for the person's answer like any other.
+	if st.conducted() && !st.GateOpened && len(st.PullRequestIDs) == 0 {
+		return w.toConductor(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if err != nil {

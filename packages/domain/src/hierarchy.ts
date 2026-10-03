@@ -357,6 +357,8 @@ export const taskSchema = z.object({
    * or its conductor, in Chat with its people ("conductor").
    */
   decider: deciderSchema.default("policy"),
+  /** A person let Deliver finish its delivery: a later message in Chat does not take the decisions over again. */
+  handedBack: z.boolean().default(false),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),

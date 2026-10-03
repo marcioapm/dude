@@ -364,6 +364,17 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 		"next": "End your turn now. If the person answers Open or Draft, decide open_pull_request."}, nil
 }
 
+// GateAnswer is the pull request gate as a hand-back reads it: whether the
+// person's answer opens the pull request (a draft for Draft), or a Refusal
+// saying why it does not.
+func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) { return gate(ctx, tx, st) }
+
+// AtGate says the delivery is parked at the pull request gate, untaken.
+func (d *Delivery) AtGate() bool {
+	p := d.State.Decision
+	return d.Step == "conductorDecision" && p != nil && p.Taken == nil && p.Point == PointBeforePR
+}
+
 // gate is the pull request gate: the task's latest gate question, asked at
 // the head the task is at now, answered Open (or Draft: a draft).
 func gate(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {

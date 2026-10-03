@@ -190,7 +190,7 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		st.Directed = &Directed{Note: t.Note, By: t.By}
 		return workflow.Result{Next: d.Policy, State: st}, nil
 	case "open_pull_request":
-		st.Draft = t.Draft
+		st.Draft, st.GateOpened = t.Draft, true
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	case "wait":
 		st.PRFeedback = nil
