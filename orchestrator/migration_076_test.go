@@ -7,11 +7,11 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// The Go migrator applies 073's columns and 074's index built concurrently
+// The Go migrator applies 075's columns and 076's index built concurrently
 // over existing Runs, as the runner does outside a transaction: the index
 // is valid and serves conductor_run_id.
 func TestTheConductorRunsIndexIsBuiltOnAnUpgrade(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "073")
+	owner, apply := dbtest.Upgrade(t, "075")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES ('org_u', 'U', 'u')`)
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_u', 'org_u', 'P', 'p', 'P')`)
 	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_u', 'org_u', 'prj_u', 1, 'T', 'G')`)

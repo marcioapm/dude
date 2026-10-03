@@ -325,7 +325,7 @@ mode.
    `dude-migrate --status` lists applied and pending migrations.
    A file whose first line is `-- dude:no-transaction` runs outside a
    transaction: one statement Postgres refuses inside one, such as
-   `CREATE INDEX CONCURRENTLY` (074 builds `runs_conductor_run_idx` so,
+   `CREATE INDEX CONCURRENTLY` (076 builds `runs_conductor_run_idx` so,
    without blocking Runs). It is recorded once it succeeds; if the process
    dies in between, the next run repeats it, which its `IF NOT EXISTS`
    makes a no-op. A concurrent build interrupted part-way leaves an invalid
