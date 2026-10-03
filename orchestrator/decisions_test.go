@@ -623,27 +623,51 @@ func TestTheScriptedConductorDecidesWhatItIsTold(t *testing.T) {
 	w.until("the implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
 }
 
+// sweep runs the syncer once, as one tick of its loop.
+func (w *world) sweep() {
+	w.t.Helper()
+	if _, err := w.syncer.Sweep(context.Background()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// reason records a reason to wake the task's conductor, created at age ago
+// by the database's clock.
+func (w *world) reason(task, key, line string, age time.Duration) {
+	w.t.Helper()
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", key, line)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	mustExec(w.t, w.owner, `UPDATE conductor_wakes SET created_at = now() - make_interval(secs => $3) WHERE task_id = $1 AND key = $2`,
+		task, key, age.Seconds())
+}
+
 // Coalesced: reasons arriving within the window are one note, one turn.
-// A decision and the Run it followed are one wake, not two.
+// The window slides with the newest: an old first reason and a fresh one
+// wait; aged, the latest delivers one note carrying all.
 func TestWakesArrivingTogetherAreOneNote(t *testing.T) {
 	w := conducting(t)
-	w.syncer.WakeWindow = 2 * time.Second
+	w.syncer.WakeWindow = 15 * time.Second
 	task := w.task()
 	w.talk(task)
-	ctx := context.Background()
-	for _, key := range []string{"a", "b", "c"} {
-		if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-			_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:"+key, "reason "+key)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		w.pump()
+	w.reason(task, "test:a", "reason a", time.Minute)
+	w.reason(task, "test:b", "reason b", 30*time.Second)
+	w.reason(task, "test:c", "reason c", 0)
+	for range 3 {
+		w.sweep()
 	}
 	if n := len(w.woken(task)); n != 0 {
-		t.Fatalf("woken %d times within the window", n)
+		t.Fatalf("woken %d times within the window of the newest reason", n)
 	}
-	w.syncer.WakeWindow = 50 * time.Millisecond
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '20 seconds' WHERE task_id = $1 AND key = 'test:c'`, task)
+	w.sweep()
+	if n := len(w.woken(task)); n != 1 {
+		t.Fatalf("%d notes once the newest aged past the window, want 1", n)
+	}
 	note := w.wokenWith(task, "3 things")
 	for _, r := range []string{"reason a", "reason b", "reason c"} {
 		if !strings.Contains(note, r) {
@@ -651,7 +675,7 @@ func TestWakesArrivingTogetherAreOneNote(t *testing.T) {
 		}
 	}
 	for range 3 {
-		w.pump()
+		w.sweep()
 	}
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("%d notes, want 1", n)
@@ -670,21 +694,18 @@ func TestAConductorMidTurnHearsItsReasonsAfter(t *testing.T) {
 	w.talk(task)
 	id, _, _ := w.conductor(task)
 	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL WHERE id = $1`, id)
-	ctx := context.Background()
-	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:mid", "while busy")
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
+	w.reason(task, "test:mid", "while busy", time.Minute)
 	for range 3 {
-		w.pump()
+		w.sweep()
 	}
 	if n := len(w.woken(task)); n != 0 {
 		t.Fatalf("woken mid-turn")
 	}
 	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() WHERE id = $1`, id)
+	w.sweep()
+	if n := len(w.woken(task)); n != 1 {
+		t.Fatalf("%d notes once the turn ended, want 1", n)
+	}
 	w.wokenWith(task, "while busy")
 }
 
@@ -692,6 +713,7 @@ func TestAConductorMidTurnHearsItsReasonsAfter(t *testing.T) {
 // in flight is woken once, however long it stays so.
 func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
 	w := conducting(t)
+	w.syncer.SafetyAfter = 30 * time.Minute
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
@@ -701,28 +723,44 @@ func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
 	}
 	task := w.task()
 	w.talk(task)
+	id, _, _ := w.conductor(task)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("the implementer running", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
 	})
+	asleep := func(d time.Duration) {
+		mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - make_interval(secs => $2) WHERE id = $1`, id, d.Seconds())
+		mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = LEAST(created_at, now() - interval '1 minute') WHERE task_id = $1`, task)
+	}
+	asleep(10 * time.Minute)
 	for range 3 {
-		w.pump()
+		w.sweep()
 	}
 	if n := len(w.woken(task)); n != 0 {
 		t.Fatalf("woken before the safety net's time")
 	}
-	w.syncer.SafetyAfter = 200 * time.Millisecond
-	time.Sleep(300 * time.Millisecond)
+	asleep(time.Hour)
+	w.sweep() // records the reason
+	asleep(time.Hour)
+	w.sweep() // delivers it
 	note := w.wokenWith(task, "Still in flight")
 	if !strings.Contains(note, "implement Run run_") {
 		t.Errorf("note: %q", note)
 	}
-	for range 5 {
-		w.pump()
-		time.Sleep(60 * time.Millisecond)
+	// Asleep as long again, the same Run in flight: no second note, however
+	// often it is re-aged and swept (each sweep's reasons aged before the next).
+	for range 3 {
+		asleep(2 * time.Hour)
+		w.sweep()
 	}
+	// Whatever those sweeps recorded is delivered now: aged, with the
+	// safety net out of reach so it records nothing more.
+	w.syncer.SafetyAfter = 1000 * time.Hour
+	asleep(2 * time.Hour)
+	w.sweep()
 	if n := len(w.woken(task)); n != 1 {
-		t.Errorf("the safety net woke it %d times", n)
+		t.Errorf("the safety net woke it %d times (%d safety reasons)", n,
+			w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'safety'`, task))
 	}
 }
 
