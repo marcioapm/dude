@@ -311,11 +311,16 @@ describe("a conductor's session on an earlier attempt", () => {
     const page = await app(inTheTree(restartedWith(conductor(2))), `#/task/${TASK_ID}/sessions?attempt=1`);
     await until(() => (shown(page) === "1" ? true : null), "attempt 1 from the URL");
     expect((await openRow(page)).textContent).not.toContain("Conductor");
+    const bar = () => page.querySelector<HTMLElement>("[data-testid=earlier-bar]")?.textContent ?? "";
+    expect(bar()).toContain("nothing in it can be merged, resumed or steered.");
     await click(rows(page).find((l) => l.textContent?.includes("Conductor"))!.querySelector("button")!);
     await until(() => (window.location.hash === `#/session/${COND}` ? true : null), "the conductor's URL");
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
     expect(shown(page)).toBe("1");
     expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
+    // The conductor under the bar is the task's, and can be steered: the bar does not say otherwise.
+    expect(bar()).toContain("nothing in it can be merged or resumed.");
+    expect(bar()).not.toContain("steered");
     writable(page);
   });
 
