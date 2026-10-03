@@ -270,6 +270,43 @@ func TestTalkItThroughToAPullRequest(t *testing.T) {
 	}
 }
 
+// A phase Run the conductor starts is an ordinary phase Run: a reviewer it
+// starts is given the task's images with its prompt, as Deliver's are.
+func TestAReviewTheConductorStartsIsGivenTheTasksImages(t *testing.T) {
+	w := conducting(t)
+	b := w.withImages()
+	w.onModel("reviewer", "llm-review")
+	task := w.task()
+	w.upload(b, "att_goal", task, "goal.png", screenshot)
+	w.upload(b, "att_crit", task, "evidence.png", screenshot)
+	w.describe(task, "Make the page look right: ![goal.png](attachment:att_goal)", "Matches ![evidence.png](attachment:att_crit)")
+	conductor := w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	var review string
+	w.until("the conductor's reviewer on lux", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND conductor_run_id = $2`,
+			task, conductor).Scan(&review)
+		return review != "" && w.luxRunOf(review) != ""
+	})
+	for _, r := range w.lux.Runs() {
+		var spec lux.Spec
+		_ = json.Unmarshal(r.Spec, &spec)
+		if spec.Labels["dude.run"] != review {
+			continue
+		}
+		if got := promptImages(t, r.Spec); !slices.Equal(got, []string{"goal.png", "evidence.png"}) {
+			t.Errorf("the conductor's reviewer was given %v", got)
+		}
+		if p := r.Prompt(); !strings.Contains(p, "[Image 1: goal.png]") || !strings.Contains(p, "- Matches [Image 2: evidence.png]") {
+			t.Errorf("the conductor's reviewer's prompt:\n%s", p)
+		}
+		return
+	}
+	t.Fatalf("no lux Run for the reviewer %s", review)
+}
+
 // update_task: written into the task with what it was, and refused once
 // an implementer started on the attempt.
 func TestUpdateTaskOnlyBeforeTheImplementer(t *testing.T) {
