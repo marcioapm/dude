@@ -434,11 +434,12 @@ func TestAReviewerThatFinishedDoesNotBlockResumingTheRest(t *testing.T) {
 }
 
 // A task changed while it was stopped: the resumed agent is told what it
-// asks for now.
+// asks for now. A resume carries no images, so the note names them.
 func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 	w := newWorld(t)
 	wi, _ := w.aborted()
-	mustExec(t, w.owner, `UPDATE tasks SET goal = 'Say goodbye instead' WHERE id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE tasks SET goal = 'Say goodbye instead, like ![x.png](attachment:att_x)',
+		acceptance_criteria = '["It waves, as in ![y.png](attachment:att_y)"]'::jsonb WHERE id = $1`, wi)
 	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, project_id, task_id, event_type, actor_type, actor_id, source, payload)
 		VALUES ('evt_edit', $1, $2, $3, 'task.updated', 'human', 'someone', 'control-plane', '{"goal":"Say goodbye instead"}'::jsonb)`,
 		w.org, w.project, wi)
@@ -446,7 +447,9 @@ func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 		t.Fatalf("resume: %d %v", status, body)
 	}
 	w.until("the agent to be told", func() bool { r := w.lux.Runs()[0]; return len(r.Inputs) > 0 })
-	if in := w.lux.Runs()[0].Inputs[0]; !strings.Contains(in, "the task was changed") || !strings.Contains(in, "Say goodbye instead") {
+	in := w.lux.Runs()[0].Inputs[0]
+	if !strings.Contains(in, "the task was changed") || !strings.Contains(in, "Say goodbye instead, like [Image: x.png]") ||
+		!strings.Contains(in, "It waves, as in [Image: y.png]") || strings.Contains(in, "attachment:") {
 		t.Errorf("the resumed agent was told %q", in)
 	}
 }

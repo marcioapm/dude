@@ -2,12 +2,13 @@
  * Time and cost, per Run, per task, per epic (migration 028's functions):
  * how long agents worked, how long they waited on people, how long the
  * change sat in review, what it cost. Read from what the ledger and the
- * Runs already record; seconds in the database, milliseconds here.
+ * Runs already record; seconds in the database, milliseconds here. A
+ * task's `?attempt=N` limits every figure to that attempt's Runs (073).
  */
 
 import { costSplit, type CostProvenance } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
-import { json, notFound } from "../http.ts";
+import { intParam, json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const ms = (s: unknown) => (s === null || s === undefined ? null : Math.round(Number(s) * 1000));
@@ -37,15 +38,23 @@ function origin(rows: ReadonlyArray<Record<string, unknown>>): CostProvenance {
   };
 }
 
+/** `?attempt=N`, or absent for the whole task; bounded by runs.attempt's int4. */
+const attemptParam = (ctx: RequestContext): number | null =>
+  intParam(ctx.url, "attempt", { min: 1, max: 2_147_483_647 }) ?? null;
+
 async function taskMetrics(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
+  const attempt = attemptParam(ctx);
   const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
-    const [task] = (await sql`SELECT * FROM task_metrics(${id})`) as Array<Record<string, unknown>>;
+    const [task] = (attempt === null
+      ? await sql`SELECT * FROM task_metrics(${id})`
+      : await sql`SELECT * FROM attempt_metrics(${id}, ${attempt})`) as Array<Record<string, unknown>>;
     if (!task) return null;
     const runs = (await sql`
       SELECT r.id, r.phase, r.role, r.category, r.status, m.*, o.*
       FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m CROSS JOIN LATERAL run_cost_origin(r) o
-      WHERE r.task_id = ${id} AND r.kind = 'agent' ORDER BY r.created_at`) as Array<Record<string, unknown>>;
+      WHERE r.task_id = ${id} AND r.kind = 'agent' AND (${attempt}::int IS NULL OR r.attempt = ${attempt}::int)
+      ORDER BY r.created_at`) as Array<Record<string, unknown>>;
     return {
       leadMs: ms(task.lead_seconds),
       activeMs: ms(task.active_seconds),

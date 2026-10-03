@@ -51,7 +51,7 @@ export const TASK_ID = "tsk_01j9x4kqf8b2m7e3";
 export const RUN_ID = "run_01j9x5m2q7k8e4t1";
 const BRANCH = "dude/tsk_01j9x4kq/checkout-v2-split-payment";
 
-function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run["role"]; status: Run["status"] }): Run {
+export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run["role"]; status: Run["status"] }): Run {
   return {
     organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, attempt: 1, workerId: null, workspacePath: null, error: null, kind: "agent",
     category: null, parentRunId: null, conductorRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
@@ -140,6 +140,87 @@ export const FINDINGS: Finding[] = [
   { id: "f3", taskId: TASK_ID, runId: "run_d2", category: "correctness", severity: "low", status: "accepted", file: null, line: null, title: "Funnel event names differ from the analytics plan", description: "step_2 vs payment_step.", suggestedFix: "", resolutionNote: "Analytics will map them.", resolvedByRunId: null, fixAttempts: 0, createdAt: iso(140 * MIN) },
   { id: "f4", taskId: TASK_ID, runId: "run_d2", category: "correctness", severity: "note", status: "open", file: "apps/web/src/checkout/PaymentStep.module.css", line: 3, title: "Unused class .legacy", description: "", suggestedFix: "", resolutionNote: "", resolvedByRunId: null, fixAttempts: 0, createdAt: iso(140 * MIN) },
 ];
+
+// -- Started over: attempt 1 set aside, attempt 2 at work ----------------------
+
+/**
+ * The task after Start over (`dude.fixtures.run` = restarted). Attempt 1
+ * ran the pipeline, opened #478, and was stopped at the fix for its CI by
+ * Ana; Márcio started over. Attempt 2's reviewer raised nothing, #483 is
+ * open, and its fixer is at work on a review comment. Attempt 1 left three
+ * findings and a file; attempt 2 no findings yet, and a file of its own.
+ */
+export const RESTART = {
+  setAsideMin: 95,
+  note: "Keep the routing as it is; split the form only.",
+  abortReason: "It's rewriting the checkout's routing — that's not what we asked for.",
+};
+const A1 = "dude/task_wc214/attempt-1";
+const A2 = "dude/task_wc214/attempt-2";
+const head = (sha: string) => ({ "web-console": sha });
+/** One of the restarted task's Runs, on its attempt's branch, started when created unless `more` says otherwise. */
+const step = (id: string, attempt: 1 | 2, phase: Run["phase"], role: Run["role"], status: Run["status"], createdMin: number, endedMin: number | null, sha: string, more: Partial<Run> = {}) =>
+  run({ id, attempt, phase, role, status, branch: attempt === 1 ? A1 : A2, createdAt: iso(createdMin * MIN), startedAt: iso(createdMin * MIN),
+    endedAt: endedMin === null ? null : iso(endedMin * MIN), heads: head(sha), ...more });
+export const RESTARTED_RUNS: Run[] = [
+  step("run_a2_fix", 2, "fix", "implementer", "running", 10, null, "e4d1a0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"),
+  step("run_a2_simplify", 2, "simplify", "simplifier", "completed", 40, 32, "d3c0f9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2"),
+  step("run_a2_review", 2, "review", "reviewer", "completed", 55, 41, "b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3", { category: "correctness" }),
+  step("run_attempt2", 2, "implement", "implementer", "completed", 90, 56, "b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3", { startedAt: iso(89 * MIN) }),
+  step("run_a1_fix", 1, "fix", "implementer", "aborted", 110, 97, "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"),
+  step("run_a1_simplify", 1, "simplify", "simplifier", "completed", 140, 130, "7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e"),
+  step("run_a1_review", 1, "review", "reviewer", "completed", 160, 141, "3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b", { category: "correctness" }),
+  step(RUN_ID, 1, "implement", "implementer", "completed", 220, 161, "3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b", { startedAt: iso(219 * MIN) }),
+];
+
+export const RESTARTED_PULL_REQUESTS: PullRequest[] = [
+  { ...PULL_REQUEST, id: "pr_478", runId: "run_a1_simplify", number: 478, url: "https://github.com/example/web-console/pull/478", headBranch: A1,
+    title: "WC-214: split payment step", state: "closed", checkState: "failing", review: "pending", reviews: [], display: "closed",
+    checks: [{ name: "build", status: "completed", conclusion: "success", durationMs: 184_000 }, { name: "e2e", status: "completed", conclusion: "failure", durationMs: 301_000 }],
+    createdAt: iso(129 * MIN), updatedAt: iso(RESTART.setAsideMin * MIN) },
+  { ...PULL_REQUEST, id: "pr_483", runId: "run_a2_simplify", number: 483, url: "https://github.com/example/web-console/pull/483", headBranch: A2,
+    title: "WC-214: split the payment form", createdAt: iso(31 * MIN), updatedAt: iso(9 * MIN) },
+];
+
+const finding = (id: string, runId: string | null, severity: Finding["severity"], title: string, file: string | null, line: number | null, min: number): Finding =>
+  ({ id, taskId: TASK_ID, runId, category: "correctness", severity, status: "open", file, line, title, description: "", suggestedFix: "", resolutionNote: "", resolvedByRunId: null, fixAttempts: 0, createdAt: iso(min * MIN) });
+
+export const RESTARTED_FINDINGS: Finding[] = [
+  finding("f_a1_1", "run_a1_review", "blocking", "Route moved under /billing/v2 breaks deep links", "apps/web/src/checkout/routes.tsx", 22, 142),
+  finding("f_a1_2", "run_a1_review", "medium", "Card form state lost on Back", "apps/web/src/checkout/PaymentStep.tsx", 61, 142),
+  finding("f_a1_3", "run_a1_review", "low", "Funnel event fired twice on step change", "apps/web/src/checkout/funnel.ts", 14, 142),
+];
+
+/** A finding whose Run is gone (deleted; `run_id` NULL): it shows with the current attempt. */
+export const ORPHAN_FINDING: Finding = finding("f_orphan", null, "medium", "Totals rounded before VAT", "apps/web/src/checkout/useTotals.ts", 30, 20);
+
+const artifact = (id: string, runId: string | null, name: string, phase: string, min: number) => ({
+  id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, epoch: 1, createdAt: iso(min * MIN),
+  phase, role: "implementer" as const, version: 1, versions: 1,
+});
+export const RESTARTED_ARTIFACTS = [
+  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170),
+  artifact("art_a2_notes", "run_attempt2", "notes/form-split.md", "implement", 60),
+];
+
+/** The task metrics' per-Run rows for the restarted task, each Run costing what its attempt makes it. */
+export function restartedMetrics(attempt?: number): TaskMetrics {
+  const runs = RESTARTED_RUNS.filter((r) => attempt === undefined || r.attempt === attempt).reverse();
+  const cost = (r: Run) => (r.attempt === 1 ? 3.35 : 1.1);
+  const rows = runs.map((r) => ({
+    id: r.id, phase: r.phase, role: r.role, category: r.category, status: r.status,
+    activeMs: Date.parse(r.endedAt ?? new Date().toISOString()) - Date.parse(r.startedAt ?? r.createdAt), parkedMs: 0,
+    costUsd: cost(r), cost: { totalUsd: cost(r), tokensUsd: cost(r) - 0.1, machineUsd: 0.1 }, tokens: { input: 200_000, output: 20_000 },
+  }));
+  const sum = (f: (x: (typeof rows)[number]) => number) => rows.reduce((n, x) => n + f(x), 0);
+  return {
+    leadMs: attempt === 1 ? 125 * MIN : attempt === 2 ? 90 * MIN : 2 * 24 * 60 * MIN,
+    activeMs: sum((x) => x.activeMs), humanWaitMs: 0, reviewMs: 0,
+    costUsd: sum((x) => x.cost.tokensUsd), cost: { totalUsd: sum((x) => x.cost.totalUsd), tokensUsd: sum((x) => x.cost.tokensUsd), machineUsd: sum((x) => x.cost.machineUsd) },
+    tokens: { input: sum((x) => x.tokens.input), output: sum((x) => x.tokens.output) },
+    runs: rows,
+  };
+}
 
 export function navigationFor(scenario: ServerScenario): NavProject[] {
   const inReview = scenario === "d";

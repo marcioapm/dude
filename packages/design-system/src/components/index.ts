@@ -32,8 +32,8 @@ export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChang
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
 export type { LogStreamProps, LogLine, LogLevel, LogChannel } from "./LogStream.tsx";
-export { Markdown } from "./Markdown.tsx";
-export type { MarkdownProps, MarkdownVariant } from "./Markdown.tsx";
+export { ImageFigure, Markdown, MarkdownImage } from "./Markdown.tsx";
+export type { AttachmentFrameProps, MarkdownImageProps, MarkdownProps, MarkdownVariant } from "./Markdown.tsx";
 export { ActivityIndicator } from "./ActivityIndicator.tsx";
 export type { ActivityIndicatorProps } from "./ActivityIndicator.tsx";
 export { AnsiString } from "./AnsiString.tsx";

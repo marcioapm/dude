@@ -1123,7 +1123,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   which follow it into the closed trigger and are cut before the label is.
   `description` is a line under an option in the list only ("Follows
   whichever size is the default"); `footer` sits under the list on the
-  chrome shade (a note, or a link to where the options are managed).
+  chrome shade (a note, or a link to where the options are managed). The
+  list is at most 560px wide, and 16px narrower than the room left on a
+  phone: a long description wraps instead of running off the screen.
 - **How much of a host a size takes is a `FitBar`**: a 40px track in the
   success tone and the words ("50% of a host"). An unknown share draws no
   track, only "Unknown" in muted ink: nothing known must not look like
@@ -1259,7 +1261,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
-`footer`), Checkbox, ChoiceList (a radio group of a few ways to act, each
+`footer`, `onOpenChange`), Checkbox, ChoiceList (a radio group of a few ways to act, each
 with a sentence; `disabledReason` says why one cannot be chosen),
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and

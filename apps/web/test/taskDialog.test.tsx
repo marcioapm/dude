@@ -1,17 +1,20 @@
 /**
  * The task dialog saves only with a goal of at least TASK_GOAL_MIN
  * characters, trimmed, and says how many more once the person types in it.
- * A new task's images hold Create and deliver until they are made; an edit
- * takes no images. Mounted in happy-dom against the fixture client.
+ * A dropped image goes into the text where it was dropped, as a reference
+ * once it is made; while delivery runs none can be added. Mounted in
+ * happy-dom against the fixture client.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, until } from "./dom.ts";
-import type { Epic } from "../src/api/client.ts";
+import { ApiError, type Epic } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
 import { TaskDialog, type ExistingTask } from "../src/screens/TaskDialog.tsx";
+import { criteriaFromMarkdown } from "../src/screens/criteria.ts";
+import { imageDrag, stackRects } from "../../../packages/design-system/test/imageDrag.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -25,11 +28,11 @@ class EpicsClient extends FixtureClient {
   }
 }
 
-async function open(existing?: ExistingTask) {
+async function open(existing?: ExistingTask, client: FixtureClient = new EpicsClient("a"), onClose: () => void = () => {}) {
   const { unmount } = await mount(
     <TooltipProvider>
       <ToastProvider>
-        <TaskDialog client={new EpicsClient("a")} projectId={PROJECT.id} existing={existing} onClose={() => {}} onSaved={() => {}} />
+        <TaskDialog client={client} projectId={PROJECT.id} existing={existing} onClose={onClose} onSaved={() => {}} />
       </ToastProvider>
     </TooltipProvider>,
   );
@@ -112,54 +115,311 @@ describe("editing a task saved before the rule", () => {
     expect(d.save().disabled).toBe(false);
   });
 
-  test("a file dragged over it shows no drop overlay: an edit takes no images", async () => {
-    await open(old(false));
+  test("while delivery runs, a file dragged over it says images are fixed, and the Attach button is off", async () => {
+    await open(old(true));
     await act(async () => void fileEvent("dragenter", PNG));
-    expect(document.querySelectorAll('[data-testid="drop-overlay"]').length).toBe(0);
+    const overlay = document.querySelector('[data-testid="drop-overlay"]');
+    expect(overlay?.getAttribute("data-refused")).toBe("true");
+    expect(overlay?.textContent).toContain("Delivery is running, so what the task asks for is fixed, and its images too.");
+    expect(document.querySelector<HTMLButtonElement>("[data-testid=task-attach]")!.disabled).toBe(true);
   });
 });
 
 const PNG = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "design.png", { type: "image/png" });
 
-/** A file drag event on the goal, carrying `file`. */
-function fileEvent(type: string, file: File) {
+/** A file drag event on `target` (the goal), carrying `file` (or several). */
+function fileEvent(type: string, file: File | File[], target = "task-goal") {
+  const files = Array.isArray(file) ? file : [file];
   const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
-  e.dataTransfer = { types: ["Files"], items: [file], files: [file], dropEffect: "" };
-  document.querySelector("[data-testid=task-goal]")!.dispatchEvent(e);
+  e.dataTransfer = { types: ["Files"], items: files, files, dropEffect: "" };
+  document.querySelector(`[data-testid=${target}]`)!.dispatchEvent(e);
   return e;
 }
 
-describe("a new task's images", () => {
-  test("Create and deliver waits for a dropped image to be made, and is enabled once it is", async () => {
-    // Decoding is held until released, so the chip stays "uploading"; the canvas encodes a small PNG.
-    let decoded!: () => void;
-    const held = new Promise<void>((r) => (decoded = r));
-    const g = globalThis as { createImageBitmap?: unknown };
-    const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
-    const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
-    g.createImageBitmap = async () => {
-      await held;
-      return { width: 40, height: 30, close() {} };
-    };
-    canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
-    canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
-    try {
-      const d = await open();
-      await d.title("Show invoices in euros");
-      await d.goal("Keep invoices in euros for EU customers.");
-      expect(d.deliver()!.disabled).toBe(false);
-      await act(async () => void fileEvent("drop", PNG));
-      const chip = () => document.querySelector("[data-testid=attachment-chip]");
-      expect(chip()?.getAttribute("data-state")).toBe("uploading");
-      expect(d.deliver()!.disabled).toBe(true);
-      await act(async () => decoded());
-      await until(() => chip()?.getAttribute("data-state") === "ready", "the chip, ready");
-      expect(d.deliver()!.disabled).toBe(false);
-    } finally {
+/** A canvas that encodes a small PNG, its decoding held until `decoded` is called. */
+function heldCanvas() {
+  let decoded!: () => void;
+  const held = new Promise<void>((r) => (decoded = r));
+  const g = globalThis as { createImageBitmap?: unknown };
+  const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+  const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
+  g.createImageBitmap = async () => {
+    await held;
+    return { width: 40, height: 30, close() {} };
+  };
+  canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
+  canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
+  return {
+    decoded: () => decoded(),
+    restore() {
       g.createImageBitmap = saved.bitmap;
       canvas["getContext"] = saved.getContext;
       canvas["toBlob"] = saved.toBlob;
+    },
+  };
+}
+
+const goalValue = () => document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!.value;
+
+describe("a new task's images", () => {
+  test("a drop on the goal puts a placeholder at the caret, held saves until the image is made, then its reference", async () => {
+    const canvas = heldCanvas();
+    try {
+      const d = await open();
+      await d.title("Show invoices in euros");
+      await d.goal("Keep invoices in euros. Like this: and done.");
+      const area = document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!;
+      area.setSelectionRange(34, 34);
+      expect(d.deliver()!.disabled).toBe(false);
+      await act(async () => void fileEvent("drop", PNG));
+      await until(() => goalValue().includes("![Uploading design.png…]()"), "the placeholder");
+      expect(goalValue()).toBe("Keep invoices in euros. Like this:\n\n![Uploading design.png…]()\n\nand done.");
+      expect(d.deliver()!.disabled).toBe(true);
+      expect(d.save().disabled).toBe(true);
+      await act(async () => canvas.decoded());
+      await until(() => !goalValue().includes("Uploading"), "the reference");
+      expect(goalValue()).toMatch(/^Keep invoices in euros\. Like this:\n\n!\[design\.png\]\(attachment:att_local\d+\)\n\nand done\.$/);
+      expect(d.deliver()!.disabled).toBe(false);
+      // Plain Create is not held back by images any more.
+      expect(d.save().disabled).toBe(false);
+      // The tray is gone.
+      expect(document.querySelector("[data-testid=task-images]")).toBeNull();
+      expect(document.querySelector("[data-testid=attachment-chip]")).toBeNull();
+    } finally {
+      canvas.restore();
     }
+  });
+
+  test("a file that is not an image leaves no placeholder, and says why", async () => {
+    const d = await open();
+    await d.goal("Keep invoices in euros for EU customers.");
+    await act(async () => void fileEvent("drop", new File(["%PDF-1.7"], "spec.pdf", { type: "application/pdf" })));
+    await until(() => document.querySelector("[data-testid=task-image-refused]"), "the warning");
+    expect(goalValue()).toBe("Keep invoices in euros for EU customers.");
+    expect(document.querySelector("[data-testid=task-image-refused]")!.textContent).toContain("spec.pdf: only PNG, JPEG, WebP and GIF can be sent");
+  });
+});
+
+describe("laying out a task's images in Preview", () => {
+  const IMG = "![design.png](attachment:att_d1)";
+  const task = (fixed: ExistingTask["fixed"], goal: string, criteria: string[] = []): ExistingTask => ({
+    id: "task_lay", fixed, title: "Lay out", goal, acceptanceCriteria: criteria, epicId: null, repositories: [],
+  });
+  const preview = async (field: "task-goal" | "task-criteria") => {
+    const panel = document.querySelector<HTMLElement>(`[data-testid=${field}-preview]`)!;
+    const tab = document.getElementById(panel.getAttribute("aria-labelledby")!) as HTMLButtonElement;
+    if (tab.getAttribute("aria-selected") !== "true") await act(async () => tab.click());
+    return panel;
+  };
+  const figure = (field: string) => document.querySelector<HTMLElement>(`[data-testid=${field}-preview] [data-image-n="0"]`);
+  const press = (label: string) => act(async () => document.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`)!.click());
+  const criteriaValue = () => document.querySelector<HTMLTextAreaElement>("[data-testid=task-criteria]")!.value;
+
+  test("Wrap right and Small write \"small right\" into the goal's source, and Save is enabled", async () => {
+    const d = await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`));
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Wrap right");
+    await press("Small");
+    expect(goalValue()).toBe('Keep invoices in euros for EU customers.\n\n![design.png](attachment:att_d1 "small right")');
+    expect(d.save().disabled).toBe(false);
+  });
+
+  test("Move up swaps it with the paragraph above", async () => {
+    await open(task(null, `First paragraph here.\n\nSecond paragraph here.\n\n${IMG}`));
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Move up");
+    expect(goalValue()).toBe(`First paragraph here.\n\n${IMG}\n\nSecond paragraph here.`);
+  });
+
+  test("a drag from the goal lands in a criterion as its continuation, and the criteria keep their number", async () => {
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`, ["One", "Two", "Three"]));
+    await preview("task-goal");
+    const crit = await preview("task-criteria");
+    await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
+    stackRects(crit.querySelectorAll("li"), 20, 20);
+    const dnd = imageDrag();
+    await act(async () => dnd("dragstart", figure("task-goal")!));
+    await act(async () => dnd("dragover", crit, 40));
+    await act(async () => dnd("drop", crit, 40));
+    expect(goalValue()).toBe("Keep invoices in euros for EU customers.");
+    expect(criteriaValue()).toBe(`- [ ] One\n- [ ] Two\n  ${IMG}\n- [ ] Three`);
+    const parsed = criteriaFromMarkdown(criteriaValue());
+    expect(parsed.items).toEqual(["One", `Two\n${IMG}`, "Three"]);
+    expect(parsed.stray).toBe(false);
+    expect(document.querySelector("[data-testid=task-criteria-count]")!.textContent).toBe("3 criteria");
+  });
+
+  test("a drag from the goal to the criteria, listed as Files as Chrome does, raises no drop overlay", async () => {
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`, ["One", "Two", "Three"]));
+    await preview("task-goal");
+    const crit = await preview("task-criteria");
+    await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
+    stackRects(crit.querySelectorAll("li"), 20, 20);
+    const overlay = () => document.querySelector('[data-testid="drop-overlay"]');
+    const dnd = imageDrag({ Files: "" });
+    const goal = figure("task-goal")!;
+    await act(async () => dnd("dragstart", goal));
+    for (const [type, el] of [["dragenter", goal], ["dragleave", goal], ["dragenter", crit], ["dragover", crit]] as const) {
+      await act(async () => dnd(type, el, 40));
+      expect(overlay()).toBeNull();
+    }
+    await act(async () => dnd("drop", crit, 40));
+    expect(criteriaValue()).toBe(`- [ ] One\n- [ ] Two\n  ${IMG}\n- [ ] Three`);
+    expect(overlay()).toBeNull();
+  });
+
+  test("Esc on a selected image deselects it, and the dialog stays open", async () => {
+    let closed = 0;
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`), new EpicsClient("a"), () => closed++);
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    expect(document.querySelector("[data-image-toolbar]")).not.toBeNull();
+    await act(async () => void figure("task-goal")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
+    expect(closed).toBe(0);
+    expect(document.querySelector("[role=alertdialog]")).toBeNull();
+    expect(document.querySelector("[data-testid=task-goal]")).not.toBeNull();
+  });
+
+  test("Open shows the viewer, and one Esc closes it", async () => {
+    let closed = 0;
+    class WithImage extends EpicsClient {
+      override attachment(): Promise<Blob> {
+        return Promise.resolve(new Blob([PNG], { type: "image/png" }));
+      }
+    }
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`), new WithImage("a"), () => closed++);
+    await preview("task-goal");
+    await until(() => figure("task-goal")?.querySelector("[data-testid=markdown-image]"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Open");
+    const viewer = await until(() => document.querySelector<HTMLElement>("[data-testid=image-viewer]"), "the viewer");
+    await act(async () => void (document.activeElement ?? viewer).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await until(() => !document.querySelector("[data-testid=image-viewer]"), "the viewer closed");
+    expect(closed).toBe(0);
+  });
+
+  test("while delivery runs: no toolbar, no handles, and a click does not select", async () => {
+    await open(task("all", `Keep invoices in euros for EU customers.\n\n${IMG}`));
+    const goal = document.querySelector<HTMLElement>("[data-testid=task-goal-preview]")!;
+    await until(() => goal.querySelector('[data-testid="markdown-figure"]'), "the image");
+    expect(figure("task-goal")).toBeNull();
+    await act(async () => goal.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!.click());
+    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
+    expect(goal.querySelector("[draggable=true]")).toBeNull();
+  });
+});
+
+/** Records each save call in order; a call named in `failing` rejects that many times first. */
+class SaveRecorder extends EpicsClient {
+  calls: Array<{ call: string; detail?: unknown }> = [];
+  failing: Record<string, number> = {};
+  #uploads = 0;
+  #fail(call: string) {
+    if ((this.failing[call] ?? 0) === 0) return;
+    this.failing[call]!--;
+    throw new ApiError(500, "internal", `${call} failed`);
+  }
+  override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+    this.calls.push({ call: "createTask", detail: input });
+    this.#fail("createTask");
+    return { id: "task_new" } as Awaited<ReturnType<FixtureClient["createTask"]>>;
+  }
+  override async uploadAttachment(taskId: string, image: Parameters<FixtureClient["uploadAttachment"]>[1]) {
+    this.calls.push({ call: "uploadAttachment", detail: taskId });
+    this.#fail("uploadAttachment");
+    return { id: `att_real${++this.#uploads}`, name: image.name } as Awaited<ReturnType<FixtureClient["uploadAttachment"]>>;
+  }
+  override async updateTask(id: string, fields: Parameters<FixtureClient["updateTask"]>[1]) {
+    this.calls.push({ call: "updateTask", detail: { id, ...fields } });
+    this.#fail("updateTask");
+    return { id } as Awaited<ReturnType<FixtureClient["updateTask"]>>;
+  }
+  override async deliver(taskId: string) {
+    this.calls.push({ call: "deliver", detail: taskId });
+    this.#fail("deliver");
+    return { workflowRunId: "wf_new", alreadyRunning: false };
+  }
+  names() {
+    return this.calls.map((c) => c.call);
+  }
+}
+
+describe("creating a task with images", () => {
+  const GOAL = "Keep invoices in euros. Like this:";
+
+  /** New task with `count` images dropped at the end of the goal, each made. */
+  async function withImages(client: SaveRecorder, count = 1) {
+    const canvas = heldCanvas();
+    try {
+      const d = await open(undefined, client);
+      await d.title("Show invoices in euros");
+      await d.goal(GOAL);
+      const area = document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!;
+      area.setSelectionRange(GOAL.length, GOAL.length);
+      const files = Array.from({ length: count }, (_, i) => new File([PNG], `design${i}.png`, { type: "image/png" }));
+      await act(async () => void fileEvent("drop", files));
+      await act(async () => canvas.decoded());
+      await until(() => (goalValue().match(/attachment:att_local/g) ?? []).length === count && !goalValue().includes("Uploading"), "the references");
+      return d;
+    } finally {
+      canvas.restore();
+    }
+  }
+  const press = async (button: HTMLButtonElement) => act(async () => button.click());
+  const sentGoal = (c: SaveRecorder) => (c.calls.findLast((x) => x.call === "updateTask")!.detail as { goal: string }).goal;
+
+  test("Create and deliver: the task, its image uploaded to it, one PATCH with the real id and every field, then the delivery", async () => {
+    const client = new SaveRecorder("a");
+    const d = await withImages(client);
+    await press(d.deliver()!);
+    await until(() => client.names().includes("deliver"), "the delivery");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask", "deliver"]);
+    const patch = client.calls[2]!.detail as Record<string, unknown>;
+    expect(patch).toMatchObject({ id: "task_new", title: "Show invoices in euros", acceptanceCriteria: [], epicId: null });
+    expect(patch).toHaveProperty("repositories");
+    expect(patch["goal"]).toBe(`${GOAL}\n\n![design0.png](attachment:att_real1)`);
+  });
+
+  test("a PATCH that fails is sent again on the retry, with no second task and no second upload", async () => {
+    const client = new SaveRecorder("a");
+    client.failing = { updateTask: 1 };
+    const d = await withImages(client);
+    await press(d.deliver()!);
+    await until(() => document.body.textContent?.includes("updateTask failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask"]);
+    await press(d.deliver()!);
+    await until(() => client.names().includes("deliver"), "the delivery");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask", "updateTask", "deliver"]);
+    expect(sentGoal(client)).toBe(`${GOAL}\n\n![design0.png](attachment:att_real1)`);
+  });
+
+  test("after a failed upload, a Create without the image saves the text as it now is", async () => {
+    const client = new SaveRecorder("a");
+    client.failing = { uploadAttachment: 1 };
+    const d = await withImages(client);
+    await press(d.save());
+    await until(() => document.body.textContent?.includes("uploadAttachment failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment"]);
+    await d.goal("Keep invoices in euros for every EU customer.");
+    await press(d.save());
+    await until(() => client.names().includes("updateTask"), "the PATCH");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask"]);
+    expect(sentGoal(client)).toBe("Keep invoices in euros for every EU customer.");
+    expect(sentGoal(client)).not.toContain("att_local");
+  });
+
+  test("more images than a task shows are refused before anything is created", async () => {
+    const client = new SaveRecorder("a");
+    const d = await withImages(client, 7);
+    await press(d.deliver()!);
+    await until(() => document.body.textContent?.includes("A task shows at most 6 images; this one shows 7."), "the refusal");
+    expect(client.calls).toEqual([]);
   });
 });
 
@@ -184,6 +444,13 @@ describe("editing a task whose delivery stopped", () => {
     mounted.push(unmount);
     await until(() => document.querySelector("[data-testid=task-goal]") && document.body.textContent?.includes(PROJECT.name), "the dialog, loaded");
     expect(document.body.textContent).toContain("Its repositories are fixed.");
+    // Its text can change, so its images can too.
+    expect(document.querySelector<HTMLButtonElement>("[data-testid=task-attach]")!.disabled).toBe(false);
+    await act(async () => void fileEvent("dragenter", PNG));
+    const overlay = document.querySelector('[data-testid="drop-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.getAttribute("data-refused")).not.toBe("true");
+    await act(async () => void fileEvent("dragleave", PNG));
     const title = document.querySelector<HTMLInputElement>("[data-testid=task-title]")!;
     expect(title.disabled).toBe(false);
     await set(title, HTMLInputElement.prototype, "Stopped task, reworded");

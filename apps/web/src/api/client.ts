@@ -875,8 +875,8 @@ export class ApiClient {
    * Start the delivery workflow: implement, review, fix, simplify, then a
    * pull request. Idempotent — a second call joins the delivery in flight.
    */
-  deliver(taskId: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, attachmentIds.length > 0 ? { attachmentIds } : {});
+  deliver(taskId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, {});
   }
 
   /** Approve or decline an agent's request for a repository. */
@@ -884,9 +884,9 @@ export class ApiClient {
     return this.#request("POST", `/v1/repository-requests/${encodeURIComponent(id)}/decide`, { approve, note });
   }
 
-  /** How long a task's agents worked and waited, how long it sat in review, what it cost. */
-  taskMetrics(taskId: string): Promise<TaskMetrics> {
-    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/metrics`);
+  /** How long a task's agents worked and waited, how long it sat in review, what it cost; with `attempt`, that attempt's Runs' alone. */
+  taskMetrics(taskId: string, attempt?: number): Promise<TaskMetrics> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/metrics${attempt ? `?attempt=${attempt}` : ""}`);
   }
 
   /** An epic's tasks, totalled. */

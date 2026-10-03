@@ -26,6 +26,8 @@
  * four spaces), footnotes, reference links.
  */
 
+import { attachmentReferences } from "@dude/domain";
+
 export type Inline =
   | { readonly t: "text"; readonly v: string }
   | { readonly t: "code"; readonly v: string }
@@ -33,7 +35,7 @@ export type Inline =
   | { readonly t: "em"; readonly c: readonly Inline[] }
   | { readonly t: "del"; readonly c: readonly Inline[] }
   | { readonly t: "link"; readonly href: string; readonly c: readonly Inline[] }
-  | { readonly t: "image"; readonly src: string; readonly alt: string }
+  | { readonly t: "image"; readonly src: string; readonly alt: string; readonly title?: string }
   | { readonly t: "br" };
 
 export type TableAlign = "left" | "center" | "right" | null;
@@ -65,6 +67,8 @@ export interface ParseOptions {
   readonly breaks?: boolean | undefined;
   /** Heading ids already taken, shared by the sections of one document so each id is unique in it. */
   readonly usedIds?: Map<string, number> | undefined;
+  /** Filled with the source line each top-level block starts on, one per block returned. */
+  readonly blockLines?: number[] | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,13 +115,14 @@ export function parseMarkdown(src: string, opts: ParseOptions = {}): Block[] {
   const breaks = opts.breaks === true;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const usedIds = opts.usedIds ?? new Map<string, number>();
-  return parseBlocks(lines, { streaming, breaks, usedIds }, 0);
+  return parseBlocks(lines, { streaming, breaks, usedIds, blockLines: opts.blockLines }, 0);
 }
 
 interface BlockCtx {
   readonly streaming: boolean;
   readonly breaks: boolean;
   readonly usedIds: Map<string, number>;
+  readonly blockLines?: number[] | undefined;
 }
 
 function parseBlocks(lines: readonly string[], ctx: BlockCtx, depth: number): Block[] {
@@ -134,7 +139,8 @@ function parseBlocks(lines: readonly string[], ctx: BlockCtx, depth: number): Bl
       i++;
       continue;
     }
-
+    // Every branch below pushes exactly one block.
+    if (depth === 0) ctx.blockLines?.push(i);
     // Fenced code
     const fence = FENCE_RE.exec(line);
     if (fence) {
@@ -495,6 +501,17 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       const link = parseLink(ctx, i + 1, to, depth, links);
       if (link) {
         flush();
+        if (/^<?attachment:/.test(link.href.trim())) {
+          // One of the caller's own images, drawn only where the backend would
+          // attach it: exactly the span `attachmentReferences` matches. Any
+          // other spelling reaches the agent as text, so it shows as text.
+          const span = src.slice(i, link.end);
+          const ref = attachmentReferences(span)[0];
+          if (ref && ref.from === 0 && ref.to === span.length) nodes.push({ t: "image", src: `attachment:${ref.id}`, alt: plain(link.nodes), ...(ref.title !== undefined ? { title: ref.title } : {}) });
+          else nodes.push({ t: "text", v: span });
+          i = link.end;
+          continue;
+        }
         const s = safeUrl(link.href);
         const alt = plain(link.nodes);
         if (s) nodes.push({ t: "image", src: s, alt });

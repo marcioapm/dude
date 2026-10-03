@@ -37,7 +37,7 @@ export type { RowMenuProps, RowMenuTriggerProps, RowMenuItem, RowMenuAction, Row
 export { Page, PageHeader, Section, Callout, KeyValueList, FormStack, FormRow, FormActions, Fieldset } from "./Layout.tsx";
 export type { PageProps, PageHeaderProps, SectionProps, CalloutProps, CalloutTone, KeyValueListProps, FormActionsProps, FieldsetProps } from "./Layout.tsx";
 export { MarkdownEditor } from "./MarkdownEditor.tsx";
-export type { MarkdownEditorProps, MarkdownEditorMode } from "./MarkdownEditor.tsx";
+export type { MarkdownEditorHandle, MarkdownEditorProps, MarkdownEditorMode } from "./MarkdownEditor.tsx";
 export { formatEdit, continueList, editorKey, countState, FORMAT_KEYS } from "../util/markdownEdit.ts";
 export type { TextEdit, MarkdownFormat, EditorKey } from "../util/markdownEdit.ts";
 export { modKey } from "../util/keys.ts";

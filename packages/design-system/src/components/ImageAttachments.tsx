@@ -2,6 +2,7 @@ import * as RadixDialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent, type ReactNode, type RefObject } from "react";
 import { cx } from "../util/cx.ts";
 import { formatBytes } from "../util/format.ts";
+import { isImageMove } from "../util/imageDrag.ts";
 import { Icon } from "../icons/index.tsx";
 import styles from "./ImageAttachments.module.css";
 
@@ -89,8 +90,8 @@ export function attachmentWarning(attachments: ReadonlyArray<ComposerAttachment>
 // -------------------------------------------------------------------------
 
 export interface AttachDropZoneProps {
-  /** Files dropped or pasted on it. */
-  readonly onFiles: (files: File[]) => void;
+  /** Files dropped or pasted on it, and the element they were dropped or pasted on. */
+  readonly onFiles: (files: File[], on: EventTarget | null) => void;
   /** Off: no overlay, nothing taken, drags left to the browser (a finished session, another view). */
   readonly disabled?: boolean | undefined;
   /**
@@ -107,7 +108,11 @@ export interface AttachDropZoneProps {
   readonly children: ReactNode;
 }
 
-const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+// An image repositioned in Preview carries "Files" too (Chrome offers its <img>): it is not a file drop.
+const hasFiles = (e: DragEvent) => {
+  const types = Array.from(e.dataTransfer?.types ?? []);
+  return types.includes("Files") && !isImageMove(types);
+};
 
 /**
  * Takes a paste's files for `onFiles`. The paste's text, when it has some
@@ -144,6 +149,28 @@ export function AttachDropZone({ onFiles, disabled, disabledReason, detail, take
     depth.current = 0;
     setCount(null);
   };
+  // A drop handled lower down (stopPropagation), a drag ended outside the
+  // window or cancelled with Esc: none balances dragleave, so the overlay
+  // goes on the drag's end however it ends.
+  const showing = count !== null;
+  useEffect(() => {
+    if (!showing) return;
+    const end = reset;
+    // Out of the window: a leave to nothing. Safari reports every dragleave
+    // to nothing, so a pointer still inside the viewport is not out.
+    const left = (e: globalThis.DragEvent) => {
+      const inside = e.clientX > 0 && e.clientY > 0 && e.clientX < window.innerWidth && e.clientY < window.innerHeight;
+      if (e.relatedTarget === null && !inside) end();
+    };
+    window.addEventListener("dragend", end, true);
+    window.addEventListener("drop", end, true);
+    document.addEventListener("dragleave", left);
+    return () => {
+      window.removeEventListener("dragend", end, true);
+      window.removeEventListener("drop", end, true);
+      document.removeEventListener("dragleave", left);
+    };
+  }, [showing]);
   const refused = disabledReason !== undefined && disabledReason !== null && disabledReason !== false;
   return (
     <div
@@ -170,11 +197,11 @@ export function AttachDropZone({ onFiles, disabled, disabledReason, detail, take
         e.preventDefault();
         reset();
         const files = Array.from(e.dataTransfer.files);
-        if (!refused && files.length > 0) onFiles(files);
+        if (!refused && files.length > 0) onFiles(files, e.target);
       }}
       onPaste={takePaste ? (e) => {
         if (disabled || refused) return;
-        takePastedFiles(e, onFiles);
+        takePastedFiles(e, (files) => onFiles(files, e.target));
       } : undefined}
     >
       {children}

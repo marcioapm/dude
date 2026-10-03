@@ -29,11 +29,6 @@ export interface ImageTray {
   /** Whether images can be attached; why not when they cannot. */
   disabledReason: string | undefined;
   limits: Limits;
-  /**
-   * For a tray opened before its task exists: upload what it holds to the
-   * task now, and answer the attachment ids, in order. Throws if one fails.
-   */
-  uploadTo: (taskId: string) => Promise<string[]>;
 }
 
 let seq = 0;
@@ -54,8 +49,8 @@ export function useAttachmentLimits(client: ApiClient): AttachmentLimits | null 
 /**
  * The tray for one message to a task. Each file is checked, its delivered
  * variant made within what the message has left of its budget, and both
- * uploaded; the chip shows each step. With no task yet (a task being
- * written), images are made and kept, and `uploadTo` sends them once it exists.
+ * uploaded; the chip shows each step. With no task known, images are made
+ * and kept, not uploaded.
  */
 export function useImageTray(client: ApiClient, taskId: string | undefined, limitsAnswer: AttachmentLimits | null): ImageTray {
   const [chips, setChips] = useState<Chip[]>([]);
@@ -148,29 +143,8 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
     setChips((cs) => cs.filter((c) => !gone.has(c.id)));
   }, [dropPreview]);
 
-  const uploadTo = useCallback(async (task: string) => {
-    const ids: string[] = [];
-    for (const chip of chipsRef.current) {
-      if (chip.attachmentId) {
-        ids.push(chip.attachmentId);
-        continue;
-      }
-      if (!chip.prepared) continue;
-      update(chip.id, { state: "uploading", progress: 0 });
-      try {
-        const uploaded = await client.uploadAttachment(task, chip.prepared, (p) => update(chip.id, { progress: p }));
-        update(chip.id, { state: "ready", attachmentId: uploaded.id, progress: 1 });
-        ids.push(uploaded.id);
-      } catch (err) {
-        uploadFailed(chip.id, err);
-        throw err;
-      }
-    }
-    return ids;
-  }, [client, update, uploadFailed]);
-
   const disabledReason = limitsAnswer && !limitsAnswer.enabled ? "Image storage isn't set up" : undefined;
-  return { attachments: chips, add, remove, clear, disabledReason, limits, uploadTo };
+  return { attachments: chips, add, remove, clear, disabledReason, limits };
 }
 
 /** The paperclip's tooltip: what may be attached, and how large. `dropOn` names where a drop lands. */
