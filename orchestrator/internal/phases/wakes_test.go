@@ -130,7 +130,7 @@ func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
 		SELECT 'cwk_old'||n, $1, 'wi_'||n, 'decision', 'old', 'arrived an hour ago', now() - interval '1 hour'
 		FROM generate_series(1, 200) n`, org)
 	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
-		SELECT 'cwk_new'||n, $1, 'wi_'||n, 'decision', 'new', 'still arriving', now()
+		SELECT 'cwk_new'||n, $1, 'wi_'||n, 'decision', 'new', 'still arriving', now() + interval '1 day'
 		FROM generate_series(1, 200) n`, org)
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
 		VALUES ('run_ready', $1, 'prj_'||$1, 'wi_zready', 1, 'conductor', 'agent', 'paused', 'conductor', now())`, org)
