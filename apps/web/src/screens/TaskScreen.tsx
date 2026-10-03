@@ -662,7 +662,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <div className="taskSessionList" data-testid="sessions">
                 {(() => {
                   const item = (run: Run, under: boolean) => (
-                    <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session"
+                    <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session" data-run={run.id}
                       data-under={under ? (run.conductorRunId ? "conductor" : "delivered") : undefined}
                       className={under ? "sessionUnder" : undefined}
                       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
