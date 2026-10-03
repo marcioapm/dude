@@ -410,8 +410,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
   const started = currentPhases.length > 0;
   // Where Deliver is offered, Talk it through is beside it: a task nothing
-  // has started, neither delivered nor talked through.
-  const startable = !started && item.decider === "policy" && ["received", "intake", "awaiting_confirmation", "queued"].includes(item.status);
+  // has started, neither delivered nor talked through, on its current
+  // attempt (an earlier one is only to read).
+  const startable = !earlier && !started && item.decider === "policy" && ["received", "intake", "awaiting_confirmation", "queued"].includes(item.status);
   const stopped = item.status === "aborted" || item.status === "failed";
   // The pick-up is the current attempt's: an earlier one is only to read.
   const stop = stopped && !earlier ? stopOfTask : null;
@@ -543,7 +544,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
-            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack} />
+            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack} />
         </TabPanel>
 
         <TabPanel value="overview" className="taskPane">
