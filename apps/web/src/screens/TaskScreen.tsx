@@ -398,10 +398,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // the current attempt's: an earlier one has none to show.
   const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
   // The one open is the one asked for, else the one picked on first sight
-  // (what was running, else the newest).
+  // (what was running, else the newest). On an earlier attempt, first sight
+  // is of that attempt's own sessions, not the task's conductor above them.
+  const firstSight = earlier ? sessions.filter((r) => !isConductor(r)) : sessions;
   const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
-    ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
+    ?? (firstSight.find((r) => r.status === "running") ?? firstSight[0] ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
