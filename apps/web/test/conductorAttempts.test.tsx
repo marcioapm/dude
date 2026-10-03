@@ -208,6 +208,15 @@ describe("a conductor's session, from its URL", () => {
     expect(tabCount(page, "Sessions")).toBe("5");
   });
 
+  test("Sessions lists the conductor first even when it is older than every Run of the attempt", async () => {
+    // Created before attempt 1 was set aside, older than all of attempt 2's.
+    const page = await app(restartedWith(conductor(2, { createdAt: at(10_000), startedAt: at(10_000) })), `#/task/${TASK_ID}/sessions`);
+    const list = await sessionsListed(page);
+    expect(shown(page)).toBe("2");
+    expect(list[0]!.textContent).toContain("Conductor");
+    expect(list).toHaveLength(5);
+  });
+
   test("Overview picked on a task with a conductor stays picked once the URL says the task alone", async () => {
     const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/findings`);
     await until(() => page.querySelector("[data-testid=attempt-picker]"), "the task page");
