@@ -96,3 +96,55 @@ func TestAReadyWakeIsNotCrowdedOutOfTheSweep(t *testing.T) {
 		t.Errorf("%d notes for the ready conductor after a repeat sweep, want 1", n)
 	}
 }
+
+// At the batch's boundary again: 200 idle conductors, each with an old
+// reason and a fresh one inside the window, so they must wait; and one
+// whose only reason has settled, newer than their old ones. The ready one
+// is told in one sweep, and none of the 200.
+func TestAWakeIsNotCrowdedOutByReasonsStillArriving(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(sql string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, 200) n`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zready', $1, 'prj_'||$1, 201, 'T', 'G')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
+		SELECT 'run_i'||n, $1, 'prj_'||$1, 'wi_'||n, 1, 'conductor', 'agent', 'paused', 'conductor', now() - interval '2 hours'
+		FROM generate_series(1, 200) n`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		SELECT 'cwk_old'||n, $1, 'wi_'||n, 'decision', 'old', 'arrived an hour ago', now() - interval '1 hour'
+		FROM generate_series(1, 200) n`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		SELECT 'cwk_new'||n, $1, 'wi_'||n, 'decision', 'new', 'still arriving', now()
+		FROM generate_series(1, 200) n`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
+		VALUES ('run_ready', $1, 'prj_'||$1, 'wi_zready', 1, 'conductor', 'agent', 'paused', 'conductor', now())`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_ready', $1, 'wi_zready', 'decision', 'k', 'ready to decide', now() - interval '1 minute')`, org)
+
+	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), WakeWindow: 15 * time.Second, SafetyAfter: time.Hour}
+	if err := s.wakeConductors(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT count(*) FROM directives WHERE run_id = 'run_ready' AND text LIKE '%ready to decide%'`); n != 1 {
+		t.Fatalf("the ready conductor has %d notes after one sweep, want 1", n)
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE task_id <> 'wi_zready' AND delivered_at IS NOT NULL`); n != 0 {
+		t.Errorf("%d reasons delivered while more were arriving", n)
+	}
+}
