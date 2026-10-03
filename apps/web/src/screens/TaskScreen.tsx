@@ -363,7 +363,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // turn, and the latest takes the next message.
   const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const conductor = conductors.at(-1) ?? null;
-  const tab = asked ?? (conductor ? "chat" : "overview");
+  // A URL naming an attempt is an attempt's place, and Chat is the task's: with no tab, Overview.
+  const tab = asked ?? (conductor && urlAttempt === undefined ? "chat" : "overview");
 
   // Leaves any open session; the URL is replaced only for a tab change with none open.
   const show = (onTab: string, n: number, replace: boolean) => {
