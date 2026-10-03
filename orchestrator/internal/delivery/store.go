@@ -51,6 +51,9 @@ const (
 // safe to repeat.
 type Store struct {
 	DB *db.DB
+	// Test hook: called in a step once it has read the gate's answer, before
+	// any authorization from it is recorded.
+	GateRead func()
 }
 
 // runByKey finds the Run a workflow step already created, or "".

@@ -9,9 +9,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // gated registers the delivery workflow with hook called before each
@@ -188,6 +190,104 @@ func TestAGateAuthorizationIsForItsHeads(t *testing.T) {
 				t.Errorf("draft %v, want %v", w.gh.Pulls()[0].Draft, c.draft)
 			}
 		})
+	}
+}
+
+// Deliver holds the gate the conductor entered and the person answers
+// Open. A worker claims the parked step, reads that answer, and stalls
+// before its transition commits; its lease lapses. The person gives the
+// decisions back to the conductor, which asks again; they answer Draft and
+// hand back. The stale worker's commit must not replace that newer Draft
+// with the Open it read: the pull request opens as a draft.
+func TestAStaleStepCannotAuthorizeTheGateOverANewerAnswer(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ctx := context.Background()
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step != "test" || next == step {
+			return
+		}
+		once.Do(func() {
+			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+				t.Errorf("hand-back while entering the gate: %d %v", status, out)
+			}
+		})
+	})
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	armed.Store(true)
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("Deliver's gate question", func() bool { return w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0 })
+	w.pump()
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened with the gate unanswered", n)
+	}
+	armed.Store(false)
+
+	// The stale worker: its own runtime, paused once its step has read the
+	// gate's answer.
+	reached, release := make(chan struct{}), make(chan struct{})
+	var paused sync.Once
+	store := &delivery.Store{DB: w.app}
+	store.GateRead = func() {
+		paused.Do(func() {
+			close(reached)
+			<-release
+		})
+	}
+	stale := workflow.New(w.app, "stale", quiet)
+	stale.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+
+	if status, out := w.chat(task, "Open"); status != 200 {
+		t.Fatalf("answer Open: %d %v", status, out)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := stale.Tick(ctx, 1)
+		done <- err
+	}()
+	select {
+	case <-reached:
+	case <-time.After(20 * time.Second):
+		close(release)
+		t.Fatal("the stale worker never ran the gate's step")
+	}
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	// Its lease lapses. Cleared rather than backdated, so the stalled
+	// worker's renewal (guarded on its poller id) cannot extend it again.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = NULL, locked_until = NULL WHERE task_id = $1`, task)
+
+	if status, out := w.handBack(task, map[string]any{"decider": "conductor"}); status != 200 {
+		t.Fatalf("giving the decisions back to the conductor: %d %v", status, out)
+	}
+	w.until("the gate parked for the conductor", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chat(task, "Draft"); status != 200 {
+		t.Fatalf("answer Draft: %d %v", status, out)
+	}
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand-back on Draft: %d %v", status, out)
+	}
+	w.stepTo(task, "openPullRequest")
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened before the stale worker resumed", n)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if !w.gh.Pulls()[0].Draft {
+		t.Errorf("the pull request opened ready for review: the stale worker's Open replaced the person's newer Draft")
 	}
 }
 
