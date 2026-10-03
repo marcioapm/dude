@@ -34,7 +34,7 @@ export function ChatRunLine({ role, status, what, facts = [], onOpen, className,
         {what ? <span className={styles["what"]}>· {what}</span> : null}
         <span className={styles["end"]}>
           <StatusMark status={status} size="sm" />
-          {facts.map((fact, i) => <span key={i} className={styles["fact"]}>{fact}</span>)}
+          {facts.map((fact, i) => <span key={i}>{fact}</span>)}
         </span>
       </button>
     </div>
