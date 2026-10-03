@@ -113,6 +113,14 @@ test("Talk it through and Let Deliver finish it go to the orchestrator as who as
   expect(forwarded).toEqual([]);
 });
 
+test("Talk it through and Deliver carry no images: the task's text names them", async () => {
+  forwarded.length = 0;
+  expect((await call("POST", "/v1/tasks/wi_1/deliver", { attachmentIds: ["att_x"] })).status).toBe(400);
+  expect(forwarded).toEqual([]);
+  expect((await call("POST", "/v1/tasks/wi_1/talk", { attachmentIds: ["att_x"] })).status).toBe(201);
+  expect(forwarded).toEqual([{ path: "/internal/tasks/wi_1/talk", body: {}, actor: key.id, person: key.personId }]);
+});
+
 test("a task says who decides, and the decision its conductor is asked for", async () => {
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
     VALUES ('wi_none', ${ORG}, ${PROJECT}, 3, 'Not started', 'received'),
