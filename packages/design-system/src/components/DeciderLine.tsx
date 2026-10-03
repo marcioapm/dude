@@ -6,7 +6,7 @@ import styles from "./DeciderLine.module.css";
 export interface DeciderLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   /** Who takes the task's decisions: Deliver's rules, or its conductor. */
   readonly decider: "policy" | "conductor";
-  /** What the delivery waits on the conductor for now, in a person's words. */
+  /** What the delivery waits on now, in a person's words: the conductor, or (Deliver deciding) the person. */
   readonly waiting?: string | undefined;
   /** One quiet action: hand the decisions back, or to the conductor. */
   readonly action?: ReactNode;
@@ -30,7 +30,7 @@ export function DeciderLine({ decider, waiting, action, className, ...rest }: De
           {" · "}
           {conductor
             ? waiting ? <>waiting on it: {waiting}</> : "each step that finishes comes back to it"
-            : "the pipeline runs to the pull request on its own"}
+            : waiting ? <>waiting on the person: {waiting}</> : "the pipeline runs to the pull request on its own"}
         </span>
       </p>
       {action ? <span className={styles["action"]}>{action}</span> : null}

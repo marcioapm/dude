@@ -72,7 +72,8 @@ class DecisionsClient extends FixtureClient {
   override async setDecider(taskId: string, decider: Decider, openPullRequest = false) {
     this.deciders.push(openPullRequest ? `${decider}+open` as Decider : decider);
     if (this.refuse && !(this.refuse.code === "pull_request_gate" && openPullRequest)) throw this.refuse;
-    this.patch = { ...this.patch, decider };
+    // Confirmed, Deliver opens the pull request: the gate waits no more.
+    this.patch = { ...this.patch, decider, ...(openPullRequest ? { awaitingDecision: null } : {}) };
     return { taskId, decider };
   }
   refuse: ApiError | null = null;
@@ -164,6 +165,35 @@ describe("a conducted task's Chat", () => {
     await click(open);
     expect(client.deciders).toEqual(["policy", "policy+open"]);
     await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "Deliver decides");
+  });
+
+  // Handed back while the conductor entered the gate, and its conductor
+  // ended: Deliver holds the gate with no one live to ask the person. The
+  // confirmation is still there, and only it opens the pull request.
+  for (const conductor of ["completed", "running"] as const) {
+    test(`a gate Deliver holds offers Let Deliver finish it, its conductor ${conductor}`, async () => {
+      const held = [run({ id: CONDUCTOR, phase: null, role: "conductor", status: conductor, createdAt: at(0) }), runs[1]!];
+      const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs: held,
+        awaitingDecision: { point: "before_pull_request" } }, events());
+      client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
+      const p = await page(client);
+      const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "the gate's line");
+      expect(line.textContent).toContain("Deliver decides · waiting on the person: whether to open the pull request");
+      expect(p.querySelector("[data-testid=task-chat]")?.textContent).toContain("read-only");
+      await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
+      const open = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-open]"), "the confirmation");
+      expect(client.deciders).toEqual(["policy"]);
+      await click(open);
+      expect(client.deciders).toEqual(["policy", "policy+open"]);
+      await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "the gate no longer held");
+    });
+  }
+
+  test("Deliver deciding anywhere but a held gate shows no line", async () => {
+    const p = await page(new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs,
+      awaitingDecision: null }, events()));
+    await until(() => p.querySelector("[data-testid=chat-screen]"), "the Chat");
+    expect(p.querySelector("[data-testid=decider-line]")).toBeNull();
   });
 
   test("a hand-back that fails says why beside the conductor's Chat", async () => {

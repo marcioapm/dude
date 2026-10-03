@@ -77,6 +77,11 @@ describe("who decides", () => {
     expect(plain(html(<DeciderLine decider="policy" />))).toBe("Deliver decides · the pipeline runs to the pull request on its own");
   });
 
+  test("Deliver, holding a gate for the person", () => {
+    expect(plain(html(<DeciderLine decider="policy" waiting="whether to open the pull request" action={<button>Let Deliver finish it</button>} />)))
+      .toBe("Deliver decides · waiting on the person: whether to open the pull requestLet Deliver finish it");
+  });
+
   test("a decision waited on is dude's notice, signed", () => {
     const h = html(<ChatNotice kind="decision" by="El Duderino" text="Waiting on the conductor." at={0} />);
     expect(h).toContain('data-kind="decision"');
