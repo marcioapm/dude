@@ -216,6 +216,14 @@ describe("a conductor's session, from its URL", () => {
     await settle(100);
     expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
   });
+
+  test("a URL naming attempt 1 and no tab opens on Overview of attempt 1, not Chat", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}?attempt=1`);
+    await until(() => (shown(page) === "1" ? true : null), "attempt 1 from the URL");
+    await settle(100);
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
+    expect(window.location.hash).toBe(`#/task/${TASK_ID}?attempt=1`);
+  });
 });
 
 describe("a conductor's session on an earlier attempt", () => {
