@@ -206,6 +206,10 @@ describe("a conductor's session, from its URL", () => {
     // Attempt 1's four Runs, and the conductor.
     expect(list).toHaveLength(5);
     expect(tabCount(page, "Sessions")).toBe("5");
+    const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
+    await act(async () => tab.focus());
+    const tip = await until(() => document.querySelector<HTMLElement>("[role=tooltip]"), "the Sessions tooltip");
+    expect(tip.textContent).toBe("Attempt 1's sessions, and the task's conductor");
   });
 
   test("Sessions lists the conductor first even when it is older than every Run of the attempt", async () => {
