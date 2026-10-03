@@ -475,6 +475,34 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.must(task, "decide", `{"action":"wait","note":"asking Márcio first"}`)
 		w.until("waiting on the pull request", func() bool { return w.taskStatus(task) == "review" })
 	})
+	t.Run("the organization's fix rounds per pull request", func(t *testing.T) {
+		w := conducting(t)
+		mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":1}' WHERE organization_id = $1`, w.org)
+		task := w.task()
+		w.deliver(task)
+		// The per-review budget is not what stops it: plenty left.
+		setPolicy(w, task, `{"maxPrFixIterations":9}`)
+		w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+		w.chat(task, "I'll take it from here")
+		w.gh.Comment(1, "alice", "Please rename the greeting.")
+		w.until("feedback to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
+		w.must(task, "start_phase", `{"phase":"fix"}`)
+		w.until("the fix", func() bool { return w.fixes(task) == 1 && w.taskStatus(task) == "review" })
+		w.gh.Comment(1, "alice", "And the farewell.")
+		w.until("feedback again", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
+		decided := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, task)
+		w.refused(task, "start_phase", `{"phase":"fix"}`, "the organization's bound")
+		w.refused(task, "decide", `{"action":"next"}`, "the organization's bound")
+		for range 3 {
+			w.pump()
+		}
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, task); n != decided {
+			t.Errorf("%d decisions recorded past the bound", n-decided)
+		}
+		if n := w.fixes(task); n != 1 {
+			t.Errorf("%d fixer Runs, want the one within the bound", n)
+		}
+	})
 }
 
 // setPolicy changes the policy of the task's delivery, as a project's
