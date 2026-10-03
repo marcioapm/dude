@@ -182,6 +182,18 @@ async function decideTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
+const chatInput = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+
+/**
+ * A message in a task's Chat: it starts the task's conductor, or is its
+ * next input (the orchestrator decides which, and answers which Run).
+ */
+async function chatTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, chatInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/chat`,
+    JSON.stringify(input), ctx.principal);
+}
+
 /** How a stopped task can be picked back up, and until when a resume can. */
 async function recoveryOptions(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "GET", `/internal/tasks/${ctx.params.id}/recover`, undefined, ctx.principal);
@@ -423,6 +435,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
+  router.post("/v1/tasks/:id/chat", chatTask);
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
 

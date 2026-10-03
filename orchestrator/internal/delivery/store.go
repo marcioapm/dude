@@ -479,7 +479,10 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 }
 
 // AskTx records an agent's question for a person, and the task waiting
-// on it.
+// on it. When the question is what moved the task, its event keeps the
+// status the task had before (taskStatus) and the move's own event
+// (waitCursor): the mark an answer to a conductor checks before putting
+// the task back (EndConductorWait).
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
 	id := ids.New(ids.Question)
 	opts, _ := json.Marshal(db.NonNil(options))
@@ -487,14 +490,91 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts); err != nil {
 		return "", err
 	}
-	if _, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
-		"the agent asked a question"); err != nil {
+	var before string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&before); err != nil {
 		return "", err
 	}
-	_, err := ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent,
-		map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}))
+	moved, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input", "the agent asked a question")
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}
+	if moved {
+		// The move's event is this transaction's latest for the task, whose
+		// row the move holds.
+		var cursor int64
+		if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = $2`,
+			r.TaskID, EvTaskStatusChanged).Scan(&cursor); err != nil {
+			return "", err
+		}
+		payload["taskStatus"], payload["waitCursor"] = before, cursor
+	}
+	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
 	return id, err
 }
+
+// EndConductorWait puts the task back to the status it had before a
+// conductor's question made it wait on a person, once nothing waits on a
+// person any more. Called wherever something a person settles may be the
+// last of what the task waits on: an answer, a repository decision, a
+// resume. The candidate is a conductor's question.asked whose waitCursor is
+// still the task's latest status change: a newer wait, or delivery moving
+// the task on, is never undone. Blockers (waitBlocked) keep it waiting; the
+// candidate stays in the ledger for the next settlement to reconsider.
+func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID string) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+		return err
+	}
+	var before string
+	err := tx.QueryRow(ctx, conductorWait+` AND NOT `+waitBlocked+` ORDER BY e.cursor LIMIT 1`,
+		taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before, "nothing waits on a person any more")
+	return err
+}
+
+// ConductorOwnsWait says whether the task's current wait was raised by a
+// conductor's question (EndConductorWait's candidate), blocked or not: such
+// a wait is ended only by EndConductorWait, which restores its saved status.
+func ConductorOwnsWait(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+		return false, err
+	}
+	var owned bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (`+conductorWait+`)`,
+		taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&owned)
+	return owned, err
+}
+
+// conductorWait (SQL; $1 task, $2 status-change and $3 question-asked event
+// types) selects the saved status of each conductor question.asked whose
+// waitCursor is still the task's latest status change. The question's event
+// follows its status change in the same transaction, so only the task's
+// events after that change are read.
+const conductorWait = `SELECT e.payload->>'taskStatus' FROM tasks t
+	CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
+	JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
+		AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
+	JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
+	WHERE t.id = $1 AND t.status = 'awaiting_input'`
+
+// waitBlocked (SQL, over tasks t): something on the task still waits on a
+// person — an open question, a pending blocking repository request, an
+// undecided escalation in its live workflow, or a phase Run parked as idle
+// or paused by a person, or with a person's pause or resume still pending
+// (dude's own control requests set dude_pause).
+const waitBlocked = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open')
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
+	OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
+		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided')
+	OR EXISTS (SELECT 1 FROM runs p WHERE p.task_id = t.id AND p.phase IS NOT NULL
+		AND p.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+		AND (p.dude_pause = 'idle' OR p.dude_pause IS NULL AND (p.status = 'paused' OR p.control <> 'none'))))`
 
 // RecordDecisionTx records something a person decided about the task, as
 // an answered question: every phase from then on is told it (Decisions).

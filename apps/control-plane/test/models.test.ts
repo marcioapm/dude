@@ -63,7 +63,7 @@ beforeAll(async () => {
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
       requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false,
-      parkAfterMinutes: 10, idleNudgeMinutes: 0,
+      parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5,
     });
   } });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${server.port}`;
@@ -122,7 +122,7 @@ test("project create and update refuse a role's model without changing anything"
     const update = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Bad", agentModels: { investigator: { model } } });
     expect(update.status).toBe(400);
     expect((await body(update)).error.message).toContain(ROLE_MODEL_REMOVED);
-    const create = await call("POST", "/v1/projects", { name: "Bad", slug: "bad-model", agentModels: { orchestrator: { model } } });
+    const create = await call("POST", "/v1/projects", { name: "Bad", slug: "bad-model", agentModels: { conductor: { model } } });
     expect(create.status).toBe(400);
   }
   expect(await body(await call("GET", `/v1/projects/${PROJECT}`))).toEqual(before);

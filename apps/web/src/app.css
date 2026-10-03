@@ -399,7 +399,8 @@ body {
   }
 }
 @media (max-height: 639px) {
-  .taskSessions {
+  .taskSessions,
+  .taskChat {
     min-height: 560px;
   }
 }
@@ -519,8 +520,23 @@ body {
   grid-template-columns: 260px minmax(0, 1fr);
   margin-top: var(--ds-space-panel-gap);
 }
+/* Chat: the conductor's conversation, the whole width, as a session's is
+   beside its list. */
+.taskChat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  margin-top: var(--ds-space-panel-gap);
+}
 .taskSessionList {
   overflow: auto;
+}
+/* An ended conductor's turns in Chat, above the next one's: the same
+   column of turns, laid out as the transcript lays out its own. */
+.chatEarlier {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* A line of figures under a header: an epic's progress, time and cost. */
@@ -577,6 +593,30 @@ body {
   margin-top: var(--ds-space-8);
   flex-wrap: wrap;
   gap: var(--ds-space-8);
+}
+/* Verify's results: a line per repository, an indented line per permission not granted. */
+.forgePermissions {
+  margin-top: var(--ds-space-8);
+}
+.forgePermissions > li {
+  display: block;
+}
+.forgePermissionRepo,
+.forgePermissionRows li {
+  display: flex;
+  gap: var(--ds-space-8);
+  align-items: baseline;
+}
+.forgePermissionRows {
+  list-style: none;
+  margin: var(--ds-space-4) 0 0;
+  padding: 0 0 0 var(--ds-space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.forgePermissionRows strong {
+  font-weight: 600;
 }
 
 /* A fieldset only to disable a form's controls at once: no box of its own. */

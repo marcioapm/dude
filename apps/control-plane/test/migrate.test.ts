@@ -226,6 +226,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "069_model_tiers.sql",
       "070_kept_runs.sql",
       "071_attachments.sql",
+      "072_conductor.sql",
       "072_task_inline_images.sql",
     ]);
 

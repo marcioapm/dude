@@ -18,6 +18,7 @@ import { newId, prDisplayState, type PullRequest } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { badRequest, HttpError, json, notFound, parseBody, unauthorized } from "../http.ts";
 import { kickOrchestrator, orchestrator } from "../../orchestrator/client.ts";
+import { tokenKind, verifyRepositories, type RepositoryRow } from "../../githubPermissions.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 export const PR_SELECT = `
@@ -221,16 +222,20 @@ export async function registerRepositoryWebhook(ctx: RequestContext, repositoryI
 }
 
 /**
- * Ask GitHub who the stored token is, so a person can see the connection
- * works before an agent finds out it does not. Says who, and what it may do.
+ * Ask GitHub who the stored token is, and what it may do on each of the
+ * organization's repositories (githubPermissions.ts), so a person sees
+ * what is missing before an agent finds out. Not ok when a permission
+ * normal delivery needs is missing on any repository; optional ones and
+ * ones that could not be tested are reported without failing it.
  */
 async function verifyCredential(ctx: RequestContext): Promise<Response> {
   const cred = await githubCredential(ctx.principal.organizationId);
   if (!cred) return json({ ok: false, reason: "not connected" });
   if (cred.auth !== "pat") return json({ ok: false, reason: "only token connections can be verified yet" });
+  const apiBaseUrl = (cred.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/, "");
   let res: Response;
   try {
-    res = await fetch(`${(cred.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/, "")}/user`, {
+    res = await fetch(`${apiBaseUrl}/user`, {
       headers: { authorization: `Bearer ${cred.secret}`, accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(10_000),
     });
@@ -239,7 +244,17 @@ async function verifyCredential(ctx: RequestContext): Promise<Response> {
   }
   if (!res.ok) return json({ ok: false, reason: res.status === 401 ? "GitHub rejected the token" : `GitHub answered ${res.status}` });
   const user = (await res.json()) as { login?: string };
-  return json({ ok: true, login: user.login ?? null, scopes: res.headers.get("x-oauth-scopes") });
+  const scopes = res.headers.get("x-oauth-scopes");
+  const kind = tokenKind(cred.secret, scopes);
+  const rows = (await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT r.id, r.name, r.url, r.default_branch AS "defaultBranch", p.name AS "projectName"
+    FROM repositories r JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.name`)) as RepositoryRow[];
+  const repositories = await verifyRepositories(fetch, {
+    secret: cred.secret, apiBaseUrl, kind,
+    scopes: (scopes ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  }, rows);
+  const ok = !repositories.some((r) => r.permissions.some((p) => p.level === "required" && p.outcome === "missing"));
+  return json({ ok, login: user.login ?? null, scopes, tokenKind: kind, repositories });
 }
 
 /**

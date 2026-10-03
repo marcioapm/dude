@@ -201,7 +201,7 @@ export type AgentRoleName = AgentRole;
 export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = ALL_AGENT_ROLES;
 
 const ROLE_HUES: Record<AgentRoleName, number> = {
-  orchestrator: 300, // violet — conducts, sits above the others
+  conductor: 300, // violet — conducts, sits above the others
   investigator: 232, // blue — reads and searches
   implementer: 170, // teal — builds
   reviewer: 40, // orange — scrutinises
@@ -218,7 +218,7 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
  */
 const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
   dark: {
-    orchestrator: 0.66,
+    conductor: 0.66,
     investigator: 0.82,
     implementer: 0.71,
     reviewer: 0.66,
@@ -226,7 +226,7 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
     qa_browser: 0.82,
   },
   light: {
-    orchestrator: 0.42,
+    conductor: 0.42,
     investigator: 0.56,
     implementer: 0.45,
     reviewer: 0.47,
