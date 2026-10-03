@@ -725,6 +725,8 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 				return "", err
 			}
 		}
+	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
+		return "", err
 	}
 	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }

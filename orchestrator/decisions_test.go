@@ -1006,11 +1006,7 @@ func TestHandingBackAtTheGateNeedsTheOpening(t *testing.T) {
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
 	handBack := func(body map[string]any) (int, map[string]any) {
-		return w.call("/internal/tasks/"+task+"/decider", body)
-	}
-	gateRefused := func(out map[string]any) bool {
-		e, _ := out["error"].(map[string]any)
-		return e["code"] == "pull_request_gate"
+		return w.handBack(task, body)
 	}
 	if status, out := handBack(map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
 		t.Fatalf("hand-back with the gate unasked: %d %v", status, out)

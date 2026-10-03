@@ -376,16 +376,66 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 	if note != "" {
 		prompt = clip(note, noteChars) + "\n\n" + GateQuestion
 	}
-	id, err := AskTx(ctx, tx, ref, prompt, GateChoices)
+	id, err := askGate(ctx, tx, ref, &d.State, prompt)
 	if err != nil {
-		return nil, err
-	}
-	heads, _ := json.Marshal(nonNilMap(d.State.Heads))
-	if _, err := tx.Exec(ctx, `UPDATE questions SET pr_gate_heads = $2::jsonb WHERE id = $1`, id, heads); err != nil {
 		return nil, err
 	}
 	return map[string]any{"questionId": id, "choices": GateChoices,
 		"next": "End your turn now. If the person answers Open or Draft, decide open_pull_request."}, nil
+}
+
+// askGate asks the pull request gate's question on the conductor's Run, at
+// the heads the delivery is at.
+func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt string) (string, error) {
+	id, err := AskTx(ctx, tx, ref, prompt, GateChoices)
+	if err != nil {
+		return "", err
+	}
+	heads, _ := json.Marshal(nonNilMap(st.Heads))
+	_, err = tx.Exec(ctx, `UPDATE questions SET pr_gate_heads = $2::jsonb WHERE id = $1`, id, heads)
+	return id, err
+}
+
+// askGateTx asks the gate's question for a delivery Deliver holds at a gate
+// the conductor entered, on the task's live conductor: unless one is open
+// already, or the task has no live conductor (a confirmed hand-back then
+// opens it). Its answer wakes the delivery (GateAnswered).
+func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
+	var open bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL
+		AND status = 'open')`, st.TaskID).Scan(&open); err != nil || open {
+		return err
+	}
+	var runID string
+	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` AND NOT COALESCE(`+Ending+`, false)`,
+		st.TaskID).Scan(&runID)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st,
+		"Deliver is about to open the pull request, and the conductor had asked you first.\n\n"+GateQuestion)
+	return err
+}
+
+// GateAnswered wakes the task's delivery once the gate's question is
+// answered: one Deliver holds at the gate goes on with an Open or Draft.
+func GateAnswered(ctx context.Context, tx pgx.Tx, org, questionID string) error {
+	var taskID string
+	err := tx.QueryRow(ctx, `SELECT task_id FROM questions WHERE id = $1 AND pr_gate_heads IS NOT NULL`, questionID).Scan(&taskID)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil || !d.AtGate() {
+		return err
+	}
+	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalConductorDecision, map[string]any{"action": "answered"}, "")
 }
 
 // GateAnswer is the pull request gate as a hand-back reads it: whether the
