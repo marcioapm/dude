@@ -561,3 +561,44 @@ func TestAnImageSteerToAPausedRunGoesAfterTheResume(t *testing.T) {
 		t.Errorf("/input for the steer got %q", bodies)
 	}
 }
+
+// A task's conductor is briefed with the task's goal and criteria, so it
+// is given their images as a phase is: workload.attachments in order of
+// first appearance, each reference read as its place there, a missing one
+// as unavailable, and no `attachment:` URL anywhere in its prompt.
+func TestAConductorIsGivenTheTasksImages(t *testing.T) {
+	// A model of its own: the scripted agent's prompt is its script.
+	w := conductorWorld(t, "llm-conductor")
+	b := w.withImages()
+	wi := w.task()
+	w.upload(b, "att_cgoal", wi, "goal.png", screenshot)
+	w.upload(b, "att_ccrit", wi, "evidence.png", screenshot)
+	w.describe(wi, "Make it look like ![goal.png](attachment:att_cgoal), not ![gone.png](attachment:att_cgone).",
+		"Matches ![evidence.png](attachment:att_ccrit)")
+	if status, out := w.chat(wi, "what does the mock show?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the conductor to be submitted", func() bool { return w.conductorSpec() != nil })
+	var conductor []byte
+	for _, r := range w.lux.Runs() {
+		if strings.Contains(string(r.Spec), `"dude.role":"conductor"`) {
+			conductor = r.Spec
+		}
+	}
+	if got := promptImages(t, conductor); !slices.Equal(got, []string{"goal.png", "evidence.png"}) {
+		t.Errorf("the conductor was given %v", got)
+	}
+	prompt := w.conductorSpec().Workload.Prompt
+	for _, want := range []string{
+		"Make it look like [Image 1: goal.png], not [Image unavailable: gone.png].",
+		"- Matches [Image 2: evidence.png]",
+		"what does the mock show?",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the conductor's prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "attachment:") {
+		t.Errorf("the conductor's prompt carries a raw reference:\n%s", prompt)
+	}
+}

@@ -144,3 +144,25 @@ func TestAPullRequestNamesTheImages(t *testing.T) {
 		t.Errorf("pull request body:\n%s", body)
 	}
 }
+
+// The conductor's briefing clips the goal and each criterion. A cut never
+// leaves half a reference for its prompt to pass on raw, and a fence it
+// leaves open is closed, so the references after it stay references.
+func TestTheBriefingsClipKeepsReferencesWhole(t *testing.T) {
+	ref := "![shot.png](attachment:att_s)"
+	text := strings.Repeat("a", 20) + ref + " tail"
+	for n := 21; n < 20+len(ref)+2; n++ {
+		got := clipTaskText(text, n)
+		if strings.Contains(got, "attachment:") && !strings.Contains(got, ref) {
+			t.Errorf("clip at %d splits the reference: %q", n, got)
+		}
+	}
+	if got := clipTaskText(text, len(text)); got != text {
+		t.Errorf("a text within the limit changed: %q", got)
+	}
+	briefing := "Goal:\n\n" + clipTaskText("```go\nx := 1\n"+strings.Repeat("y", 50), 30) + "\n\n- Matches " + ref
+	got := ConductorPrompt(briefing, PromptInput{Images: []PromptImage{{"att_s", "shot.png"}}})
+	if !strings.Contains(got, "- Matches [Image 1: shot.png]") || strings.Contains(got, "attachment:") {
+		t.Errorf("the conductor's prompt:\n%s", got)
+	}
+}

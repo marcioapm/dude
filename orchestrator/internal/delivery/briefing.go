@@ -72,7 +72,7 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
 		"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
 	fmt.Fprintf(&b, "\n\n## The task\n\n%s · %s · status %s", key, taskID, status)
-	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", clip(strings.TrimSpace(goal), briefGoalChars))
+	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", clipTaskText(strings.TrimSpace(goal), briefGoalChars))
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
 	if len(ac) > 0 {
@@ -82,7 +82,7 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 				fmt.Fprintf(&b, "\n- … and %d more", len(ac)-briefCriteria)
 				break
 			}
-			fmt.Fprintf(&b, "\n- %s", clip(oneLine(c), briefCriterionChars))
+			fmt.Fprintf(&b, "\n- %s", clipTaskText(oneLine(c), briefCriterionChars))
 		}
 	}
 
@@ -279,6 +279,27 @@ func clip(s string, n int) string {
 	}
 	r := []rune(s)
 	return string(r[:n-1]) + "…"
+}
+
+// clipTaskText is clip for a task's goal or criterion, which
+// ConductorPrompt reads image references in: a cut never splits a
+// reference (it cuts before it instead), and a fence left open is closed,
+// cut or not, so the briefing after it is not read as code.
+func clipTaskText(s string, n int) string {
+	out := s
+	if utf8.RuneCountInString(s) > n {
+		cut := len(string([]rune(s)[:n-1]))
+		for _, r := range ImageRefs(s) {
+			if r.From < cut && cut < r.To {
+				cut = r.From
+			}
+		}
+		out = s[:cut] + "…"
+	}
+	if f := UnclosedFence(out); f != "" {
+		out += "\n" + f
+	}
+	return out
 }
 
 func firstLine(s string) string {
