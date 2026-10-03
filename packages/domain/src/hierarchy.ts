@@ -14,9 +14,12 @@ import { z } from "zod";
 // Agent roles and model selection
 // ---------------------------------------------------------------------------
 
-/** Roles a Session can play — plan §30 (the first agents). */
+/**
+ * Roles a Session can play — plan §30 (the first agents). The conductor is
+ * the agent people talk to in a task's Chat (it was the orchestrator).
+ */
 export const agentRoleSchema = z.enum([
-  "orchestrator",
+  "conductor",
   "investigator",
   "implementer",
   "reviewer",
@@ -161,6 +164,8 @@ export const deliveryPolicySchema = z
     parkAfterMinutes: z.number().int().min(1).max(1440),
     /** Minutes an agent may be quiet mid-turn before it is nudged; 0 never. */
     idleNudgeMinutes: z.number().int().min(0).max(1440),
+    /** Minutes a task's conductor stays running after its turn, before it is parked. */
+    conductorWarmMinutes: z.number().int().min(1).max(1440),
   })
   .partial()
   .strict();
@@ -410,8 +415,8 @@ export const runSchema = z.object({
   /** An agent's, or a branch preview's: no agent, the task's branch serving its servers. */
   kind: z.enum(["agent", "preview"]).default("agent"),
   /**
-   * Which step of the delivery workflow this Run is. Null for a Run created
-   * directly through the API, which executes as an orchestrator.
+   * Which step of the delivery workflow this Run is. Null for a task's
+   * conductor (role conductor), and for a Run created directly through the API.
    */
   phase: z
     .enum(["investigate", "implement", "review", "fix", "simplify", "test"])
@@ -442,10 +447,12 @@ export const runSchema = z.object({
    * parked while it waits for an answer or a decision, which resumes it;
    * "idle" — parked after going quiet, until a person resumes it;
    * "repository" — stopped a moment to bring one in; "unused" — a branch
-   * preview nobody opened for a while, until a person starts a server. Null
+   * preview nobody opened for a while, until a person starts a server;
+   * "conductor" — a task's conductor past its warm period, until someone
+   * writes in its Chat. Null
    * when not paused, or when a person paused it.
    */
-  dudePause: z.enum(["person", "idle", "repository", "unused"]).nullable().default(null),
+  dudePause: z.enum(["person", "idle", "repository", "unused", "conductor"]).nullable().default(null),
   /** Tokens as the agent reported them. Context is the latest size, not a sum. */
   tokens: z
     .object({
@@ -519,14 +526,20 @@ export const runSchema = z.object({
 export type Run = z.infer<typeof runSchema>;
 
 /** The role a Run executes as when it has no phase: one created by hand. */
-export const DEFAULT_RUN_ROLE: AgentRole = "orchestrator";
+export const DEFAULT_RUN_ROLE: AgentRole = "conductor";
+
+/** A task's conductor: the Run people talk to in its Chat, which is no phase. */
+export function isConductor(run: { phase?: string | null; role?: string | null; kind?: string }): boolean {
+  return run.role === "conductor" && !run.phase && run.kind !== "preview";
+}
 
 /**
  * How a Run is named to a person: its phase, and for a review its category.
- * "Review · security", "Fix", "Agent" for a Run with no phase at all.
+ * "Review · security", "Fix", "Conductor", "Agent" for a Run with no phase at all.
  */
-export function runLabel(run: { phase?: string | null; category?: string | null; kind?: string }): string {
+export function runLabel(run: { phase?: string | null; category?: string | null; kind?: string; role?: string | null }): string {
   if (run.kind === "preview") return "Branch preview";
+  if (isConductor(run)) return "Conductor";
   if (!run.phase) return "Agent";
   const phase = run.phase.charAt(0).toUpperCase() + run.phase.slice(1);
   return run.category ? `${phase} · ${run.category}` : phase;
@@ -732,12 +745,13 @@ export function prCheckDiagnosticReason(code: string): string {
 }
 
 /**
- * What to do about it, under that line: what the token lacks, and that CI
- * may well be running — dude cannot see it, so Merge waits.
+ * What to do about it, under that line: GitHub gives fine-grained tokens no
+ * way to read check runs, so the fix is another kind of token — and that CI
+ * may well be running; dude cannot see it, so Merge waits.
  */
 export function prCheckDiagnosticFix(code: string): string | null {
   return code === CHECK_RUNS_FORBIDDEN
-    ? "dude's GitHub token needs Checks: Read on this repository, and the organization's approval if it uses SSO. CI may be running; dude can't see it, so Merge waits."
+    ? "A fine-grained token cannot read check runs: connect a classic token with the repo scope (or a GitHub App once dude supports one), authorized for the organization's SSO and with access to this repository. CI may be running; dude can't see it, so Merge waits."
     : null;
 }
 

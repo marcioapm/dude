@@ -13,8 +13,14 @@ import styles from "./ChatMessage.module.css";
 
 export type ChatMessageKind = "agent" | "human" | "system";
 
-/** Turns addressed *to* the agent are one of three intents, each with a distinct treatment. */
-export type HumanIntent = "prompt" | "answer" | "steer";
+/**
+ * Turns addressed *to* the agent, each with a distinct treatment: the
+ * task (`prompt`), an answer, a steer; and in a task's Chat, dude's
+ * briefing of its conductor (`briefing`, framed as a prompt is) and a
+ * person's message to it (`message`, a plain signed turn: talking, not
+ * intervening).
+ */
+export type HumanIntent = "prompt" | "answer" | "steer" | "briefing" | "message";
 
 export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "children" | "title" | "content"> {
   readonly role: AvatarKind;
@@ -109,10 +115,12 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
   readonly avatar?: ReactNode;
 }
 
-const INTENT_LABEL: Record<HumanIntent, string> = {
+const INTENT_LABEL: Record<HumanIntent, string | null> = {
   prompt: "Task",
   answer: "Answer",
   steer: "Steer",
+  briefing: "Briefing",
+  message: null,
 };
 
 const PROMPT_MAX_LINES = 8;
@@ -202,7 +210,7 @@ export function ChatMessage({
   const queued = k === "human" && deliveredAt === null && !isFailed;
   const delivered = k === "human" ? toDate(deliveredAt) : null;
   const wasRead = delivered !== null && read === true;
-  const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && humanIntent === "prompt" ? PROMPT_MAX_LINES : null);
+  const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && (humanIntent === "prompt" || humanIntent === "briefing") ? PROMPT_MAX_LINES : null);
   const hasStats = k === "agent" && (costUsd !== undefined || tokens !== undefined || contextTokens !== undefined || outputTokens !== undefined || timed);
 
   return (
@@ -246,7 +254,7 @@ export function ChatMessage({
           <header className={styles["header"]}>
             <span className={styles["name"]}>{name ?? person?.name ?? ROLE_LABEL[role]}</span>
             {k === "agent" && name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
-            {k === "human" ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
+            {k === "human" && INTENT_LABEL[humanIntent] ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
             {queued ? (
               <span className={styles["queued-tag"]} title="Sent. The agent has not read it yet; the line under it says when it will.">
                 <Icon name="clock" size={10} strokeWidth={2} />

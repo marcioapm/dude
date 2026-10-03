@@ -29,7 +29,7 @@ export type IconName =
   | "agent"
   | "integration"
   // agent roles
-  | "orchestrator"
+  | "conductor"
   | "investigator"
   | "implementer"
   | "reviewer"
@@ -141,7 +141,7 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   agent: { d: "M4 6.5h8a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 12 12.5H4A1.5 1.5 0 0 1 2.5 11V8A1.5 1.5 0 0 1 4 6.5ZM8 6.5V4M8 4a1 1 0 1 0 0-2a1 1 0 0 0 0 2ZM5.75 9.5h.01M10.25 9.5h.01" },
   integration: { d: "M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0V5.5ZM8 11.5v2" },
 
-  orchestrator: { d: "M8 2.5v3M8 5.5l-4 3M8 5.5l4 3M8 5.5v0M2.5 10.5h3v3h-3zM10.5 10.5h3v3h-3zM6.5 2.5h3v3h-3z" },
+  conductor: { d: "M8 2.5v3M8 5.5l-4 3M8 5.5l4 3M8 5.5v0M2.5 10.5h3v3h-3zM10.5 10.5h3v3h-3zM6.5 2.5h3v3h-3z" },
   investigator: { d: "M7 11.5A4.5 4.5 0 1 0 7 2.5a4.5 4.5 0 0 0 0 9ZM10.3 10.3l3.2 3.2" },
   implementer: { d: "M9.6 2.7a3.2 3.2 0 0 0-3.9 4L2.5 9.9l1.6 1.6 3.2-3.2a3.2 3.2 0 0 0 4-3.9L9.4 6.3 7.7 4.6Z" },
   reviewer: { d: "M4.5 2.5h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM5.75 8l1.5 1.5 3-3" },

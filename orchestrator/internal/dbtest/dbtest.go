@@ -122,6 +122,76 @@ func setup() {
 	_, _ = admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", template)
 }
 
+// Upgrade gives a migration test a database of its own, migrated by the
+// files before version (e.g. "072") and nothing else, as a deploy meets
+// one; apply runs the rest. owner is its owner-role connection.
+func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
+	t.Helper()
+	once.Do(setup)
+	if setupErr != nil && unreachable {
+		t.Skipf("no test database: %v", setupErr)
+	}
+	ctx := context.Background()
+	name := fmt.Sprintf("dude_gotest_upgrade_%d_%d", time.Now().UnixNano(), counter.Add(1))
+	admin, err := adminConn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name+" OWNER dude"); err != nil {
+		t.Fatal(err)
+	}
+	owner, err = pgx.Connect(ctx, fmt.Sprintf("postgres://dude:dude@%s/%s", host(), name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		owner.Close(context.Background())
+		if a, err := adminConn(context.Background()); err == nil {
+			_, _ = a.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+			a.Close(context.Background())
+		}
+	})
+	_, file, _, _ := runtime.Caller(0)
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(file), "../../../migrations/*.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(before bool) {
+		for _, f := range files {
+			if (filepath.Base(f) < version) != before {
+				continue
+			}
+			sql, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := owner.Exec(ctx, string(sql)); err != nil {
+				t.Fatalf("%s: %v", filepath.Base(f), err)
+			}
+		}
+	}
+	// As the runner has it before the first file (migrate.ts).
+	if _, err := owner.Exec(ctx, `CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
+		checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		t.Fatal(err)
+	}
+	// Migrations create cluster-wide roles: one migrates at a time.
+	lock := func() func() {
+		if _, err := owner.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_migrate'))"); err != nil {
+			t.Fatal(err)
+		}
+		return func() { _, _ = owner.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_migrate'))") }
+	}
+	unlock := lock()
+	run(true)
+	unlock()
+	return owner, func() {
+		defer lock()()
+		run(false)
+	}
+}
+
 // Builder connects to owner's database as dude-image-builder's role
 // (migration 068), which aiverse gives a password in production.
 func Builder(t *testing.T, owner *pgx.Conn) *db.DB {

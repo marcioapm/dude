@@ -19,7 +19,7 @@ import (
 )
 
 // Who may create work: the roles whose job can turn up more of it.
-var creators = []string{"implementer", "investigator", "orchestrator"}
+var creators = []string{"implementer", "investigator", "conductor"}
 
 // Who may ask to change another repository: the roles that change code.
 var writers = []string{"implementer"}
@@ -37,7 +37,7 @@ var tools = []tool{
 	define("ask_person", "Ask a person something only a person can decide — the task is ambiguous in a way that "+
 		"changes what you build, or two reasonable readings conflict. After calling it, end your turn: the answer "+
 		"is your next message. Do not ask about anything you can decide or find out yourself.",
-		[]string{"implementer", "investigator"}, askPerson),
+		[]string{"implementer", "investigator", "conductor"}, askPerson),
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
 		"your chat and the run's events.", nil, emitEvent).limit(eventsPerRun),
@@ -67,6 +67,13 @@ var tools = []tool{
 		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
 		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
 		"With paths, those files' changes as unified diff text, at most 2,000 lines in all.", nil, runDiff),
+	define("findings", "Your task's review findings, open and most severe first: each one's id, severity, "+
+		"category, file:line, status and how it was settled (fixed by which Run, accepted by a person, or open after "+
+		"so many fix attempts). Name ids (at most 20) to read those in full: title, description, suggested fix and "+
+		"the resolution note.", conductors, findings),
+	define("pull_requests", "Your task's pull requests: state, head commit, checks (each one's status), review "+
+		"(each reviewer's word), unresolved threads, and the feedback people left — author, kind, path, a short "+
+		"excerpt, and whether a fixer was sent it.", conductors, pullRequests),
 }
 
 // ---- list_tasks --------------------------------------------------------------

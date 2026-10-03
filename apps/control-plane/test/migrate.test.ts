@@ -226,7 +226,8 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "069_model_tiers.sql",
       "070_kept_runs.sql",
       "071_attachments.sql",
-      "072_task_inline_images.sql",
+      "072_conductor.sql",
+      "073_task_inline_images.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -243,13 +244,13 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
   }
 }, 120_000);
 
-test("072 gives each task's tray images a place at the end of its goal, so they stay its own", async () => {
+test("073 gives each task's tray images a place at the end of its goal, so they stay its own", async () => {
   const url = await ownedByANonSuperuser();
   const sql = new SQL(url);
   try {
     await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
       checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
-    for (const file of (await listMigrationFiles()).filter((f) => f.version < "072")) {
+    for (const file of (await listMigrationFiles()).filter((f) => f.version < "073")) {
       const contents = await file.contents();
       await sql.begin(async (tx) => {
         await tx.unsafe(contents);
@@ -271,7 +272,7 @@ test("072 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["072_task_inline_images.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["073_task_inline_images.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },

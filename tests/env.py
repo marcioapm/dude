@@ -269,6 +269,8 @@ class TestEnvironment:
                 # An agent waiting on a person is parked after seconds, not
                 # the policy's minutes, so the suite sees it happen.
                 "DUDE_PARK_AFTER": "3s",
+                # A task's conductor is parked a few seconds after its turn.
+                "DUDE_CONDUCTOR_WARM": "4s",
                 # A working agent's diff is read every few seconds besides
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",
