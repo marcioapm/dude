@@ -481,6 +481,9 @@ const (
 	SafetyAfter = 30 * time.Minute
 )
 
+// wakeBatch bounds each kind of work one sweep takes up for wakes.
+const wakeBatch = 200
+
 // wakeConductors records the reasons the syncer sees — a Run a conductor
 // started failed; a conductor long asleep with a Run of its own in flight —
 // and delivers each task's pending reasons to its conductor as one note.
@@ -495,17 +498,30 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 	type found struct{ Kind, Org, TaskID, RunID string }
 	var todo []found
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		// Reasons to record, then the tasks whose reasons can be delivered
+		// now, oldest reason first: each its own bounded batch, so neither
+		// crowds out the other, and tasks that must wait are not selected.
+		// SafetyNet's NOT EXISTS keeps Runs already recorded out of its batch.
 		rows, err := tx.Query(ctx, `
-			SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.FailedForConductor+`
+			(SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.FailedForConductor+` LIMIT $2)
 			UNION ALL
-			SELECT 'safety', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.SafetyNet+`
-			UNION ALL
-			SELECT DISTINCT 'wake', c.organization_id, c.task_id, '' FROM conductor_wakes c WHERE c.delivered_at IS NULL
-			LIMIT 200`, safety.Seconds())
+			(SELECT 'safety', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.SafetyNet+`
+				ORDER BY r.turn_done_at LIMIT $2)`,
+			safety.Seconds(), wakeBatch)
 		if err != nil {
 			return err
 		}
-		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		if todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found]); err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM conductor_wakes c
+			WHERE `+delivery.Wakeable+` GROUP BY c.organization_id, c.task_id ORDER BY min(c.created_at) LIMIT $2`,
+			window.Seconds(), wakeBatch)
+		if err != nil {
+			return err
+		}
+		wakes, err := pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		todo = append(todo, wakes...)
 		return err
 	}); err != nil {
 		return err
