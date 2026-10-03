@@ -321,6 +321,61 @@ describe("a conducted task with two attempts", () => {
     // The URL a line opens names the session alone: attempt 1 is the Run's, not the current one.
     await showing(undefined, undefined, [], "run_a1_impl", 1);
   });
+
+  test("an earlier attempt offers no way to start or hand back: Chat on it has no Let Deliver finish it", async () => {
+    const { p } = await showing(1, "findings");
+    expect(p.querySelector("[data-testid=talk]")).toBeNull();
+    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    // Chat is the task's: opened with attempt 1 picked, attempt 1 stays shown, set aside.
+    await toTab(p, "Chat");
+    await until(() => p.querySelector("[data-testid=task-chat]"), "Chat");
+    expect(p.querySelector("[data-testid=task-screen]")?.getAttribute("data-attempt")).toBe("1");
+    expect(p.querySelector("[data-testid=earlier-bar]")).not.toBeNull();
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    expect(line.textContent).toContain("The conductor decides");
+    expect(p.querySelector("[data-testid=let-deliver-finish]")).toBeNull();
+  });
+
+  test("on the current attempt, Chat keeps Let Deliver finish it", async () => {
+    const { p } = await showing(undefined, "chat");
+    await until(() => p.querySelector("[data-testid=let-deliver-finish]"), "Let Deliver finish it");
+  });
+
+  // A new attempt queued (POST /v1/tasks/:id/runs) and not started: its
+  // start choice is offered, and attempt 1, shown, is only to read.
+  for (const [attempt, offered] of [[undefined, true], [1, false]] as const) {
+    test(`a new attempt not started: the start choice ${offered ? "on it" : "not on attempt 1"}`, async () => {
+      const queued = [
+        run({ id: "run_q1_impl", attempt: 1, status: "aborted", createdAt: at(10), endedAt: at(20) }),
+        run({ id: "run_q2", attempt: 2, phase: null, status: "pending", startedAt: null, createdAt: at(30) }),
+      ];
+      const client = new DecisionsClient({ status: "queued", decider: "policy", runs: queued });
+      const { container, unmount } = await mount(
+        <TooltipProvider>
+          <ToastProvider>
+            <PeopleProvider client={client}>
+              <TaskScreen client={client} taskId={TASK_ID} tab={attempt ? "findings" : undefined} attempt={attempt} onOpenRun={() => {}} onBack={() => {}} />
+            </PeopleProvider>
+          </ToastProvider>
+        </TooltipProvider>,
+      );
+      mounted.push(unmount);
+      await until(() => container.querySelector(`[data-testid=task-screen][data-attempt="${attempt ?? 2}"]`), `attempt ${attempt ?? 2}`);
+      await settle();
+      const there = (sel: string) => container.querySelector(sel) !== null;
+      expect([there("[data-testid=talk]"), there("[data-testid=deliver]")]).toEqual([offered, offered]);
+      if (offered) {
+        expect(container.querySelector("[data-testid=talk]")!.getAttribute("data-variant")).toBe("secondary");
+        expect(container.querySelector("[data-testid=deliver]")!.getAttribute("data-variant")).toBe("secondary");
+      } else {
+        await toTab(container, "Overview");
+        expect(container.querySelector("[data-testid=task-screen]")?.getAttribute("data-attempt")).toBe("1");
+        expect(there("[data-testid=start-choice]")).toBe(false);
+        expect(there("[data-testid=talk]")).toBe(false);
+      }
+    });
+  }
 });
 
 describe("what the Chat is made of", () => {

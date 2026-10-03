@@ -43,6 +43,8 @@ export interface ChatSectionProps {
   onSent: () => void;
   /** Open a Run's session: a Run the conductor started, from its line. */
   onOpenRun: (runId: string) => void;
+  /** An earlier attempt is shown: only to read, so who decides is said without the way to hand it back. */
+  setAside?: boolean | undefined;
   onBack: () => void;
 }
 
@@ -58,7 +60,7 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, setAside = false, onBack }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
@@ -142,8 +144,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const above = useMemo(() => {
     if (!inProgress || (task.decider !== "conductor" && !gateHeld)) return null;
     return <DeciderLine data-testid="decider-line" decider={gateHeld ? "policy" : "conductor"} waiting={waiting}
-      action={<Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
-  }, [task.decider, gateHeld, inProgress, waiting, handing, handBack]);
+      action={setAside ? undefined
+        : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
+  }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
   const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
     [head, send, briefedWith, before, conductorCost, lines, above, gateHeld]);
 
