@@ -453,7 +453,7 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 	if status != "open" {
 		return refusef("%s is %s already", findingID, status)
 	}
-	note := "Dismissed by the conductor: " + clip(oneLine(reason), 1000)
+	note := DismissedByConductor + clip(oneLine(reason), 1000)
 	if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
 		WHERE id = $1`, findingID, note); err != nil {
 		return err
@@ -466,6 +466,19 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 // EvFindingResolved is a finding's status changed by hand: a person's, or
 // the conductor's dismissal.
 const EvFindingResolved = "review.finding_resolved"
+
+// DismissedByConductor begins the resolution note of a finding the
+// conductor dismissed: accepted, by the conductor and not a person.
+const DismissedByConductor = "Dismissed by the conductor: "
+
+// AcceptedBy says who left an accepted finding as it is, from its
+// resolution note: the conductor, with its reason, or a person.
+func AcceptedBy(note string) string {
+	if reason, ok := strings.CutPrefix(note, DismissedByConductor); ok {
+		return "dismissed by the conductor: " + clip(reason, 120)
+	}
+	return "accepted by a person"
+}
 
 // TaskSpec is update_task: a goal, acceptance criteria, or both; nil
 // leaves one as it is.

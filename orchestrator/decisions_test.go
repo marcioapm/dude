@@ -503,6 +503,47 @@ func TestDismissAFinding(t *testing.T) {
 	if status != "accepted" || !strings.Contains(note, "FACTORY.md is generated") {
 		t.Errorf("the finding is %s: %q", status, note)
 	}
+	// Who left it so reaches both readers: the findings tool, listed and
+	// by id, and a replacement conductor's briefing. A person's acceptance
+	// still reads as theirs.
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status,
+			resolution_note)
+		SELECT 'fnd_p_'||$1, organization_id, task_id, run_id, category, 'low', 'P', 'accepted', 'fine as it is'
+		FROM review_findings WHERE id = $2`, task, id)
+	settled := func(out map[string]any) map[string]string {
+		got := map[string]string{}
+		fs, _ := out["findings"].([]any)
+		for _, f := range fs {
+			m, _ := f.(map[string]any)
+			got[m["id"].(string)], _ = m["settled"].(string)
+		}
+		return got
+	}
+	list := settled(w.must(task, "findings", `{}`))
+	if !strings.HasPrefix(list[id], "dismissed by the conductor: FACTORY.md is generated") || list["fnd_p_"+task] != "accepted by a person" {
+		t.Errorf("the findings list says %v", list)
+	}
+	byID := w.must(task, "findings", `{"ids":["`+id+`"]}`)
+	if s := settled(byID)[id]; !strings.HasPrefix(s, "dismissed by the conductor") || strings.Contains(s, "person") || strings.Contains(s, "fixed") {
+		t.Errorf("the finding by id says %q", s)
+	}
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		b, err := delivery.Briefing(context.Background(), tx, task, "run_next", "", "hello")
+		if err != nil {
+			return err
+		}
+		for _, l := range strings.Split(b, "\n") {
+			switch {
+			case strings.Contains(l, id) && !strings.Contains(l, "dismissed by the conductor: FACTORY.md is generated"):
+				t.Errorf("the briefing's line: %q", l)
+			case strings.Contains(l, "fnd_p_"+task) && !strings.Contains(l, "accepted by a person"):
+				t.Errorf("the briefing's line for a person's: %q", l)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// What the policy would do now: the round is clear, on to simplify.
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("simplify", func() bool { return w.phaseRuns(task, "simplify") == 1 })
