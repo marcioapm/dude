@@ -126,13 +126,14 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 
 // Unheard (SQL, over runs r): an ended conductor holding input it never
 // read, or a wake note it was started with and never heard, for the syncer
-// to hand over (HandOver). The subqueries read only unsettled directives
+// to hand over (HandOver). The candidates come from unsettled directives
 // (directives_unsettled_idx) and unheard briefings
-// (conductor_wake_attempts_briefing_idx), not every ended Run.
+// (conductor_wake_attempts_briefing_idx) and are joined to runs by key.
+// One IN over their UNION: an OR of two INs makes the planner scan all runs.
 const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', 'aborted')
-	AND (r.id IN (SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL)
-	  OR r.id IN (SELECT a.conductor_run_id FROM conductor_wake_attempts a
-	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL)))`
+	AND r.id IN (SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
+	  UNION SELECT a.conductor_run_id FROM conductor_wake_attempts a
+	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL))`
 
 // HandOver settles what a person sent an ended conductor and it never
 // read. With replace, each message goes to the task's live conductor, or
