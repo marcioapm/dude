@@ -46,5 +46,5 @@ function pr(p: Record<string, unknown>): string {
 
 /** What a Run the conductor started is, after its role: its review category, its phase. */
 export function runWhat(run: Run): string {
-  return run.category ? run.category : runLabel(run).toLowerCase();
+  return run.category || runLabel(run).toLowerCase();
 }

@@ -774,16 +774,15 @@ export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: Readonl
   const out: Array<{ group: Turn | Turn[] } | { id: string; at: string; node: ReactNode }> = [];
   let i = 0;
   for (const group of groups) {
-    const at = turnAt(Array.isArray(group) ? group[0]! : group);
+    const turn = Array.isArray(group) ? group[0]! : group;
+    let at: string | null = null;
+    if ("at" in turn) at = turn.at;
+    else if ("startedAt" in turn) at = turn.startedAt;
     while (i < lines.length && at !== null && lines[i]!.at < at) out.push(lines[i++]!);
     out.push({ group });
   }
   while (i < lines.length) out.push(lines[i++]!);
   return out;
-}
-
-function turnAt(turn: Turn): string | null {
-  return "at" in turn ? turn.at : "startedAt" in turn ? turn.startedAt : null;
 }
 
 function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {

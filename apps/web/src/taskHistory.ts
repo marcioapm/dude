@@ -56,12 +56,8 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; de
   }
   if (costUsd !== null && costUsd > 0) facts.push(format(costUsd));
 
-  return { lead: leadFor(task.status, ran, conducted(task)), steps, facts };
-}
-
-/** The conductor took the task's decisions: it decides now, or started any of its Runs. */
-function conducted(task: { runs: readonly Run[]; decider?: string }): boolean {
-  return task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
+  const byConductor = task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
+  return { lead: leadFor(task.status, ran, byConductor), steps, facts };
 }
 
 function leadFor(status: TaskStatus, ran: readonly Run[], byConductor: boolean): string {

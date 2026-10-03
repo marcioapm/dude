@@ -21,6 +21,14 @@ export interface DeciderLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  */
 export function DeciderLine({ decider, waiting, action, className, ...rest }: DeciderLineProps) {
   const conductor = decider === "conductor";
+  let detail: ReactNode;
+  if (waiting) {
+    detail = <>waiting on {conductor ? "it" : "the person"}: {waiting}</>;
+  } else if (conductor) {
+    detail = "each step that finishes comes back to it";
+  } else {
+    detail = "the pipeline runs to the pull request on its own";
+  }
   return (
     <div className={cx(styles["root"], conductor && styles["conductor"], className)} data-decider={decider} {...rest}>
       <Icon name={conductor ? "conductor" : "zap"} size={14} className={styles["icon"]} />
@@ -28,9 +36,7 @@ export function DeciderLine({ decider, waiting, action, className, ...rest }: De
         <span className={styles["who"]}>{conductor ? "The conductor decides" : "Deliver decides"}</span>
         <span className={styles["detail"]}>
           {" · "}
-          {conductor
-            ? waiting ? <>waiting on it: {waiting}</> : "each step that finishes comes back to it"
-            : waiting ? <>waiting on the person: {waiting}</> : "the pipeline runs to the pull request on its own"}
+          {detail}
         </span>
       </p>
       {action ? <span className={styles["action"]}>{action}</span> : null}
