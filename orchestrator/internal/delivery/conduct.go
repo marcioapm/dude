@@ -97,10 +97,10 @@ func parked(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, error) {
 	case !d.State.conducted():
 		return nil, refusef("Deliver takes this task's decisions, not you: you are read-only. A person hands them to you " +
 			"by writing in Chat; until then, answer and advise")
+	case d.Step == "conductorDecision" && d.State.Decision != nil && d.State.Decision.Taken != nil:
+		return nil, refusef("this decision was taken already (%s); you are woken at the next one", d.State.Decision.Taken.Action)
 	case d.Status != "waiting" || d.Step != "conductorDecision" || d.State.Decision == nil:
 		return nil, refusef("the delivery is not waiting on a decision now (it is at %s): you are woken when it is", d.Step)
-	case d.State.Decision.Taken != nil:
-		return nil, refusef("this decision was taken already (%s); you are woken at the next one", d.State.Decision.Taken.Action)
 	}
 	return d, nil
 }
