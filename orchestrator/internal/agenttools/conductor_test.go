@@ -83,14 +83,14 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	if got := strings.Join(names, ","); got != "ask_person,create_task,emit_event,findings,get_memory,list_epics,list_repositories,"+
-		"list_tasks,pull_requests,remember,request_repository,run_diff,search_memory" {
+	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,dismiss_finding,emit_event,findings,get_memory,"+
+		"list_epics,list_repositories,list_tasks,pull_requests,remember,request_repository,run_diff,search_memory,start_phase,update_task" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
-	for _, tool := range []string{"findings", "pull_requests"} {
+	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}

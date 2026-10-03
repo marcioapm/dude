@@ -189,7 +189,7 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 			FROM tasks t WHERE t.id = $1`, taskID).Scan(&status, &started); err != nil {
 			return "", err
 		}
-		if delivery.Ended(status) || started {
+		if !notStarted(status) || started {
 			if talk {
 				return "", fail(http.StatusConflict, "conflict", "task %s is %s: it can no longer be talked through", taskID, status)
 			}
@@ -212,6 +212,17 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 		return "", err
 	}
 	return delivery.DeciderConductor, nil
+}
+
+// notStarted is a task status from before any delivery: where Deliver and
+// Talk it through are offered. A task with no delivery in any other status
+// (marked done, or moved by hand) is not talked through.
+func notStarted(status string) bool {
+	switch status {
+	case "received", "intake", "awaiting_confirmation", "queued":
+		return true
+	}
+	return false
 }
 
 // talkThrough starts a task's delivery for its conductor to decide: as
