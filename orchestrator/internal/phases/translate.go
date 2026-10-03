@@ -413,6 +413,11 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
 		return err
 	}
+	// A wake note read after its failure was counted: its reasons, back to
+	// pending, are heard and not told again.
+	if err := delivery.WakesHeardTx(ctx, tx, id); err != nil {
+		return err
+	}
 	// An "Interrupt now" sent as the interrupt alone (interrupt_only, see
 	// deliverDirectives) has no receipt of its own: it is delivered with
 	// the directive carrying its words, on the same precedence, with an

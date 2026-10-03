@@ -1152,6 +1152,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 				map[string]any{"directiveId": id, "error": "the run finished before the agent read it"}); err != nil {
 				return err
 			}
+			if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
 	}); err != nil {
@@ -1839,6 +1842,9 @@ func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, 
 		return err
 	}
 	if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": reason}); err != nil {
+		return err
+	}
+	if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
 		return err
 	}
 	return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3

@@ -87,6 +87,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	}
 	note := WakeNote(lines)
 	payload := map[string]any{"text": note, "reasons": kinds}
+	var directiveID string
 	if runID == "" {
 		if runID, err = startConductor(ctx, tx, org, projectID, taskID, Writer{ActorType: ledger.ActorSystem, ActorID: "dude"},
 			note, true); err != nil {
@@ -95,8 +96,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		payload["started"] = true
 	} else {
 		ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
-		directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: note, Scope: "run"})
-		if err != nil {
+		if directiveID, _, err = QueueDirective(ctx, tx, ref, Directive{Text: note, Scope: "run"}); err != nil {
 			return "", err
 		}
 		payload["directiveId"] = directiveID
@@ -108,14 +108,36 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 			return "", err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now(), conductor_run_id = $2 WHERE id = ANY($1)`,
-		ids, runID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now(), conductor_run_id = $2, directive_id = NULLIF($3, '')
+		WHERE id = ANY($1)`, ids, runID, directiveID); err != nil {
 		return "", err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorWoken, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: runID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: payload})
 	return runID, err
+}
+
+// RequeueWakesTx puts the reasons a wake note carried back to pending once
+// its directive definitively failed (lux.input.failed, or its conductor
+// ended without reading it): the next sweep tells the live conductor, or
+// its replacement, again. A directive that was delivered — its consumption
+// receipt — keeps them delivered, so a note is never heard twice.
+func RequeueWakesTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
+	// The link is kept while they wait: a late consumption receipt finds
+	// them (WakesHeardTx) until another note carries them.
+	_, err := tx.Exec(ctx, `UPDATE conductor_wakes c SET delivered_at = NULL, conductor_run_id = NULL
+		FROM directives d WHERE c.directive_id = $1 AND d.id = c.directive_id AND d.failed_at IS NOT NULL AND d.delivered_at IS NULL`,
+		directiveID)
+	return err
+}
+
+// WakesHeardTx marks the reasons a wake note carried delivered again once
+// its directive is delivered after a failure (a consumption receipt wins).
+func WakesHeardTx(ctx context.Context, tx pgx.Tx, directiveID string) error {
+	_, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now() WHERE directive_id = $1 AND delivered_at IS NULL`,
+		directiveID)
+	return err
 }
 
 // FailedForConductor (SQL, over runs r): a phase Run the task's conductor

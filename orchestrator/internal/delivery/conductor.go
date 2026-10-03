@@ -143,7 +143,7 @@ const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', '
 // that has them, "" for none. The caller holds the task's Chat lock, and
 // the Run has ended.
 func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string, error) {
-	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
+	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt OR EXISTS (SELECT 1 FROM conductor_wakes c WHERE c.directive_id = d.id),
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, '')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id FROM events e WHERE e.run_id = d.run_id
@@ -155,7 +155,9 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 		return "", err
 	}
 	type unread struct {
-		ID, Text           string
+		ID, Text string
+		// An interrupt, or dude's wake note (whose reasons go back to
+		// pending, RequeueWakesTx): no one's words to hand on.
 		Interrupt          bool
 		ActorType, ActorID string
 	}
@@ -195,6 +197,11 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 			reason = stopped
 		}
 		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2 WHERE id = $1`, d.ID, reason); err != nil {
+			return "", err
+		}
+		// A wake note not inherited goes back to its reasons, for the next
+		// conductor.
+		if err := RequeueWakesTx(ctx, tx, d.ID); err != nil {
 			return "", err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event(evDirectiveFailed, ledger.ActorSystem,
