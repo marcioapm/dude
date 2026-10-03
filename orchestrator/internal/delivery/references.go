@@ -33,18 +33,8 @@ func ImageRefs(text string) []ImageRef {
 	fence := ""
 	offset := 0
 	for _, line := range strings.Split(text, "\n") {
-		opener := ""
-		if m := fenceOpen.FindStringSubmatch(line); m != nil {
-			opener = m[1]
-		}
-		switch {
-		case fence != "":
-			if opener != "" && opener[0] == fence[0] && len(opener) >= len(fence) && strings.Trim(line, " \t") == opener {
-				fence = ""
-			}
-		case opener != "":
-			fence = opener
-		default:
+		var code bool
+		if fence, code = fenceAfter(fence, line); !code {
 			masked := maskCodeSpans(line)
 			for _, m := range attachmentRef.FindAllStringSubmatchIndex(masked, -1) {
 				ref := ImageRef{
@@ -63,6 +53,36 @@ func ImageRefs(text string) []ImageRef {
 		offset += len(line) + 1
 	}
 	return out
+}
+
+// fenceAfter is the fence open after line, given the one open before it
+// ("" for none), and whether line is code: inside a fence, or one's opener
+// or closer.
+func fenceAfter(fence, line string) (string, bool) {
+	opener := ""
+	if m := fenceOpen.FindStringSubmatch(line); m != nil {
+		opener = m[1]
+	}
+	switch {
+	case fence != "":
+		if opener != "" && opener[0] == fence[0] && len(opener) >= len(fence) && strings.Trim(line, " \t") == opener {
+			return "", true
+		}
+		return fence, true
+	case opener != "":
+		return opener, true
+	}
+	return "", false
+}
+
+// UnclosedFence is the fence text leaves open at its end, "" for none: the
+// closer to write after it so that what follows is not read as code.
+func UnclosedFence(text string) string {
+	fence := ""
+	for _, line := range strings.Split(text, "\n") {
+		fence, _ = fenceAfter(fence, line)
+	}
+	return fence
 }
 
 // maskCodeSpans blanks each closed code span's content, keeping offsets.

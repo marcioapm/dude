@@ -398,8 +398,13 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
+//
+// The briefing quotes the task's goal and criteria as written: each image
+// reference in it reads as the image the Run is given (in.Images), as in a
+// phase's prompt, and a saved prompt's {{task.goal}} does too.
 func ConductorPrompt(briefing string, in PromptInput) string {
-	sections := []string{briefing, "## How you work"}
+	in = in.withImages()
+	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), "## How you work"}
 	lead, _ := in.instructions(RoleConductor)
 	for _, s := range lead {
 		sections = append(sections, in.fill(s))
