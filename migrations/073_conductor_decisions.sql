@@ -81,10 +81,14 @@ CREATE INDEX conductor_wake_attempts_wake_idx ON conductor_wake_attempts (wake_i
 -- Receipts and failures find a directive's reasons; hand-over asks whether
 -- a directive is a wake note.
 CREATE INDEX conductor_wake_attempts_directive_idx ON conductor_wake_attempts (directive_id) WHERE directive_id IS NOT NULL;
--- Briefings not yet heard: the syncer's scan for conductors that ended
--- before hearing theirs, and the prompt's receipt.
+-- Briefings not yet heard and not failed: the syncer's scan for conductors
+-- that ended before hearing theirs.
 CREATE INDEX conductor_wake_attempts_briefing_idx ON conductor_wake_attempts (conductor_run_id)
   WHERE directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL;
+-- Briefings not yet heard, failed or not: the prompt's read receipt, which
+-- counts after a failure too (BriefingHeardTx).
+CREATE INDEX conductor_wake_attempts_briefing_receipt_idx ON conductor_wake_attempts (conductor_run_id)
+  WHERE directive_id IS NULL AND heard_at IS NULL;
 
 ALTER TABLE conductor_wake_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conductor_wake_attempts FORCE ROW LEVEL SECURITY;
