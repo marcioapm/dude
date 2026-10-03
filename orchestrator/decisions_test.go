@@ -154,12 +154,9 @@ func (w *world) wokenWith(task, want string) string {
 			return false
 		}
 		if directive == "" {
-			for _, r := range w.lux.Runs() {
-				if r.ID == lr {
-					return strings.Contains(r.Prompt(), note)
-				}
-			}
-			return false
+			// Its briefing, which lux started it with.
+			return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND strpos(prompt, $2) > 0`, runID, note) == 1 &&
+				w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'`, runID) > 0
 		}
 		for _, rec := range w.lux.Records(lr) {
 			if data, _ := rec["data"].(map[string]any); rec["type"] == lux.RecordInputConsumed && data["requestId"] == directive {
@@ -689,6 +686,31 @@ func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
 		t.Errorf("%d reasons pending again after the conductor read their note", n)
+	}
+}
+
+// A conductor whose container stopped mid-turn, with no turn end seen,
+// does not hold the task's live slot against a decision's note: its
+// replacement is started with the note, no person's message needed.
+func TestAWakeReplacesAConductorWhoseContainerStopped(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	first := w.talk(task)
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL, lux_state = 'stopped' WHERE id = $1`, first)
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:stopped", "decide after the stop")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("a new conductor", func() bool {
+		id, _, _ := w.conductor(task)
+		return id != first
+	})
+	w.wokenWith(task, "decide after the stop")
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message'`, task); n != 1 {
+		t.Errorf("%d chat messages: the replacement needed a person", n)
 	}
 }
 

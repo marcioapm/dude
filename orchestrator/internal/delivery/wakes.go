@@ -68,11 +68,25 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
 		return "", err
 	}
+	// A conductor whose container stopped without dude asking holds the
+	// live slot until it is ended, turn end or not: ended here, as Chat
+	// ends it, so the note can start its replacement.
+	var ending string
+	err = tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` AND `+Ending+` FOR NO KEY UPDATE`,
+		taskID).Scan(&ending)
+	if err != nil && !db.IsNotFound(err) {
+		return "", err
+	}
+	if ending != "" {
+		if err := EndConductor(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: ending}, "its container stopped"); err != nil {
+			return "", err
+		}
+	}
 	var runID string
 	var between bool
 	err = tx.QueryRow(ctx, `SELECT r.id, r.status = 'paused' OR (r.status = 'running'
 			AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))
-		FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` AND NOT `+Ending+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between)
+		FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between)
 	if err != nil && !db.IsNotFound(err) {
 		return "", err
 	}

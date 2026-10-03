@@ -411,7 +411,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			return true, s.nudge(ctx, r)
 		}
 	}
-	if r.TurnDone && r.conductor() {
+	if r.conductor() && (r.TurnDone || lux.Terminal(r.LuxState)) {
+		// A conductor's container that stopped on its own ends it, whether
+		// or not its turn's end was seen.
 		return s.betweenTurns(ctx, r)
 	}
 	if r.TurnDone {
