@@ -291,7 +291,8 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 		if handedBack && d.AtGate() {
 			// Handed back at the gate, Deliver opens the pull request at once:
 			// only on the person's Open or Draft, or their confirmation,
-			// written as the opening's authorization (the step keeps it).
+			// written as the opening's authorization at the heads now (the
+			// step keeps it).
 			draft, err := delivery.GateAnswer(r.Context(), tx, &d.State)
 			var refused delivery.Refusal
 			switch {
@@ -301,9 +302,13 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			case err != nil && !errors.As(err, &refused):
 				return err
 			}
+			draft = err == nil && draft
 			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = state || jsonb_build_object('gateOpened', true)
 					|| CASE WHEN $2 THEN '{"draft": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
-				d.WorkflowID, err == nil && draft); err != nil {
+				d.WorkflowID, draft); err != nil {
+				return err
+			}
+			if err := delivery.AuthorizeGateTx(r.Context(), tx, d.WorkflowID, &d.State, draft); err != nil {
 				return err
 			}
 		}

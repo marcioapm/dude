@@ -2,8 +2,10 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -218,7 +220,7 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	if d.Taken == nil && !st.conducted() {
 		// A gate the conductor entered stays one handed back: Deliver goes
 		// on only with the person's Open or Draft, or their confirmation.
-		if d.Point == PointBeforePR && st.GateRequired && !st.GateOpened {
+		if d.Point == PointBeforePR && st.GateRequired && !st.gateHeld() {
 			ok, err := w.gateAuthorized(ctx, sc, st)
 			if err != nil {
 				return workflow.Result{}, err
@@ -255,17 +257,19 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 }
 
 // gateAuthorized says whether a gate the conductor entered may open under
-// Deliver: the person's Open or Draft at the heads now (taken into the
-// state, Draft as the draft), or a confirmed hand-back (GateOpened).
+// Deliver: an authorization at the heads now (gateHeld), or the person's
+// Open or Draft at them, recorded as one (Draft as the draft).
 func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
-	if st.GateOpened {
+	if st.gateHeld() {
 		return true, nil
 	}
 	var draft bool
 	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		var err error
-		draft, err = gate(ctx, tx, st)
-		return err
+		if draft, err = gate(ctx, tx, st); err != nil {
+			return err
+		}
+		return AuthorizeGateTx(ctx, tx, sc.WorkflowRunID, st, draft)
 	})
 	var refused Refusal
 	if errors.As(err, &refused) {
@@ -274,8 +278,33 @@ func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil {
 		return false, err
 	}
-	st.Draft, st.GateOpened = st.Draft || draft, true
+	st.Draft, st.GateOpened = draft, true
 	return true, nil
+}
+
+// gateHeld says the gate was authorized at the heads the delivery is at
+// now. An authorization at other heads does not count, whatever the
+// latched GateOpened says.
+func (st *State) gateHeld() bool {
+	return st.GateOpened && st.GateAt != nil && maps.Equal(nonNilMap(st.GateAt.Heads), nonNilMap(st.Heads))
+}
+
+// GateAt is the gate's authorization: the heads it was given at.
+type GateAt struct {
+	Heads map[string]string `json:"heads"`
+	Draft bool              `json:"draft,omitempty"`
+}
+
+// AuthorizeGateTx records the gate's authorization at st's heads, in the
+// row (gateAt is owned: a step's transition keeps the row's).
+func AuthorizeGateTx(ctx context.Context, tx pgx.Tx, wfID string, st *State, draft bool) error {
+	st.GateAt = &GateAt{Heads: nonNilMap(st.Heads), Draft: draft}
+	raw, err := json.Marshal(st.GateAt)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{gateAt}', $2::jsonb) WHERE id = $1`, wfID, raw)
+	return err
 }
 
 // parkAtGate parks a delivery Deliver decides at the pull request gate the

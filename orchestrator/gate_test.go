@@ -136,6 +136,61 @@ func TestAHandBackWhileEnteringTheGateStillAsks(t *testing.T) {
 	}
 }
 
+// The person's Open or Draft authorizes the heads it was given at. Handed
+// back at the gate and taken back before the opening, the conductor starts
+// a simplifier that moves the head, and hands back again: Deliver asks
+// again at the new head, opens nothing until it is answered, and then
+// opens as that answer says.
+func TestAGateAuthorizationIsForItsHeads(t *testing.T) {
+	for _, c := range []struct {
+		first, again string
+		draft        bool
+	}{{"Open", "Open", false}, {"Draft", "Draft", true}, {"Draft", "Open", false}} {
+		t.Run(c.first+" then "+c.again, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.talk(task)
+			w.must(task, "start_phase", `{"phase":"implement"}`)
+			w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+			w.must(task, "start_phase", `{"phase":"simplify"}`)
+			w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+			w.must(task, "decide", `{"action":"ask_person"}`)
+			w.chat(task, c.first)
+			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+				t.Fatalf("hand-back at the gate: %d %v", status, out)
+			}
+			if status, out := w.handBack(task, map[string]any{"decider": "conductor"}); status != 200 {
+				t.Fatalf("taking the decisions back: %d %v", status, out)
+			}
+			w.pump()
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Fatalf("%d pull requests opened under the conductor", n)
+			}
+			simplifiers := w.phaseRuns(task, "simplify")
+			w.must(task, "start_phase", `{"phase":"simplify"}`)
+			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+				t.Fatalf("hand-back during the simplifier: %d %v", status, out)
+			}
+			w.until("Deliver's gate question at the new head", func() bool {
+				return w.phaseRuns(task, "simplify") == simplifiers+1 && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
+			})
+			for range 3 {
+				w.pump()
+			}
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Fatalf("%d pull requests opened at a head the person did not authorize", n)
+			}
+			if status, out := w.chat(task, c.again); status != 200 || out["questionId"] == nil {
+				t.Fatalf("answer at the new head: %d %v", status, out)
+			}
+			w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			if w.gh.Pulls()[0].Draft != c.draft {
+				t.Errorf("draft %v, want %v", w.gh.Pulls()[0].Draft, c.draft)
+			}
+		})
+	}
+}
+
 // Deliver from the start, never conducted: no gate, no question.
 func TestADeliveryNeverConductedOpensWithoutAsking(t *testing.T) {
 	w := conducting(t)

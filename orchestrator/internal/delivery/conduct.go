@@ -338,6 +338,9 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 		if err != nil {
 			return nil, err
 		}
+		if err := AuthorizeGateTx(ctx, tx, d.WorkflowID, st, draft); err != nil {
+			return nil, err
+		}
 		if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars), Draft: draft}); err != nil {
 			return nil, err
 		}
