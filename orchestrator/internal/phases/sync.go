@@ -563,7 +563,7 @@ func (s *Syncer) handOverUnheard(ctx context.Context) error {
 	var todo []ended
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text
-			FROM runs r WHERE `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
+			FROM `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
 		if err != nil {
 			return err
 		}
