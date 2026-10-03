@@ -69,7 +69,7 @@ type Pending struct {
 // Taken is a conductor's decision.
 type Taken struct {
 	// "next": what the policy would do; "start_phase"; "open_pull_request";
-	// "wait" (on the pull requests, leaving their feedback).
+	// "wait" (on the pull requests, dropping their feedback).
 	Action string `json:"action"`
 	// start_phase: the phase, and what it is limited to.
 	Phase      string   `json:"phase,omitempty"`
@@ -277,7 +277,7 @@ func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st 
 		return true, nil
 	}
 	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		_, err := gate(ctx, tx, st)
+		_, err := GateAnswer(ctx, tx, st)
 		return err
 	})
 	var refused Refusal
@@ -312,7 +312,7 @@ func authorizeAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext
 	if !maps.Equal(nonNilMap(heads), nonNilMap(st.Heads)) {
 		return nil
 	}
-	draft, err := gate(ctx, tx, st)
+	draft, err := GateAnswer(ctx, tx, st)
 	var refused Refusal
 	if errors.As(err, &refused) {
 		return nil
@@ -402,14 +402,12 @@ func conductorKey(sc workflow.StepContext, st *State, d *Directed, parts ...any)
 	return key(sc, st, append([]any{":c", st.Decisions}, parts...)...)
 }
 
-// conductorRun gives a phase Run the conductor's mark.
+// apply gives a phase Run the conductor's mark.
 func (d *Directed) apply(p *PhaseRun) {
 	if d != nil {
 		p.ConductorRunID, p.ConductorNote = d.By, d.Note
 	}
 }
-
-// wakeWindow and the rest: see the syncer's delivery of wakes.
 
 // RecordWakeTx records a reason to wake the task's conductor, once per key.
 // Returns whether it is new.

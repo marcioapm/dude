@@ -254,8 +254,8 @@ func (s *Server) talkThrough(ctx context.Context, tx pgx.Tx, org, taskID string,
 
 // handBack is "Let Deliver finish it" (decider policy), or taking the
 // decisions back for the conductor (decider conductor): from the next
-// decision on. A decision the delivery is waiting on now is the policy's
-// at once.
+// decision on. An untaken pending decision goes to the policy at once;
+// a taken decision is still carried out, and a required PR gate still holds.
 func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) error {
 	taskID := r.PathValue("id")
 	var body struct {
@@ -295,11 +295,12 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			// step keeps it).
 			draft, err := delivery.GateAnswer(r.Context(), tx, &d.State)
 			var refused delivery.Refusal
+			isRefusal := errors.As(err, &refused)
 			switch {
-			case errors.As(err, &refused) && !body.OpenPullRequest:
+			case isRefusal && !body.OpenPullRequest:
 				return fail(http.StatusConflict, "pull_request_gate",
 					"Deliver will open the pull request now, and the person has not answered Open or Draft; confirm with openPullRequest")
-			case err != nil && !errors.As(err, &refused):
+			case err != nil && !isRefusal:
 				return err
 			}
 			draft = err == nil && draft

@@ -27,7 +27,7 @@ func (r Refusal) Error() string { return r.Msg }
 
 func refusef(format string, a ...any) error { return Refusal{fmt.Sprintf(format, a...)} }
 
-// Delivery is a task's latest delivery, locked for a decision.
+// Delivery is a task's latest delivery; LoadDelivery locks it for a decision.
 type Delivery struct {
 	WorkflowID, Status, Step string
 	State                    State
@@ -334,7 +334,7 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 			}
 		}
 	case "open_pull_request":
-		draft, err := gate(ctx, tx, st)
+		draft, err := GateAnswer(ctx, tx, st)
 		if err != nil {
 			return nil, err
 		}
@@ -441,22 +441,15 @@ func GateAnswered(ctx context.Context, tx pgx.Tx, org, questionID string) error 
 	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalConductorDecision, map[string]any{"action": "answered"}, "")
 }
 
-// GateAnswer is the pull request gate as a hand-back reads it: whether the
-// person's answer opens the pull request (a draft for Draft), or a Refusal
-// saying why it does not.
-func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {
-	return gate(ctx, tx, st)
-}
-
 // AtGate says the delivery is parked at the pull request gate, untaken.
 func (d *Delivery) AtGate() bool {
 	p := d.State.Decision
 	return d.Step == "conductorDecision" && p != nil && p.Taken == nil && p.Point == PointBeforePR
 }
 
-// gate is the pull request gate: the task's latest gate question, asked at
-// the head the task is at now, answered Open (or Draft: a draft).
-func gate(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {
+// GateAnswer reads the latest gate question at the current heads. Open and
+// Draft authorize the opening; other answers return a Refusal. It writes nothing.
+func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err error) {
 	var status, answer string
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT status::text, COALESCE(answer, ''), pr_gate_heads FROM questions
