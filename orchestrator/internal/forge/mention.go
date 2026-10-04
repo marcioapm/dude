@@ -18,21 +18,122 @@ const DudeMention = "dude"
 const ReplyMarker = "<!-- dude:conductor -->"
 
 // Own says the feedback is a comment the conductor posted: its last
-// non-blank line is the marker itself, as ConductReply writes it. A person
-// quoting a reply carries the marker inside a blockquote or a code fence,
-// or above their own words, and stays theirs.
+// non-blank line is the marker itself, as ConductReply writes it, outside
+// any code fence and blockquote. A person quoting a reply carries the
+// marker inside a blockquote or a code fence, or above their own words,
+// and stays theirs.
 func Own(f Feedback) bool {
-	lines := strings.Split(strings.TrimRight(f.Body, " \t\r\n"), "\n")
-	if strings.TrimSpace(lines[len(lines)-1]) != ReplyMarker {
-		return false
-	}
-	fenced := false
-	for _, l := range lines[:len(lines)-1] {
-		if t := strings.TrimLeft(l, " "); strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			fenced = !fenced
+	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
+	ind, rest := indent(lines[len(lines)-1])
+	// The marker line itself goes through the fence reading: a marker that
+	// ends a list item ends a fence left open in it.
+	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
+}
+
+// fenced says the last of lines is inside a code fence, as CommonMark
+// reads them: a run of three or more ` or ~ indented at most 3 spaces in
+// its container (the document, or a list item) opens one; only a run of
+// the same character, at least as long, with nothing after it, closes it;
+// the end of its list item, or of the comment, closes it too. A fence
+// inside a blockquote ends with the quote, so quoted lines open none.
+func fenced(lines []string) bool {
+	var fence byte // 0: outside any fence
+	var length int // the opening run's length
+	var cont int   // the column the fence's container starts at
+	var item int   // the content column of the list item last opened, 0 for none
+	for _, line := range lines {
+		ind, rest := indent(line)
+		if fence != 0 {
+			if strings.TrimSpace(rest) == "" {
+				continue
+			}
+			if cont == 0 || ind >= cont {
+				if ind-cont <= 3 && closes(rest, fence, length) {
+					fence = 0
+				}
+				continue
+			}
+			fence = 0 // its list item ended, and the fence with it
+		}
+		if strings.TrimSpace(rest) == "" {
+			continue
+		}
+		rel := ind
+		cont = 0
+		if ind <= 3 && strings.HasPrefix(rest, ">") {
+			continue
+		}
+		if w, ok := listMarker(rest); ok && ind <= 3 {
+			// Spaces past the marker's own are the content's indentation:
+			// four or more make it indented code, not a fence.
+			item = ind + w
+			cont = item
+			rel, rest = indent(rest[w:])
+		} else if item > 0 && ind >= item {
+			cont, rel = item, ind-item
+		} else if ind < item {
+			item = 0
+		}
+		if rel > 3 {
+			continue
+		}
+		if c, n := run(rest); n >= 3 && (c == '~' || !strings.ContainsRune(rest[n:], '`')) {
+			fence, length = c, n
 		}
 	}
-	return !fenced
+	return fence != 0
+}
+
+// indent counts a line's leading spaces, a tab as up to the next multiple
+// of 4, and returns the rest.
+func indent(line string) (int, string) {
+	n := 0
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case ' ':
+			n++
+		case '\t':
+			n += 4 - n%4
+		default:
+			return n, line[i:]
+		}
+	}
+	return n, ""
+}
+
+// run is the fence character a line starts with and how many of it.
+func run(s string) (byte, int) {
+	if s == "" || s[0] != '`' && s[0] != '~' {
+		return 0, 0
+	}
+	n := 0
+	for n < len(s) && s[n] == s[0] {
+		n++
+	}
+	return s[0], n
+}
+
+// closes says a line (its indentation removed) closes a fence of c, length
+// long: c at least as many times, then only whitespace.
+func closes(s string, c byte, length int) bool {
+	got, n := run(s)
+	return got == c && n >= length && strings.TrimSpace(s[n:]) == ""
+}
+
+// listMarker is a list item's marker at the start of s ("- ", "* ", "+ ",
+// "1. ", "1) "): its width, including the one space after it.
+func listMarker(s string) (int, bool) {
+	if len(s) >= 2 && strings.ContainsRune("-*+", rune(s[0])) && (s[1] == ' ' || s[1] == '\t') {
+		return 2, true
+	}
+	d := 0
+	for d < len(s) && d < 9 && s[d] >= '0' && s[d] <= '9' {
+		d++
+	}
+	if d > 0 && d+1 < len(s) && (s[d] == '.' || s[d] == ')') && (s[d+1] == ' ' || s[d+1] == '\t') {
+		return d + 2, true
+	}
+	return 0, false
 }
 
 // mentionLogin is what GitHub allows in a login: letters, digits, hyphens.

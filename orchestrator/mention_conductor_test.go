@@ -197,15 +197,17 @@ func TestAPersonQuotingDudesReplyIsStillHeard(t *testing.T) {
 	quoted := "> Because the task says greet.\n>\n> " + forge.ReplyMarker + "\n\n"
 	w.gh.Comment(1, "alice", quoted+"@dude could you explain the tradeoff?")
 	w.gh.Comment(1, "alice", "```\nBecause.\n\n"+forge.ReplyMarker+"\n```\n\n@dude and this one?")
-	w.until("both messages", func() bool { w.sync(); return w.mentions(task) == 2 })
+	w.gh.Comment(1, "alice", "@dude explain this example\n````\n```\n"+forge.ReplyMarker)
+	w.gh.Comment(1, "alice", "@dude and this\n~~~~\n~~~\n"+forge.ReplyMarker)
+	w.until("the four messages", func() bool { w.sync(); return w.mentions(task) == 4 })
 	w.gh.Comment(1, "alice", quoted+"Please rename greet() to hello().")
 	w.until("a fixer for the change request", func() bool { w.sync(); return w.fixes(task) == 1 })
 
 	// Dude's own reply, as ConductReply writes it, stays dude's.
 	w.gh.Comment(1, "alice", "> @alice: @dude why?\n\nBecause.\n\n"+forge.ReplyMarker+"\n")
 	w.syncs(3)
-	if n := w.mentions(task); n != 2 {
-		t.Errorf("%d messages, want the two quoting comments'", n)
+	if n := w.mentions(task); n != 4 {
+		t.Errorf("%d messages, want the four quoting or fenced comments'", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
 		AND payload->>'own' = 'true'`, task); n != 1 {

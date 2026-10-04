@@ -4,6 +4,7 @@ package orchestrator_test
 // with its Run's token as its agent would, against the fake GitHub.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,35 @@ func TestTheConductorRepliesOnThePullRequest(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != before {
 		t.Errorf("the replies recorded %d reasons to wake", n-before)
+	}
+}
+
+// A reply showing Markdown with a code example inside a longer fence is
+// still dude's own when read back, under a token that comments as a person:
+// neither a message from its quoted @dude nor fixer feedback.
+func TestAReplyWithANestedCodeExampleIsStillDudesOwn(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	issue := w.gh.Comment(1, "alice", "@dude how should the README show greet()?")
+	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
+
+	text := "Open a Go example in the README with:\n\n````markdown\n```go\n````\n\nand please close it the same way."
+	args, _ := json.Marshal(map[string]string{"pr": "1", "text": text, "in_reply_to": fmt.Sprintf("issue-comment-%d", issue)})
+	w.must(task, "reply_on_pull_request", string(args))
+	posted := w.gh.Pull(1).Comments
+	if last := posted[len(posted)-1]; !strings.Contains(last.Body, "````markdown\n```go\n````") {
+		t.Fatalf("the reply posted: %q", last.Body)
+	}
+	w.syncs(5)
+	if n := w.mentions(task); n != 1 {
+		t.Errorf("the reply came back as %d messages", n-1)
+	}
+	if n := w.fixes(task); n != 0 {
+		t.Errorf("%d fixers for the conductor's reply", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'own' = 'true'`, task); n != 1 {
+		t.Errorf("%d comments recorded as dude's own, want the reply", n)
 	}
 }
 
