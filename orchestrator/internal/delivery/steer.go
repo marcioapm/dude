@@ -98,6 +98,14 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 			return Steered{}, err
 		}
 		payload["by"], payload["conductorRunId"] = RoleConductor, in.Conductor
+	} else if in.Supersedes != "" {
+		// A person's Retry or Interrupt now of a conductor's steer is the
+		// conductor's instruction sent again: it settles to the conductor
+		// (SteerSettledTx), though the person sent it. New words do not.
+		if _, err := tx.Exec(ctx, `UPDATE directives d SET conductor_run_id = s.conductor_run_id FROM directives s
+			WHERE d.id = $1 AND s.id = $2 AND s.run_id = d.run_id AND s.text = d.text`, id, in.Supersedes); err != nil {
+			return Steered{}, err
+		}
 	}
 	attached, err := Attach(ctx, tx, taskID, id, in.AttachmentIDs)
 	if refused, ok := err.(AttachmentError); ok {

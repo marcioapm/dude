@@ -94,6 +94,33 @@ describe("the conductor's steer under its Run's line", () => {
   });
 });
 
+describe("a person's Retry of the conductor's steer", () => {
+  const person = { type: "human", id: "key_1" } as const;
+  const retried = (supersedes: string, id: string, text: string, s: number) =>
+    ev("run.steered", { directiveId: id, text, scope: "run", interrupt: false, supersedes }, s, IMPL, person);
+  test("is the same steer: read, on one line", () => {
+    const steers = conductorSteers([
+      steered("dir_c1", "Use staging.", 1),
+      ev("run.directive.failed", { directiveId: "dir_c1", error: "the agent errored" }, 2),
+      retried("dir_c1", "dir_p2", "Use staging.", 3),
+      ev("run.directive.delivered", { directiveId: "dir_p2", read: true }, 4),
+    ]).get(IMPL)!;
+    expect(steers.map((s) => [s.directiveId, s.deliveredAt, s.read, s.failed])).toEqual([["dir_c1", at(4), true, null]]);
+    const h = plain(shown(steers[0]!));
+    expect(h).toMatch(/sent \d\d:\d\d · read \d\d:\d\d:\d\d/);
+    expect(h).not.toContain("Not delivered");
+  });
+  test("new words superseding it are the person's, not the conductor's steer", () => {
+    const steers = conductorSteers([
+      steered("dir_c1", "Use staging.", 1),
+      ev("run.directive.failed", { directiveId: "dir_c1", error: "the agent errored" }, 2),
+      retried("dir_c1", "dir_p2", "Use production.", 3),
+      ev("run.directive.delivered", { directiveId: "dir_p2", read: true }, 4),
+    ]).get(IMPL)!;
+    expect(steers.map((s) => [s.directiveId, s.text, s.deliveredAt, s.failed])).toEqual([["dir_c1", "Use staging.", null, "the agent errored"]]);
+  });
+});
+
 /** The fixture Run's ledger with a conductor's steer and a person's. */
 class SteeredClient extends FixtureClient {
   protected override ledgerFor(params: LedgerQuery): PersistedEvent[] {

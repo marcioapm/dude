@@ -263,6 +263,75 @@ func TestAPersonsSteerAndTheConductorsBothArriveInOrder(t *testing.T) {
 	}
 }
 
+// A person's Retry of the conductor's failed steer is the conductor's
+// instruction again: read, the conductor is told, once, though the person
+// sent it. New words superseding it are the person's own, and wake nobody.
+func TestAPersonsRetryOfTheConductorsSteerWakesTheConductor(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	_, out := s.steer(steerArgs(s.implementer, "use the staging database", false))
+	d1, _ := out["directiveId"].(string)
+	s.until("taken", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, d1) == 1
+	})
+	lr := s.luxRunOf(s.implementer)
+	s.lux.FailInput(lr, d1, "the agent errored")
+	s.wokenWith(s.task, "was not delivered: the agent errored")
+	status, retry := s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "use the staging database", "supersedes": d1})
+	if status != 201 {
+		t.Fatalf("retry: %d %v", status, retry)
+	}
+	d2, _ := retry["id"].(string)
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.steered' AND payload->>'directiveId' = $2
+		AND actor_type <> 'agent' AND actor_id <> $3 AND NOT payload ? 'by'`, s.implementer, d2, s.conductor); n != 1 {
+		t.Error("the retry is not the person's")
+	}
+	status, other := s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "and the other thing", "supersedes": d1})
+	if status != 201 {
+		t.Fatalf("new words: %d %v", status, other)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND conductor_run_id IS NULL`, other["id"]); n != 1 {
+		t.Error("new words superseding the conductor's steer were linked to the conductor")
+	}
+	s.until("both taken", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id IN ($1, $2) AND accepted_at IS NOT NULL`, d2, other["id"]) == 2
+	})
+	s.lux.FinishTools(lr)
+	s.wokenWith(s.task, "read your steer "+d1)
+	for range 3 {
+		s.pump()
+	}
+	if w := s.steerWakes(); len(w) != 2 || !strings.HasPrefix(w[0], "steer_failed ") || !strings.HasPrefix(w[1], "steer_read ") {
+		t.Errorf("steer wakes: %v, want the failure, then one read", w)
+	}
+}
+
+// A person's Interrupt now of the conductor's steer lux already has goes
+// as the interrupt alone: the words are read once, and the conductor is
+// told once.
+func TestAPersonsInterruptNowOfTheConductorsSteerWakesItOnce(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	_, out := s.steer(steerArgs(s.implementer, "stop and use staging", false))
+	d1, _ := out["directiveId"].(string)
+	s.until("taken", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, d1) == 1
+	})
+	status, now := s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "stop and use staging", "supersedes": d1,
+		"interrupt": true})
+	if status != 201 {
+		t.Fatalf("interrupt now: %d %v", status, now)
+	}
+	s.until("both delivered", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id IN ($1, $2) AND delivered_at IS NOT NULL`, d1, now["id"]) == 2
+	})
+	s.wokenWith(s.task, "read your steer "+d1)
+	for range 3 {
+		s.pump()
+	}
+	if w := s.steerWakes(); len(w) != 1 || !strings.HasPrefix(w[0], "steer_read ") {
+		t.Errorf("steer wakes: %v, want one read", w)
+	}
+}
+
 // steerWakes are the task's steer wake reasons, "kind line" each.
 func (s *steering) steerWakes() []string {
 	s.t.Helper()

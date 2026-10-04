@@ -96,24 +96,34 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 }
 
 // SteerSettledTx wakes the conductor that wrote a directive with what
-// became of it, once per directive and outcome: read by the agent
-// (steer_read), or never to be (steer_failed, with why). A person's
-// directive, or dude's own, wakes nobody.
+// became of it, once per instruction and outcome: read by the agent
+// (steer_read), or never to be (steer_failed, with why). An instruction is
+// the conductor's directive and the same words sent again superseding it
+// (Retry, Interrupt now), named by the conductor's own directive. A
+// person's directive, or dude's own, wakes nobody.
 func SteerSettledTx(ctx context.Context, tx pgx.Tx, org, directiveID string, read bool, why string) error {
-	var taskID, runID, phase string
-	err := tx.QueryRow(ctx, `SELECT d.task_id, d.run_id, COALESCE(r.phase::text, '') FROM directives d JOIN runs r ON r.id = d.run_id
-		WHERE d.id = $1 AND d.conductor_run_id IS NOT NULL`, directiveID).Scan(&taskID, &runID, &phase)
+	var taskID, runID, phase, root string
+	err := tx.QueryRow(ctx, `WITH RECURSIVE chain (id, supersedes, depth) AS (
+			SELECT d.id, d.supersedes, 0 FROM directives d WHERE d.id = $1
+			UNION ALL
+			SELECT s.id, s.supersedes, c.depth + 1 FROM chain c JOIN directives d ON d.id = c.id
+			JOIN directives s ON s.id = c.supersedes AND s.run_id = d.run_id AND s.text = d.text
+			  AND s.conductor_run_id IS NOT DISTINCT FROM d.conductor_run_id
+			WHERE c.depth < 100)
+		SELECT d.task_id, d.run_id, COALESCE(r.phase::text, ''), (SELECT id FROM chain ORDER BY depth DESC LIMIT 1)
+		FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE d.id = $1 AND d.conductor_run_id IS NOT NULL`, directiveID).Scan(&taskID, &runID, &phase, &root)
 	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	kind, line := "steer_read", fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, directiveID)
+	kind, line := "steer_read", fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, root)
 	if !read {
-		kind, line = "steer_failed", fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", directiveID, phase, runID,
+		kind, line = "steer_failed", fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", root, phase, runID,
 			clip(oneLine(why), 120))
 	}
-	_, err = RecordWakeTx(ctx, tx, org, taskID, kind, kind+":"+directiveID, line)
+	_, err = RecordWakeTx(ctx, tx, org, taskID, kind, kind+":"+root, line)
 	return err
 }
