@@ -19,14 +19,6 @@ import (
 // something that wakes nobody. Payload: {text, about}.
 const EvChatNotice = "chat.notice"
 
-// chatNoticeTx appends dude's line to the task's Chat.
-func chatNoticeTx(ctx context.Context, tx pgx.Tx, org string, st *State, about, text string) error {
-	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: org, ProjectID: st.ProjectID,
-		TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
-		CorrelationID: st.TaskID, Payload: map[string]any{"text": text, "about": about}})
-	return err
-}
-
 // prName is a pull request as a line names it: repo#number.
 func prName(p PullRequestState) string { return fmt.Sprintf("%s#%d", p.Repo, p.Number) }
 
@@ -75,7 +67,10 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 		if !ready {
 			about = "no_longer_ready"
 		}
-		return chatNoticeTx(ctx, tx, org, st, about, readinessLine(states, ready))
+		_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: org, ProjectID: st.ProjectID,
+			TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+			CorrelationID: st.TaskID, Payload: map[string]any{"text": readinessLine(states, ready), "about": about}})
+		return err
 	})
 }
 
