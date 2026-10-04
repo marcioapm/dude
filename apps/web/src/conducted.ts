@@ -31,12 +31,16 @@ export interface ConductorSteer {
   failed: string | null;
 }
 
-/** The task's conducted lines, oldest first; none for a task its conductor never decided for. */
+/**
+ * The task's conducted lines, oldest first: a line for each Run the
+ * conductor started or steered; none for a task its conductor never
+ * decided for nor steered.
+ */
 export function conductedLines(task: { decider: string; runs: readonly Run[] }, events: readonly PersistedEvent[]): ConductedLine[] {
-  const started = task.runs.filter((r) => r.conductorRunId);
-  if (task.decider !== "conductor" && started.length === 0) return [];
   const steers = conductorSteers(events);
-  const out: ConductedLine[] = started.map((run) => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }));
+  const lined = task.runs.filter((r) => r.conductorRunId || steers.has(r.id));
+  if (task.decider !== "conductor" && lined.length === 0) return [];
+  const out: ConductedLine[] = lined.map((run) => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }));
   for (const e of events) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
     switch (e.eventType) {
