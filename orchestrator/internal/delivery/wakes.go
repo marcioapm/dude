@@ -55,6 +55,24 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		}
 		return pgx.CollectRows(rows, pgx.RowToStructByPos[reason])
 	}
+	// The live conductor's Run is locked before any reason: its follower
+	// holds that Run while a receipt settles reasons (heardTx), so the
+	// opposite order would deadlock with it.
+	var runID string
+	var between, ending bool
+	liveNow := func() error {
+		runID, between, ending = "", false, false
+		err := tx.QueryRow(ctx, `SELECT r.id, r.status = 'paused' OR (r.status = 'running'
+				AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)), COALESCE(`+Ending+`, false)
+			FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between, &ending)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if err := liveNow(); err != nil {
+		return "", err
+	}
 	pending, err := pendingNow()
 	if err != nil || len(pending) == 0 {
 		return "", err
@@ -74,28 +92,18 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	// A conductor whose container stopped without dude asking holds the
 	// live slot until it is ended, turn end or not: ended here, as Chat
 	// ends it, so the note can start its replacement.
-	var ending string
-	err = tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` AND `+Ending+` FOR NO KEY UPDATE`,
-		taskID).Scan(&ending)
-	if err != nil && !db.IsNotFound(err) {
-		return "", err
-	}
-	if ending != "" {
-		if err := EndConductor(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: ending}, "its container stopped"); err != nil {
+	if ending {
+		if err := EndConductor(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}, "its container stopped"); err != nil {
 			return "", err
 		}
-		// What it was told and never heard is pending again: told now too.
+		// What it was told and never heard is pending again: told now too,
+		// to the replacement HandOver may have started, or to none.
 		if pending, err = pendingNow(); err != nil {
 			return "", err
 		}
-	}
-	var runID string
-	var between bool
-	err = tx.QueryRow(ctx, `SELECT r.id, r.status = 'paused' OR (r.status = 'running'
-			AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))
-		FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between)
-	if err != nil && !db.IsNotFound(err) {
-		return "", err
+		if err := liveNow(); err != nil {
+			return "", err
+		}
 	}
 	if runID != "" && !between {
 		// Mid-turn, or not started yet: what it hears next.
