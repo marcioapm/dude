@@ -634,11 +634,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
         const github = githubOf(payload.github);
-        const byConductor = payload.by === "conductor";
         const turn: HumanTurn = {
           ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
           directiveId,
-          conductor: byConductor,
+          conductor: payload.by === "conductor",
           github,
           // A message handed on from an earlier conductor keeps its images.
           attachments: attachmentsOf(payload.attachments),
