@@ -332,6 +332,66 @@ func TestAPersonsInterruptNowOfTheConductorsSteerWakesItOnce(t *testing.T) {
 	}
 }
 
+// A conductor's steer settled again — the same outcome, in another
+// transaction, as a repeated receipt or a second terminal path would —
+// wakes its conductor once: one reason, one note. A person's steer
+// settled the same way wakes no conductor.
+func TestASteerSettledTwiceWakesTheConductorOnce(t *testing.T) {
+	settle := func(s *steering, id string, read bool) {
+		s.t.Helper()
+		for range 2 {
+			if err := s.app.InOrg(context.Background(), s.org, func(tx pgx.Tx) error {
+				return delivery.SteerSettledTx(context.Background(), tx, s.org, id, read, "the agent errored")
+			}); err != nil {
+				s.t.Fatal(err)
+			}
+		}
+	}
+	for _, c := range []struct {
+		name, kind, says string
+		read             bool
+	}{
+		{"read", "steer_read", "read your steer ", true},
+		{"failed", "steer_failed", "was not delivered: the agent errored", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSteering(t, conducting(t))
+			_, out := s.steer(steerArgs(s.implementer, "settled twice", false))
+			id, _ := out["directiveId"].(string)
+			settle(s, id, c.read)
+			s.wokenWith(s.task, c.says)
+			for range 3 {
+				s.pump()
+			}
+			if w := s.steerWakes(); len(w) != 1 || !strings.HasPrefix(w[0], c.kind+" ") {
+				t.Errorf("steer wakes: %v, want one %s", w, c.kind)
+			}
+			notes := 0
+			for _, n := range s.woken(s.task) {
+				if strings.Contains(n, "steer "+id) {
+					notes++
+				}
+			}
+			if notes != 1 {
+				t.Errorf("%d notes name the steer, want 1", notes)
+			}
+		})
+	}
+	t.Run("a person's", func(t *testing.T) {
+		s := newSteering(t, conducting(t))
+		_, out := s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "a person's words"})
+		id, _ := out["id"].(string)
+		settle(s, id, true)
+		settle(s, id, false)
+		for range 3 {
+			s.pump()
+		}
+		if w := s.steerWakes(); len(w) != 0 {
+			t.Errorf("a person's steer woke the conductor: %v", w)
+		}
+	})
+}
+
 // steerWakes are the task's steer wake reasons, "kind line" each.
 func (s *steering) steerWakes() []string {
 	s.t.Helper()
