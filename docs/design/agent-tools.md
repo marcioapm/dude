@@ -29,13 +29,15 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 | `decide` | the decision waited on (`dude decide ACTION`): `next` (what Deliver would do), `ask_person` (a question for the person in `note`; before the pull request the fixed question Open / Draft / Show me the diff / Another round, recorded with the heads it was asked at), `wait` (at pull request feedback) or `open_pull_request` — only when the latest gate question, asked at the task's current heads, was answered Open (or Draft: a draft) | conductor, deciding |
 | `dismiss_finding` | an open finding left as it is (`dude finding dismiss ID --reason R`): status accepted, the reason its resolution note | conductor, deciding |
 | `update_task` | what Chat settled, written into the task (`dude task update`): its goal, its acceptance criteria (the whole list), or both; a `task.updated` event with what they were. Only while no implementer has started on the attempt | conductor, deciding |
+| `steer` | a steer for a live phase Run of the caller's task's current attempt (`dude steer RUN TEXT [--interrupt]`), queued as a person's is (`delivery.Steer`): read at the agent's next step, `interrupt` stops its turn. Text only, at most a person's bound (`SteerTextMax`). The directive (`conductor_run_id`) and its `run.steered` event (actor the conductor's Run, `by: conductor`) are the conductor's. Returns the directive, the Run and `lands` once lux has said it. Refused for the conductor itself, another task's Run, an earlier attempt's, a branch preview, a Run ended or ending, a done, aborted or failed task, and a conductor superseded (the Chat lock, as decisions take it). Its read wakes the conductor (`steer_read`); its failure too (`steer_failed`, with why) | conductor, whoever decides |
 
 A task's **conductor** (the agent people talk to in its Chat) reads with
 these. Its decisions (`start_phase`, `decide`, `dismiss_finding`,
 `update_task`) are its only while it takes the task's decisions (the
 delivery's `decider` is `conductor`) and the delivery is parked on one;
 under Deliver, or on a merged or closed task, each is refused saying so
-and it is read-only. It has no tool that edits, and its checkout is
+and it is read-only. Its `steer` takes no decision: it is allowed under
+Deliver too, as a person's steer is. It has no tool that edits, and its checkout is
 never pushed. Its briefing names findings and Runs by id, and these tools
 are how it reads what the briefing leaves out.
 

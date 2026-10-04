@@ -594,9 +594,13 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for name, text := range step.Publish {
 		published[name] = text + "\n"
 	}
+	tools := []string{"todowrite", "read"}
+	if step.LongCommand {
+		tools = []string{"bash"}
+	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
+		Publish: published, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor}
 }
 
@@ -917,6 +921,12 @@ func (s *Server) Handler() http.Handler {
 		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 		s.FailStarts(r.URL.Query().Get("label"), n)
 		writeJSON(w, 200, map[string]any{"label": r.URL.Query().Get("label"), "n": n})
+	})
+	// A Run's long command finishing (FinishTools): its next step reads
+	// what it was steered with meanwhile.
+	mux.HandleFunc("POST /fake/runs/{id}/finish-tools", func(w http.ResponseWriter, r *http.Request) {
+		s.FinishTools(r.PathValue("id"))
+		writeJSON(w, 200, map[string]any{"finished": true})
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {

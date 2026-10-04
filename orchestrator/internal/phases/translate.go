@@ -262,7 +262,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+	return s.failedTx(ctx, tx, t.run, reason)
 }
 
 // shimEvent handles what lux's shim reports about the agent. These come in
@@ -440,6 +440,10 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		payload["read"] = true
 	}
 	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
+		return err
+	}
+	// A conductor's steer, read: the conductor is told.
+	if err := delivery.SteerSettledTx(ctx, tx, t.run.Org, id, true, ""); err != nil {
 		return err
 	}
 	// A wake note read after its failure was counted: its reasons, back to
@@ -711,7 +715,7 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+	return s.failedTx(ctx, tx, t.run, reason)
 }
 
 // turnFailure says why a turn failed, for a person. OpenCode answers a

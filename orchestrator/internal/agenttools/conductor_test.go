@@ -84,13 +84,13 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,dismiss_finding,emit_event,findings,get_memory,"+
-		"list_epics,list_repositories,list_tasks,pull_requests,remember,request_repository,run_diff,search_memory,start_phase,update_task" {
+		"list_epics,list_repositories,list_tasks,pull_requests,remember,request_repository,run_diff,search_memory,start_phase,steer,update_task" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
-	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task"} {
+	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task", "steer"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}
@@ -150,6 +150,23 @@ func TestTheConductorsDecisionsFromTheShell(t *testing.T) {
 	out, err := dude("decide", "next")
 	if err == nil || !strings.Contains(out, "taken already") {
 		t.Errorf("a second decision: %v\n%s", err, out)
+	}
+	// dude steer reaches the steer tool, with its interrupt.
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+		VALUES ('run_0abcdefgh0123456789abcdef', $1, $2, $3, 1, 'running', 'implement', 'implementer')`, f.org, f.project, f.item)
+	if out, err := dude("steer", "run_0abcdefgh0123456789abcdef", "use", "staging", "--interrupt"); err != nil ||
+		!strings.Contains(out, `"directiveId"`) {
+		t.Fatalf("steer: %v\n%s", err, out)
+	}
+	var text string
+	var interrupt bool
+	_ = f.owner.QueryRow(context.Background(), `SELECT text, interrupt FROM directives WHERE run_id = 'run_0abcdefgh0123456789abcdef'
+		AND conductor_run_id = 'run_cond'`).Scan(&text, &interrupt)
+	if text != "use staging" || !interrupt {
+		t.Errorf("dude steer's directive: %q interrupt %v", text, interrupt)
+	}
+	if out, err := dude("steer", "run_nope"); err == nil || !strings.Contains(out, "usage") {
+		t.Errorf("dude steer without words: %v\n%s", err, out)
 	}
 }
 

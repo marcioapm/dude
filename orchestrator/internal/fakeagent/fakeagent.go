@@ -32,6 +32,11 @@ const ModelPrefix = "fake/"
 // HangModel keeps its agent busy until stopped.
 const HangModel = "fake/hang"
 
+// CommandModel's implementer runs a long command and never finishes its
+// turn: a steer sent meanwhile is taken at once and read at its next step,
+// once the command finishes (the fake lux's POST /fake/runs/{id}/finish-tools).
+const CommandModel = "fake/command"
+
 // ToolsModel's implementer calls dude's list_tasks tool (through lux-fake's
 // MCP client) before its usual work, so a real lux's handling of dude's
 // tools is exercised.
@@ -128,6 +133,8 @@ type Step struct {
 	// Files it writes into its checkout in the turn it finishes, after
 	// a Hang is woken: a change a person watching can see arrive.
 	FinishEdits map[string]string
+	// Its tool calls stay running: a long command (with Hang, never done).
+	LongCommand bool
 }
 
 // Notes is what the implementer publishes: a short account of its work, as
@@ -210,6 +217,9 @@ func For(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
 	}
+	if model == CommandModel && phase == "implement" {
+		return Step{Hang: true, LongCommand: true}
+	}
 	if model == LiveModel && phase == "implement" {
 		return Step{Hang: true, Edits: LiveEdits,
 			PublishNow: map[string]string{Notes: LiveNotes[0], "screenshot.png": LiveScreenshot,
@@ -272,7 +282,7 @@ func For(phase, model, runID string, fixed bool) Step {
 // The reviewer decides inside the container, from the tree it checked out,
 // as a real one would.
 func Script(phase, model, runID string) string {
-	if model == HangModel {
+	if model == HangModel || model == CommandModel && phase == "implement" {
 		return "sleep 3600"
 	}
 	if model == LiveModel && phase == "implement" {

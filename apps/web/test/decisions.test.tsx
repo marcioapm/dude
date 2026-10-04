@@ -239,6 +239,34 @@ describe("a conducted task's Chat", () => {
       li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
     expect(rows).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
   });
+
+  // Deliver started it; the person took over, and the conductor steered it.
+  test("a Run Deliver started and the conductor steered has its line in Chat, and stays Deliver's in Sessions", async () => {
+    const auto = run({ id: "run_auto", status: "running", createdAt: at(-100) });
+    const steer = { ...ev("run.steered", { directiveId: "dir_auto", text: "Use staging.", scope: "run", interrupt: false, by: "conductor",
+      conductorRunId: CONDUCTOR }, 95, "run_auto"), actor: { type: "agent", id: CONDUCTOR } } as PersistedEvent;
+    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [run({ id: CONDUCTOR, phase: null,
+      role: "conductor", status: "running", createdAt: at(0) }), auto] }, [steer]));
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_auto]"), "the steered Run's line");
+    expect(line.querySelector("[data-testid=conductor-steer]")?.getAttribute("data-directive")).toBe("dir_auto");
+    expect(line.textContent).toContain("Use staging.");
+    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
+    await act(async () => {
+      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      tab.click();
+    });
+    await settle();
+    const rows = [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
+      li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
+    expect(rows).toEqual(["top", "— Delivered automatically", "delivered"]);
+  });
+
+  test("under Deliver, a Run the conductor steered still has its line", () => {
+    const auto = run({ id: "run_auto", status: "running" });
+    const steer = ev("run.steered", { directiveId: "dir_auto", text: "Use staging.", by: "conductor", conductorRunId: CONDUCTOR }, 5, "run_auto");
+    const lines = conductedLines({ decider: "policy", runs: [auto] }, [steer]);
+    expect(lines.map((l) => l.kind === "run" && [l.id, l.steers.map((s) => s.directiveId)])).toEqual([["run_auto", ["dir_auto"]]]);
+  });
 });
 
 // A conducted task started over: the conductor is the task's, its Runs

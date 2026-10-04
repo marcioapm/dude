@@ -982,17 +982,38 @@ func TestAWakeReplacesAConductorWhoseContainerStopped(t *testing.T) {
 	task := w.task()
 	first := w.talk(task)
 	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL, lux_state = 'stopped' WHERE id = $1`, first)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
 		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:stopped", "decide after the stop")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.until("a new conductor", func() bool {
-		id, _, _ := w.conductor(task)
-		return id != first
-	})
+	// One sweep's transaction, read before any other: the one that ends the
+	// stopped conductor must start its replacement with the note itself. A
+	// later sweep would also start one, and hide a sweep that kept the ended
+	// conductor as its recipient.
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	var woke string
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		if err := delivery.LockChat(ctx, tx, task); err != nil {
+			return err
+		}
+		var err error
+		woke, err = delivery.WakeConductorTx(ctx, tx, w.org, task, 15)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var replacement string
+	if err := w.owner.QueryRow(ctx, `SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND id <> $2
+		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, task, first).Scan(&replacement); err != nil {
+		t.Fatalf("no live replacement right after the sweep that ended the stopped conductor: %v", err)
+	}
+	if woke != replacement {
+		t.Errorf("the sweep woke %q, want its replacement %q (the stopped conductor was %q)", woke, replacement, first)
+	}
 	w.wokenWith(task, "decide after the stop")
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message'`, task); n != 1 {
 		t.Errorf("%d chat messages: the replacement needed a person", n)
