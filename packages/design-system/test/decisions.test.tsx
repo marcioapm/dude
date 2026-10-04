@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { ChatNotice } from "../src/components/ChatNotice.tsx";
 import { ChatRunLine } from "../src/components/ChatRunLine.tsx";
 import { DeciderLine } from "../src/components/DeciderLine.tsx";
@@ -63,6 +64,19 @@ describe("ChatRunLine", () => {
     await act(async () => root!.render(<ChatRunLine role="implementer" status="running" onOpen={() => opened++} />));
     await act(async () => host!.querySelector("button")!.click());
     expect(opened).toBe(1);
+  });
+
+  test("the conductor's steers sit under the line, outside its button, and none adds nothing", () => {
+    const bare = html(<ChatRunLine role="implementer" status="running" onOpen={() => undefined} />);
+    expect(bare).not.toContain("run-line-steers");
+    const h = html(<ChatRunLine role="implementer" status="running" onOpen={() => undefined}
+      steers={<ChatMessage role="conductor" name="Conductor" intent="steer" content="Use staging." deliveredAt={null}
+        pendingReason="Lands at the agent's next step." />} />);
+    const [, after] = h.split("</button>");
+    expect(after).toContain('data-testid="run-line-steers"');
+    expect(plain(after!)).toContain("ConductorSteerQueued");
+    expect(plain(after!)).toContain("Use staging.");
+    expect(plain(after!)).toContain("Lands at the agent&#x27;s next step.");
   });
 });
 

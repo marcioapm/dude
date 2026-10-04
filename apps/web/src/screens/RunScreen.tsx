@@ -819,7 +819,7 @@ interface SteerActions {
 }
 
 /** The one line under a queued steer. */
-function pendingReason(wait: SteerWait) {
+export function pendingReason(wait: SteerWait) {
   switch (wait.kind) {
     case "tool": return <>Lands after <b>{toolLabel(wait.tool)}</b> finishes.</>;
     case "next_step": return "Lands at the agent's next step.";
@@ -1029,8 +1029,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         />
       );
     case "human": {
-      // Signed: the person's face and name when known; "Someone" only when the ledger kept no one.
-      const name = actorName(turn.by, people.names);
+      // Signed: the person's face and name when known; "Someone" only when the ledger kept no one. A
+      // conductor's steer is the conductor's: its face, colour and name, never a person's.
+      const name = turn.conductor ? null : actorName(turn.by, people.names);
       const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
       const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
       // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
@@ -1039,7 +1040,8 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         <ChatMessage
           key={turn.id}
           data-testid="human-turn"
-          role="human"
+          data-by={turn.conductor ? "conductor" : undefined}
+          role={turn.conductor ? "conductor" : "human"}
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}
@@ -1051,7 +1053,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           {...(interruptible && steer ? { onInterrupt: () => steer.resend(turn, true) } : {})}
           {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
           person={person}
-          name={name ?? "Someone"}
+          name={turn.conductor ? "Conductor" : name ?? "Someone"}
           {...turnImages(turn, shown)}
         />
       );

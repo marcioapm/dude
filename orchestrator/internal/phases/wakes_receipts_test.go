@@ -2,7 +2,9 @@ package phases
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -119,6 +121,171 @@ func TestAFailedWakeReadAfterAllIsNotToldAgain(t *testing.T) {
 	}
 	if b := w.wake(); b != "" {
 		t.Errorf("told again: %s", b)
+	}
+}
+
+// A failed wake note's late consumption receipt, in the conductor's
+// follower batch, and a wake sweep for the same conductor, at once: the
+// batch holds the conductor's Run and waits on the note's directive; the
+// sweep starts and waits on the batch. Neither deadlocks: both commit, the
+// note is read, its reason settled, and no retry is queued.
+func TestALateWakeReceiptAndAWakeSweepBothCommit(t *testing.T) {
+	w := newWakeWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	a := w.wake()
+	if a == "" {
+		t.Fatal("no note for the reason")
+	}
+	w.exec(`UPDATE directives SET sent_at = now() WHERE run_id = 'run_'||$1`)
+	w.receive(failedAfterAccepted(a, "the agent stopped"))
+	w.exec(`UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE organization_id = $1`)
+	if n := w.pending(); n != 1 {
+		t.Fatalf("%d reasons pending after the note failed, want 1", n)
+	}
+
+	// The gate holds A's directive row only.
+	gateConn, err := pgx.Connect(ctx, w.owner.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gateConn.Close(context.Background()) })
+	gate, err := gateConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gate.Rollback(context.Background()) })
+	if _, err := gate.Exec(ctx, `SELECT 1 FROM directives WHERE id = $1 FOR UPDATE`, a); err != nil {
+		t.Fatal(err)
+	}
+	var gatePID int
+	if err := gate.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&gatePID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The real follower, fed the late consumption receipt.
+	st := newStreamLux(&placementLux{})
+	w.s.Lux = st
+	followCtx, stopFollowing := context.WithCancel(ctx)
+	followed := make(chan error, 1)
+	go func() { followed <- w.s.followOutput(followCtx, w.tr.run) }()
+	// Before the gate's rollback and the database's drop: the follower is
+	// stopped, and gone, or the test says so.
+	t.Cleanup(func() {
+		stopFollowing()
+		select {
+		case <-followed:
+		case <-time.After(5 * time.Second):
+			t.Error("the follower did not stop")
+		}
+	})
+	typ, data := consumed(a)
+	select {
+	case st.frames <- cursorFrame(record(1, typ, data), "c1"):
+	case <-ctx.Done():
+		t.Fatal("the follower never took the receipt")
+	}
+	followerPID := waiterOn(ctx, t, w.owner, gatePID, 0, "the receipt's batch")
+
+	// The real sweep, under the task's Chat lock, on another backend.
+	wakePID := make(chan int, 1)
+	woke := make(chan error, 1)
+	go func() {
+		woke <- w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			var pid int
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				return err
+			}
+			wakePID <- pid
+			if err := delivery.LockChat(ctx, tx, "wi_"+w.org); err != nil {
+				return err
+			}
+			_, err := delivery.WakeConductorTx(ctx, tx, w.org, "wi_"+w.org, 15)
+			return err
+		})
+	}()
+	var sweepPID int
+	select {
+	case sweepPID = <-wakePID:
+	case err := <-woke:
+		t.Fatalf("the sweep ended before it started: %v", err)
+	case <-ctx.Done():
+		t.Fatal("the sweep never started")
+	}
+	waiterOn(ctx, t, w.owner, followerPID, sweepPID, "the sweep")
+
+	if err := gate.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-woke:
+		if err != nil {
+			t.Fatalf("the sweep failed: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the sweep did not finish")
+	}
+	for {
+		var cursor string
+		if err := w.owner.QueryRow(ctx, `SELECT COALESCE(lux_cursor, '') FROM runs WHERE id = 'run_'||$1`, w.org).
+			Scan(&cursor); err != nil {
+			t.Fatal(err)
+		}
+		if cursor == "c1" {
+			break
+		}
+		select {
+		case err := <-followed:
+			t.Fatalf("the receipt's batch failed: %v", err)
+		case <-ctx.Done():
+			t.Fatal("the receipt's batch did not commit")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	countOf := func(sql string) int {
+		t.Helper()
+		var n int
+		if err := w.owner.QueryRow(ctx, sql, a).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := countOf(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`); n != 1 {
+		t.Error("the note is not read")
+	}
+	if n := countOf(`SELECT count(*) FROM events WHERE event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $1 AND (payload->>'read')::boolean`); n != 1 {
+		t.Errorf("%d read events, want 1", n)
+	}
+	if n := w.pending(); n != 0 {
+		t.Errorf("%d reasons pending after the note was read", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = 'run_'||$1 AND sent_at IS NULL AND failed_at IS NULL`); n != 0 {
+		t.Errorf("%d retries left to send", n)
+	}
+}
+
+// waiterOn waits for a backend to wait on a lock holder holds — waiter
+// itself, or with waiter 0 any backend of the test's database — and
+// returns it.
+func waiterOn(ctx context.Context, t *testing.T, owner *pgx.Conn, holder, waiter int, what string) int {
+	t.Helper()
+	for {
+		var pid int
+		err := owner.QueryRow(ctx, `SELECT pid FROM pg_stat_activity WHERE datname = current_database()
+			AND ($2 = 0 OR pid = $2) AND $1 = ANY (pg_blocking_pids(pid)) ORDER BY pid LIMIT 1`, holder, waiter).Scan(&pid)
+		switch {
+		case err == nil:
+			return pid
+		case !errors.Is(err, pgx.ErrNoRows):
+			t.Fatalf("waiting for %s: %v", what, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s never waited on backend %d", what, holder)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
