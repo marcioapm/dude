@@ -616,13 +616,17 @@ func (s *Syncer) process(ctx context.Context, org, event string, payload json.Ra
 		return nil // not about a pull request
 	}
 
+	// A comment or review on any tracked pull request, merged or closed
+	// too: a mention there still reaches the task's conductor, and a
+	// terminal state reads no fixer feedback (forge.Classify).
+	discussed := event == "issue_comment" || event == "pull_request_review" || event == "pull_request_review_comment"
 	var prIDs []string
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// A closed pull request too, when GitHub says something happened to
 		// it (reopened): otherwise its reopening would never be read.
 		rows, err := tx.Query(ctx, `SELECT pr.id, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE (pr.state IN ('draft', 'open') OR $3 AND pr.state = 'closed') AND (pr.number = $1 OR pr.head_sha = $2)`,
-			number, sha, event == "pull_request")
+			WHERE (pr.state IN ('draft', 'open') OR $3 AND pr.state = 'closed' OR $4) AND (pr.number = $1 OR pr.head_sha = $2)`,
+			number, sha, event == "pull_request", discussed && number > 0)
 		if err != nil {
 			return err
 		}
@@ -649,15 +653,23 @@ func (s *Syncer) process(ctx context.Context, org, event string, payload json.Ra
 	return nil
 }
 
-// Reconcile syncs open PRs not looked at within `every`: the backstop for
-// deliveries GitHub never sent or dude never received.
+// endedPollWindow: how long after a pull request is merged or closed the
+// reconciler still reads it, for a mention whose webhook was lost. Past
+// it, only a webhook reads it: polling every ended pull request forever
+// would spend the rate limit on conversations that have gone quiet.
+const endedPollWindow = 7 * 24 * time.Hour
+
+// Reconcile syncs open PRs, and recently ended ones, not looked at within
+// `every`: the backstop for deliveries GitHub never sent or dude never
+// received.
 func (s *Syncer) Reconcile(ctx context.Context, every time.Duration) (int, error) {
 	type due struct{ ID, Org string }
 	var batch []due
 	if err := s.DB.InSystem(ctx, "pr-reconciler", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, organization_id FROM pull_requests
-			WHERE state IN ('draft', 'open') AND (last_polled_at IS NULL OR last_polled_at < now() - $1::interval)
-			ORDER BY last_polled_at NULLS FIRST LIMIT 20`, every.String())
+			WHERE (state IN ('draft', 'open') OR COALESCE(merged_at, closed_at) > now() - $2::interval)
+			  AND (last_polled_at IS NULL OR last_polled_at < now() - $1::interval)
+			ORDER BY last_polled_at NULLS FIRST LIMIT 20`, every.String(), endedPollWindow.String())
 		if err != nil {
 			return err
 		}

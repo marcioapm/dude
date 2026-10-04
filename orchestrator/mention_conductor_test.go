@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -209,6 +210,60 @@ func TestAPersonQuotingDudesReplyIsStillHeard(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
 		AND payload->>'own' = 'true'`, task); n != 1 {
 		t.Errorf("%d comments recorded as dude's own, want the reply", n)
+	}
+}
+
+// webhook stores a delivery as the backend does, and processes it.
+func (w *world) webhook(event string, payload map[string]any) {
+	w.t.Helper()
+	body, _ := json.Marshal(payload)
+	mustExec(w.t, w.owner, `INSERT INTO webhook_deliveries (id, organization_id, event, payload) VALUES ($1, $2, $3, $4)`,
+		fmt.Sprintf("dlv_%d_%s", time.Now().UnixNano(), w.org), w.org, event, body)
+	if _, err := w.prs.ProcessDeliveries(context.Background()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// A mention on a pull request that was merged, or closed, still reaches
+// the conductor, once, which can only answer: the task has ended.
+func TestAMentionOnAnEndedPullRequestReachesTheConductor(t *testing.T) {
+	for _, end := range []struct{ how, status string }{{"merged", "done"}, {"closed", "aborted"}} {
+		t.Run(end.how, func(t *testing.T) {
+			w := conducting(t)
+			task := w.reviewing()
+			if end.how == "merged" {
+				w.gh.Merge(1)
+			} else {
+				w.gh.Close(1)
+			}
+			w.until(end.status, func() bool { w.sync(); return w.taskStatus(task) == end.status })
+			id := w.gh.Comment(1, "alice", "@dude why this choice?")
+			comment := map[string]any{"action": "created", "repository": map[string]any{"full_name": "acme/target"},
+				"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}}
+			w.webhook("issue_comment", comment)
+			w.until("the conductor's answer", func() bool {
+				c, _, _ := w.conductor(task)
+				return c != "" && len(w.said(c)) > 0
+			})
+			w.webhook("issue_comment", comment)
+			w.pump()
+			if n := w.mentions(task); n != 1 {
+				t.Errorf("%d messages for one mention", n)
+			}
+			c, _, _ := w.conductor(task)
+			var prompt string
+			_ = w.owner.QueryRow(context.Background(), `SELECT prompt FROM runs WHERE id = $1`, c).Scan(&prompt)
+			if !strings.Contains(prompt, "No delivery is in progress: you are read-only.") ||
+				!strings.Contains(prompt, "@dude why this choice?") {
+				t.Errorf("the conductor was not briefed read-only with the mention:\n%s", prompt)
+			}
+			if s := w.taskStatus(task); s != end.status {
+				t.Errorf("the mention moved the task to %s", s)
+			}
+			if n := w.fixes(task); n != 0 {
+				t.Errorf("%d fixers on an ended task", n)
+			}
+		})
 	}
 }
 
