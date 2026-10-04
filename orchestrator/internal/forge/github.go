@@ -163,6 +163,8 @@ type Feedback struct {
 	Path      string
 	CreatedAt string
 	Kind      string
+	// Where a person reads it on GitHub, when GitHub said.
+	URL string
 }
 
 // Error is GitHub refusing a request.
@@ -818,6 +820,7 @@ type ghComment struct {
 	Body      string  `json:"body"`
 	Path      string  `json:"path"`
 	CreatedAt string  `json:"created_at"`
+	HTMLURL   string  `json:"html_url"`
 	User      *ghUser `json:"user"`
 }
 
@@ -826,6 +829,7 @@ type ghReview struct {
 	Body        string  `json:"body"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at"`
+	HTMLURL     string  `json:"html_url"`
 	User        *ghUser `json:"user"`
 }
 
@@ -861,10 +865,12 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since str
 	reviews := st.reviews
 	var out []Feedback
 	for _, c := range issue {
-		out = append(out, Feedback{ID: fmt.Sprintf("issue-comment-%d", c.ID), Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt, Kind: KindComment})
+		out = append(out, Feedback{ID: fmt.Sprintf("issue-comment-%d", c.ID), Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt,
+			Kind: KindComment, URL: c.HTMLURL})
 	}
 	for _, c := range line {
-		out = append(out, Feedback{ID: fmt.Sprintf("line-comment-%d", c.ID), Author: login(c.User), Body: c.Body, Path: c.Path, CreatedAt: c.CreatedAt, Kind: KindLineComment})
+		out = append(out, Feedback{ID: fmt.Sprintf("line-comment-%d", c.ID), Author: login(c.User), Body: c.Body, Path: c.Path,
+			CreatedAt: c.CreatedAt, Kind: KindLineComment, URL: c.HTMLURL})
 	}
 	for _, r := range reviews {
 		// A reviewer who writes only "please rename this" in the review box
@@ -877,7 +883,8 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since str
 		if r.State == "CHANGES_REQUESTED" {
 			kind = KindChangesRequested
 		}
-		out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt, Kind: kind})
+		out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt,
+			Kind: kind, URL: r.HTMLURL})
 	}
 	filtered := out[:0]
 	for _, f := range out {
