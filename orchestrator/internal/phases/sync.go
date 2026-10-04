@@ -1047,6 +1047,13 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			}
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			// The Run's row before any directive: the order abort and the
+			// Run's other ends take them in (FailUnreadTx), so a receipt in
+			// this batch and an abort wait for each other, never deadlock.
+			// save updates the row at the batch's end anyway.
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+				return err
+			}
 			var cursor string
 			var afterEvent int64
 			for _, f := range batch {

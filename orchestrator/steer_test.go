@@ -561,6 +561,88 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 	})
 }
 
+// A person aborts the Run while its follower is recording the agent's read
+// of the conductor's steer: the receipt's batch has the directive, and the
+// abort fails the Run's unread directives. Both commit, one after the
+// other: the abort answers 200, the Run is aborted, and the read wins.
+func TestAnAbortDuringASteersReceiptStopsTheRun(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	ctx := context.Background()
+	_, out := s.steer(steerArgs(s.implementer, "read while aborted", false))
+	id, _ := out["directiveId"].(string)
+	s.until("taken", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
+	})
+	// The receipt's batch is held after it has delivered the directive: its
+	// conductor wake is the key another transaction is inserting.
+	holder, err := pgx.Connect(ctx, s.owner.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close(ctx) })
+	hold, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hold.Rollback(ctx) })
+	if _, err := hold.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+		VALUES ('cwk_hold', $1, $2, 'steer_read', 'steer_read:' || $3, 'held')`, s.org, s.task, id); err != nil {
+		t.Fatal(err)
+	}
+	var holderPID int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	s.lux.FinishTools(s.luxRunOf(s.implementer))
+	receiptPID := s.blockedBy(holderPID, "the receipt's batch")
+
+	type answer struct {
+		status int
+		body   map[string]any
+	}
+	aborted := make(chan answer, 1)
+	go func() {
+		status, body := s.call("/internal/runs/"+s.implementer+"/abort", map[string]any{})
+		aborted <- answer{status, body}
+	}()
+	s.blockedBy(receiptPID, "the abort")
+	if err := hold.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a := <-aborted
+	if a.status != 200 {
+		t.Fatalf("abort: %d %v", a.status, a.body)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, s.implementer); n != 1 {
+		t.Error("the Run is not aborted")
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`, id); n != 1 {
+		t.Error("the steer is not read")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'read')::boolean`, s.implementer, id); n != 1 {
+		t.Errorf("%d read events, want 1", n)
+	}
+}
+
+// blockedBy waits, without sweeping, for a backend of the test's database
+// to wait on a lock pid holds, and returns it.
+func (s *steering) blockedBy(pid int, what string) int {
+	s.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiter int
+		err := s.owner.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity
+			WHERE datname = current_database() AND $1 = ANY (pg_blocking_pids(pid)) LIMIT 1`, pid).Scan(&waiter)
+		if err == nil {
+			return waiter
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.t.Fatalf("%s never waited on backend %d", what, pid)
+	return 0
+}
+
 // A paused Run reads its steers when it resumes: nothing fails them, and
 // the conductor is not woken.
 func TestAPausedRunsSteerStaysQueued(t *testing.T) {
