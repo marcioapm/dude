@@ -1153,28 +1153,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		completed = true
-		// What the agent never read, it never will: said so, not left queued.
-		rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
-			WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`,
-			r.ID, "the run finished before the agent read it")
-		if err != nil {
+		if err := s.failUnread(ctx, tx, r, UnreadRunFinished); err != nil {
 			return err
-		}
-		late, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		for _, id := range late {
-			if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem,
-				map[string]any{"directiveId": id, "error": "the run finished before the agent read it"}); err != nil {
-				return err
-			}
-			if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
-				return err
-			}
-			if err := delivery.SteerSettledTx(ctx, tx, r.Org, id, false, "the run finished before the agent read it"); err != nil {
-				return err
-			}
 		}
 		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
 	}); err != nil {
@@ -1893,6 +1873,66 @@ func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, 
 		RETURNING d.id`, id, r.ID, reason)
 }
 
+// Why a Run's unread directives fail when it ends (FailUnreadTx).
+const (
+	UnreadRunFinished = "the run finished before the agent read it"
+	UnreadRunFailed   = "the run failed before the agent read it"
+	UnreadRunAborted  = "the run was aborted before the agent read it"
+)
+
+// FailUnreadTx fails what the agent of Run r, ending in this transaction,
+// never read and now never will: each directive neither delivered nor
+// failed gets run.directive.failed with why, its wake reasons go back to
+// pending, and a conductor's steer wakes its conductor (SteerSettledTx).
+// A receipt that lands after still delivers it (directiveReceipt). at is
+// the events' time; zero is now.
+func FailUnreadTx(ctx context.Context, tx pgx.Tx, r delivery.RunRef, at time.Time, why string) error {
+	rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
+		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`, r.RunID, why)
+	if err != nil {
+		return err
+	}
+	unread, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, id := range unread {
+		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": why})
+		ev.Source, ev.OccurredAt = ledger.SourceRunner, at
+		if _, err := ledger.Append(ctx, tx, ev); err != nil {
+			return err
+		}
+		if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := delivery.SteerSettledTx(ctx, tx, r.Org, id, false, why); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r phaseRun) ref() delivery.RunRef {
+	return delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}
+}
+
+// failUnread is FailUnreadTx for a phase Run the syncer ends. A conductor's
+// unread wake notes are not failed: HandOver gives them to its successor.
+func (s *Syncer) failUnread(ctx context.Context, tx pgx.Tx, r phaseRun, why string) error {
+	if r.conductor() {
+		return nil
+	}
+	return FailUnreadTx(ctx, tx, r.ref(), s.at(), why)
+}
+
+// at is the time the syncer's events say, zero for now.
+func (s *Syncer) at() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Time{}
+}
+
 // carrierOf (SQL): c is a directive carrying the words of d's instruction,
 // its root or a resend sent with them (d an "Interrupt now", resends set).
 const carrierOf = `(c.id = d.resends OR c.resends = d.resends) AND c.id <> d.id AND c.interrupt_only IS FALSE`
@@ -1976,6 +2016,9 @@ func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep boo
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason, keep)
 		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := s.failUnread(ctx, tx, r, UnreadRunFailed); err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
