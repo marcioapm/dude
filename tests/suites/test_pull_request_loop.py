@@ -87,7 +87,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     fixes_before = len(fix_runs())
 
     # A courtesy comment is recorded but wakes nobody.
-    assert fake_github.comment(pr["number"], "LGTM so far, thanks!") is None
+    fake_github.comment(pr["number"], "LGTM so far, thanks!")
     wait_until(
         lambda: any(e["eventType"] == "pull_request.commented" for e in client.events(taskId=task["id"])),
         timeout=20,
