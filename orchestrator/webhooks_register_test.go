@@ -191,7 +191,7 @@ func TestARegistrationFailedBeforeAttemptsWereTimedIsRetried(t *testing.T) {
 	}
 	t.Run("repair", func(t *testing.T) {
 		w := legacy(t)
-		if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+		if err := w.prs.RepairWebhooks(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if n := w.healthy(); n != 2 {
@@ -215,7 +215,7 @@ func TestTheRepairRegistersAFewPerPassAndStopsAtARateLimit(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE forge_credentials SET public_url = 'https://dude.example.com', webhook_url = $2
 		WHERE organization_id = $1`, w.org, hookURL)
 	w.gh.limit = 3
-	if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.healthy(); n != 3 {
@@ -235,13 +235,13 @@ func TestTheRepairRegistersAFewPerPassAndStopsAtARateLimit(t *testing.T) {
 	w.gh.mu.Lock()
 	w.gh.limit = 0
 	w.gh.mu.Unlock()
-	if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.healthy(); n != 3+prs.RepairPerPass {
 		t.Errorf("%d registered after the next pass, want %d", n, 3+prs.RepairPerPass)
 	}
-	if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.healthy(); n != 12 {
@@ -249,7 +249,7 @@ func TestTheRepairRegistersAFewPerPassAndStopsAtARateLimit(t *testing.T) {
 	}
 	// Nothing is left to mend: a pass asks GitHub nothing.
 	before := len(w.gh.callsSoFar())
-	if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(w.gh.callsSoFar()) - before; n != 0 {
