@@ -50,7 +50,7 @@ import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -928,6 +928,17 @@ function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
   return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
 }
 
+/** Where a Chat message was written on GitHub, or where the conductor's reply went: the pull request, linked to the comment. */
+function GithubSource({ github, reply }: { github: GithubRef; reply: boolean }) {
+  const pr = `${github.repo}#${github.number}`;
+  const what = reply ? <>Replied on {pr}</> : <>On {pr}</>;
+  return (
+    <div className="githubSource" data-testid="github-source">
+      {github.url ? <a href={github.url} target="_blank" rel="noreferrer noopener">{what} on GitHub</a> : <>{what} on GitHub</>}
+    </div>
+  );
+}
+
 /** "Márcio · steer to Implement · 15:52": who sent a message's images, to whom, when. */
 function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: string): string {
   const at = new Date(turn.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -1030,9 +1041,10 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     case "human": {
       // Signed: the person's face and name when known; "Someone" only when the ledger kept no one. A
-      // conductor's steer is the conductor's: its face, colour and name, never a person's.
+      // conductor's steer is the conductor's: its face, colour and name, never a person's. One from a
+      // pull request is signed by its GitHub login, and says where it was written.
       const name = turn.conductor ? null : actorName(turn.by, people.names);
-      const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
+      const person = name && turn.by && !turn.github ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
       const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
       // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
       const interruptible = turn.intent === "steer" && (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
@@ -1040,8 +1052,8 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         <ChatMessage
           key={turn.id}
           data-testid="human-turn"
-          data-by={turn.conductor ? "conductor" : undefined}
-          role={turn.conductor ? "conductor" : "human"}
+          data-by={turn.conductor ? "conductor" : turn.github ? "github" : undefined}
+          role={turn.conductor ? "conductor" : turn.github ? "integration" : "human"}
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}
@@ -1055,6 +1067,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           person={person}
           name={turn.conductor ? "Conductor" : name ?? "Someone"}
           {...turnImages(turn, shown)}
+          {...(turn.github ? { attachments: <GithubSource github={turn.github} reply={turn.conductor} /> } : {})}
         />
       );
     }

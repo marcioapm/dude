@@ -431,6 +431,18 @@ describe("what the Chat is made of", () => {
     expect(conductedLines({ decider: "policy", runs: [run({ id: "a" })] }, [ev("conductor.decision_awaited", { point: "start" }, 1)])).toEqual([]);
   });
 
+  test("ready to merge, and no longer, are dude's notices in its own words, once each", () => {
+    const lines = conductedLines({ decider: "conductor", runs: [] }, [
+      ev("task.ready_to_merge", { pullRequests: 1 }, 1),
+      ev("chat.notice", { text: "greeter#3 is ready to merge: approved, checks green. Merging is yours.", about: "ready_to_merge" }, 1),
+      ev("chat.notice", { text: "greeter#3 is no longer ready to merge: checks are failing.", about: "no_longer_ready" }, 2),
+    ]);
+    expect(lines.map((l) => l.kind === "notice" ? l.text : l.kind)).toEqual([
+      "greeter#3 is ready to merge: approved, checks green. Merging is yours.",
+      "greeter#3 is no longer ready to merge: checks are failing.",
+    ]);
+  });
+
   test("the history says the conductor's work is conducted", () => {
     const line = taskHistory({ status: "running", decider: "conductor", runs: [run({ id: "a", status: "running", conductorRunId: CONDUCTOR })] }, [], [], null, String);
     expect(line.lead).toBe("Conducting");
