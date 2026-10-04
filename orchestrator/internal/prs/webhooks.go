@@ -133,10 +133,11 @@ const repairBackoff = time.Hour
 // .webhook_url), RepairPerPass at a time: what a registration cut short by
 // a rate limit, a restart or a timeout left undone. Stops at a rate limit.
 func (s *Syncer) RepairWebhooks(ctx context.Context) error {
-	var orgs []string
+	type asked struct{ Org, URL string }
+	var orgs []asked
 	if err := s.DB.InSystem(ctx, "webhook-repair", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT c.organization_id FROM forge_credentials c
-			WHERE c.forge = 'github' AND c.webhook_url IS NOT NULL
+		rows, err := tx.Query(ctx, `SELECT c.organization_id, c.webhook_url FROM forge_credentials c
+			WHERE c.forge = 'github' AND c.webhook_url <> ''
 			  AND EXISTS (SELECT 1 FROM repositories r WHERE r.organization_id = c.organization_id
 			    AND NOT (r.webhook_url IS NOT DISTINCT FROM c.webhook_url AND r.webhook_id IS NOT NULL
 			             AND r.webhook_registered_at IS NOT NULL AND r.webhook_error IS NULL)
@@ -146,34 +147,28 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		orgs, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		orgs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[asked])
 		return err
 	}); err != nil {
 		return err
 	}
 	done := 0
-	for _, org := range orgs {
+	for _, o := range orgs {
 		if done >= RepairPerPass {
 			break
 		}
-		gh, err := s.Forges.For(ctx, org)
+		gh, err := s.Forges.For(ctx, o.Org)
 		if err != nil || gh == nil {
 			continue
 		}
-		var url string
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT COALESCE(webhook_url, '') FROM forge_credentials WHERE forge = 'github'`).Scan(&url)
-		}); err != nil || url == "" {
-			continue
-		}
-		results, limited, err := RegisterWebhooks(ctx, s.DB, gh, org, Registration{URL: url, OnlyMissing: true,
+		results, limited, err := RegisterWebhooks(ctx, s.DB, gh, o.Org, Registration{URL: o.URL, OnlyMissing: true,
 			Backoff: repairBackoff, Limit: RepairPerPass - done})
 		done += len(results)
 		if err != nil && !errors.Is(err, ErrNoWebhookSecret) {
-			s.Log.Warn("repairing webhooks failed", "organization", org, "error", err)
+			s.Log.Warn("repairing webhooks failed", "organization", o.Org, "error", err)
 		}
 		if limited {
-			s.Log.Info("GitHub's rate limit stopped the webhook repair; the next pass goes on", "organization", org)
+			s.Log.Info("GitHub's rate limit stopped the webhook repair; the next pass goes on", "organization", o.Org)
 			break
 		}
 	}
