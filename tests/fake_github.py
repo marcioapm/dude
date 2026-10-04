@@ -120,6 +120,8 @@ class FakeGitHub:
         self.tokens: dict[str, TokenProfile] = {"fake-token": TokenProfile()}
         # Who owns the repositories, as GitHub's repository answer says.
         self.owner_type = "User"
+        # Who the token comments as.
+        self.token_login = "dude-bot"
         self._init_repository()
 
     def _init_repository(self) -> None:
@@ -251,17 +253,22 @@ class FakeGitHub:
         )
         return [line for line in result.stdout.splitlines() if line]
 
-    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None) -> None:
+    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None) -> int:
+        """A person's comment, on the conversation or (with a path) on a line; its id."""
         with self._lock:
             self._next_id += 1
+            anchor = "discussion_r" if path else "issuecomment-"
             self.pulls[number].comments.append(
                 {"id": self._next_id, "body": body, "user": {"login": author},
-                 "created_at": _now(), "path": path}
+                 "created_at": _now(), "path": path,
+                 "html_url": f"https://github.test/{self.owner}/{self.repo}/pull/{number}#{anchor}{self._next_id}"}
             )
+            comment_id = self._next_id
         if path:
             self.send_webhook("pull_request_review_comment", {"action": "created", "pull_request": {"number": number}})
         else:
             self.send_webhook("issue_comment", {"action": "created", "issue": {"number": number, "pull_request": {"url": ""}}})
+        return comment_id
 
     def approve(self, number: int, reviewer: str = "alice") -> None:
         """A reviewer approves the pull request, and GitHub says so by webhook."""
@@ -551,6 +558,30 @@ class FakeGitHub:
                         gh.review_requests.append((pr.number, list(body.get("reviewers", []))))
                         pr.requested_reviewers += [r for r in body.get("reviewers", []) if r not in pr.requested_reviewers]
                     return self._send(201, self._pull_json(pr))
+                # A comment the token posts, as its login: on the conversation,
+                # or a reply in a line comment's thread. GitHub then tells
+                # dude by webhook, as it does of anyone's comment.
+                m = re.fullmatch(rf"{prefix}/issues/(\d+)/comments", self.path)
+                reply = re.fullmatch(rf"{prefix}/pulls/(\d+)/comments/(\d+)/replies", self.path)
+                if m or reply:
+                    number = int((m or reply)[1])
+                    pr = gh.pulls[number]
+                    with gh._lock:
+                        parent = next((c for c in pr.comments if reply and c["id"] == int(reply[2]) and c["path"]), None)
+                        if reply and parent is None:
+                            return self._send(404, {"message": "Not Found"})
+                        gh._next_id += 1
+                        anchor = "discussion_r" if reply else "issuecomment-"
+                        comment = {"id": gh._next_id, "body": body.get("body", ""), "user": {"login": gh.token_login},
+                                   "created_at": _now(), "path": parent["path"] if parent else None,
+                                   "in_reply_to_id": int(reply[2]) if reply else None,
+                                   "html_url": f"https://github.test/{gh.owner}/{gh.repo}/pull/{number}#{anchor}{gh._next_id}"}
+                        pr.comments.append(comment)
+                    if reply:
+                        gh.send_webhook("pull_request_review_comment", {"action": "created", "pull_request": {"number": number}})
+                    else:
+                        gh.send_webhook("issue_comment", {"action": "created", "issue": {"number": number, "pull_request": {"url": ""}}})
+                    return self._send(201, comment)
                 if self.path == f"/repos/{self.github.owner}/{self.github.repo}/git/refs":
                     if self._git("update-ref", body["ref"], body["sha"], "").returncode:
                         return self._send(422, {"message": "Reference already exists"})
