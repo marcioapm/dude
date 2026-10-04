@@ -117,8 +117,7 @@ func TestAMentionIsOneMessageHoweverOftenItArrives(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
 	id := w.gh.Comment(1, "alice", "@dude why?")
-	payload, _ := json.Marshal(map[string]any{"action": "created", "repository": map[string]any{"full_name": "acme/target"},
-		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}})
+	payload, _ := json.Marshal(issueComment("created", id))
 	for i := range 2 {
 		mustExec(t, w.owner, `INSERT INTO webhook_deliveries (id, organization_id, event, payload) VALUES ($1, $2, 'issue_comment', $3)`,
 			fmt.Sprintf("dlv_%d_%s", i, w.org), w.org, payload)
@@ -226,6 +225,13 @@ func (w *world) webhook(event string, payload map[string]any) {
 	}
 }
 
+// issueComment is GitHub's issue_comment payload for a comment on
+// acme/target's pull request 1.
+func issueComment(action string, id int64) map[string]any {
+	return map[string]any{"action": action, "repository": map[string]any{"full_name": "acme/target"},
+		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}}
+}
+
 // A mention on a pull request that was merged, or closed, still reaches
 // the conductor, once, which can only answer: the task has ended.
 func TestAMentionOnAnEndedPullRequestReachesTheConductor(t *testing.T) {
@@ -240,8 +246,7 @@ func TestAMentionOnAnEndedPullRequestReachesTheConductor(t *testing.T) {
 			}
 			w.until(end.status, func() bool { w.sync(); return w.taskStatus(task) == end.status })
 			id := w.gh.Comment(1, "alice", "@dude why this choice?")
-			comment := map[string]any{"action": "created", "repository": map[string]any{"full_name": "acme/target"},
-				"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}}
+			comment := issueComment("created", id)
 			w.webhook("issue_comment", comment)
 			w.until("the conductor's answer", func() bool {
 				c, _, _ := w.conductor(task)
@@ -292,8 +297,7 @@ func TestAnEndedPullRequestReadForAMentionKeepsItsRecord(t *testing.T) {
 	w.gh.CommitOnTop(w.gh.Pull(1).Head, "later work")
 	w.gh.SetChecks("failure")
 	id := w.gh.Comment(1, "alice", "@dude why this choice?")
-	w.webhook("issue_comment", map[string]any{"action": "created", "repository": map[string]any{"full_name": "acme/target"},
-		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}})
+	w.webhook("issue_comment", issueComment("created", id))
 	w.until("the message", func() bool { return w.mentions(task) == 1 })
 	w.pump()
 	if after := record(); after != before {
@@ -347,8 +351,7 @@ func TestACommentEditedIntoAMentionIsOneMessage(t *testing.T) {
 		t.Fatalf("%d messages before any mention", n)
 	}
 	w.gh.EditComment(1, id, "@dude why this choice?")
-	edited := map[string]any{"action": "edited", "repository": map[string]any{"full_name": "acme/target"},
-		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}}
+	edited := issueComment("edited", id)
 	w.webhook("issue_comment", edited)
 	w.until("the message", func() bool { return w.mentions(task) == 1 })
 	var text string
