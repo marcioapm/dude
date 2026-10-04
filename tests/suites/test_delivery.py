@@ -264,10 +264,11 @@ def _at(stamp: str) -> datetime:
 
 
 def _timed_resume(client: ApiClient, run_id: str, cause: str) -> dict:
-    """The Run's one run.resume.timed, once its agent spoke after the resume:
-    its cause, every phase (the fake lux reports every placement time), each
-    a duration, the total at least their sum less lux's and dude's skew, and
-    after the run.unparked or run.resumed that started it."""
+    """The Run's one run.resume.timed: its cause, every phase (the fake lux
+    reports every placement time), each a duration, the total at least their
+    sum less lux's and dude's skew, after the run.unparked or run.resumed
+    that started it, and an agent that went on to say or do something after
+    that resume."""
     def timed():
         return [e for e in client.events(runId=run_id) if e["eventType"] == "run.resume.timed"]
 
@@ -285,12 +286,17 @@ def _timed_resume(client: ApiClient, run_id: str, cause: str) -> dict:
     assert payload["totalMs"] >= payload["untilBusyMs"] >= phases["react"], payload
     # Each rounded to the millisecond on its own.
     assert abs(payload["totalMs"] - payload["untilBusyMs"] - phases["firstOutput"]) <= 1, payload
-    # Timed after the resume it is about, and after the agent's first words.
+    # Timed after the resume it is about.
     events = client.events(runId=run_id)
     cursors = {e["eventType"]: e["cursor"] for e in events if e["eventType"] in ("run.resumed", "run.unparked")}
     assert cursors and all(c < event["cursor"] for c in cursors.values()), (cursors, event)
-    assert any(e["eventType"] in ("agent.message", "agent.thought", "agent.tool.called") and e["cursor"] < event["cursor"]
-               and e["cursor"] > min(cursors.values()) for e in events), "timed before the agent said anything"
+    # The agent said or did something after the resume. Not necessarily
+    # before the timing: first output is stamped on a raw message chunk, and
+    # the timing can be published before a later flush records the buffered
+    # text as agent.message.
+    wait_until(lambda: any(e["eventType"] in ("agent.message", "agent.thought", "agent.tool.called")
+                           and e["cursor"] > min(cursors.values()) for e in client.events(runId=run_id)),
+               timeout=30, message="the agent said nothing after the resume")
     unparked = [e["payload"] for e in events if e["eventType"] == "run.unparked"]
     assert all(p["epoch"] == payload["epoch"] for p in unparked), (unparked, payload)
     return event
