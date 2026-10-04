@@ -28,20 +28,16 @@ func TestReadinessIsOneNoticePerActualMove(t *testing.T) {
 	st := &State{TaskID: "wi_r", ProjectID: "prj_r", Decider: DeciderConductor}
 	pr := PullRequestState{Repo: "target", Status: forge.Status{PullRequestRef: forge.PullRequestRef{Number: 1, State: forge.StateOpen},
 		Checks: forge.ChecksPassing, Review: forge.ReviewApproved}}
-	count := func(sql string) int {
+	count := func(sql string, args ...any) int {
 		var n int
-		if err := owner.QueryRow(ctx, sql, "wi_r").Scan(&n); err != nil {
+		if err := owner.QueryRow(ctx, sql, append([]any{"wi_r"}, args...)...).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
 	}
 	notices := func(about string) int {
-		var n int
-		if err := owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
-			AND payload->>'about' = $2`, "wi_r", about).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
+		return count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+			AND payload->>'about' = $2`, about)
 	}
 	status := func() string {
 		var s string
