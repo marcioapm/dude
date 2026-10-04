@@ -330,7 +330,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
-	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.replyToLineComment)
+	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
@@ -628,8 +628,9 @@ func (s *Server) poster() string {
 	return Login
 }
 
-// postComment is a comment the token posts on a pull request's
-// conversation, as Login. A locked pull request is refused, as GitHub does.
+// postComment is a comment the token posts, as Login: on a pull request's
+// conversation, or (with {id}) a reply in that line comment's thread. A
+// locked pull request is refused, as GitHub does.
 func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	p := s.number(w, r)
 	if p == nil {
@@ -645,31 +646,17 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Unable to create comment because issue is locked.")
 		return
 	}
-	c := Comment{ID: nextID.Add(1), Author: s.poster(), Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
-	p.Comments = append(p.Comments, c)
-	write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
-}
-
-// replyToLineComment answers a line comment in its thread, as Login.
-func (s *Server) replyToLineComment(w http.ResponseWriter, r *http.Request) {
-	p := s.number(w, r)
-	if p == nil {
+	c := Comment{Author: s.poster(), Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	if r.PathValue("id") == "" {
+		c.ID = nextID.Add(1)
+		p.Comments = append(p.Comments, c)
+		write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
 		return
 	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var in struct {
-		Body string `json:"body"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p.Locked {
-		fail(w, 403, "Unable to create comment because issue is locked.")
-		return
-	}
+	c.InReplyTo, _ = strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var parent *Comment
 	for i := range p.LineComments {
-		if p.LineComments[i].ID == id {
+		if p.LineComments[i].ID == c.InReplyTo {
 			parent = &p.LineComments[i]
 		}
 	}
@@ -677,8 +664,7 @@ func (s *Server) replyToLineComment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	c := Comment{ID: nextID.Add(1), Author: s.poster(), Body: in.Body, Path: parent.Path, InReplyTo: id,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	c.ID, c.Path = nextID.Add(1), parent.Path
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
 }
