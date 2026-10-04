@@ -1046,7 +1046,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case "workflow.transitioned":
         break;
       case "run.steered":
-        out.push({ ...base, who: face, text: <>{person} steered the {phase(e.runId)}</>, quote: String(p.text ?? "") });
+        out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
+          text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {phase(e.runId)}</>, quote: String(p.text ?? "") });
         break;
       case "question.answered":
         out.push({ ...base, who: face, text: <>{person} answered the {phase(e.runId)}</>, quote: String(p.answer ?? "") });
