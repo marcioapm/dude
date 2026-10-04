@@ -92,15 +92,18 @@ def test_connecting_github_registers_an_existing_projects_webhook_and_a_new_proj
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub, env
 ):
     """Settings → GitHub, connecting with where GitHub reaches dude (what
-    the web app sends): the existing project's repository gets its hook at
-    once. A project created afterwards gets its repository's at creation."""
+    the web app sends): the existing project's repository gets its hook in
+    the background, the save not waiting on GitHub. A project created
+    afterwards gets its repository's at creation."""
     assert fake_github.hooks == []
     resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url,
                                                 "publicUrl": env.control_plane_url})
     assert resp.status_code == 200, resp.text
-    assert not (resp.json()["registered"] or {}).get("error"), resp.json()
-    assert len(fake_github.hooks) == 1, "the existing project's repository has no webhook"
+    assert resp.json()["registered"] == {"background": True}, resp.json()
+    wait_until(lambda: len(fake_github.hooks) == 1, timeout=30, message="the existing project's repository has no webhook")
     assert fake_github.hooks[0]["config"]["url"] == fake_github.webhook_url
+    wait_until(lambda: all(r["registeredAt"] for r in client.get("/v1/forge/credential").json()["webhook"]["repositories"]),
+               timeout=30, message="the registration was not recorded")
 
     later = fake_github.add_repository("later")
     project = client.create_project(name="Later", slug=f"later-{fake_github.api_port}",

@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/prs"
 )
 
 func (s *Server) githubRoutes(mux *http.ServeMux) {
@@ -104,11 +106,18 @@ func (s *Server) forge(ctx context.Context, org string) (*forge.GitHub, error) {
 // registerWebhooks registers dude's webhook on each of the organization's
 // GitHub repositories — or the one named — delivering to url, signed with
 // the organization's secret. Each repository's outcome is recorded on it,
-// so settings can say which are registered and why one is not.
+// so settings can say which are registered and why one is not; the url is
+// recorded on the organization, for the reconciler to repair hooks that
+// are missing (prs.RepairWebhooks).
+//
+// background answers at once and registers afterwards, only where a
+// repository has no healthy hook to url: what connecting GitHub asks, which
+// must not wait on two GitHub calls per repository.
 func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org string) error {
 	var body struct {
 		URL          string `json:"url"`
 		RepositoryID string `json:"repositoryId"`
+		Background   bool   `json:"background"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -120,63 +129,40 @@ func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org st
 	if err != nil {
 		return err
 	}
-	type repo struct{ ID, Name, URL string }
-	var secret string
-	var repos []repo
+	var hasSecret bool
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(webhook_secret, '') FROM forge_credentials WHERE forge = 'github'`).
-			Scan(&secret); err != nil {
-			return err
-		}
-		rows, err := tx.Query(r.Context(), `SELECT id, name, url FROM repositories
-			WHERE ($1 = '' OR id = $1) ORDER BY name`, body.RepositoryID)
-		if err != nil {
-			return err
-		}
-		repos, err = pgx.CollectRows(rows, pgx.RowToStructByPos[repo])
-		return err
+		return tx.QueryRow(r.Context(), `UPDATE forge_credentials SET webhook_url = $1 WHERE forge = 'github'
+			RETURNING COALESCE(webhook_secret, '') <> ''`, body.URL).Scan(&hasSecret)
 	}); err != nil {
 		return err
 	}
-	if secret == "" {
+	if !hasSecret {
 		return fail(http.StatusConflict, "conflict", "no webhook secret: connect GitHub first")
 	}
-	type result struct {
-		RepositoryID string `json:"repositoryId"`
-		Name         string `json:"name"`
-		Slug         string `json:"slug"`
-		HookID       string `json:"hookId,omitempty"`
-		Error        string `json:"error,omitempty"`
-	}
-	results := []result{}
-	for _, rp := range repos {
-		slug := forge.SlugFromURL(rp.URL)
-		if slug == "" {
-			continue // a local repository: nothing on GitHub to hook
-		}
-		res := result{RepositoryID: rp.ID, Name: rp.Name, Slug: slug}
-		id, err := gh.EnsureWebhook(r.Context(), slug, body.URL, secret)
-		if err != nil {
-			if !forge.Transient(err) && !forge.Refused(err) {
-				return err
+	reg := prs.Registration{URL: body.URL, RepositoryID: body.RepositoryID}
+	if body.Background {
+		reg.OnlyMissing = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), backgroundRegistration)
+			defer cancel()
+			// What this leaves undone, the reconciler's repair takes up.
+			if _, _, err := prs.RegisterWebhooks(ctx, s.DB, gh, org, reg); err != nil {
+				s.Log.Warn("registering webhooks in the background failed", "organization", org, "error", err)
 			}
-			res.Error = err.Error()
-		}
-		res.HookID = id
-		if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(r.Context(), `UPDATE repositories SET
-				webhook_id = COALESCE(NULLIF($2, ''), webhook_id),
-				webhook_registered_at = CASE WHEN $3 = '' THEN now() ELSE webhook_registered_at END,
-				webhook_error = NULLIF($3, '') WHERE id = $1`, rp.ID, id, res.Error)
-			return err
-		}); err != nil {
-			return err
-		}
-		results = append(results, res)
+		}()
+		write(w, http.StatusAccepted, map[string]any{"background": true})
+		return nil
+	}
+	results, _, err := prs.RegisterWebhooks(r.Context(), s.DB, gh, org, reg)
+	if err != nil {
+		return err
 	}
 	write(w, http.StatusOK, map[string]any{"repositories": results})
 	return nil
 }
+
+// backgroundRegistration bounds a connect's background registration.
+const backgroundRegistration = 10 * time.Minute
 
 // pullRequestAction does to a pull request what a person asked, on GitHub.
 func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org string) error {

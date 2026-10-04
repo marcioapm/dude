@@ -229,6 +229,13 @@ func Transient(err error) bool {
 	return errors.As(err, &u)
 }
 
+// RateLimited says GitHub refused for its rate limit: a 429, or a 403
+// it marks as one (markRateLimit, or its own message).
+func RateLimited(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && (e.Status == 429 || e.Status == 403 && Transient(err))
+}
+
 // Refused says GitHub answered, and would not: a refusal (403, 404, 422…)
 // asking again will not mend, as opposed to a failure that may pass.
 func Refused(err error) bool {

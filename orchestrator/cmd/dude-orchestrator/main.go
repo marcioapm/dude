@@ -213,6 +213,11 @@ func run(log *slog.Logger) error {
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
+			// And a few repositories' missing webhooks, each pass: its count
+			// is not the loop's, or a backlog would run it without pause.
+			if _, err := pullRequests.RepairWebhooks(ctx); err != nil {
+				log.Warn("repairing webhooks failed", "error", err)
+			}
 			return pullRequests.Reconcile(ctx, set.ReconcileEvery)
 		}},
 	}
