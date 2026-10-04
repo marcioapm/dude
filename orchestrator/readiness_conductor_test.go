@@ -141,3 +141,41 @@ func TestEachMergeWakesTheConductorOnce(t *testing.T) {
 		}
 	}
 }
+
+// One pull request closed while its sibling stays open is a person's
+// decision; the sibling merged while the delivery waits on it still wakes
+// the conductor once, to close out, though no step is listening.
+func TestASiblingMergedDuringAnEscalationWakesTheConductorOnce(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	task := w.task()
+	w.addWeb(task, "write")
+	w.deliver(task)
+	w.until("two pull requests", func() bool {
+		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
+	})
+	if status, _ := w.chat(task, "mine now"); status != 201 {
+		t.Fatalf("take-over: %d", status)
+	}
+	w.gh.Close(1)
+	w.until("the closure escalated", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = 'pr_closed:target:1'`, task) == 1 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step <> 'awaitPullRequest'`, task) == 1
+	})
+	w.web.Merge(1)
+	w.syncs(5)
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'pr_merged' AND key = 'pr_merged:web:1'`, task); n != 1 {
+		t.Errorf("%d close-out reasons for web#1 merged during the escalation, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind IN ('pr_merged', 'pr_closed')`, task); n != 2 {
+		t.Errorf("%d close-out reasons for two ended pull requests", n)
+	}
+}

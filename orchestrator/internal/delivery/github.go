@@ -84,19 +84,29 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 // request and how it ended, so every sync that sees it records it once.
 func closeOutTx(ctx context.Context, tx pgx.Tx, org string, st *State, states []PullRequestState) error {
 	for _, p := range states {
-		var kind, line string
-		switch p.State {
-		case forge.StateMerged:
-			kind, line = "pr_merged", fmt.Sprintf("Pull request %s was merged.", prName(p))
-		case forge.StateClosed:
-			kind, line = "pr_closed", fmt.Sprintf("Pull request %s was closed without merging.", prName(p))
-		default:
-			continue
-		}
-		line += " Close out: say so in Chat if it helps the people on the task. Start nothing."
-		if _, err := RecordWakeTx(ctx, tx, org, st.TaskID, kind, fmt.Sprintf("%s:%s:%d", kind, p.Repo, p.Number), line); err != nil {
+		if err := CloseOutTx(ctx, tx, org, st.TaskID, p.Repo, p.Number, p.State); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CloseOutTx records the reason to wake a conducted task's conductor for
+// one pull request that ended (merged or closed; any other state records
+// nothing). The pull request syncer records it as it reads the end, the
+// workflow as it weighs it: one reason per (task, key) either way.
+func CloseOutTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int, state string) error {
+	name := fmt.Sprintf("%s#%d", repo, number)
+	var kind, line string
+	switch state {
+	case forge.StateMerged:
+		kind, line = "pr_merged", fmt.Sprintf("Pull request %s was merged.", name)
+	case forge.StateClosed:
+		kind, line = "pr_closed", fmt.Sprintf("Pull request %s was closed without merging.", name)
+	default:
+		return nil
+	}
+	line += " Close out: say so in Chat if it helps the people on the task. Start nothing."
+	_, err := RecordWakeTx(ctx, tx, org, taskID, kind, fmt.Sprintf("%s:%s:%d", kind, repo, number), line)
+	return err
 }
