@@ -288,7 +288,7 @@ func TestStartingOverClosesTheLastAttemptsOpenPullRequest(t *testing.T) {
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.gh.Comment(1, "octo", "@dude please rename it")
+	w.gh.Comment(1, "octo", "Please rename it")
 	w.until("a fixer for the feedback", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, wi) == 1
@@ -361,7 +361,7 @@ func TestAnEarlierAttemptsPullRequestDoesNotWakeTheNext(t *testing.T) {
 	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
 	// Reopened on GitHub and commented on.
 	w.gh.Reopen(1)
-	w.gh.Comment(1, "octo", "@dude please rename it")
+	w.gh.Comment(1, "octo", "Please rename it")
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		w.pump()

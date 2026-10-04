@@ -30,8 +30,13 @@ type Pull struct {
 	// Logins asked for a review.
 	Requested []string
 	Comments  []Comment
+	// Line comments, in review threads: a reply names the comment it
+	// answers (InReplyTo).
+	LineComments []Comment
 	// Reviews submitted, oldest first: each keeps its id, as GitHub's do.
 	Reviews []Review
+	// GitHub refuses comments on it, as on a locked conversation.
+	Locked bool
 }
 
 type Review struct {
@@ -47,6 +52,7 @@ type Comment struct {
 	Body      string
 	Path      string
 	CreatedAt string
+	InReplyTo int64
 }
 
 type Server struct {
@@ -182,13 +188,29 @@ func (s *Server) Pulls() []*Pull {
 	return out
 }
 
-// Comment leaves a comment as a person would.
-func (s *Server) Comment(number int, author, body string) {
+// Comment leaves a comment as a person would; its id.
+func (s *Server) Comment(number int, author, body string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	id := nextID.Add(1)
 	s.pulls[number].Comments = append(s.pulls[number].Comments,
-		Comment{ID: nextID.Add(1), Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+		Comment{ID: id, Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	return id
 }
+
+// LineComment leaves a comment on a line of a file, in a review thread of
+// its own; its id.
+func (s *Server) LineComment(number int, author, path, body string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := nextID.Add(1)
+	s.pulls[number].LineComments = append(s.pulls[number].LineComments,
+		Comment{ID: id, Author: author, Body: body, Path: path, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	return id
+}
+
+// Login is who the token comments as: what a comment dude posts is by.
+const Login = "dude-bot"
 
 // Review records a reviewer's verdict: "APPROVED" or "CHANGES_REQUESTED".
 func (s *Server) Review(number int, login, verdict string) {
@@ -218,6 +240,14 @@ func (s *Server) Close(number int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pulls[number].State = "closed"
+}
+
+// LockConversation locks a pull request's conversation: comments on it
+// are refused.
+func (s *Server) LockConversation(number int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].Locked = true
 }
 
 func (s *Server) Merge(number int) {
@@ -279,8 +309,10 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, s.pullJSON(p))
 	})
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
-	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", func(w http.ResponseWriter, r *http.Request) { write(w, 200, []any{}) })
+	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
+	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.replyToLineComment)
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
+	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec}", s.compare)
@@ -535,11 +567,88 @@ func (s *Server) comments(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := []any{}
-	for _, c := range p.Comments {
-		out = append(out, map[string]any{"id": c.ID, "body": c.Body, "created_at": c.CreatedAt, "user": map[string]string{"login": c.Author}})
+	write(w, 200, s.commentsJSON(p, p.Comments, "issuecomment"))
+}
+
+func (s *Server) lineComments(w http.ResponseWriter, r *http.Request) {
+	p := s.number(w, r)
+	if p == nil {
+		return
 	}
-	write(w, 200, out)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	write(w, 200, s.commentsJSON(p, p.LineComments, "discussion_r"))
+}
+
+func (s *Server) commentsJSON(p *Pull, comments []Comment, anchor string) []any {
+	out := []any{}
+	for _, c := range comments {
+		m := map[string]any{"id": c.ID, "body": c.Body, "created_at": c.CreatedAt, "user": map[string]string{"login": c.Author},
+			"html_url": fmt.Sprintf("https://github.test/%s/pull/%d#%s-%d", s.Slug, p.Number, anchor, c.ID)}
+		if c.Path != "" {
+			m["path"] = c.Path
+		}
+		if c.InReplyTo != 0 {
+			m["in_reply_to_id"] = c.InReplyTo
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// postComment is a comment the token posts on a pull request's
+// conversation, as Login. A locked pull request is refused, as GitHub does.
+func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
+	p := s.number(w, r)
+	if p == nil {
+		return
+	}
+	var in struct {
+		Body string `json:"body"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p.Locked {
+		fail(w, 403, "Unable to create comment because issue is locked.")
+		return
+	}
+	c := Comment{ID: nextID.Add(1), Author: Login, Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	p.Comments = append(p.Comments, c)
+	write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
+}
+
+// replyToLineComment answers a line comment in its thread, as Login.
+func (s *Server) replyToLineComment(w http.ResponseWriter, r *http.Request) {
+	p := s.number(w, r)
+	if p == nil {
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var in struct {
+		Body string `json:"body"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p.Locked {
+		fail(w, 403, "Unable to create comment because issue is locked.")
+		return
+	}
+	var parent *Comment
+	for i := range p.LineComments {
+		if p.LineComments[i].ID == id {
+			parent = &p.LineComments[i]
+		}
+	}
+	if parent == nil {
+		fail(w, 404, "Not Found")
+		return
+	}
+	c := Comment{ID: nextID.Add(1), Author: Login, Body: in.Body, Path: parent.Path, InReplyTo: id,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	p.LineComments = append(p.LineComments, c)
+	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {

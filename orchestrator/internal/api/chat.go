@@ -17,7 +17,7 @@ import (
 
 // chatMessageMax bounds one message, as a steer's text is bounded by the
 // directive it becomes.
-const chatMessageMax = 16_384
+const chatMessageMax = delivery.ChatMessageMax
 
 // chat is a person writing in a task's Chat. With no conductor, the
 // message creates the task's conductor, briefed by dude; with one, it is
