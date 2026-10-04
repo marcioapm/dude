@@ -267,6 +267,68 @@ func TestAMentionOnAnEndedPullRequestReachesTheConductor(t *testing.T) {
 	}
 }
 
+// A merged pull request read again for a mention keeps what it was merged
+// with: its branch moving on with failing work changes neither its head nor
+// its checks, records no change, and still the mention is heard.
+func TestAnEndedPullRequestReadForAMentionKeepsItsRecord(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	w.gh.Merge(1)
+	w.until("done", func() bool { w.sync(); return w.taskStatus(task) == "done" })
+	record := func() string {
+		var head, checks, list string
+		_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(head_sha, ''), checks::text, checks_json::text
+			FROM pull_requests WHERE task_id = $1 AND number = 1`, task).Scan(&head, &checks, &list)
+		return head + " " + checks + " " + list
+	}
+	before := record()
+	if !strings.Contains(before, " passing ") {
+		t.Fatalf("merged with %s, want passing checks", before)
+	}
+	changes := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.checks_changed'`, task)
+
+	w.gh.CommitOnTop(w.gh.Pull(1).Head, "later work")
+	w.gh.SetChecks("failure")
+	id := w.gh.Comment(1, "alice", "@dude why this choice?")
+	w.webhook("issue_comment", map[string]any{"action": "created", "repository": map[string]any{"full_name": "acme/target"},
+		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}})
+	w.until("the message", func() bool { return w.mentions(task) == 1 })
+	w.pump()
+	if after := record(); after != before {
+		t.Errorf("the merged pull request's record changed:\n  was %s\n  now %s", before, after)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.checks_changed'`, task); n != changes {
+		t.Errorf("%d checks changes recorded on a merged pull request", n-changes)
+	}
+	if n := w.fixes(task); n != 0 {
+		t.Errorf("%d fixers on a done task", n)
+	}
+}
+
+// A closed pull request reopened is read in full again: open, at its
+// branch's head now, with that head's checks.
+func TestAClosedPullRequestReopenedIsReadInFull(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	w.gh.Close(1)
+	w.until("aborted", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
+	head := w.gh.CommitOnTop(w.gh.Pull(1).Head, "later work")
+	w.gh.SetChecks("failure")
+	w.gh.Reopen(1)
+	w.webhook("pull_request", map[string]any{"action": "reopened", "repository": map[string]any{"full_name": "acme/target"},
+		"pull_request": map[string]any{"number": 1}})
+	var state, sha, checks string
+	_ = w.owner.QueryRow(context.Background(), `SELECT state::text, COALESCE(head_sha, ''), checks::text FROM pull_requests
+		WHERE task_id = $1 AND number = 1`, task).Scan(&state, &sha, &checks)
+	if state != "open" || sha != head || checks != "failing" {
+		t.Errorf("reopened, it reads %s at %s with %s checks; want open at %s, failing", state, sha, checks, head)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.updated'
+		AND payload->>'from' = 'closed' AND payload->>'to' = 'open'`, task); n != 1 {
+		t.Errorf("%d reopenings recorded", n)
+	}
+}
+
 // A comment edited to address dude is a message, once: the edit's webhook
 // and the poll both find it, though an older comment was read since; a
 // second edit, or the same delivery again, is no second message.

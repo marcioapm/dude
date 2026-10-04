@@ -103,9 +103,25 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	status, err := gh.PullRequest(ctx, slug, pr.Number)
+	// A pull request already recorded as ended is read again for what was
+	// said on it (a mention), not for its checks: its branch may have moved
+	// on with later work, whose head and checks are not what it ended with.
+	// Read in full only if it is open again (reopened).
+	var status forge.Status
+	ended := !isOpen(pr.State)
+	if ended {
+		if status, err = gh.Discussion(ctx, slug, pr.Number); err == nil && isOpen(status.State) {
+			ended = false
+		}
+	}
+	if !ended {
+		status, err = gh.PullRequest(ctx, slug, pr.Number)
+	}
 	if err != nil {
 		return err
+	}
+	if ended {
+		frozen(&status, pr)
 	}
 	// No CI reports unknown, and so does a new head before CI has
 	// registered on it. On a pull request that has had CI, a head within
@@ -122,7 +138,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		grace = DefaultCIGrace
 	}
 	hadCI := pr.HadCI || status.Checks != forge.ChecksUnknown
-	if status.Checks == forge.ChecksUnknown && pr.HadCI && time.Since(headSeenAt) < grace {
+	if status.Checks == forge.ChecksUnknown && pr.HadCI && !ended && time.Since(headSeenAt) < grace {
 		status.Checks = forge.ChecksPending
 	}
 	// A head dude did not push: a person pushed, or GitHub's Update
@@ -227,16 +243,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
+	if ended {
+		checksJSON, reviewsJSON = pr.ChecksJSON, pr.ReviewsJSON
+	}
 	if !isOpen(status.State) {
 		// What it was when it closed is what it stays.
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
-	}
-	if !isOpen(status.State) && !isOpen(pr.State) && pr.HeadSHA != "" {
-		// Read again once ended (for a mention on it): the head it ended
-		// on stays, though the branch moves on with work outside it
-		// (delivery.OpenPullRequests opens that work a pull request of its
-		// own by comparing heads).
-		status.HeadSHA = pr.HeadSHA
 	}
 
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -466,6 +478,18 @@ func (s *Syncer) pushedByDude(ctx context.Context, org, taskID, sha string) (boo
 }
 
 func isOpen(state string) bool { return state == forge.StateOpen || state == forge.StateDraft }
+
+// frozen sets a read of a pull request that stays ended to what was
+// recorded when it ended: its head, checks and reviews. The branch moves
+// on with work outside it (delivery.OpenPullRequests opens that work a
+// pull request of its own by comparing heads), and neither that work's
+// checks nor a later review are this pull request's.
+func frozen(status *forge.Status, pr tracked) {
+	status.HeadSHA, status.Checks, status.Review = pr.HeadSHA, pr.Checks, pr.Review
+	status.CheckList, status.Reviews = nil, nil
+	_ = json.Unmarshal(pr.ChecksJSON, &status.CheckList)
+	_ = json.Unmarshal(pr.ReviewsJSON, &status.Reviews)
+}
 
 func failingNames(checks []forge.Check) []string {
 	var out []string

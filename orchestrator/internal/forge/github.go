@@ -534,14 +534,8 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if st.Checks, st.CheckList, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
 		return Status{}, err
 	}
-	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
-	if err != nil {
+	if err := g.readReviews(ctx, slug, number, p, &st); err != nil {
 		return Status{}, err
-	}
-	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
-	owner, _, _ := strings.Cut(slug, "/")
-	for _, t := range p.RequestedTeams {
-		st.Reviews = append(st.Reviews, Review{Login: owner + "/" + t.Slug, State: "REQUESTED", Team: true})
 	}
 	if st.State != StateOpen && st.State != StateDraft {
 		return st, nil
@@ -564,6 +558,31 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 		return Status{}, err
 	}
 	return st, nil
+}
+
+// Discussion reads a pull request without its checks or mergeability: its
+// state, head and reviews, which is what Feedback needs to list what was
+// said on it. For a pull request that has ended, read for a mention.
+func (g *GitHub) Discussion(ctx context.Context, slug string, number int) (Status, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return Status{}, err
+	}
+	st := Status{PullRequestRef: p.ref()}
+	return st, g.readReviews(ctx, slug, number, p, &st)
+}
+
+func (g *GitHub) readReviews(ctx context.Context, slug string, number int, p ghPull, st *Status) error {
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
+		return err
+	}
+	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
+	owner, _, _ := strings.Cut(slug, "/")
+	for _, t := range p.RequestedTeams {
+		st.Reviews = append(st.Reviews, Review{Login: owner + "/" + t.Slug, State: "REQUESTED", Team: true})
+	}
+	return nil
 }
 
 // mergeable reads GitHub's two mergeable fields and the distance from the
