@@ -8,7 +8,7 @@
  */
 
 import { DECISION_POINT_LABEL, EventTypes, decisionPointSchema, runLabel, type PersistedEvent, type Run } from "@dude/domain";
-import { apply, emptyProjection } from "./api/conversation.ts";
+import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
 
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
@@ -19,17 +19,7 @@ export type ConductedLine =
  * person's steer's turn says it: sent, taken (with where it lands), read,
  * or not delivered and why.
  */
-export interface ConductorSteer {
-  directiveId: string;
-  text: string;
-  at: string;
-  /** Where the harness said it lands, once lux took it. */
-  lands: "next_step" | "next_turn" | null;
-  /** When the agent read it, or (an older lux) had it handed over. */
-  deliveredAt: string | null;
-  read: boolean;
-  failed: string | null;
-}
+export type ConductorSteer = Pick<HumanTurn, "text" | "at" | "lands" | "deliveredAt" | "read" | "failed"> & { directiveId: string };
 
 /**
  * The task's conducted lines, oldest first: a line for each Run the
