@@ -96,8 +96,7 @@ func aReplyIsStillDudesOwn(t *testing.T, text, shown string) {
 	if n := w.fixes(task); n != 0 {
 		t.Errorf("%d fixers for the conductor's reply", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
-		AND payload->>'own' = 'true'`, task); n != 1 {
+	if n := w.ownComments(task); n != 1 {
 		t.Errorf("%d comments recorded as dude's own, want the reply", n)
 	}
 }
@@ -157,9 +156,15 @@ func TestTheConductorRepliesOnlyOnItsOwnPullRequests(t *testing.T) {
 	if n := len(w.gh.Pull(1).Comments); n != before {
 		t.Errorf("a comment was posted on a locked pull request")
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'`, task); n != 0 {
+	if n := w.replies(task); n != 0 {
 		t.Errorf("%d replies recorded though GitHub refused", n)
 	}
+}
+
+// replies is how many of the conductor's replies on a pull request were
+// recorded in Chat.
+func (w *world) replies(task string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'`, task)
 }
 
 // A reply answers a comment on the pull request it is posted on: an id
@@ -172,9 +177,6 @@ func TestTheConductorRepliesOnlyToTheCommentsOfThatPullRequest(t *testing.T) {
 	webComment := w.web.Comment(1, "alice", "@dude and here?")
 	w.until("both messages", func() bool { w.sync(); return w.mentions(task) == 2 })
 
-	replies := func() int {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'`, task)
-	}
 	before, beforeWeb := len(w.gh.Pull(1).Comments), len(w.web.Pull(1).Comments)
 	w.refused(task, "reply_on_pull_request", `{"pr":"target#1","text":"Hello.","in_reply_to":"issue-comment-999999"}`,
 		"issue-comment-999999 is not a comment on target#1")
@@ -183,12 +185,12 @@ func TestTheConductorRepliesOnlyToTheCommentsOfThatPullRequest(t *testing.T) {
 	if n, m := len(w.gh.Pull(1).Comments), len(w.web.Pull(1).Comments); n != before || m != beforeWeb {
 		t.Errorf("refused replies posted %d comments", n-before+m-beforeWeb)
 	}
-	if n := replies(); n != 0 {
+	if n := w.replies(task); n != 0 {
 		t.Errorf("%d replies recorded for refused calls", n)
 	}
 	// The same comment, on the pull request it was left on, is answered.
 	w.must(task, "reply_on_pull_request", fmt.Sprintf(`{"pr":"web#1","text":"Yes.","in_reply_to":"issue-comment-%d"}`, webComment))
-	if n := replies(); n != 1 {
+	if n := w.replies(task); n != 1 {
 		t.Errorf("%d replies recorded", n)
 	}
 }
