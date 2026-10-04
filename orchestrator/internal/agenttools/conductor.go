@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // The conductor's read tools: what the delivery workflow recorded about the
@@ -319,6 +320,36 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 		out["lands"] = lands
 	}
 	return out, nil
+}
+
+type replyIn struct {
+	PR        string `json:"pr" jsonschema:"the pull request: its number, or repo#number, one of your task's"`
+	Text      string `json:"text" jsonschema:"what to post, in Markdown, as you would say it in Chat"`
+	InReplyTo string `json:"in_reply_to,omitempty" jsonschema:"the comment you answer (issue-comment-…, line-comment-… or review-…): a line comment is answered in its thread; anything else is quoted"`
+}
+
+// forgeFor resolves the caller's organization's GitHub client before the
+// call's transaction opens: the resolver reads in a transaction of its own.
+func forgeFor(ctx context.Context, c Caller, _ json.RawMessage) any {
+	if c.env.forges == nil {
+		return nil
+	}
+	gh, err := c.env.forges.For(ctx, c.Org)
+	if err != nil {
+		return err
+	}
+	return gh
+}
+
+func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (delivery.Replied, error) {
+	var gh *forge.GitHub
+	switch p := c.env.prepared.(type) {
+	case error:
+		return delivery.Replied{}, p
+	case *forge.GitHub:
+		gh = p
+	}
+	return conducted(delivery.ConductReply(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
 }
 
 type updateTaskIn struct {

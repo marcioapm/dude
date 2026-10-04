@@ -48,6 +48,9 @@ type Server struct {
 	Embedder embeddings.Embedder
 	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
 	Kick func()
+	// Forges finds the organization's GitHub client, for a conductor's
+	// reply on a pull request; nil, no forge.
+	Forges delivery.Forges
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -65,6 +68,7 @@ type Caller struct {
 type env struct {
 	embedder embeddings.Embedder
 	kick     func()
+	forges   delivery.Forges
 	prepared any
 }
 
@@ -341,7 +345,7 @@ const (
 // transaction as what the tool did.
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
-	c.env = env{embedder: s.Embedder, kick: s.Kick}
+	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}

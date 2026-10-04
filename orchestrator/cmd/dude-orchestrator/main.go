@@ -260,7 +260,7 @@ func run(log *slog.Logger) error {
 	var tools *http.Server
 	if addr := set.ToolsListen; addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
-			Kick: serverService.Kick}).Handler(),
+			Kick: serverService.Kick, Forges: forges}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			log.Info("agent tools listening", "addr", addr, "url", agent.ToolsURL)

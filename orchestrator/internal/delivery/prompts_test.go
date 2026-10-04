@@ -18,6 +18,17 @@ func TestTheConductorIsToldWhenToSteer(t *testing.T) {
 	}
 }
 
+// A mention from a pull request is answered there, and hands over nothing.
+func TestTheConductorIsToldToAnswerOnThePullRequest(t *testing.T) {
+	got := ConductorPrompt("briefing", PromptInput{Tools: true})
+	for _, want := range []string{"Chat message from a GitHub person", "changes nothing about who decides",
+		"Answer it on the pull request (reply_on_pull_request", "`dude pr reply PR TEXT --in-reply-to ID`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the conductor's prompt lacks %q", want)
+		}
+	}
+}
+
 // A person's answer is part of the task from then on: a reviewer judging
 // the change, or a fixer after it, is told what was decided rather than
 // flagging it again (a real run's reviewers reported "chosen with no
