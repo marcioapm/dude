@@ -101,6 +101,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-markdown", "Markdown"],
       ["ch-message", "ChatMessage"],
       ["ch-conductor", "A task's Chat"],
+      ["ch-conducted", "A conducted task"],
       ["ch-steer", "Steer delivery"],
       ["ch-thread", "ChatThread"],
       ["ch-question", "QuestionCard"],

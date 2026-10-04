@@ -38,12 +38,17 @@ type Writer struct{ ActorType, ActorID, Person string }
 // conductor, from the task's head in each repository (the default branch
 // where nothing was published), briefed by dude with the message.
 func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string) (string, error) {
+	return startConductor(ctx, tx, org, projectID, taskID, w, message, false)
+}
+
+// With woken, the message is dude's wake note, not a person's.
+func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
 	if w.Person != "" {
 		_ = tx.QueryRow(ctx, `SELECT name FROM people WHERE id = $1`, w.Person).Scan(&person)
 	}
-	briefing, err := Briefing(ctx, tx, taskID, id, person, message)
+	briefing, err := briefing(ctx, tx, taskID, id, person, message, woken)
 	if err != nil {
 		return "", err
 	}
@@ -71,10 +76,13 @@ func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		return "", err
 	}
 	// The message, then dude's briefing of the conductor about it: what the
-	// Chat shows, whatever the agent's harness echoes back of its prompt.
+	// Chat shows, whatever the agent's harness echoes back of its prompt. A
+	// wake's note is recorded by the wake (WakeConductorTx).
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
-	if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
-		return "", err
+	if !woken {
+		if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
+			return "", err
+		}
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorBriefed, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
@@ -115,11 +123,19 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 	return err
 }
 
-// Unheard (SQL, over runs r): an ended conductor holding input it never
-// read, for the syncer to hand over (HandOver). The subquery reads only
-// unsettled directives (directives_unsettled_idx), not every ended Run.
-const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', 'aborted')
-	AND r.id IN (SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL))`
+// Unheard (SQL, a FROM source yielding r with id, organization_id,
+// project_id, task_id, status and ended_at): an ended conductor holding
+// input it never read, or a wake note it was started with and never heard,
+// for the syncer to hand over (HandOver). The candidates come from
+// unsettled directives (directives_unsettled_idx) and unheard briefings
+// (conductor_wake_attempts_briefing_idx). Each reaches runs through a
+// LATERAL primary-key lookup; OFFSET 0 keeps the planner from flattening it
+// into a join, which with retained attempt history it hashes over all runs.
+const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
+	  UNION SELECT a.conductor_run_id FROM conductor_wake_attempts a
+	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL) c
+	CROSS JOIN LATERAL (SELECT u.id, u.organization_id, u.project_id, u.task_id, u.status, u.ended_at FROM runs u
+	  WHERE u.id = c.run_id AND u.role = 'conductor' AND u.status IN ('completed', 'failed', 'aborted') OFFSET 0) r`
 
 // HandOver settles what a person sent an ended conductor and it never
 // read. With replace, each message goes to the task's live conductor, or
@@ -134,7 +150,11 @@ const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', '
 // that has them, "" for none. The caller holds the task's Chat lock, and
 // the Run has ended.
 func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string, error) {
-	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
+	// The wake note it was started with and never heard is told again.
+	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
+		return "", err
+	}
+	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt OR EXISTS (SELECT 1 FROM conductor_wake_attempts a WHERE a.directive_id = d.id),
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, '')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id FROM events e WHERE e.run_id = d.run_id
@@ -146,7 +166,9 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 		return "", err
 	}
 	type unread struct {
-		ID, Text           string
+		ID, Text string
+		// An interrupt, or dude's wake note (whose reasons go back to
+		// pending, RequeueWakesTx): no one's words to hand on.
 		Interrupt          bool
 		ActorType, ActorID string
 	}
@@ -186,6 +208,11 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 			reason = stopped
 		}
 		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2 WHERE id = $1`, d.ID, reason); err != nil {
+			return "", err
+		}
+		// A wake note not inherited goes back to its reasons, for the next
+		// conductor.
+		if err := RequeueWakesTx(ctx, tx, d.ID); err != nil {
 			return "", err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event(evDirectiveFailed, ledger.ActorSystem,

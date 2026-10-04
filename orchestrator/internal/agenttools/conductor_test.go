@@ -83,17 +83,73 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	if got := strings.Join(names, ","); got != "ask_person,create_task,emit_event,findings,get_memory,list_epics,list_repositories,"+
-		"list_tasks,pull_requests,remember,request_repository,run_diff,search_memory" {
+	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,dismiss_finding,emit_event,findings,get_memory,"+
+		"list_epics,list_repositories,list_tasks,pull_requests,remember,request_repository,run_diff,search_memory,start_phase,update_task" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
-	for _, tool := range []string{"findings", "pull_requests"} {
+	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}
+	}
+}
+
+// The conductor's decisions from its shell: each command reaches its tool
+// with the arguments the tool takes. With a delivery parked for the
+// conductor, update_task changes the task, dismiss_finding the finding,
+// and start_phase takes the decision; with none, decide is refused saying
+// why, and the CLI fails with that message.
+func TestTheConductorsDecisionsFromTheShell(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO review_findings (id, organization_id, task_id, category, severity, title, description)
+		VALUES ('fnd_d', $1, $2, 'correctness', 'high', 'A title', 'Its text')`, f.org, f.item)
+	mustExec(t, f.owner, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id,
+			awaiting_signals)
+		VALUES ('wfr_d', $1, 'task.delivery', 'delivery:d', 'waiting', 'conductorDecision',
+			jsonb_build_object('taskId', $2::text, 'decider', 'conductor', 'policy', jsonb_build_object('maxReviewIterations', 5,
+				'maxAttemptsPerFinding', 2), 'decision', jsonb_build_object('point', 'after_review', 'policy', 'reviewExit')),
+			$2, '["conductor.decision"]')`, f.org, f.item)
+	bin := cli(t)
+	env := append(os.Environ(), "LUX_SERVICE_DUDE="+luxService(t, f.url, token), "DUDE_TOOLS_TOKEN=", "DUDE_TOOLS_URL=")
+	dude := func(args ...string) (string, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := dude("task", "update", "--goal", "Retry on 429 with a capped backoff.", "--criterion", "caps at 8s"); err != nil {
+		t.Fatalf("task update: %v\n%s", err, out)
+	}
+	var goal, criteria string
+	_ = f.owner.QueryRow(context.Background(), `SELECT goal, acceptance_criteria::text FROM tasks WHERE id = $1`, f.item).Scan(&goal, &criteria)
+	if goal != "Retry on 429 with a capped backoff." || criteria != `["caps at 8s"]` {
+		t.Errorf("the task after update: %q %s", goal, criteria)
+	}
+	if out, err := dude("finding", "dismiss", "fnd_d", "--reason", "covered by the integration test"); err != nil {
+		t.Fatalf("finding dismiss: %v\n%s", err, out)
+	}
+	var note string
+	_ = f.owner.QueryRow(context.Background(), `SELECT resolution_note FROM review_findings WHERE id = 'fnd_d'`).Scan(&note)
+	if !strings.Contains(note, "covered by the integration test") {
+		t.Errorf("the dismissal's note: %q", note)
+	}
+	if out, err := dude("phase", "start", "review", "--category", "security", "--note", "look at the token"); err != nil {
+		t.Fatalf("phase start: %v\n%s", err, out)
+	}
+	var taken string
+	_ = f.owner.QueryRow(context.Background(), `SELECT state->'decision'->'taken'::text FROM workflow_runs WHERE id = 'wfr_d'`).Scan(&taken)
+	for _, want := range []string{`"phase": "review"`, `"categories": ["security"]`, `"note": "look at the token"`, `"by": "run_cond"`} {
+		if !strings.Contains(taken, want) {
+			t.Errorf("the decision taken %s lacks %s", taken, want)
+		}
+	}
+	out, err := dude("decide", "next")
+	if err == nil || !strings.Contains(out, "taken already") {
+		t.Errorf("a second decision: %v\n%s", err, out)
 	}
 }
 

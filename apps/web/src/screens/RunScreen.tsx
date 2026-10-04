@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -99,6 +99,15 @@ export interface ChatVariant {
   before?: ReactNode;
   /** The conductor's whole cost, from the task's metrics; null until read. */
   cost?: RunCost | null;
+  /**
+   * Lines beside the conductor's turns, each where it happened: the Runs it
+   * started, the decisions waited on, dude's notices. Merged in by time.
+   */
+  lines?: ReadonlyArray<{ id: string; at: string; node: ReactNode }>;
+  /** Above the composer: who decides, and the way to hand it back. */
+  above?: ReactNode;
+  /** The conductor only reads and answers, though there is a line above (Deliver decides). */
+  readOnly?: boolean;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -429,6 +438,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               turns={conversation.turns.length}
               pinned={chat.head}
               footer={
+                <>
+                {chat.above}
                 <ChatComposer
                   mode={asking ? "answer" : "chat"}
                   question={asking ? {
@@ -439,15 +450,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
-                  to={<>To <b>Conductor</b> · read-only</>}
+                  to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
                 />
+                </>
               }
               emptyMessage="Waiting for the conductor to start."
             >
               {chat.before}
-              {grouped.map((group) => Array.isArray(group)
-                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
-                : render(group))}
+              {interleaved(grouped, chat.lines ?? []).map((item) => "node" in item
+                ? <Fragment key={item.id}>{item.node}</Fragment>
+                : Array.isArray(item.group)
+                  ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
+                  : render(item.group))}
               {conversation.activity ? (
                 <ChatMessage role={role} activity={conversation.activity}
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
@@ -757,6 +771,27 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
  * with a turn's air above and below the run — as the design system draws
  * what an agent does between its messages.
  */
+/**
+ * The conductor's turns (grouped into asides) and the Chat's other lines,
+ * merged by time: a line goes before the first turn that came after it.
+ * Stable: turns keep their order, and lines theirs.
+ */
+export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: ReadonlyArray<{ id: string; at: string; node: ReactNode }>):
+  Array<{ group: Turn | Turn[] } | { id: string; at: string; node: ReactNode }> {
+  const out: Array<{ group: Turn | Turn[] } | { id: string; at: string; node: ReactNode }> = [];
+  let i = 0;
+  for (const group of groups) {
+    const turn = Array.isArray(group) ? group[0]! : group;
+    let at: string | null = null;
+    if ("at" in turn) at = turn.at;
+    else if ("startedAt" in turn) at = turn.startedAt;
+    while (i < lines.length && at !== null && lines[i]!.at < at) out.push(lines[i++]!);
+    out.push({ group });
+  }
+  while (i < lines.length) out.push(lines[i++]!);
+  return out;
+}
+
 function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
   const out: Array<Turn | Turn[]> = [];
   for (const turn of turns) {

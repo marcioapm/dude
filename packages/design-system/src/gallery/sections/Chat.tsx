@@ -15,6 +15,9 @@ import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { TaskHistory } from "../../components/TaskHistory.tsx";
+import { ChatRunLine } from "../../components/ChatRunLine.tsx";
+import { StartChoice } from "../../components/StartChoice.tsx";
+import { DeciderLine } from "../../components/DeciderLine.tsx";
 import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
@@ -406,6 +409,41 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b> · read-only</>} onSubmit={() => undefined} />
             </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-conducted"
+        title="A conducted task"
+        note="The conductor takes the decisions. StartChoice offers the two ways to start, side by side and equal: no primary, nothing preselected. In Chat, each Run the conductor started is a ChatRunLine — one collapsed line on a rail in its role's colour, with its status and what it came to, opening its session. A decision the delivery waits on is El Duderino's notice (kind decision); an approval or a green check is a notice (kind notice) that wakes nobody. DeciderLine sits above the composer: who decides, what it waits on, and Let Deliver finish it."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>not started: how to start</Label>
+            <StartChoice options={[
+              { id: "talk", icon: "message", title: "Talk it through",
+                description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
+                points: ["Nothing is built until you agree", "It asks before the pull request"],
+                foot: "Conductor · Thinker · Small", action: <Button>Talk it through</Button> },
+              { id: "deliver", icon: "zap", title: "Deliver",
+                description: "The automatic pipeline: implementer, reviewers, fixer, simplifier, then the pull request. Nobody needs to be here.",
+                points: ["Stops only on a question or an escalation", "You can open Chat later and take over"],
+                foot: "The project's pipeline", action: <Button>Deliver</Button> },
+            ]} />
+            <Label>in Chat</Label>
+            <ChatMessage role="conductor" model="claude-opus-5-5" startedAt={at(0)} endedAt={at(6_000)}
+              content={"Agreed: retry only 5xx and network errors, cap at 8s. I wrote that into the task's criteria and started the implementer."} />
+            <ChatRunLine role="implementer" status="completed" what="implement" facts={["9m", "$1.12"]} onOpen={() => undefined} />
+            <ChatNotice kind="decision" by="El Duderino" text="Waiting on the conductor: what to do with the review's findings." at={at(700_000)} />
+            <ChatRunLine role="reviewer" status="completed" what="correctness · 2 findings" facts={["4m", "$0.88"]} onOpen={() => undefined} />
+            <ChatRunLine role="reviewer" status="running" what="security" facts={["2m"]} onOpen={() => undefined} />
+            <ChatNotice kind="notice" by="El Duderino" text="Pull request #88: approved by Tiago, checks passing." at={at(900_000)} />
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <DeciderLine decider="conductor" waiting="whether to open the pull request" action={<Button variant="quiet">Let Deliver finish it</Button>} />
+              <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b></>} onSubmit={() => undefined} />
+            </div>
+            <DeciderLine decider="policy" />
           </Col>
         </Panes>
       </Block>

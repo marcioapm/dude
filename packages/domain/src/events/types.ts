@@ -241,6 +241,31 @@ export const EventTypes = {
    * Run, after that message's `chat.message`.
    */
   ConductorBriefed: "conductor.briefed",
+  /**
+   * Who takes a task's delivery decisions changed. Payload: `{ from, to, why }`,
+   * each "policy" or "conductor" (`from` null for a delivery started by Talk
+   * it through). A person's first message in Chat hands them to the conductor;
+   * Let Deliver finish it hands them back.
+   */
+  TaskDeciderChanged: "task.decider_changed",
+  /**
+   * A conducted delivery parked on a decision for its conductor. Payload:
+   * `{ point, policy, actions, phases, note }`: where, what Deliver would do,
+   * what decide and start_phase may say, and the note's line.
+   */
+  ConductorDecisionAwaited: "conductor.decision_awaited",
+  /**
+   * The conductor took the decision its delivery waited on. Payload:
+   * `{ point, action, phase?, categories?, findingIds?, note?, draft? }`.
+   */
+  ConductorDecided: "conductor.decided",
+  /**
+   * dude woke a task's conductor with a note listing why. Payload:
+   * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
+   * (decision, escalation, question, safety); `started` when no conductor
+   * was live and the note briefed a new one.
+   */
+  ConductorWoken: "conductor.woken",
 
   // Artifacts
   ArtifactCreated: "artifact.created",
