@@ -94,6 +94,27 @@ describe("the conductor's steer under its Run's line", () => {
   });
 });
 
+describe("competing receipts for one steer", () => {
+  const failed = (s: number) => () => ev("run.directive.failed", { directiveId: "dir_c", error: "late failure" }, s);
+  const read = (s: number) => () => ev("run.directive.delivered", { directiveId: "dir_c", read: true }, s);
+  for (const c of [
+    { name: "a failure, then a read: read", receipts: [failed(2), read(3)], readAt: at(3) },
+    { name: "a read, then a failure: read", receipts: [read(2), failed(3)], readAt: at(2) },
+    { name: "read twice: the first read's time", receipts: [read(2), read(5)], readAt: at(2) },
+  ]) {
+    test(c.name, () => {
+      // Built in ledger order: each event's cursor after the one before.
+      const ledger = [steered("dir_c", "Use staging.", 1)];
+      for (const receipt of c.receipts) ledger.push(receipt());
+      const steer = conductorSteers(ledger).get(IMPL)![0]!;
+      expect([steer.deliveredAt, steer.read, steer.failed]).toEqual([c.readAt, true, null]);
+      const h = plain(shown(steer));
+      expect(h).not.toContain("Not delivered:");
+      expect(h).toMatch(/sent \d\d:\d\d · read \d\d:\d\d:\d\d/);
+    });
+  }
+});
+
 describe("a person's Retry of the conductor's steer", () => {
   const person = { type: "human", id: "key_1" } as const;
   const retried = (supersedes: string, id: string, text: string, s: number) =>
