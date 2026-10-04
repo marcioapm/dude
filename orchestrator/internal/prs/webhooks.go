@@ -132,7 +132,7 @@ const repairBackoff = time.Hour
 // healthy, in organizations that asked for webhooks (forge_credentials
 // .webhook_url), RepairPerPass at a time: what a registration cut short by
 // a rate limit, a restart or a timeout left undone. Stops at a rate limit.
-func (s *Syncer) RepairWebhooks(ctx context.Context) (int, error) {
+func (s *Syncer) RepairWebhooks(ctx context.Context) error {
 	var orgs []string
 	if err := s.DB.InSystem(ctx, "webhook-repair", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT c.organization_id FROM forge_credentials c
@@ -149,7 +149,7 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) (int, error) {
 		orgs, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	}); err != nil {
-		return 0, err
+		return err
 	}
 	done := 0
 	for _, org := range orgs {
@@ -177,5 +177,5 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) (int, error) {
 			break
 		}
 	}
-	return done, nil
+	return nil
 }
