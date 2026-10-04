@@ -177,6 +177,36 @@ func TestConnectingRegistersWebhooksInTheBackgroundAndOnlyWhereMissing(t *testin
 	}
 }
 
+// A repository whose registration failed before attempts were timed (as
+// migration 079 left it: an error, no attempt time) is due at once: after
+// the token is replaced, both the repair and a reconnect register its hook.
+func TestARegistrationFailedBeforeAttemptsWereTimedIsRetried(t *testing.T) {
+	legacy := func(t *testing.T) *hookWorld {
+		w := hookingWorld(t, 2)
+		mustExec(t, w.owner, `UPDATE repositories SET webhook_error = 'github 403: missing permission',
+			webhook_attempted_at = NULL WHERE organization_id = $1`, w.org)
+		mustExec(t, w.owner, `UPDATE forge_credentials SET secret = 'ghp_replaced', public_url = 'https://dude.example.com',
+			webhook_url = $2 WHERE organization_id = $1`, w.org, hookURL)
+		return w
+	}
+	t.Run("repair", func(t *testing.T) {
+		w := legacy(t)
+		if _, err := w.prs.RepairWebhooks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if n := w.healthy(); n != 2 {
+			t.Errorf("the repair registered %d of 2 legacy failures; GitHub calls %v", n, w.gh.callsSoFar())
+		}
+	})
+	t.Run("reconnect", func(t *testing.T) {
+		w := legacy(t)
+		if status, _ := w.register(map[string]any{"url": hookURL, "background": true}); status != http.StatusAccepted {
+			t.Fatalf("reconnecting: %d", status)
+		}
+		w.until("both legacy failures registered", func() bool { return w.healthy() == 2 })
+	})
+}
+
 // The reconciler's repair registers a few repositories per pass where an
 // organization has a public URL and a repository has no healthy hook;
 // GitHub's rate limit stops the pass, and the next pass goes on.
