@@ -32,8 +32,11 @@ const (
 	EvPullRequestChecks    = "pull_request.checks_changed"
 	EvPullRequestReviewed  = "pull_request.reviewed"
 	EvPullRequestCommented = "pull_request.commented"
-	EvPullRequestMerged    = "pull_request.merged"
-	EvPullRequestClosed    = "pull_request.closed"
+	// Feedback recorded before whose words changed on GitHub: its current
+	// body, for a reply quoting it. Neither fixer feedback nor a mention.
+	EvPullRequestCommentEdited = "pull_request.comment_edited"
+	EvPullRequestMerged        = "pull_request.merged"
+	EvPullRequestClosed        = "pull_request.closed"
 	// Someone other than dude pushed to the pull request's branch: the
 	// next fix starts from their commit.
 	EvPullRequestPushed = "pull_request.pushed"

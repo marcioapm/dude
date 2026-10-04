@@ -152,8 +152,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// before, whose words now address dude and have reached no conductor
 	// yet: a comment edited into a mention. A mention is delivered once
 	// per comment, by Chat's own record of it (delivery.MentionTx), not by
-	// whether the comment was recorded.
-	var fresh, edited []forge.Feedback
+	// whether the comment was recorded. rewritten is feedback recorded
+	// before whose body differs from the last one recorded.
+	var fresh, edited, rewritten []forge.Feedback
 	var workflowRunID, workflowStep string
 	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -165,14 +166,22 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		for i, f := range listed {
 			ids[i] = f.ID
 		}
-		rows, err := tx.Query(ctx, `SELECT payload->>'feedbackId' FROM events WHERE task_id = $1
-			AND event_type = $2 AND payload->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvPullRequestCommented, ids)
+		type known struct{ ID, Body string }
+		rows, err := tx.Query(ctx, `SELECT DISTINCT ON (payload->>'feedbackId') payload->>'feedbackId',
+			COALESCE(payload->>'body', '') FROM events WHERE task_id = $1
+			AND event_type IN ($2, $3) AND payload->>'feedbackId' = ANY($4)
+			ORDER BY payload->>'feedbackId', cursor DESC`,
+			pr.TaskID, delivery.EvPullRequestCommented, delivery.EvPullRequestCommentEdited, ids)
 		if err != nil {
 			return err
 		}
-		seen, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		recordedBodies, err := pgx.CollectRows(rows, pgx.RowToStructByPos[known])
 		if err != nil {
 			return err
+		}
+		bodies := map[string]string{}
+		for _, k := range recordedBodies {
+			bodies[k.ID] = k.Body
 		}
 		rows, err = tx.Query(ctx, `SELECT payload->'github'->>'feedbackId' FROM events WHERE task_id = $1
 			AND event_type = $2 AND payload->'github'->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvChatMessage, ids)
@@ -184,10 +193,15 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			return err
 		}
 		for _, f := range listed {
+			body, seen := bodies[f.ID]
 			switch {
-			case !slices.Contains(seen, f.ID):
+			case !seen:
 				fresh = append(fresh, f)
-			case !slices.Contains(mentioned, f.ID) && forge.AddressedToDude(f, s.FactoryLogins):
+				continue
+			case body != f.Body:
+				rewritten = append(rewritten, f)
+			}
+			if !slices.Contains(mentioned, f.ID) && forge.AddressedToDude(f, s.FactoryLogins) {
 				edited = append(edited, f)
 			}
 		}
@@ -315,6 +329,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				p["addressed"] = "conductor"
 			}
 			changes = append(changes, change{delivery.EvPullRequestCommented, p})
+		}
+		for _, f := range rewritten {
+			changes = append(changes, change{delivery.EvPullRequestCommentEdited, map[string]any{"feedbackId": f.ID,
+				"author": f.Author, "body": f.Body, "kind": f.Kind}})
 		}
 		for _, c := range changes {
 			c.payload["number"], c.payload["repo"] = pr.Number, pr.RepoName
