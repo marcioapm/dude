@@ -119,6 +119,8 @@ export interface HumanTurn {
   intent: Extract<HumanIntent, "steer" | "answer" | "message">;
   /** Who said it. */
   by: ActorRef | null;
+  /** The task's conductor wrote it (a steer of a Run it conducts), not a person. */
+  conductor: boolean;
   text: string;
   at: string;
   /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
@@ -718,6 +720,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         }
         const turn: HumanTurn = {
           ...humanTurn(event, "steer", String(payload.text ?? ""), null),
+          conductor: payload.by === "conductor",
           interrupting: payload.interrupt === true,
           directiveId,
           attachments: attachmentsOf(payload.attachments),
@@ -1070,7 +1073,7 @@ function landsOf(value: unknown): SteerLands | null {
 
 function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: string, deliveredAt: string | null): HumanTurn {
   return {
-    kind: "human", id: event.eventId, intent, by: humanActor(event), text, at: event.occurredAt, deliveredAt,
+    kind: "human", id: event.eventId, intent, by: humanActor(event), conductor: false, text, at: event.occurredAt, deliveredAt,
     acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
     attachments: [],
   };

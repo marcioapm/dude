@@ -15,6 +15,12 @@ export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
   readonly facts?: readonly ReactNode[] | undefined;
   /** Open the Run's own session. The whole line is the link. */
   readonly onOpen: () => void;
+  /**
+   * The conductor's steers of this Run, where they landed: each a steer
+   * turn (ChatMessage, intent `steer`) with its delivery state, under the
+   * line on the same rail.
+   */
+  readonly steers?: ReactNode;
 }
 
 /**
@@ -22,9 +28,10 @@ export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * in the Run's role colour — its face, its role and what it is, its
  * status, and what it came to — that opens the Run's own session. The
  * conductor's conversation stays the subject; each Run is a line in it,
- * where it started, never its transcript.
+ * where it started, never its transcript. The conductor's steers of it
+ * sit under it.
  */
-export function ChatRunLine({ role, status, what, facts = [], onOpen, className, ...rest }: ChatRunLineProps) {
+export function ChatRunLine({ role, status, what, facts = [], onOpen, steers, className, ...rest }: ChatRunLineProps) {
   return (
     <div className={cx(styles["root"], styles[role], className)} data-role={role} data-status={status} {...rest}>
       <button type="button" className={styles["line"]} onClick={onOpen} aria-label={`Open the ${ROLE_LABEL[role]}'s session`}>
@@ -37,6 +44,7 @@ export function ChatRunLine({ role, status, what, facts = [], onOpen, className,
           {facts.map((fact, i) => <span key={i}>{fact}</span>)}
         </span>
       </button>
+      {steers ? <div className={styles["steers"]} data-testid="run-line-steers">{steers}</div> : null}
     </div>
   );
 }

@@ -10,16 +10,17 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { ChatComposer, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
+import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/client.ts";
-import { conductedLines, runWhat } from "../conducted.ts";
+import { steerWait, type HumanTurn } from "../api/conversation.ts";
+import { conductedLines, runWhat, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
-import { EndedConductor, RunScreen, type ChatVariant, type RunCost } from "./RunScreen.tsx";
+import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 
 export interface ChatSectionProps {
@@ -46,6 +47,24 @@ export interface ChatSectionProps {
   /** An earlier attempt is shown: only to read, so who decides is said without the way to hand it back. */
   setAside?: boolean | undefined;
   onBack: () => void;
+}
+
+/**
+ * The conductor's steer of a Run, under its line: its words, signed by the
+ * conductor, with a person's steer's delivery states — queued with where
+ * it lands (pendingReason), read, or not delivered and why. Until lux has
+ * taken it, a running Run's steer says only that it was sent.
+ */
+export function ConductorSteerTurn({ steer, runStatus }: { steer: ConductorSteer; runStatus: RunStatus }) {
+  const queued = steer.deliveredAt === null && !steer.failed;
+  const taken = steer.lands !== null || runStatus !== "running";
+  const reason = !queued ? undefined
+    : taken ? pendingReason(steerWait({ lands: steer.lands } as HumanTurn, runStatus, null, steer.lands)) : "Sent.";
+  return (
+    <ChatMessage data-testid="conductor-steer" data-directive={steer.directiveId} role="conductor" name="Conductor" intent="steer"
+      content={steer.text} startedAt={steer.at} deliveredAt={steer.deliveredAt} read={steer.read}
+      failed={steer.failed ?? undefined} {...(reason ? { pendingReason: reason } : {})} />
+  );
 }
 
 /** A Run's line's facts: how long it took, what it cost. */
@@ -109,12 +128,14 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   // The Runs the conductor started, decisions waited on, dude's notices.
   const dude = dudeName(task.id);
   const conducted = useMemo(() => conductedLines(task, events), [task.decider, task.runs, events]); // eslint-disable-line react-hooks/exhaustive-deps -- what the lines are made of
-  const linesKey = conducted.map((l) => l.kind === "run" ? `${l.id}:${l.run.status}` : l.id).join(",");
+  const linesKey = conducted.map((l) => l.kind === "run"
+    ? `${l.id}:${l.run.status}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
   const lines = useMemo(() => conducted.map((l) => ({
     id: l.id, at: l.at,
     node: l.kind === "run"
       ? <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
-          what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)} />
+          what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
+          steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />
       : <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />,
   })), [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
 

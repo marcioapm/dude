@@ -71,6 +71,12 @@ export const EventTypes = {
   WorkflowStepFailed: "workflow.step.failed",
 
   // Human intervention on a Run (plan §24)
+  /**
+   * A steer was queued for a Run's agent. Payload: `{ directiveId, text,
+   * scope, supersedes, interrupt, attachments?, by?, conductorRunId? }`:
+   * `by: "conductor"` for the task's conductor's steer (the actor is its
+   * Run), with `conductorRunId`; absent for a person's.
+   */
   RunSteered: "run.steered",
   /**
    * The harness took a steer. Payload: `{ directiveId, lands, receipt }`:

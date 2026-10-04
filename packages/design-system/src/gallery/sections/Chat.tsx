@@ -438,6 +438,17 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatNotice kind="decision" by="El Duderino" text="Waiting on the conductor: what to do with the review's findings." at={at(700_000)} />
             <ChatRunLine role="reviewer" status="completed" what="correctness · 2 findings" facts={["4m", "$0.88"]} onOpen={() => undefined} />
             <ChatRunLine role="reviewer" status="running" what="security" facts={["2m"]} onOpen={() => undefined} />
+            <Label>a Run the conductor steered: its steers under its line, in each delivery state</Label>
+            <ChatRunLine role="implementer" status="running" what="implement" facts={["6m"]} onOpen={() => undefined} steers={<>
+              <ChatMessage role="conductor" name="Conductor" intent="steer" content="Use the staging database for this one." startedAt={at(600_000)}
+                deliveredAt={at(612_000)} read readAfter="Bash" />
+              <ChatMessage role="conductor" name="Conductor" intent="steer" content="Keep the invoice option hidden on monthly plans." startedAt={at(640_000)}
+                deliveredAt={null} pendingReason="Lands at the agent's next step." />
+              <ChatMessage role="conductor" name="Conductor" intent="steer" content="Also cover the empty cart." startedAt={at(650_000)}
+                deliveredAt={null} pendingReason="Lands when the run resumes." />
+              <ChatMessage role="conductor" name="Conductor" intent="steer" content="Stop and run the migration first." startedAt={at(660_000)}
+                deliveredAt={null} failed="the run finished before the agent read it" />
+            </>} />
             <ChatNotice kind="notice" by="El Duderino" text="Pull request #88: approved by Tiago, checks passing." at={at(900_000)} />
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <DeciderLine decider="conductor" waiting="whether to open the pull request" action={<Button variant="quiet">Let Deliver finish it</Button>} />
