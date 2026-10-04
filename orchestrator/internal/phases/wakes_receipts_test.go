@@ -169,7 +169,16 @@ func TestALateWakeReceiptAndAWakeSweepBothCommit(t *testing.T) {
 	followCtx, stopFollowing := context.WithCancel(ctx)
 	followed := make(chan error, 1)
 	go func() { followed <- w.s.followOutput(followCtx, w.tr.run) }()
-	t.Cleanup(stopFollowing)
+	// Before the gate's rollback and the database's drop: the follower is
+	// stopped, and gone, or the test says so.
+	t.Cleanup(func() {
+		stopFollowing()
+		select {
+		case <-followed:
+		case <-time.After(5 * time.Second):
+			t.Error("the follower did not stop")
+		}
+	})
 	typ, data := consumed(a)
 	select {
 	case st.frames <- cursorFrame(record(1, typ, data), "c1"):

@@ -6,8 +6,13 @@ package orchestrator_test
 // receipts that follow.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -567,7 +572,10 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 // other: the abort answers 200, the Run is aborted, and the read wins.
 func TestAnAbortDuringASteersReceiptStopsTheRun(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Registered after the world's: runs before its server closes.
+	t.Cleanup(cancel)
 	_, out := s.steer(steerArgs(s.implementer, "read while aborted", false))
 	id, _ := out["directiveId"].(string)
 	s.until("taken", func() bool {
@@ -579,12 +587,12 @@ func TestAnAbortDuringASteersReceiptStopsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = holder.Close(ctx) })
+	t.Cleanup(func() { _ = holder.Close(context.Background()) })
 	hold, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = hold.Rollback(ctx) })
+	t.Cleanup(func() { _ = hold.Rollback(context.Background()) })
 	if _, err := hold.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
 		VALUES ('cwk_hold', $1, $2, 'steer_read', 'steer_read:' || $3, 'held')`, s.org, s.task, id); err != nil {
 		t.Fatal(err)
@@ -594,53 +602,101 @@ func TestAnAbortDuringASteersReceiptStopsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.lux.FinishTools(s.luxRunOf(s.implementer))
-	receiptPID := s.blockedBy(holderPID, "the receipt's batch")
+	receiptPID := s.blockedBy(ctx, holderPID, "the receipt's batch")
 
 	type answer struct {
 		status int
 		body   map[string]any
+		err    error
 	}
 	aborted := make(chan answer, 1)
 	go func() {
-		status, body := s.call("/internal/runs/"+s.implementer+"/abort", map[string]any{})
-		aborted <- answer{status, body}
+		status, body, err := s.post(ctx, "/internal/runs/"+s.implementer+"/abort", map[string]any{})
+		aborted <- answer{status, body, err}
 	}()
-	s.blockedBy(receiptPID, "the abort")
+	s.blockedBy(ctx, receiptPID, "the abort")
 	if err := hold.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	a := <-aborted
-	if a.status != 200 {
-		t.Fatalf("abort: %d %v", a.status, a.body)
+	select {
+	case a := <-aborted:
+		if a.err != nil {
+			t.Fatalf("abort: %v", a.err)
+		}
+		if a.status != 200 {
+			t.Fatalf("abort: %d %v", a.status, a.body)
+		}
+	case <-ctx.Done():
+		t.Fatalf("the abort did not answer within the test's deadline: %v", ctx.Err())
 	}
-	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, s.implementer); n != 1 {
+	countIn := func(sql string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := s.owner.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := countIn(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, s.implementer); n != 1 {
 		t.Error("the Run is not aborted")
 	}
-	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`, id); n != 1 {
+	if n := countIn(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`, id); n != 1 {
 		t.Error("the steer is not read")
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+	if n := countIn(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
 		AND payload->>'directiveId' = $2 AND (payload->>'read')::boolean`, s.implementer, id); n != 1 {
 		t.Errorf("%d read events, want 1", n)
 	}
 }
 
-// blockedBy waits, without sweeping, for a backend of the test's database
-// to wait on a lock pid holds, and returns it.
-func (s *steering) blockedBy(pid int, what string) int {
+// blockedBy waits, without sweeping and until ctx ends, for a backend of
+// the test's database to wait on a lock pid holds, and returns it.
+func (s *steering) blockedBy(ctx context.Context, pid int, what string) int {
 	s.t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		var waiter int
-		err := s.owner.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity
-			WHERE datname = current_database() AND $1 = ANY (pg_blocking_pids(pid)) LIMIT 1`, pid).Scan(&waiter)
-		if err == nil {
+		err := s.owner.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
+			WHERE datname = current_database() AND $1 = ANY (pg_blocking_pids(pid)) ORDER BY pid LIMIT 1`, pid).Scan(&waiter)
+		switch {
+		case err == nil:
 			return waiter
+		case ctx.Err() != nil:
+			s.t.Fatalf("%s never waited on backend %d: %v", what, pid, ctx.Err())
+		case !errors.Is(err, pgx.ErrNoRows):
+			s.t.Fatalf("waiting for %s: %v", what, err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			s.t.Fatalf("%s never waited on backend %d: %v", what, pid, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	s.t.Fatalf("%s never waited on backend %d", what, pid)
-	return 0
+}
+
+// post is world.call bounded by ctx, and safe off the test's goroutine:
+// it returns transport and decoding errors instead of failing the test.
+func (s *steering) post(ctx context.Context, path string, body any) (int, map[string]any, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", s.api+path, bytes.NewReader(b))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", s.org)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil && !errors.Is(err, io.EOF) {
+		return res.StatusCode, nil, fmt.Errorf("decoding the answer (status %d): %w", res.StatusCode, err)
+	}
+	return res.StatusCode, out, nil
 }
 
 // A paused Run reads its steers when it resumes: nothing fails them, and
