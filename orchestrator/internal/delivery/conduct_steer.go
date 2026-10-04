@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -92,4 +93,27 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 		return Steered{}, "", err
 	}
 	return out, lands, nil
+}
+
+// SteerSettledTx wakes the conductor that wrote a directive with what
+// became of it, once per directive and outcome: read by the agent
+// (steer_read), or never to be (steer_failed, with why). A person's
+// directive, or dude's own, wakes nobody.
+func SteerSettledTx(ctx context.Context, tx pgx.Tx, org, directiveID string, read bool, why string) error {
+	var taskID, runID, phase string
+	err := tx.QueryRow(ctx, `SELECT d.task_id, d.run_id, COALESCE(r.phase::text, '') FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE d.id = $1 AND d.conductor_run_id IS NOT NULL`, directiveID).Scan(&taskID, &runID, &phase)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	kind, line := "steer_read", fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, directiveID)
+	if !read {
+		kind, line = "steer_failed", fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", directiveID, phase, runID,
+			clip(oneLine(why), 120))
+	}
+	_, err = RecordWakeTx(ctx, tx, org, taskID, kind, kind+":"+directiveID, line)
+	return err
 }

@@ -442,6 +442,10 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
 		return err
 	}
+	// A conductor's steer, read: the conductor is told.
+	if err := delivery.SteerSettledTx(ctx, tx, t.run.Org, id, true, ""); err != nil {
+		return err
+	}
 	// A wake note read after its failure was counted: its reasons, back to
 	// pending, are heard and not told again.
 	if err := delivery.WakesHeardTx(ctx, tx, id); err != nil {

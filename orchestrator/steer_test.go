@@ -261,3 +261,85 @@ func TestAPersonsSteerAndTheConductorsBothArriveInOrder(t *testing.T) {
 		t.Errorf("%d steers attributed to an agent, want the conductor's one", n)
 	}
 }
+
+// steerWakes are the task's steer wake reasons, "kind line" each.
+func (s *steering) steerWakes() []string {
+	s.t.Helper()
+	rows, err := s.owner.Query(context.Background(), `SELECT kind || ' ' || line FROM conductor_wakes
+		WHERE task_id = $1 AND kind LIKE 'steer_%' ORDER BY created_at`, s.task)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return out
+}
+
+// Read by the agent, the conductor's steer wakes the conductor once,
+// with steer_read; a person's steer wakes nobody.
+func TestTheConductorIsWokenOnceWhenItsSteerIsRead(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	_, out := s.steer(steerArgs(s.implementer, "add a test for the empty case", false))
+	id, _ := out["directiveId"].(string)
+	s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "a person's words"})
+	s.until("both taken", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND accepted_at IS NOT NULL`, s.implementer) == 2
+	})
+	if w := s.steerWakes(); len(w) != 0 {
+		t.Fatalf("woken before it was read: %v", w)
+	}
+	s.lux.FinishTools(s.luxRunOf(s.implementer))
+	note := s.wokenWith(s.task, "read your steer "+id)
+	if !strings.Contains(note, "implement Run "+s.implementer) {
+		t.Errorf("the note: %q", note)
+	}
+	for range 3 {
+		s.pump()
+	}
+	if w := s.steerWakes(); len(w) != 1 || !strings.HasPrefix(w[0], "steer_read ") {
+		t.Errorf("steer wakes: %v, want one steer_read", w)
+	}
+	if n := len(s.woken(s.task)); n != 1 {
+		t.Errorf("%d notes, want 1", n)
+	}
+}
+
+// A steer that will not reach the agent wakes the conductor with
+// steer_failed and the reason: lux refusing it, or the Run finishing
+// before the agent read it.
+func TestTheConductorIsWokenWhenItsSteerFails(t *testing.T) {
+	t.Run("lux refused it", func(t *testing.T) {
+		s := newSteering(t, conducting(t))
+		_, out := s.steer(steerArgs(s.implementer, "never heard", false))
+		id, _ := out["directiveId"].(string)
+		s.until("taken", func() bool {
+			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
+		})
+		s.lux.FailInput(s.luxRunOf(s.implementer), id, "the agent errored")
+		note := s.wokenWith(s.task, "was not delivered: the agent errored")
+		if !strings.Contains(note, id) {
+			t.Errorf("the note: %q", note)
+		}
+		if w := s.steerWakes(); len(w) != 1 || !strings.HasPrefix(w[0], "steer_failed ") {
+			t.Errorf("steer wakes: %v", w)
+		}
+	})
+	t.Run("the run finished unread", func(t *testing.T) {
+		s := newSteering(t, conducting(t))
+		_, out := s.steer(steerArgs(s.implementer, "too late", false))
+		id, _ := out["directiveId"].(string)
+		s.until("taken", func() bool {
+			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
+		})
+		// Its turn ended with the steer taken and unread past the grace a
+		// receipt has: the Run is collected, the steer failed.
+		mustExec(t, s.owner, `UPDATE directives SET sent_at = now() - interval '121 seconds' WHERE id = $1`, id)
+		mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() WHERE id = $1`, s.implementer)
+		s.until("the implementer to complete", func() bool {
+			return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, s.implementer) == 1
+		})
+		s.wokenWith(s.task, "was not delivered: the run finished before the agent read it")
+	})
+}
