@@ -500,8 +500,10 @@ export class ApiClient {
     return this.#request("POST", "/v1/forge/credential/verify", {});
   }
 
-  connectForge(token: string, apiBaseUrl?: string): Promise<unknown> {
-    return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+  /** Store the organization's token; with `publicUrl`, also register dude's webhook on every repository, delivering there. */
+  connectForge(token: string, apiBaseUrl?: string, publicUrl?: string): Promise<unknown> {
+    return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}),
+      ...(publicUrl ? { publicUrl } : {}) });
   }
 
   githubSettings(): Promise<GithubSettings> {
