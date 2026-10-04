@@ -12,6 +12,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -86,6 +87,50 @@ func TestTheConductorRepliesOnlyOnItsOwnPullRequests(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'`, task); n != 0 {
 		t.Errorf("%d replies recorded though GitHub refused", n)
+	}
+}
+
+// A reply answers a comment on the pull request it is posted on: an id
+// nobody left, or a comment on the task's other pull request, is refused,
+// and nothing is posted or recorded.
+func TestTheConductorRepliesOnlyToTheCommentsOfThatPullRequest(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	task := w.task()
+	w.addWeb(task, "write")
+	w.deliver(task)
+	w.until("two pull requests", func() bool {
+		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
+	})
+	w.gh.Comment(1, "alice", "@dude hello")
+	webComment := w.web.Comment(1, "alice", "@dude and here?")
+	w.until("both messages", func() bool { w.sync(); return w.mentions(task) == 2 })
+
+	replies := func() int {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'`, task)
+	}
+	before, beforeWeb := len(w.gh.Pull(1).Comments), len(w.web.Pull(1).Comments)
+	w.refused(task, "reply_on_pull_request", `{"pr":"target#1","text":"Hello.","in_reply_to":"issue-comment-999999"}`,
+		"issue-comment-999999 is not a comment on target#1")
+	w.refused(task, "reply_on_pull_request", fmt.Sprintf(`{"pr":"target#1","text":"Hello.","in_reply_to":"issue-comment-%d"}`, webComment),
+		fmt.Sprintf("issue-comment-%d is not a comment on target#1", webComment))
+	if n, m := len(w.gh.Pull(1).Comments), len(w.web.Pull(1).Comments); n != before || m != beforeWeb {
+		t.Errorf("refused replies posted %d comments", n-before+m-beforeWeb)
+	}
+	if n := replies(); n != 0 {
+		t.Errorf("%d replies recorded for refused calls", n)
+	}
+	// The same comment, on the pull request it was left on, is answered.
+	w.must(task, "reply_on_pull_request", fmt.Sprintf(`{"pr":"web#1","text":"Yes.","in_reply_to":"issue-comment-%d"}`, webComment))
+	if n := replies(); n != 1 {
+		t.Errorf("%d replies recorded", n)
 	}
 }
 
