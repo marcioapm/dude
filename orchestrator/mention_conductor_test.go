@@ -31,6 +31,13 @@ func (w *world) conductors(task string) int {
 	return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task)
 }
 
+// ownComments is how many pull request comments were recorded as dude's
+// own replies.
+func (w *world) ownComments(task string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'own' = 'true'`, task)
+}
+
 // A permitted person's @dude on a delivered task's pull request is a
 // message to its conductor: one chat.message attributed to them, a
 // conductor briefed with it, no fixer, and the decisions still Deliver's.
@@ -208,8 +215,7 @@ func TestAPersonQuotingDudesReplyIsStillHeard(t *testing.T) {
 	if n := w.mentions(task); n != 4 {
 		t.Errorf("%d messages, want the four quoting or fenced comments'", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
-		AND payload->>'own' = 'true'`, task); n != 1 {
+	if n := w.ownComments(task); n != 1 {
 		t.Errorf("%d comments recorded as dude's own, want the reply", n)
 	}
 }
