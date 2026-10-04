@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+// The conductor is told when to steer rather than start another phase, and
+// that interrupting is for wasted work only; with tools, how to from its shell.
+func TestTheConductorIsToldWhenToSteer(t *testing.T) {
+	got := ConductorPrompt("briefing", PromptInput{Tools: true})
+	for _, want := range []string{"Steer a running Run (steer) that is going the wrong way",
+		"Start another phase only once the Run has ended", "Interrupt only when its current work is wasted",
+		"`dude steer RUN TEXT`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the conductor's prompt lacks %q", want)
+		}
+	}
+}
+
 // A person's answer is part of the task from then on: a reviewer judging
 // the change, or a fixer after it, is told what was decided rather than
 // flagging it again (a real run's reviewers reported "chosen with no

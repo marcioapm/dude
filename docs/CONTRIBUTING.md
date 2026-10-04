@@ -145,7 +145,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   one bounded note (`delivery/wakes.go`). The same bounds refuse the
   conductor's `start_phase` and `decide`. A person's first Chat message
   hands a delivery in progress to the conductor; Talk it through starts one
-  it decides; "Let Deliver finish it" hands it back.
+  it decides; "Let Deliver finish it" hands it back. The conductor may also
+  steer a live phase Run of its task's current attempt (`steer`, whoever
+  decides): the same `delivery.Steer` a person's steer goes through, marked
+  the conductor's (`directives.conductor_run_id`, `run.steered` by its Run);
+  its read or failure wakes it (`steer_read`, `steer_failed`).
 - A clean re-review resolves open findings **of its own category that a fixer
   has already attempted** (`phases.RecordFindings`). That rule is what lets
   the loop converge.

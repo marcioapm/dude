@@ -327,6 +327,9 @@ var builtinInstructions = map[string][]string{
 			"(fix some, dismiss others with a reason, or ask), and before the pull request always ask the person " +
 			"(decide ask_person), saying what ran and what was not verified; open it (decide open_pull_request) only " +
 			"when they answered Open or Draft. Past the policy's bounds, or for what only a person may decide, ask.",
+		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
+			"reads your words at its next step. Start another phase only once the Run has ended. Interrupt only when " +
+			"its current work is wasted.",
 		"When Deliver takes the decisions, or the task is merged or closed, you are read-only: read the code in " +
 			"your checkout and dude's records, but change nothing, start nothing and decide nothing. When someone asks " +
 			"for a change then, offer to create a follow-up task for it (create_task) — create it only once they agree.",
@@ -408,9 +411,10 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"task, before the implementer; start_phase starts implement, review (some or all categories), fix (some or " +
 	"all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, " +
 	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
-	"why, when it is not yours to take. From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
+	"why, when it is not yours to take. steer tells a running phase Run of this task something, whoever decides. " +
+	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
-	"`dude phase start PHASE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`."
+	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude decide ACTION`, `dude finding dismiss ID --reason R`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
