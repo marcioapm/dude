@@ -56,16 +56,16 @@ func newSteering(t *testing.T, w *world) *steering {
 
 // steer calls the steer tool as the conductor, without sweeping: what the
 // test arranged in the database is what the tool sees.
-func (s *steering) steer(args string) (int, map[string]any) {
+func (s *steering) steer(run, text string) (int, map[string]any) {
 	s.t.Helper()
-	status, body := s.callTool(s.syncer.Agent.ToolsURL, s.spec, "steer", args)
+	status, body := s.callTool(s.syncer.Agent.ToolsURL, s.spec, "steer", steerArgs(run, text))
 	var out map[string]any
 	_ = json.Unmarshal([]byte(body), &out)
 	return status, out
 }
 
-func steerArgs(run, text string, interrupt bool) string {
-	b, _ := json.Marshal(map[string]any{"run": run, "text": text, "interrupt": interrupt})
+func steerArgs(run, text string) string {
+	b, _ := json.Marshal(map[string]any{"run": run, "text": text, "interrupt": false})
 	return string(b)
 }
 
@@ -81,7 +81,7 @@ func (s *steering) written() int {
 // same turn, nothing interrupted.
 func TestTheConductorSteersItsRunningImplementer(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	status, out := s.steer(steerArgs(s.implementer, "Use the staging database for this one.", false))
+	status, out := s.steer(s.implementer, "Use the staging database for this one.")
 	if status != 200 || out["directiveId"] == nil || out["run"] != s.implementer {
 		t.Fatalf("steer: %d %v", status, out)
 	}
@@ -147,7 +147,7 @@ func TestTheConductorsSteerIsRefusedForWhatItDoesNotConduct(t *testing.T) {
 		{"run_preview", "hello", "branch preview"},
 		{s.implementer, "   ", "text is required"},
 	} {
-		status, out := s.steer(steerArgs(c.run, c.text, false))
+		status, out := s.steer(c.run, c.text)
 		if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {
 			t.Errorf("steer %s %q: %d %v, want refused saying %q", c.run, c.text, status, out, c.want)
 		}
@@ -155,7 +155,7 @@ func TestTheConductorsSteerIsRefusedForWhatItDoesNotConduct(t *testing.T) {
 	// An earlier attempt's: a later attempt exists.
 	mustExec(t, s.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ('run_later', $1, $2, $3, 2, 'completed', 'implement', 'implementer')`, s.org, s.project, s.task)
-	if status, out := s.steer(steerArgs(s.implementer, "hello", false)); status != 422 ||
+	if status, out := s.steer(s.implementer, "hello"); status != 422 ||
 		!strings.Contains(out["error"].(string), "earlier attempt") {
 		t.Errorf("an earlier attempt's Run: %d %v", status, out)
 	}
@@ -163,7 +163,7 @@ func TestTheConductorsSteerIsRefusedForWhatItDoesNotConduct(t *testing.T) {
 	// The text bound, a person's: the tools' request bound refuses it first;
 	// the tool's own check says it.
 	long := strings.Repeat("x", delivery.SteerTextMax+1)
-	if status, _ := s.steer(steerArgs(s.implementer, long, false)); status != 413 {
+	if status, _ := s.steer(s.implementer, long); status != 413 {
 		t.Errorf("a steer past the bound over HTTP: %d", status)
 	}
 	if err := s.app.InOrg(ctx, s.org, func(tx pgx.Tx) error {
@@ -175,7 +175,7 @@ func TestTheConductorsSteerIsRefusedForWhatItDoesNotConduct(t *testing.T) {
 	}
 	// The task done: read-only, in parked's words.
 	mustExec(t, s.owner, `UPDATE tasks SET status = 'done' WHERE id = $1`, s.task)
-	if status, out := s.steer(steerArgs(s.implementer, "hello", false)); status != 422 ||
+	if status, out := s.steer(s.implementer, "hello"); status != 422 ||
 		!strings.Contains(out["error"].(string), "read-only") {
 		t.Errorf("a done task: %d %v", status, out)
 	}
@@ -201,7 +201,7 @@ func TestASupersededConductorSteersNothing(t *testing.T) {
 	before := s.written()
 	done := make(chan string, 1)
 	go func() {
-		status, body := w.callTool(tools.URL, s.spec, "steer", steerArgs(s.implementer, "late words", false))
+		status, body := w.callTool(tools.URL, s.spec, "steer", steerArgs(s.implementer, "late words"))
 		if status != 422 {
 			body = "status " + body
 		}
@@ -228,13 +228,13 @@ func TestASupersededConductorSteersNothing(t *testing.T) {
 // person does.
 func TestTheConductorSteersUnderDeliverToo(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	if status, out := s.steer(steerArgs(s.implementer, "while you decide", false)); status != 200 {
+	if status, out := s.steer(s.implementer, "while you decide"); status != 200 {
 		t.Fatalf("under the conductor: %d %v", status, out)
 	}
 	if status, out := s.call("/internal/tasks/"+s.task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
 		t.Fatalf("hand back: %d %v", status, out)
 	}
-	if status, out := s.steer(steerArgs(s.implementer, "under Deliver", false)); status != 200 {
+	if status, out := s.steer(s.implementer, "under Deliver"); status != 200 {
 		t.Fatalf("under Deliver: %d %v", status, out)
 	}
 }
@@ -246,7 +246,7 @@ func TestAPersonsSteerAndTheConductorsBothArriveInOrder(t *testing.T) {
 	if status, out := s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "the person first"}); status != 201 {
 		t.Fatalf("person: %d %v", status, out)
 	}
-	if status, out := s.steer(steerArgs(s.implementer, "then the conductor", false)); status != 200 {
+	if status, out := s.steer(s.implementer, "then the conductor"); status != 200 {
 		t.Fatalf("conductor: %d %v", status, out)
 	}
 	s.until("both taken", func() bool {
@@ -273,7 +273,7 @@ func TestAPersonsSteerAndTheConductorsBothArriveInOrder(t *testing.T) {
 // sent it. New words superseding it are the person's own, and wake nobody.
 func TestAPersonsRetryOfTheConductorsSteerWakesTheConductor(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	_, out := s.steer(steerArgs(s.implementer, "use the staging database", false))
+	_, out := s.steer(s.implementer, "use the staging database")
 	d1, _ := out["directiveId"].(string)
 	s.until("taken", func() bool {
 		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, d1) == 1
@@ -315,7 +315,7 @@ func TestAPersonsRetryOfTheConductorsSteerWakesTheConductor(t *testing.T) {
 // told once.
 func TestAPersonsInterruptNowOfTheConductorsSteerWakesItOnce(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	_, out := s.steer(steerArgs(s.implementer, "stop and use staging", false))
+	_, out := s.steer(s.implementer, "stop and use staging")
 	d1, _ := out["directiveId"].(string)
 	s.until("taken", func() bool {
 		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, d1) == 1
@@ -361,7 +361,7 @@ func TestASteerSettledTwiceWakesTheConductorOnce(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSteering(t, conducting(t))
-			_, out := s.steer(steerArgs(s.implementer, "settled twice", false))
+			_, out := s.steer(s.implementer, "settled twice")
 			id, _ := out["directiveId"].(string)
 			settle(s, id, c.read)
 			s.wokenWith(s.task, c.says)
@@ -416,7 +416,7 @@ func (s *steering) steerWakes() []string {
 // with steer_read; a person's steer wakes nobody.
 func TestTheConductorIsWokenOnceWhenItsSteerIsRead(t *testing.T) {
 	s := newSteering(t, conducting(t))
-	_, out := s.steer(steerArgs(s.implementer, "add a test for the empty case", false))
+	_, out := s.steer(s.implementer, "add a test for the empty case")
 	id, _ := out["directiveId"].(string)
 	s.call("/internal/runs/"+s.implementer+"/steer", map[string]any{"text": "a person's words"})
 	s.until("both taken", func() bool {
@@ -447,7 +447,7 @@ func TestTheConductorIsWokenOnceWhenItsSteerIsRead(t *testing.T) {
 func TestTheConductorIsWokenWhenItsSteerFails(t *testing.T) {
 	t.Run("lux refused it", func(t *testing.T) {
 		s := newSteering(t, conducting(t))
-		_, out := s.steer(steerArgs(s.implementer, "never heard", false))
+		_, out := s.steer(s.implementer, "never heard")
 		id, _ := out["directiveId"].(string)
 		s.until("taken", func() bool {
 			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
@@ -463,7 +463,7 @@ func TestTheConductorIsWokenWhenItsSteerFails(t *testing.T) {
 	})
 	t.Run("the run finished unread", func(t *testing.T) {
 		s := newSteering(t, conducting(t))
-		_, out := s.steer(steerArgs(s.implementer, "too late", false))
+		_, out := s.steer(s.implementer, "too late")
 		id, _ := out["directiveId"].(string)
 		s.until("taken", func() bool {
 			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
@@ -530,7 +530,7 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 		if s.implementer == "" {
 			t.Fatal("no pending implementer")
 		}
-		status, out := s.steer(steerArgs(s.implementer, "before you start", false))
+		status, out := s.steer(s.implementer, "before you start")
 		if status != 200 {
 			t.Fatalf("steer a pending Run: %d %v", status, out)
 		}
@@ -541,7 +541,7 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 	})
 	t.Run("a person aborts it", func(t *testing.T) {
 		s := newSteering(t, conducting(t))
-		_, out := s.steer(steerArgs(s.implementer, "aborted before read", false))
+		_, out := s.steer(s.implementer, "aborted before read")
 		id, _ := out["directiveId"].(string)
 		s.until("taken", func() bool {
 			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
@@ -553,7 +553,7 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 	})
 	t.Run("its agent dies", func(t *testing.T) {
 		s := newSteering(t, conducting(t))
-		_, out := s.steer(steerArgs(s.implementer, "dies before read", false))
+		_, out := s.steer(s.implementer, "dies before read")
 		id, _ := out["directiveId"].(string)
 		s.until("taken", func() bool {
 			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
@@ -576,7 +576,7 @@ func TestAnAbortDuringASteersReceiptStopsTheRun(t *testing.T) {
 	defer cancel()
 	// Registered after the world's: runs before its server closes.
 	t.Cleanup(cancel)
-	_, out := s.steer(steerArgs(s.implementer, "read while aborted", false))
+	_, out := s.steer(s.implementer, "read while aborted")
 	id, _ := out["directiveId"].(string)
 	s.until("taken", func() bool {
 		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
@@ -709,7 +709,7 @@ func TestAPausedRunsSteerStaysQueued(t *testing.T) {
 	s.until("paused", func() bool {
 		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, s.implementer) == 1
 	})
-	status, out := s.steer(steerArgs(s.implementer, "when you are back", false))
+	status, out := s.steer(s.implementer, "when you are back")
 	if status != 200 {
 		t.Fatalf("steer a paused Run: %d %v", status, out)
 	}
