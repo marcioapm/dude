@@ -88,6 +88,29 @@ def test_a_repository_added_later_gets_its_webhook(client: ApiClient, forge_proj
     assert len(sibling.hooks) == 1, "the new repository's webhook was not registered"
 
 
+def test_connecting_github_registers_an_existing_projects_webhook_and_a_new_projects(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub, env
+):
+    """Settings → GitHub, connecting with where GitHub reaches dude (what
+    the web app sends): the existing project's repository gets its hook at
+    once. A project created afterwards gets its repository's at creation."""
+    assert fake_github.hooks == []
+    resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url,
+                                                "publicUrl": env.control_plane_url})
+    assert resp.status_code == 200, resp.text
+    assert not (resp.json()["registered"] or {}).get("error"), resp.json()
+    assert len(fake_github.hooks) == 1, "the existing project's repository has no webhook"
+    assert fake_github.hooks[0]["config"]["url"] == fake_github.webhook_url
+
+    later = fake_github.add_repository("later")
+    project = client.create_project(name="Later", slug=f"later-{fake_github.api_port}",
+                                    repositories=[{"name": "later", "url": later.clone_url, "defaultBranch": "main"}])
+    assert project["repositories"], project
+    assert len(later.hooks) == 1, "a project created after connecting has no webhook on its repository"
+    health = client.get("/v1/forge/credential").json()["webhook"]["repositories"]
+    assert {r["name"]: bool(r["registeredAt"]) for r in health} == {"greeter": True, "later": True}, health
+
+
 
 def _pr(client: ApiClient, task_id: str) -> dict:
     return _pull_requests(client, task_id)[0]
