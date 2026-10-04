@@ -354,26 +354,6 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 	})
 }
 
-// SetTaskStatusFrom moves the task only from the given status.
-func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, from, status, reason)
-		return err
-	})
-}
-
-// ReadyToMerge moves the task from review to ready to merge and records
-// that it is, for whoever is told when something waits on them — together.
-func (s *Store) ReadyToMerge(ctx context.Context, org string, st *State, pullRequests int) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		moved, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "review", "ready_to_merge", "approved, checks passing")
-		if err != nil || !moved {
-			return err
-		}
-		return emitTx(ctx, tx, org, st, EvReadyToMerge, map[string]any{"pullRequests": pullRequests})
-	})
-}
-
 // SetTaskStatusTx is SetTaskStatus in the caller's transaction, for
 // a change that must commit with something else: an agent's question and
 // the task waiting on it. With from set, only a task in that
