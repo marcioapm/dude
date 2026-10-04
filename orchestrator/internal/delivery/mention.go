@@ -74,17 +74,16 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 	w := Writer{ActorType: ledger.ActorIntegration, ActorID: "github:" + m.Feedback.Author, Name: m.Feedback.Author + " (GitHub)",
 		Shown: body, Via: map[string]any{"github": m.github()}}
 	text := m.told(body)
-	var runID string
+	ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID}
 	var ending bool
 	find := func() error {
 		return tx.QueryRow(ctx, `SELECT r.id, `+Ending+` FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`,
-			m.TaskID).Scan(&runID, &ending)
+			m.TaskID).Scan(&ref.RunID, &ending)
 	}
 	err := find()
 	if err == nil && ending {
 		// Its container stopped and nothing will resume it: ended here, as
 		// Chat ends it, so the mention reaches its replacement.
-		ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID, RunID: runID}
 		if err := EndConductor(ctx, tx, ref, "its container stopped"); err != nil {
 			return false, err
 		}
@@ -97,12 +96,11 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID, RunID: runID}
 	directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: text, Scope: "run"})
 	if err != nil {
 		return false, err
 	}
-	if err := RequestResumeForMessage(ctx, tx, runID, "a message from a pull request"); err != nil {
+	if err := RequestResumeForMessage(ctx, tx, ref.RunID, "a message from a pull request"); err != nil {
 		return false, err
 	}
 	return true, ChatEvent(ctx, tx, ref, w, map[string]any{"text": text, "directiveId": directiveID})
