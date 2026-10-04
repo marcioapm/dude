@@ -16,6 +16,7 @@
 //	dude findings [ID...]                 a conductor's: the task's findings
 //	dude prs                              a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
+//	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
@@ -283,6 +284,17 @@ func run(args []string, out io.Writer) error {
 			body["note"] = *note
 		}
 		return show(out, *asJSON, call("start_phase", body))
+	case "steer":
+		interrupt := fs.Bool("interrupt", false, "stop its current turn so it hears this now")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) < 2 || !runID.MatchString(args[0]) {
+			return errors.New(`usage: dude steer RUN "what to tell it" [--interrupt]`)
+		}
+		return show(out, *asJSON, call("steer", map[string]any{"run": args[0], "text": strings.Join(args[1:], " "),
+			"interrupt": *interrupt}))
 	case "decide":
 		note := fs.String("note", "", "why; for ask_person, the question")
 		args, err := parse(fs, rest)
@@ -535,6 +547,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude phase start PHASE [--category C]... [--finding ID]... [--note N]
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test
+  dude steer RUN TEXT [--interrupt]          a conductor's: tell a running phase Run of this task
+                                             something, read at its next step (--interrupt stops
+                                             its turn: only when its current work is wasted)
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
                                              open_pull_request (after the person answered Open)
   dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is
