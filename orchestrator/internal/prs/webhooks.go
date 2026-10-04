@@ -21,7 +21,8 @@ type Registration struct {
 	// Skip a repository whose hook is registered to URL with no error:
 	// connecting again asks GitHub only about the rest.
 	OnlyMissing bool
-	// Leave alone a repository GitHub refused within this long (0: none).
+	// Leave alone a repository GitHub refused within this long (0: none). A
+	// failure with no attempt time (recorded before 080) is always due.
 	Backoff time.Duration
 	// At most this many repositories asked of GitHub (0: no bound).
 	Limit int
@@ -67,7 +68,8 @@ func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org strin
 			WHERE ($1 = '' OR id = $1)
 			  AND NOT ($2 AND webhook_url = $3 AND webhook_id IS NOT NULL AND webhook_registered_at IS NOT NULL
 			           AND webhook_error IS NULL)
-			  AND NOT (webhook_error IS NOT NULL AND webhook_attempted_at > now() - $4::interval)
+			  AND (webhook_error IS NULL OR webhook_attempted_at IS NULL
+			       OR webhook_attempted_at <= now() - $4::interval)
 			ORDER BY webhook_attempted_at NULLS FIRST, name`, reg.RepositoryID, reg.OnlyMissing, reg.URL, reg.Backoff.String())
 		if err != nil {
 			return err
@@ -138,7 +140,8 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) (int, error) {
 			  AND EXISTS (SELECT 1 FROM repositories r WHERE r.organization_id = c.organization_id
 			    AND NOT (r.webhook_url IS NOT DISTINCT FROM c.webhook_url AND r.webhook_id IS NOT NULL
 			             AND r.webhook_registered_at IS NOT NULL AND r.webhook_error IS NULL)
-			    AND NOT (r.webhook_error IS NOT NULL AND r.webhook_attempted_at > now() - $1::interval))
+			    AND (r.webhook_error IS NULL OR r.webhook_attempted_at IS NULL
+			         OR r.webhook_attempted_at <= now() - $1::interval))
 			ORDER BY c.organization_id`, repairBackoff.String())
 		if err != nil {
 			return err
