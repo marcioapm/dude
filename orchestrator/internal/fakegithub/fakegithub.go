@@ -52,6 +52,8 @@ type Comment struct {
 	Body      string
 	Path      string
 	CreatedAt string
+	// Set when the comment is edited, as GitHub's updated_at.
+	UpdatedAt string
 	InReplyTo int64
 }
 
@@ -207,6 +209,21 @@ func (s *Server) LineComment(number int, author, path, body string) int64 {
 	s.pulls[number].LineComments = append(s.pulls[number].LineComments,
 		Comment{ID: id, Author: author, Body: body, Path: path, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
 	return id
+}
+
+// EditComment changes a conversation or line comment's words, as its
+// author editing it on GitHub does.
+func (s *Server) EditComment(number int, id int64, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	for _, list := range [][]Comment{p.Comments, p.LineComments} {
+		for i := range list {
+			if list[i].ID == id {
+				list[i].Body, list[i].UpdatedAt = body, time.Now().UTC().Format(time.RFC3339)
+			}
+		}
+	}
 }
 
 // Login is who the token comments as: what a comment dude posts is by.
@@ -585,6 +602,10 @@ func (s *Server) commentsJSON(p *Pull, comments []Comment, anchor string) []any 
 	for _, c := range comments {
 		m := map[string]any{"id": c.ID, "body": c.Body, "created_at": c.CreatedAt, "user": map[string]string{"login": c.Author},
 			"html_url": fmt.Sprintf("https://github.test/%s/pull/%d#%s-%d", s.Slug, p.Number, anchor, c.ID)}
+		m["updated_at"] = c.CreatedAt
+		if c.UpdatedAt != "" {
+			m["updated_at"] = c.UpdatedAt
+		}
 		if c.Path != "" {
 			m["path"] = c.Path
 		}
