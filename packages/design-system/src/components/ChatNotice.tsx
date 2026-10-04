@@ -4,10 +4,14 @@ import { Icon, type IconName } from "../icons/index.tsx";
 import { formatTimestamp } from "../util/format.ts";
 import styles from "./ChatNotice.module.css";
 
-/** What the factory did to the session, as the transcript tells it. */
-export type ChatNoticeKind = "parked" | "unparked" | "nudged";
+/**
+ * What the factory did to the session, as the transcript tells it — or,
+ * in a task's Chat, a decision its delivery waits on, or something that
+ * happened that wakes nobody.
+ */
+export type ChatNoticeKind = "parked" | "unparked" | "nudged" | "decision" | "notice";
 
-const GLYPH: Record<ChatNoticeKind, IconName> = { parked: "pause", unparked: "retry", nudged: "clock" };
+const GLYPH: Record<ChatNoticeKind, IconName> = { parked: "pause", unparked: "retry", nudged: "clock", decision: "hand", notice: "info" };
 
 export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly kind: ChatNoticeKind;

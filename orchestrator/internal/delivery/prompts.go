@@ -47,6 +47,8 @@ type PromptInput struct {
 	// The branch the Run works on, and what it started from: what a saved
 	// prompt's {{run.branch}} and {{run.base_ref}} say.
 	Branch, BaseRef string
+	// What the task's conductor asked of this Run, when it started it.
+	ConductorNote string
 	// The images the Run is given with its prompt, in the order lux gets
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
@@ -316,12 +318,21 @@ var builtinInstructions = map[string][]string{
 	"conductor": {"You are this task's conductor. The people on the task talk to you in its Chat: answer " +
 		"their questions about the task, its code and how it was delivered, with the evidence — the file " +
 		"and line, the Run, the finding, the pull request comment.",
-		"You are read-only. Read the code in your checkout, and dude's records with the dude tools (run_diff, " +
-			"findings, pull_requests, list_tasks, search_memory), but change nothing: do not edit files, commit, " +
-			"push or start work. When someone asks for a change, say that changing this task's work from Chat is " +
-			"not available yet, and offer to create a task for it (create_task) — create it only once they agree.",
-		"Your machine is small and does not run the code: never build, install or run tests. Whether tests " +
-			"passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
+		"Who decides is in your briefing, and dude tells you when it changes. When you take the task's decisions, " +
+			"dude's delivery still does the mechanics — it creates the Runs, waits for them, moves the branch, opens " +
+			"the pull request — and wakes you with a short note at each decision: read what you need with your tools, " +
+			"then decide. Plan with the person before anything is built. Whenever you and the person settle something " +
+			"the task's text does not say — the scope, an approach, a criterion — write it into the task (update_task) " +
+			"before you start the implementer, so its prompt has it. Then start phases (start_phase), triage findings " +
+			"(fix some, dismiss others with a reason, or ask), and before the pull request always ask the person " +
+			"(decide ask_person), saying what ran and what was not verified; open it (decide open_pull_request) only " +
+			"when they answered Open or Draft. Past the policy's bounds, or for what only a person may decide, ask.",
+		"When Deliver takes the decisions, or the task is merged or closed, you are read-only: read the code in " +
+			"your checkout and dude's records, but change nothing, start nothing and decide nothing. When someone asks " +
+			"for a change then, offer to create a follow-up task for it (create_task) — create it only once they agree.",
+		"You never edit files, commit or push: the phase Runs change the code. Your machine is small and does not " +
+			"run the code: never build, install or run tests. Whether tests passed is what the Runs that ran them " +
+			"reported; do not claim what you did not see a Run do."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
@@ -386,15 +397,20 @@ func (in PromptInput) instructions(role string) (lead, tail []string) {
 	return lead, nil
 }
 
-// conductorToolsNote is the conductor's own tools: the read ones, and
-// create_task for a change it is asked for.
+// conductorToolsNote is the conductor's own tools: the read ones, its
+// decisions, and create_task for a change it is asked for.
 const conductorToolsNote = "The dude tools read what dude knows about this task: run_diff (what a Run changed: " +
 	"the files, then the lines of those you name), findings (the review findings and how each was settled; " +
 	"name ids for their text), pull_requests (state, checks, reviews and feedback), list_tasks, " +
 	"list_repositories, search_memory and get_memory. ask_person asks the person a question and waits for " +
 	"the answer; end your turn after it. create_task records a change as a new task, for a person to " +
-	"deliver. From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, `dude prs`, " +
-	"`dude task list`, `dude memory search QUERY`, `dude task create`."
+	"deliver. While you take the decisions: update_task writes an agreed goal or acceptance criteria into the " +
+	"task, before the implementer; start_phase starts implement, review (some or all categories), fix (some or " +
+	"all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, " +
+	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
+	"why, when it is not yours to take. From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
+	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
+	"`dude phase start PHASE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
@@ -536,6 +552,9 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task())
 	}
 
+	if n := strings.TrimSpace(in.ConductorNote); n != "" {
+		add("## From the task's conductor\n\nThe conductor, who plans this task with its people, started this Run and asks:\n\n" + n)
+	}
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)
 	}

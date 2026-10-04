@@ -54,7 +54,7 @@ const BRANCH = "dude/tsk_01j9x4kq/checkout-v2-split-payment";
 export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run["role"]; status: Run["status"] }): Run {
   return {
     organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, attempt: 1, workerId: null, workspacePath: null, error: null, kind: "agent",
-    category: null, parentRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
+    category: null, parentRunId: null, conductorRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
     branch: BRANCH, harness: "opencode", model: "claude-opus-5-5", modelTier: "Coder", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
@@ -93,6 +93,8 @@ const TASK_BASE = {
   requestedBy: YOU,
   owner: ref("u_marcio"),
   people: [ref("u_marcio"), ref("u_ana")],
+  decider: "policy" as const,
+  awaitingDecision: null,
   createdAt: iso(2 * 24 * 60 * MIN),
   updatedAt: iso(5 * MIN),
 };

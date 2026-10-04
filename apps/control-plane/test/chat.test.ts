@@ -96,6 +96,57 @@ test("an empty message, or anything else, is refused before the orchestrator hea
   expect(forwarded).toEqual([]);
 });
 
+test("Talk it through and Let Deliver finish it go to the orchestrator as who asked", async () => {
+  forwarded.length = 0;
+  expect((await call("POST", "/v1/tasks/wi_1/talk")).status).toBe(201);
+  expect((await call("POST", "/v1/tasks/wi_1/decider", { decider: "policy" })).status).toBe(201);
+  expect((await call("POST", "/v1/tasks/wi_1/decider", { decider: "policy", openPullRequest: true })).status).toBe(201);
+  expect(forwarded).toEqual([
+    { path: "/internal/tasks/wi_1/talk", body: {}, actor: key.id, person: key.personId },
+    { path: "/internal/tasks/wi_1/decider", body: { decider: "policy" }, actor: key.id, person: key.personId },
+    { path: "/internal/tasks/wi_1/decider", body: { decider: "policy", openPullRequest: true }, actor: key.id, person: key.personId },
+  ]);
+  forwarded.length = 0;
+  for (const body of [{}, { decider: "someone" }, { decider: "policy", extra: 1 }]) {
+    expect((await call("POST", "/v1/tasks/wi_1/decider", body)).status).toBe(400);
+  }
+  expect(forwarded).toEqual([]);
+});
+
+test("Talk it through and Deliver carry no images: the task's text names them", async () => {
+  forwarded.length = 0;
+  expect((await call("POST", "/v1/tasks/wi_1/deliver", { attachmentIds: ["att_x"] })).status).toBe(400);
+  expect(forwarded).toEqual([]);
+  expect((await call("POST", "/v1/tasks/wi_1/talk", { attachmentIds: ["att_x"] })).status).toBe(201);
+  expect(forwarded).toEqual([{ path: "/internal/tasks/wi_1/talk", body: {}, actor: key.id, person: key.personId }]);
+});
+
+test("a task says who decides, and the decision its conductor is asked for", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_none', ${ORG}, ${PROJECT}, 3, 'Not started', 'received'),
+           ('wi_dec', ${ORG}, ${PROJECT}, 4, 'Conducted', 'running')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, conductor_run_id)
+    VALUES ('run_dc', ${ORG}, ${PROJECT}, 'wi_dec', 1, 'running', NULL, 'conductor', NULL),
+           ('run_di', ${ORG}, ${PROJECT}, 'wi_dec', 1, 'completed', 'implement', 'implementer', 'run_dc')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+    VALUES ('wfr_dec', ${ORG}, 'task.delivery', 'delivery:wi_dec', 'waiting', 'conductorDecision',
+      '{"decider":"conductor","decision":{"point":"after_implement","policy":"review"}}', 'wi_dec')`;
+
+  const none = (await (await call("GET", "/v1/tasks/wi_none")).json()) as Record<string, unknown>;
+  expect([none.decider, none.awaitingDecision]).toEqual(["policy", null]);
+  const conducted = (await (await call("GET", "/v1/tasks/wi_dec")).json()) as {
+    decider: string; awaitingDecision: unknown; runs: Array<{ id: string; conductorRunId: string | null }>;
+  };
+  expect(conducted.decider).toBe("conductor");
+  expect(conducted.awaitingDecision).toEqual({ point: "after_implement" });
+  expect(conducted.runs.find((r) => r.id === "run_di")?.conductorRunId).toBe("run_dc");
+
+  // Taken: carried out by the workflow, waited on no more.
+  await owner`UPDATE workflow_runs SET state = jsonb_set(state, '{decision,taken}', '{"action":"next"}') WHERE id = 'wfr_dec'`;
+  const taken = (await (await call("GET", "/v1/tasks/wi_dec")).json()) as Record<string, unknown>;
+  expect(taken.awaitingDecision).toBeNull();
+});
+
 type NavSession = { id: string; role: string; status: string; title: string; activity?: string };
 type NavTask = { id: string; runs: Array<{ status: string; sessions: NavSession[] }> };
 

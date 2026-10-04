@@ -3,10 +3,13 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // The conductor's read tools: what the delivery workflow recorded about the
@@ -38,8 +41,9 @@ type findingOut struct {
 	// file:line, or the file alone.
 	Where  string `json:"where,omitempty"`
 	Status string `json:"status"`
-	// How it was settled: fixed by a Run, accepted by a person, or still
-	// open after so many fix attempts.
+	// How it was settled: fixed by a Run, accepted by a person, dismissed
+	// by the conductor (with its reason), or still open after so many fix
+	// attempts.
 	Settled    string `json:"settled"`
 	RaisedBy   string `json:"raisedBy,omitempty"`
 	ResolvedBy string `json:"resolvedBy,omitempty"`
@@ -70,9 +74,9 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	// The text only when asked for by id: a list of up to findingsMax reads
 	// none of it.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
-			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''),
+			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
-			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(resolution_note, '') ELSE '' END
+			CASE WHEN $2 THEN suggested_fix ELSE '' END
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
@@ -82,17 +86,20 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	seen := map[string]bool{}
 	for rows.Next() {
 		var f findingOut
-		var file string
+		var file, note string
 		var line, attempts int
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
-			&f.Title, &f.Description, &f.SuggestedFix, &f.ResolutionNote); err != nil {
+			&note, &f.Title, &f.Description, &f.SuggestedFix); err != nil {
 			return nil, err
+		}
+		if full {
+			f.ResolutionNote = note
 		}
 		f.Where = file
 		if file != "" && line > 0 {
 			f.Where = fmt.Sprintf("%s:%d", file, line)
 		}
-		f.Settled = settledAs(f.Status, f.ResolvedBy, attempts)
+		f.Settled = settledAs(f.Status, f.ResolvedBy, attempts, note)
 		seen[f.ID] = true
 		out.Findings = append(out.Findings, f)
 	}
@@ -107,7 +114,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	return out, nil
 }
 
-func settledAs(status, by string, attempts int) string {
+func settledAs(status, by string, attempts int, note string) string {
 	switch status {
 	case "resolved":
 		if by != "" {
@@ -115,7 +122,7 @@ func settledAs(status, by string, attempts int) string {
 		}
 		return "fixed"
 	case "accepted":
-		return "accepted by a person"
+		return delivery.AcceptedBy(note)
 	case "superseded":
 		return "superseded: the code it described is gone"
 	}
@@ -247,4 +254,69 @@ func excerpt(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
+}
+
+// ---- the conductor's decisions ----------------------------------------------
+
+// conducted maps a refusal of the delivery's to the tools' own.
+func conducted[T any](out T, err error) (T, error) {
+	var r delivery.Refusal
+	if errors.As(err, &r) {
+		return out, refuse("%s", r.Msg)
+	}
+	return out, err
+}
+
+type startPhaseIn struct {
+	Phase      string   `json:"phase" jsonschema:"implement, review, fix, simplify or test"`
+	Categories []string `json:"categories,omitempty" jsonschema:"review: the reviewers to run (correctness, security, database, api, frontend, performance); none runs those the change warrants"`
+	Findings   []string `json:"findings,omitempty" jsonschema:"fix: the open findings to fix (fnd_…); none fixes every open one"`
+	Note       string   `json:"note,omitempty" jsonschema:"what you ask of the Run, added to its prompt"`
+}
+
+func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[string]any, error) {
+	next, err := delivery.ConductStartPhase(ctx, tx, c.run(), delivery.StartPhase{Phase: strings.TrimSpace(in.Phase),
+		Categories: in.Categories, FindingIDs: in.Findings, Note: in.Note})
+	return conducted(map[string]any{"started": in.Phase, "next": next}, err)
+}
+
+type decideIn struct {
+	Action string `json:"action" jsonschema:"next, ask_person, wait or open_pull_request"`
+	Note   string `json:"note,omitempty" jsonschema:"why; for ask_person, the question"`
+}
+
+func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]any, error) {
+	return conducted(delivery.ConductDecide(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note))
+}
+
+type dismissIn struct {
+	ID     string `json:"id" jsonschema:"the finding (fnd_…)"`
+	Reason string `json:"reason" jsonschema:"why it is left as it is, shown with the finding"`
+}
+
+func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map[string]any, error) {
+	err := delivery.ConductDismiss(ctx, tx, c.run(), strings.TrimSpace(in.ID), in.Reason)
+	return conducted(map[string]any{"dismissed": in.ID}, err)
+}
+
+type updateTaskIn struct {
+	Goal               *string   `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
+	AcceptanceCriteria *[]string `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
+}
+
+func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[string]any, error) {
+	spec := delivery.TaskSpec{Goal: in.Goal}
+	if in.AcceptanceCriteria != nil {
+		spec.Criteria, spec.HasCriteria = *in.AcceptanceCriteria, true
+	}
+	switch {
+	case in.Goal != nil && utf16Len(strings.TrimFunc(*in.Goal, isJSSpace)) < GoalMin:
+		return nil, refuse("a goal of at least %d characters", GoalMin)
+	case in.Goal != nil && utf16Len(*in.Goal) > GoalMax || len(spec.Criteria) > 50:
+		return nil, refuse("too long: a goal of at most %d characters, at most 50 criteria", GoalMax)
+	case criteriaLength(spec.Criteria) > CriteriaMax:
+		return nil, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+	}
+	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
+	return conducted(map[string]any{"updated": true, "next": "The implementer's prompt will have it."}, err)
 }

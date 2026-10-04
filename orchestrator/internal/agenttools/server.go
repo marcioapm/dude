@@ -48,6 +48,9 @@ type Server struct {
 	Embedder embeddings.Embedder
 	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
 	Kick func()
+	// Test hook: called with the tool's name after the caller is
+	// authenticated, before the tool's transaction opens.
+	BeforeCall func(tool string)
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
@@ -341,6 +344,9 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	c.env = env{embedder: s.Embedder, kick: s.Kick}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
+	}
+	if s.BeforeCall != nil {
+		s.BeforeCall(t.name)
 	}
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if err := withinLimits(ctx, tx, c, t); err != nil {

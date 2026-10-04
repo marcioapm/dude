@@ -51,6 +51,9 @@ const (
 // safe to repeat.
 type Store struct {
 	DB *db.DB
+	// Test hook: called in a step once it has read the gate's answer, before
+	// any authorization from it is recorded.
+	GateRead func()
 }
 
 // runByKey finds the Run a workflow step already created, or "".
@@ -91,6 +94,9 @@ type PhaseRun struct {
 	Key string
 	// The attempt at the task it is part of; zero for the task's highest.
 	Attempt int
+	// The task's conductor, when it started the Run (start_phase or
+	// decide), and what it asked of it.
+	ConductorRunID, ConductorNote string
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -120,16 +126,21 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 			                  parent_run_id, base_refs, category, pr_feedback, creation_key,
-			                  finding_ids, blocking_severities)
-			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14)`,
+			                  finding_ids, blocking_severities, conductor_run_id, conductor_note)
+			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
+			        $15, $16)`,
 			runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 			db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
-			db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities)); err != nil {
+			db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
+			db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote)); err != nil {
 			return err
 		}
 		payload := map[string]any{
 			"attempt": attempt, "phase": in.Phase, "role": RoleForPhase[in.Phase],
 			"publishes": Publishes[in.Phase], "baseRefs": nonNilMap(in.BaseRefs),
+		}
+		if in.ConductorRunID != "" {
+			payload["conductorRunId"] = in.ConductorRunID
 		}
 		if in.Category != "" {
 			payload["category"] = in.Category
@@ -193,6 +204,25 @@ func (o Outcome) advance(heads map[string]string) map[string]string {
 	}
 	maps.Copy(out, o.Heads)
 	return out
+}
+
+// line is the phase's outcome in a conductor's note: the Run, how it
+// ended, its commit per repository and how many files it changed. Never
+// the files themselves.
+func (o Outcome) line(runID, phase string) string {
+	status := "finished"
+	if !o.Succeeded {
+		status = "failed"
+	}
+	var commits []string
+	for _, repo := range slices.Sorted(maps.Keys(o.Heads)) {
+		commits = append(commits, repo+"@"+short(o.Heads[repo]))
+	}
+	line := fmt.Sprintf("%s %s %s", phase, runID, status)
+	if len(commits) > 0 {
+		line += ", at " + strings.Join(commits, " ")
+	}
+	return fmt.Sprintf("%s, %d files changed.", line, len(o.ChangedPaths))
 }
 
 func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, error) {
@@ -509,6 +539,18 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 		}
 		payload["taskStatus"], payload["waitCursor"] = before, cursor
 	}
+	// A Run the conductor started asking a person wakes the conductor,
+	// which may answer for what it knows, or explain in Chat.
+	var phase string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1 AND conductor_run_id IS NOT NULL`,
+		r.RunID).Scan(&phase); err == nil {
+		if _, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", "question:"+id,
+			fmt.Sprintf("Your %s Run %s asks the person a question (%s): read it in its chat.", phase, r.RunID, id)); err != nil {
+			return "", err
+		}
+	} else if !db.IsNotFound(err) {
+		return "", err
+	}
 	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
 	return id, err
 }
@@ -733,7 +775,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		body += fmt.Sprintf("\n\nOne of %d pull requests for this work, all from `%s`; the others are in %s.",
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
-	draft := gh.Settings.OpenAs == "draft"
+	draft := gh.Settings.OpenAs == "draft" || st.Draft
 	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch,
 		Base: repo.DefaultBranch, Draft: draft})
 	fresh := err == nil

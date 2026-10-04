@@ -1,0 +1,55 @@
+/*
+ * StartChoice: two (or more) equal cards in a row, the same width and
+ * weight; each its own button at its foot. Below 640px they stack.
+ */
+
+.root {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--ds-space-12);
+}
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-16);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0;
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-medium);
+}
+.icon {
+  color: var(--ds-color-text-secondary);
+}
+.description {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-prose);
+}
+.points {
+  margin: 0;
+  padding-left: var(--ds-space-16);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin-top: auto;
+  padding-top: var(--ds-space-8);
+}
+.small {
+  flex: 1;
+  min-width: 0;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}

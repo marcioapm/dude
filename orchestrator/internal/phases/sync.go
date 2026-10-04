@@ -66,6 +66,11 @@ type Syncer struct {
 	// projects whose policy sets none (DUDE_CONDUCTOR_WARM; finer than the
 	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
 	ConductorWarm time.Duration
+	// How long reasons to wake a conductor are gathered after the last
+	// arrived before one note delivers them (0: WakeWindow), and how long
+	// a conductor may sleep with a Run of its own in flight before it is
+	// woken once to say what it waits for (0: SafetyAfter).
+	WakeWindow, SafetyAfter time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -335,6 +340,9 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.handOverUnheard(ctx); err != nil {
 		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
 	}
+	if err := s.wakeConductors(ctx); err != nil {
+		s.Log.Warn("waking conductors failed", "error", err)
+	}
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
@@ -403,7 +411,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			return true, s.nudge(ctx, r)
 		}
 	}
-	if r.TurnDone && r.conductor() {
+	if r.conductor() && (r.TurnDone || lux.Terminal(r.LuxState)) {
+		// A conductor's container that stopped on its own ends it, whether
+		// or not its turn's end was seen.
 		return s.betweenTurns(ctx, r)
 	}
 	if r.TurnDone {
@@ -465,6 +475,85 @@ func (s *Syncer) endConductor(ctx context.Context, r phaseRun, why string) error
 	})
 }
 
+// Waking conductors (delivery.WakeConductorTx): reasons are gathered for
+// WakeWindow after the last, and a conductor asleep for SafetyAfter with a
+// Run of its own in flight is woken once.
+const (
+	WakeWindow  = 15 * time.Second
+	SafetyAfter = 30 * time.Minute
+)
+
+// wakeBatch bounds each kind of work one sweep takes up for wakes.
+const wakeBatch = 200
+
+// wakeConductors records the reasons the syncer sees — a Run a conductor
+// started failed; a conductor long asleep with a Run of its own in flight —
+// and delivers each task's pending reasons to its conductor as one note.
+func (s *Syncer) wakeConductors(ctx context.Context) error {
+	window, safety := s.WakeWindow, s.SafetyAfter
+	if window == 0 {
+		window = WakeWindow
+	}
+	if safety == 0 {
+		safety = SafetyAfter
+	}
+	type found struct{ Kind, Org, TaskID, RunID string }
+	var todo []found
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		// Reasons to record, then the tasks whose reasons can be delivered
+		// now, oldest reason first: each its own bounded batch, so neither
+		// crowds out the other, and tasks that must wait are not selected.
+		// SafetyNet's NOT EXISTS keeps Runs already recorded out of its batch.
+		rows, err := tx.Query(ctx, `
+			(SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.FailedForConductor+` LIMIT $2)
+			UNION ALL
+			(SELECT 'safety', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.SafetyNet+`
+				ORDER BY r.turn_done_at LIMIT $2)`,
+			safety.Seconds(), wakeBatch)
+		if err != nil {
+			return err
+		}
+		if todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found]); err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM conductor_wakes c
+			WHERE `+delivery.Wakeable+` GROUP BY c.organization_id, c.task_id ORDER BY min(c.created_at) LIMIT $2`,
+			window.Seconds(), wakeBatch)
+		if err != nil {
+			return err
+		}
+		wakes, err := pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		todo = append(todo, wakes...)
+		return err
+	}); err != nil {
+		return err
+	}
+	woken := map[string]bool{}
+	for _, f := range todo {
+		err := s.DB.InOrg(ctx, f.Org, func(tx pgx.Tx) error {
+			switch f.Kind {
+			case "failed":
+				return delivery.RecordFailedTx(ctx, tx, f.Org, f.TaskID, f.RunID)
+			case "safety":
+				return delivery.RecordSafetyTx(ctx, tx, f.Org, f.TaskID, f.RunID)
+			}
+			if woken[f.TaskID] {
+				return nil
+			}
+			woken[f.TaskID] = true
+			if err := delivery.LockChat(ctx, tx, f.TaskID); err != nil {
+				return err
+			}
+			_, err := delivery.WakeConductorTx(ctx, tx, f.Org, f.TaskID, window.Seconds())
+			return err
+		})
+		if err != nil {
+			s.Log.Warn("waking a conductor failed", "task", f.TaskID, "error", err)
+		}
+	}
+	return nil
+}
+
 // handOverUnheard settles input left on conductors that ended some other
 // way — failed mid-turn, or aborted — while a message was on its way to
 // them: handed to the task's next conductor, or, for one a person
@@ -474,7 +563,7 @@ func (s *Syncer) handOverUnheard(ctx context.Context) error {
 	var todo []ended
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text
-			FROM runs r WHERE `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
+			FROM `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
 		if err != nil {
 			return err
 		}
@@ -663,7 +752,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
-	var briefing string
+	var briefing, conductorNote string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -673,10 +762,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
-				COALESCE((SELECT prompt FROM runs WHERE id = $2), '')
+				COALESCE((SELECT prompt FROM runs WHERE id = $2), ''), COALESCE((SELECT conductor_note FROM runs WHERE id = $2), '')
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID, r.ID).
-			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing); err != nil {
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -772,7 +861,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r), Images: delivery.PromptImages(taskImages),
+		Branch: runBranch(r), ConductorNote: conductorNote, Images: delivery.PromptImages(taskImages),
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -1078,6 +1167,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		for _, id := range late {
 			if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem,
 				map[string]any{"directiveId": id, "error": "the run finished before the agent read it"}); err != nil {
+				return err
+			}
+			if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
 				return err
 			}
 		}
@@ -1675,6 +1767,23 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 				return true, s.failDirective(ctx, r, d.ID, reason)
 			}
 		}
+		// Claimed just before the send, against its state now, not the
+		// batch's: a wake note's retry withdrawn since is not sent, and one
+		// claimed is not withdrawn (delivery.heardTx). A claim survives a
+		// failed send, so the retry with the same request id may go. Not
+		// guarded on delivered_at: an interrupt alone is delivered with its
+		// words' read and is still sent.
+		var claimed bool
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `WITH c AS (UPDATE directives SET claimed_at = COALESCE(claimed_at, now())
+				WHERE id = $1 AND sent_at IS NULL AND failed_at IS NULL RETURNING 1)
+				SELECT EXISTS (SELECT 1 FROM c)`, d.ID).Scan(&claimed)
+		}); err != nil {
+			return true, err
+		}
+		if !claimed {
+			continue
+		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
 		err := s.Lux.Input(ctx, r.LuxRunID, lux.InputRequest{Text: text, RequestID: d.ID, Interrupt: d.Interrupt, Attachments: images})
@@ -1767,6 +1876,9 @@ func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, 
 		return err
 	}
 	if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": reason}); err != nil {
+		return err
+	}
+	if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
 		return err
 	}
 	return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3

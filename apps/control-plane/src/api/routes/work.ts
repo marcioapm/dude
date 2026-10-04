@@ -25,18 +25,34 @@ import { ownerJson, peopleJson } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
 import type { RequestContext, Router } from "../router.ts";
 
+/**
+ * Who takes the task's delivery decisions, from its latest delivery's state
+ * (the orchestrator's State.Decider): "policy" (Deliver) or "conductor";
+ * "policy" for a task with no delivery. With it, the decision the delivery
+ * waits on for the conductor, `{point, actions, phases}`, or null.
+ */
+const DECIDING_JSON = `
+  COALESCE((SELECT w.state->>'decider' FROM workflow_runs w WHERE w.task_id = tasks.id
+    ORDER BY w.created_at DESC LIMIT 1), 'policy') AS decider,
+  COALESCE((SELECT (w.state->>'handedBack')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
+    ORDER BY w.created_at DESC LIMIT 1), false) AS "handedBack",
+  (SELECT json_build_object('point', w.state->'decision'->>'point')
+   FROM workflow_runs w WHERE w.task_id = tasks.id AND w.status IN ('running', 'waiting')
+     AND w.step = 'conductorDecision' AND w.state ? 'decision' AND NOT w.state->'decision' ? 'taken'
+   ORDER BY w.created_at DESC LIMIT 1) AS "awaitingDecision"`;
+
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
-  requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
+  requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 // A Run's columns, as a fragment of `sql`: the builder's offline threshold
 // is a parameter.
 const runSelect = (sql: OrgScope["sql"]) => sql`
   id, organization_id AS "organizationId", project_id AS "projectId",
   task_id AS "taskId", attempt, status, error, kind,
-  phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
+  phase, role, category, parent_run_id AS "parentRunId", conductor_run_id AS "conductorRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
   branch, harness, model, model_tier AS "modelTier", dude_pause AS "dudePause", machine, image,
   -- Waiting for its image: the job it waits on is still queued or running,
@@ -191,6 +207,27 @@ const chatInput = z.object({ text: z.string().trim().min(1).max(16_384) }).stric
 async function chatTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, chatInput);
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/chat`,
+    JSON.stringify(input), ctx.principal);
+}
+
+/**
+ * Talk it through: a task not started gets its conductor, and a delivery it
+ * decides, waiting on its first decision. No implementer starts until the
+ * conductor says so.
+ */
+async function talkTask(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`, "{}", ctx.principal);
+}
+
+const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
+
+/**
+ * Who takes the delivery's decisions from the next one on: "policy" is Let
+ * Deliver finish it; "conductor" gives them back to the conductor.
+ */
+async function setDecider(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, deciderInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decider`,
     JSON.stringify(input), ctx.principal);
 }
 
@@ -436,6 +473,8 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
   router.post("/v1/tasks/:id/chat", chatTask);
+  router.post("/v1/tasks/:id/talk", talkTask);
+  router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
 

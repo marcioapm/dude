@@ -25,9 +25,17 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 | `run_diff` | what a Run of the caller's task changed (`dude diff`): its checkout, uncommitted work included, against the commit it started from, as stored in `run_diffs` — one snapshot, no history. Without paths, the files by churn with counts and no lines (paged, 200 by default, at most 1,000); `nameStatus`, path and status only; with paths, those files as unified diff text, at most 2,000 lines a call. Another task's Run is refused | all |
 | `findings` | the caller's task's review findings (`dude findings [ID...]`), open and most severe first, at most 200: each one's id, severity, category, repository, `file:line`, status, who raised it and how it was settled — fixed by which Run, accepted by a person, superseded, or open after so many fix attempts. No text in the list: with `ids` (at most 20) those findings in full — title, description, suggested fix, resolution note — and `unknown` for ids that are not the task's | conductor |
 | `pull_requests` | the caller's task's pull requests (`dude prs`): repository and number, URL, state, head branch and commit, base, checks (the roll-up and each check's status and conclusion), review (the roll-up and each reviewer's word), unresolved threads, and the feedback people left — the latest 50, oldest first, each with its author, kind (comment, line comment, review, changes requested), path, an excerpt of at most 280 characters on one line, whether a fixer Run was sent it (`actedOnBy`, matched on its repository, path, author and words in the Run's `pr_feedback`) and why it woke nobody (`ignored`); `feedbackTotal` counts all of it | conductor |
+| `start_phase` | the decision the task's delivery waits on (`dude phase start PHASE`): a phase Run from the task's head — implement, review (`categories`, else those the change warrants), fix (`findings`, else every open one; at pull request feedback, the feedback), simplify or test — created by the workflow's own steps, marked with the conductor (`runs.conductor_run_id`) and its `note`. Refused past the policy's review rounds, fix attempts per finding or pull request fix rounds | conductor, deciding |
+| `decide` | the decision waited on (`dude decide ACTION`): `next` (what Deliver would do), `ask_person` (a question for the person in `note`; before the pull request the fixed question Open / Draft / Show me the diff / Another round, recorded with the heads it was asked at), `wait` (at pull request feedback) or `open_pull_request` — only when the latest gate question, asked at the task's current heads, was answered Open (or Draft: a draft) | conductor, deciding |
+| `dismiss_finding` | an open finding left as it is (`dude finding dismiss ID --reason R`): status accepted, the reason its resolution note | conductor, deciding |
+| `update_task` | what Chat settled, written into the task (`dude task update`): its goal, its acceptance criteria (the whole list), or both; a `task.updated` event with what they were. Only while no implementer has started on the attempt | conductor, deciding |
 
 A task's **conductor** (the agent people talk to in its Chat) reads with
-these and changes nothing: it has no tool that edits, and its checkout is
+these. Its decisions (`start_phase`, `decide`, `dismiss_finding`,
+`update_task`) are its only while it takes the task's decisions (the
+delivery's `decider` is `conductor`) and the delivery is parked on one;
+under Deliver, or on a merged or closed task, each is refused saying so
+and it is read-only. It has no tool that edits, and its checkout is
 never pushed. Its briefing names findings and Runs by id, and these tools
 are how it reads what the briefing leaves out.
 
