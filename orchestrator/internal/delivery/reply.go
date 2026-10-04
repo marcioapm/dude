@@ -78,10 +78,12 @@ func ConductReply(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	inReplyTo := strings.TrimSpace(in.InReplyTo)
 	var author, said string
 	if inReplyTo != "" {
+		// Its words as last read: an edit since it was first recorded is
+		// what was answered.
 		err := tx.QueryRow(ctx, `SELECT COALESCE(payload->>'author', ''), COALESCE(payload->>'body', '') FROM events
-			WHERE task_id = $1 AND event_type = $2 AND payload->>'feedbackId' = $3
-			  AND (payload->>'number')::int = $4 AND payload->>'repo' = $5 ORDER BY cursor DESC LIMIT 1`,
-			ref.TaskID, EvPullRequestCommented, inReplyTo, number, repo).Scan(&author, &said)
+			WHERE task_id = $1 AND event_type IN ($2, $3) AND payload->>'feedbackId' = $4
+			  AND (payload->>'number')::int = $5 AND payload->>'repo' = $6 ORDER BY cursor DESC LIMIT 1`,
+			ref.TaskID, EvPullRequestCommented, EvPullRequestCommentEdited, inReplyTo, number, repo).Scan(&author, &said)
 		if db.IsNotFound(err) {
 			return Replied{}, refusef("%s is not a comment on %s#%d (pull_requests lists its feedback)", inReplyTo, repo, number)
 		}

@@ -62,6 +62,38 @@ func TestTheConductorRepliesOnThePullRequest(t *testing.T) {
 	}
 }
 
+// A reply to a comment edited into a mention quotes the words it was
+// answered for, not the ones first recorded; an edit that addresses nobody
+// starts no fixer.
+func TestAReplyToAnEditedMentionQuotesItsEditedWords(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	id := w.gh.Comment(1, "alice", "LGTM")
+	w.syncs(2)
+	w.gh.EditComment(1, id, "@dude why this choice?")
+	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
+
+	w.must(task, "reply_on_pull_request", fmt.Sprintf(`{"pr":"1","text":"Because.","in_reply_to":"issue-comment-%d"}`, id))
+	posted := w.gh.Pull(1).Comments
+	if last := posted[len(posted)-1]; last.Body != "> @alice: @dude why this choice?\n\nBecause.\n\n"+forge.ReplyMarker {
+		t.Errorf("the reply quotes %q", last.Body)
+	}
+
+	other := w.gh.Comment(1, "bob", "Thanks!")
+	w.syncs(2)
+	w.gh.EditComment(1, other, "Please rename greet() to hello().")
+	w.syncs(3)
+	if n := w.fixes(task); n != 0 {
+		t.Errorf("%d fixers for edited comments", n)
+	}
+	if n := w.mentions(task); n != 1 {
+		t.Errorf("%d messages, want the one mention", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.comment_edited'`, task); n != 2 {
+		t.Errorf("%d edits recorded, want one per edited comment", n)
+	}
+}
+
 // reply_on_pull_request refuses another task's pull request, and says when
 // GitHub refuses, posting and recording nothing.
 func TestTheConductorRepliesOnlyOnItsOwnPullRequests(t *testing.T) {
