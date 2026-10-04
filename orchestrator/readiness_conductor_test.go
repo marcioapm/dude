@@ -73,33 +73,49 @@ func TestReadinessIsANoticeNotAWake(t *testing.T) {
 	}
 }
 
-// Merged under the conductor: exactly one reason to wake it, to close out,
-// however many syncs see it; the conductor is woken with it. Under
-// Deliver, none.
-func TestAMergeWakesTheConductorOnceToCloseOut(t *testing.T) {
-	for _, conducted := range []bool{true, false} {
-		t.Run(fmt.Sprintf("conducted=%v", conducted), func(t *testing.T) {
-			w := conducting(t)
-			task := w.reviewing()
-			if conducted {
-				if status, _ := w.chat(task, "mine now"); status != 201 {
-					t.Fatalf("take-over: %d", status)
+// Merged, or closed without merging, under the conductor: exactly one
+// reason to wake it, to close out, however many syncs see it; the
+// conductor is woken with it. Under Deliver, none. The task ends done, or
+// aborted, either way.
+func TestAnEndWakesTheConductorOnceToCloseOut(t *testing.T) {
+	for _, end := range []struct{ how, status, kind, note string }{
+		{"merged", "done", "pr_merged", "Pull request target#1 was merged."},
+		{"closed", "aborted", "pr_closed", "Pull request target#1 was closed without merging."},
+	} {
+		for _, conducted := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/conducted=%v", end.how, conducted), func(t *testing.T) {
+				w := conducting(t)
+				task := w.reviewing()
+				if conducted {
+					if status, _ := w.chat(task, "mine now"); status != 201 {
+						t.Fatalf("take-over: %d", status)
+					}
 				}
-			}
-			w.gh.Merge(1)
-			w.until("done", func() bool { w.sync(); return w.taskStatus(task) == "done" })
-			w.syncs(5)
-			want := 0
-			if conducted {
-				want = 1
-			}
-			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'pr_merged'`, task); n != want {
-				t.Fatalf("%d close-out reasons, want %d", n, want)
-			}
-			if conducted {
-				w.wokenWith(task, "Pull request target#1 was merged.")
-			}
-		})
+				if end.how == "merged" {
+					w.gh.Merge(1)
+				} else {
+					w.gh.Close(1)
+				}
+				w.until(end.status, func() bool { w.sync(); return w.taskStatus(task) == end.status })
+				w.syncs(5)
+				want := 0
+				if conducted {
+					want = 1
+				}
+				if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, end.kind); n != want {
+					t.Fatalf("%d %s reasons, want %d", n, end.kind, want)
+				}
+				if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind IN ('pr_merged', 'pr_closed')`, task); n != want {
+					t.Errorf("%d close-out reasons in all, want %d", n, want)
+				}
+				if conducted {
+					w.wokenWith(task, end.note)
+				}
+				if s := w.taskStatus(task); s != end.status {
+					t.Errorf("the task is %s, want %s", s, end.status)
+				}
+			})
+		}
 	}
 }
 
