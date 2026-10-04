@@ -500,7 +500,7 @@ export class ApiClient {
     return this.#request("POST", "/v1/forge/credential/verify", {});
   }
 
-  /** Store the organization's token; with `publicUrl`, also register dude's webhook on every repository, delivering there. */
+  /** Store the organization's token; with `publicUrl`, also register dude's webhook on every repository, delivering there, in the background. */
   connectForge(token: string, apiBaseUrl?: string, publicUrl?: string): Promise<unknown> {
     return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}),
       ...(publicUrl ? { publicUrl } : {}) });
