@@ -187,6 +187,31 @@ func TestAMentionNobodyMayMakeIsIgnored(t *testing.T) {
 	}
 }
 
+// A person quoting a dude reply, its marker included, still speaks for
+// themselves: their @dude is a message, their change request a fixer's.
+func TestAPersonQuotingDudesReplyIsStillHeard(t *testing.T) {
+	w := conducting(t)
+	w.prs.FactoryLogins = []string{"dude-bot"}
+	task := w.reviewing()
+	quoted := "> Because the task says greet.\n>\n> " + forge.ReplyMarker + "\n\n"
+	w.gh.Comment(1, "alice", quoted+"@dude could you explain the tradeoff?")
+	w.gh.Comment(1, "alice", "```\nBecause.\n\n"+forge.ReplyMarker+"\n```\n\n@dude and this one?")
+	w.until("both messages", func() bool { w.sync(); return w.mentions(task) == 2 })
+	w.gh.Comment(1, "alice", quoted+"Please rename greet() to hello().")
+	w.until("a fixer for the change request", func() bool { w.sync(); return w.fixes(task) == 1 })
+
+	// Dude's own reply, as ConductReply writes it, stays dude's.
+	w.gh.Comment(1, "alice", "> @alice: @dude why?\n\nBecause.\n\n"+forge.ReplyMarker+"\n")
+	w.syncs(3)
+	if n := w.mentions(task); n != 2 {
+		t.Errorf("%d messages, want the two quoting comments'", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'own' = 'true'`, task); n != 1 {
+		t.Errorf("%d comments recorded as dude's own, want the reply", n)
+	}
+}
+
 // A comment that only mentions dude in passing is not a mention: an
 // address, a longer login, a word.
 func TestWhatCountsAsAMention(t *testing.T) {
