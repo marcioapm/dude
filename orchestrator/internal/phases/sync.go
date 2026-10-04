@@ -1919,17 +1919,22 @@ func FailUnreadTx(ctx context.Context, tx pgx.Tx, r delivery.RunRef, at time.Tim
 	return nil
 }
 
-func (r phaseRun) ref() delivery.RunRef {
-	return delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}
-}
-
 // failUnread is FailUnreadTx for a phase Run the syncer ends. A conductor's
 // unread wake notes are not failed: HandOver gives them to its successor.
 func (s *Syncer) failUnread(ctx context.Context, tx pgx.Tx, r phaseRun, why string) error {
 	if r.conductor() {
 		return nil
 	}
-	return FailUnreadTx(ctx, tx, r.ref(), s.at(), why)
+	return FailUnreadTx(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}, s.at(), why)
+}
+
+// failedTx records Run r, marked failed in tx, as failed with reason: its
+// unread directives (failUnread), then run.failed.
+func (s *Syncer) failedTx(ctx context.Context, tx pgx.Tx, r phaseRun, reason string) error {
+	if err := s.failUnread(ctx, tx, r, UnreadRunFailed); err != nil {
+		return err
+	}
+	return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
 }
 
 // at is the time the syncer's events say, zero for now.
@@ -2025,10 +2030,7 @@ func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep boo
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		if err := s.failUnread(ctx, tx, r, UnreadRunFailed); err != nil {
-			return err
-		}
-		return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+		return s.failedTx(ctx, tx, r, reason)
 	})
 }
 
