@@ -15,10 +15,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// chatMessageMax bounds one message, as a steer's text is bounded by the
-// directive it becomes.
-const chatMessageMax = delivery.ChatMessageMax
-
 // chat is a person writing in a task's Chat. With no conductor, the
 // message creates the task's conductor, briefed by dude; with one, it is
 // the conductor's next input, delivered as a steer is (a directive), which
@@ -40,8 +36,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 	if strings.TrimSpace(body.Text) == "" {
 		return fail(http.StatusBadRequest, "bad_request", "text is required")
 	}
-	if len(body.Text) > chatMessageMax {
-		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", chatMessageMax)
+	if len(body.Text) > delivery.ChatMessageMax {
+		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
 	}
 	return s.converse(w, r, org, body.Text, false)
 }

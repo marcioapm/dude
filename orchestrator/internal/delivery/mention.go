@@ -13,7 +13,8 @@ import (
 )
 
 // ChatMessageMax bounds one message in a task's Chat, in bytes: a person's,
-// one from a pull request, and the conductor's reply on one.
+// one from a pull request, and the conductor's reply on one; as a steer's
+// text is bounded by the directive it becomes.
 const ChatMessageMax = 16_384
 
 // Mention is a pull request comment addressed to dude, by someone who may
