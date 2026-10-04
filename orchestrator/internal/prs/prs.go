@@ -182,7 +182,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		for i, f := range listed {
 			ids[i] = f.ID
 		}
-		type known struct{ ID, Body string }
 		rows, err := tx.Query(ctx, `SELECT DISTINCT ON (payload->>'feedbackId') payload->>'feedbackId',
 			COALESCE(payload->>'body', '') FROM events WHERE task_id = $1
 			AND event_type IN ($2, $3) AND payload->>'feedbackId' = ANY($4)
@@ -191,13 +190,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		if err != nil {
 			return err
 		}
-		recordedBodies, err := pgx.CollectRows(rows, pgx.RowToStructByPos[known])
-		if err != nil {
+		bodies := map[string]string{} // the last body recorded, by feedback id
+		var id, body string
+		if _, err := pgx.ForEachRow(rows, []any{&id, &body}, func() error { bodies[id] = body; return nil }); err != nil {
 			return err
-		}
-		bodies := map[string]string{}
-		for _, k := range recordedBodies {
-			bodies[k.ID] = k.Body
 		}
 		rows, err = tx.Query(ctx, `SELECT payload->'github'->>'feedbackId' FROM events WHERE task_id = $1
 			AND event_type = $2 AND payload->'github'->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvChatMessage, ids)
