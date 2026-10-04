@@ -267,6 +267,47 @@ func TestAMentionOnAnEndedPullRequestReachesTheConductor(t *testing.T) {
 	}
 }
 
+// A comment edited to address dude is a message, once: the edit's webhook
+// and the poll both find it, though an older comment was read since; a
+// second edit, or the same delivery again, is no second message.
+func TestACommentEditedIntoAMentionIsOneMessage(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	id := w.gh.Comment(1, "alice", "LGTM")
+	w.syncs(2)
+	// A later comment moves the cursor past the edited one's creation.
+	time.Sleep(1100 * time.Millisecond)
+	w.gh.Comment(1, "bob", "Thanks!")
+	w.syncs(2)
+	if n := w.mentions(task); n != 0 {
+		t.Fatalf("%d messages before any mention", n)
+	}
+	w.gh.EditComment(1, id, "@dude why this choice?")
+	edited := map[string]any{"action": "edited", "repository": map[string]any{"full_name": "acme/target"},
+		"issue": map[string]any{"number": 1, "pull_request": map[string]any{}}, "comment": map[string]any{"id": id}}
+	w.webhook("issue_comment", edited)
+	w.until("the message", func() bool { return w.mentions(task) == 1 })
+	var text string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'text' FROM events WHERE task_id = $1
+		AND event_type = 'chat.message' AND payload->'github'->>'feedbackId' = $2`, task, fmt.Sprintf("issue-comment-%d", id)).Scan(&text)
+	if text != "@dude why this choice?" {
+		t.Errorf("the message says %q", text)
+	}
+	w.webhook("issue_comment", edited)
+	w.gh.EditComment(1, id, "@dude why this choice? (typo)")
+	w.webhook("issue_comment", edited)
+	w.syncs(3)
+	if n := w.mentions(task); n != 1 {
+		t.Errorf("%d messages for one comment edited into a mention", n)
+	}
+	if n := w.conductors(task); n != 1 {
+		t.Errorf("%d conductors", n)
+	}
+	if n := w.fixes(task); n != 0 {
+		t.Errorf("%d fixers", n)
+	}
+}
+
 // A comment that only mentions dude in passing is not a mention: an
 // address, a longer login, a word.
 func TestWhatCountsAsAMention(t *testing.T) {

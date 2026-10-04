@@ -148,7 +148,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	var fresh []forge.Feedback
+	// fresh is feedback not recorded yet; edited is feedback recorded
+	// before, whose words now address dude and have reached no conductor
+	// yet: a comment edited into a mention. A mention is delivered once
+	// per comment, by Chat's own record of it (delivery.MentionTx), not by
+	// whether the comment was recorded.
+	var fresh, edited []forge.Feedback
 	var workflowRunID, workflowStep string
 	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -169,9 +174,21 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		if err != nil {
 			return err
 		}
+		rows, err = tx.Query(ctx, `SELECT payload->'github'->>'feedbackId' FROM events WHERE task_id = $1
+			AND event_type = $2 AND payload->'github'->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvChatMessage, ids)
+		if err != nil {
+			return err
+		}
+		mentioned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
 		for _, f := range listed {
-			if !slices.Contains(seen, f.ID) {
+			switch {
+			case !slices.Contains(seen, f.ID):
 				fresh = append(fresh, f)
+			case !slices.Contains(mentioned, f.ID) && forge.AddressedToDude(f, s.FactoryLogins):
+				edited = append(edited, f)
 			}
 		}
 		return nil
@@ -181,7 +198,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	// Who may wake a fixer: asked of GitHub (cached), before anything is
 	// recorded, so each comment says whether it could.
-	waking, err := s.wakers(ctx, org, gh, slug, fresh)
+	waking, err := s.wakers(ctx, org, gh, slug, append(slices.Clip(fresh), edited...))
 	if err != nil {
 		return err
 	}
@@ -204,7 +221,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
 		if n := len(listed); n > 0 {
-			if t, err := time.Parse(time.RFC3339, listed[n-1].CreatedAt); err == nil {
+			// An edited comment lists by its edit but sorts by its creation:
+			// the cursor never moves back to it.
+			if t, err := time.Parse(time.RFC3339, listed[n-1].CreatedAt); err == nil && (cursor == nil || t.After(*cursor)) {
 				cursor = &t
 			}
 		}
@@ -305,7 +324,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// Comments addressed to dude, by people who may address it: each a
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
-		for _, f := range fresh {
+		for _, f := range append(slices.Clip(fresh), edited...) {
 			if !waking[f.Author] || !forge.AddressedToDude(f, s.FactoryLogins) {
 				continue
 			}
