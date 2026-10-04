@@ -63,6 +63,12 @@ func fenced(lines []string) bool {
 		if ind <= 3 && strings.HasPrefix(rest, ">") {
 			continue
 		}
+		// A horizontal rule ("- - -", "***", "_ _ _") is neither a list
+		// item nor inside one it does not indent into: it ends the list.
+		if ind <= 3 && (item == 0 || ind < item) && thematicBreak(rest) {
+			item = 0
+			continue
+		}
 		if w, ok := listMarker(rest); ok && ind <= 3 {
 			// Spaces past the marker's own are the content's indentation:
 			// four or more make it indented code, not a fence.
@@ -118,6 +124,25 @@ func run(s string) (byte, int) {
 func closes(s string, c byte, length int) bool {
 	got, n := run(s)
 	return got == c && n >= length && strings.TrimSpace(s[n:]) == ""
+}
+
+// thematicBreak says s (its indentation removed) is a horizontal rule:
+// three or more of one of - * _, with only spaces or tabs between.
+func thematicBreak(s string) bool {
+	if s == "" || !strings.ContainsRune("-*_", rune(s[0])) {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case s[0]:
+			n++
+		case ' ', '\t':
+		default:
+			return false
+		}
+	}
+	return n >= 3
 }
 
 // listMarker is a list item's marker at the start of s ("- ", "* ", "+ ",
