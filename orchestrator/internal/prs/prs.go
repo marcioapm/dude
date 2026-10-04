@@ -217,6 +217,13 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// What it was when it closed is what it stays.
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
 	}
+	if !isOpen(status.State) && !isOpen(pr.State) && pr.HeadSHA != "" {
+		// Read again once ended (for a mention on it): the head it ended
+		// on stays, though the branch moves on with work outside it
+		// (delivery.OpenPullRequests opens that work a pull request of its
+		// own by comparing heads).
+		status.HeadSHA = pr.HeadSHA
+	}
 
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
