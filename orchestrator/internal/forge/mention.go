@@ -30,19 +30,29 @@ func Own(f Feedback) bool {
 	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
 }
 
-// fenced says the last of lines is inside a code fence, as CommonMark
-// reads them: a run of three or more ` or ~ indented at most 3 spaces in
+// fenced says the last of lines is inside a code fence, or an HTML block
+// opened before it, as CommonMark reads them: a run of three or more ` or ~ indented at most 3 spaces in
 // its container (the document, or a list item) opens one; only a run of
 // the same character, at least as long, with nothing after it, closes it;
 // the end of its list item, or of the comment, closes it too. A fence
 // inside a blockquote ends with the quote, so quoted lines open none.
 func fenced(lines []string) bool {
-	var fence byte // 0: outside any fence
-	var length int // the opening run's length
-	var cont int   // the column the fence's container starts at
-	var item int   // the content column of the list item last opened, 0 for none
+	var fence byte  // 0: outside any fence
+	var length int  // the opening run's length
+	var cont int    // the column the fence's container starts at
+	var item int    // the content column of the list item last opened, 0 for none
+	var html string // what ends the HTML block the line is in, "" outside one
+	var inHTML bool // the line last read was inside an HTML block opened before it
 	for _, line := range lines {
 		ind, rest := indent(line)
+		inHTML = html != ""
+		if html != "" {
+			// An HTML block's lines are its own: fence lines in it are text.
+			if strings.Contains(strings.ToLower(line), html) {
+				html = ""
+			}
+			continue
+		}
 		if fence != 0 {
 			if strings.TrimSpace(rest) == "" {
 				continue
@@ -83,11 +93,17 @@ func fenced(lines []string) bool {
 		if rel > 3 {
 			continue
 		}
+		if end := htmlBlock(rest); end != "" {
+			if !strings.Contains(strings.ToLower(rest[1:]), end) {
+				html = end
+			}
+			continue
+		}
 		if c, n := run(rest); n >= 3 && (c == '~' || !strings.ContainsRune(rest[n:], '`')) {
 			fence, length = c, n
 		}
 	}
-	return fence != 0
+	return fence != 0 || inHTML
 }
 
 // indent counts a line's leading spaces, a tab as up to the next multiple
@@ -124,6 +140,31 @@ func run(s string) (byte, int) {
 func closes(s string, c byte, length int) bool {
 	got, n := run(s)
 	return got == c && n >= length && strings.TrimSpace(s[n:]) == ""
+}
+
+// htmlBlock is what ends the HTML block s (its indentation removed)
+// starts, as CommonMark's block kinds 1 to 5 read them, "" for none: a
+// <pre>, <script>, <style> or <textarea> runs to its closing tag, a comment
+// to -->, a processing instruction to ?>, a declaration to >, CDATA to ]]>.
+// The kinds that end at a blank line hold no fence that outlives them.
+func htmlBlock(s string) string {
+	l := strings.ToLower(s)
+	for _, tag := range []string{"pre", "script", "style", "textarea"} {
+		if strings.HasPrefix(l, "<"+tag) && (len(l) == len(tag)+1 || strings.ContainsRune(" \t>", rune(l[len(tag)+1]))) {
+			return "</" + tag + ">"
+		}
+	}
+	switch {
+	case strings.HasPrefix(l, "<!--"):
+		return "-->"
+	case strings.HasPrefix(l, "<?"):
+		return "?>"
+	case strings.HasPrefix(l, "<![cdata["):
+		return "]]>"
+	case len(l) > 2 && strings.HasPrefix(l, "<!") && l[2] >= 'a' && l[2] <= 'z':
+		return ">"
+	}
+	return ""
 }
 
 // thematicBreak says s (its indentation removed) is a horizontal rule:

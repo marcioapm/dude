@@ -65,6 +65,9 @@ type Server struct {
 	Hooks []map[string]any
 	// The combined status every commit reports; "" is success.
 	checks string
+	// Who the token comments as; "" is Login. A personal access token
+	// comments as its owner, often a person rather than a bot.
+	Poster string
 	// Repository permission by login; one not named has write access, as
 	// the people in these tests are the team.
 	Permissions map[string]string
@@ -617,6 +620,14 @@ func (s *Server) commentsJSON(p *Pull, comments []Comment, anchor string) []any 
 	return out
 }
 
+// poster is who the token's comments are by. The caller holds s.mu.
+func (s *Server) poster() string {
+	if s.Poster != "" {
+		return s.Poster
+	}
+	return Login
+}
+
 // postComment is a comment the token posts on a pull request's
 // conversation, as Login. A locked pull request is refused, as GitHub does.
 func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
@@ -634,7 +645,7 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Unable to create comment because issue is locked.")
 		return
 	}
-	c := Comment{ID: nextID.Add(1), Author: Login, Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	c := Comment{ID: nextID.Add(1), Author: s.poster(), Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	p.Comments = append(p.Comments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
 }
@@ -666,7 +677,7 @@ func (s *Server) replyToLineComment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	c := Comment{ID: nextID.Add(1), Author: Login, Body: in.Body, Path: parent.Path, InReplyTo: id,
+	c := Comment{ID: nextID.Add(1), Author: s.poster(), Body: in.Body, Path: parent.Path, InReplyTo: id,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
