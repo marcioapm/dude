@@ -67,17 +67,28 @@ func TestTheConductorRepliesOnThePullRequest(t *testing.T) {
 // still dude's own when read back, under a token that comments as a person:
 // neither a message from its quoted @dude nor fixer feedback.
 func TestAReplyWithANestedCodeExampleIsStillDudesOwn(t *testing.T) {
+	for _, c := range []struct{ name, text, shown string }{
+		{"in a longer fence", "Open a Go example in the README with:\n\n````markdown\n```go\n````\n\nand please close it the same way.", "````markdown\n```go\n````"},
+		{"in an HTML pre block", "Use a preformatted HTML block:\n\n<pre>\n````markdown\n```go\n</pre>", "<pre>\n````markdown\n```go\n</pre>"},
+	} {
+		t.Run(c.name, func(t *testing.T) { aReplyIsStillDudesOwn(t, c.text, c.shown) })
+	}
+}
+
+func aReplyIsStillDudesOwn(t *testing.T, text, shown string) {
 	w := conducting(t)
+	// The token comments as a person, not a bot: only the marker says the
+	// reply is dude's.
+	w.gh.Poster = "pat-owner"
 	task := w.reviewing()
 	issue := w.gh.Comment(1, "alice", "@dude how should the README show greet()?")
 	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
 
-	text := "Open a Go example in the README with:\n\n````markdown\n```go\n````\n\nand please close it the same way."
 	args, _ := json.Marshal(map[string]string{"pr": "1", "text": text, "in_reply_to": fmt.Sprintf("issue-comment-%d", issue)})
 	w.must(task, "reply_on_pull_request", string(args))
 	posted := w.gh.Pull(1).Comments
-	if last := posted[len(posted)-1]; !strings.Contains(last.Body, "````markdown\n```go\n````") {
-		t.Fatalf("the reply posted: %q", last.Body)
+	if last := posted[len(posted)-1]; last.Author != "pat-owner" || !strings.Contains(last.Body, shown) {
+		t.Fatalf("the reply posted by %s: %q", last.Author, last.Body)
 	}
 	w.syncs(5)
 	if n := w.mentions(task); n != 1 {
