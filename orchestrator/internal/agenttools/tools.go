@@ -79,6 +79,12 @@ var tools = []tool{
 		"feedback), simplify or test. The workflow creates the Runs as it creates its own, waits for them, and wakes "+
 		"you at the next decision. Refused when you do not take the task's decisions, or past the policy's bounds: then "+
 		"ask the person.", conductors, startPhase),
+	define("steer", "Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: "+
+		"your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong "+
+		"way, or to add something the person just said; start another phase only once a Run has ended. interrupt "+
+		"stops its turn so it hears this now: only when its current work is wasted. You are woken when it reads it, "+
+		"or if it never will. Allowed whoever takes the decisions; refused for a Run that ended, another task's or an "+
+		"earlier attempt's.", conductors, steer),
 	define("decide", "Take the decision the delivery waits on: next (what Deliver would do now), ask_person (a "+
 		"question for the person in the note; before the pull request, the fixed question Open / Draft / Show me the "+
 		"diff / Another round), wait (at pull request feedback: leave it), or open_pull_request — accepted only after "+

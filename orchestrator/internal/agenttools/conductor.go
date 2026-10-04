@@ -299,6 +299,28 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 	return conducted(map[string]any{"dismissed": in.ID}, err)
 }
 
+type steerIn struct {
+	Run       string `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
+	Text      string `json:"text" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
+	Interrupt bool   `json:"interrupt,omitempty" jsonschema:"stop its current turn so it hears this now; only when the work it is doing is wasted"`
+}
+
+func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any, error) {
+	st, lands, err := delivery.ConductSteer(ctx, tx, c.run(), strings.TrimSpace(in.Run), in.Text, in.Interrupt)
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	out := map[string]any{"directiveId": st.ID, "run": in.Run,
+		"next": "Queued for the Run. You are woken when it has read it, or if it never will."}
+	if lands != "" {
+		out["lands"] = lands
+	}
+	return out, nil
+}
+
 type updateTaskIn struct {
 	Goal               *string   `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
 	AcceptanceCriteria *[]string `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
