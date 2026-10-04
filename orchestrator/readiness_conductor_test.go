@@ -20,6 +20,26 @@ func (w *world) syncs(n int) {
 	}
 }
 
+// reviewingTwo delivers a task whose implementer changes target and web
+// to a pull request in each, both waiting on people.
+func (w *world) reviewingTwo() string {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	task := w.task()
+	w.addWeb(task, "write")
+	w.deliver(task)
+	w.until("two pull requests", func() bool {
+		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
+	})
+	return task
+}
+
 // Ready to merge under the conductor: dude's notice in Chat, and no wake;
 // no longer ready, a notice saying why. Under Deliver, no notice.
 func TestReadinessIsANoticeNotAWake(t *testing.T) {
@@ -123,20 +143,7 @@ func TestAnEndWakesTheConductorOnceToCloseOut(t *testing.T) {
 // once, though the second merge reads the first again.
 func TestEachMergeWakesTheConductorOnce(t *testing.T) {
 	w := conducting(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
-		}
-		return b
-	}
-	task := w.task()
-	w.addWeb(task, "write")
-	w.deliver(task)
-	w.until("two pull requests", func() bool {
-		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
-	})
+	task := w.reviewingTwo()
 	if status, _ := w.chat(task, "mine now"); status != 201 {
 		t.Fatalf("take-over: %d", status)
 	}
@@ -163,20 +170,7 @@ func TestEachMergeWakesTheConductorOnce(t *testing.T) {
 // the conductor once, to close out, though no step is listening.
 func TestASiblingMergedDuringAnEscalationWakesTheConductorOnce(t *testing.T) {
 	w := conducting(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
-		}
-		return b
-	}
-	task := w.task()
-	w.addWeb(task, "write")
-	w.deliver(task)
-	w.until("two pull requests", func() bool {
-		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
-	})
+	task := w.reviewingTwo()
 	if status, _ := w.chat(task, "mine now"); status != 201 {
 		t.Fatalf("take-over: %d", status)
 	}
