@@ -538,6 +538,15 @@ body {
   flex-direction: column;
   min-width: 0;
 }
+/* Where a Chat message was written on GitHub, or the conductor's reply
+   went: one quiet line under its words. */
+.githubSource {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.githubSource a {
+  color: inherit;
+}
 
 /* A line of figures under a header: an epic's progress, time and cost. */
 .figures {

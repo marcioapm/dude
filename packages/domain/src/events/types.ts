@@ -235,12 +235,23 @@ export const EventTypes = {
   QuestionAsked: "question.asked",
   QuestionAnswered: "question.answered",
   /**
-   * A person wrote in a task's Chat, on its conductor's Run. Payload:
-   * `{ text, directiveId? }`: the first message has none (it is the
-   * conductor's briefing, with dude's note before it); each later one is
-   * delivered as the directive named.
+   * A message in a task's Chat, on its conductor's Run. Payload:
+   * `{ text, directiveId?, github?, by? }`. A person's: the first has no
+   * `directiveId` (it is the conductor's briefing, with dude's note before
+   * it); each later one is delivered as the directive named. One from a
+   * pull request comment addressed to dude (actor `integration`,
+   * `github:<login>`) carries `github: { login, repo, number, feedbackId,
+   * kind, url?, path? }`. The conductor's reply on a pull request is `by:
+   * "conductor"` (actor its Run) with `github: { repo, number, feedbackId,
+   * url, inReplyTo? }`.
    */
   ChatMessage: "chat.message",
+  /**
+   * dude's own line in a task's Chat, about something that wakes nobody:
+   * a conducted task's pull requests ready to merge, or no longer. Payload:
+   * `{ text, about }`, `about` "ready_to_merge" or "no_longer_ready".
+   */
+  ChatNotice: "chat.notice",
   /**
    * dude briefed a task's new conductor: `{ text }` is its first prompt —
    * dude's note on the task, then the first message. Written with the
@@ -268,8 +279,9 @@ export const EventTypes = {
   /**
    * dude woke a task's conductor with a note listing why. Payload:
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
-   * (decision, escalation, question, safety); `started` when no conductor
-   * was live and the note briefed a new one.
+   * (decision, escalation, question, safety, steer_read, steer_failed,
+   * pr_merged, pr_closed); `started` when no conductor was live and the
+   * note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
 
