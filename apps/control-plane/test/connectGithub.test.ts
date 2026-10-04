@@ -84,7 +84,7 @@ test("connecting GitHub saves the token and asks for the hooks in the background
   }));
   expect(res.status).toBe(200);
   expect(Date.now() - started).toBeLessThan(1_500);
-  expect((await res.json()).registered).toEqual({ background: true });
+  expect(((await res.json()) as { registered: unknown }).registered).toEqual({ background: true });
   expect(forwarded).toEqual([{ path: "/internal/webhooks/register",
     body: { url: `https://dude.example.com/v1/webhooks/github/${ORG}`, background: true } }]);
   const [cred] = await owner`SELECT secret, public_url FROM forge_credentials WHERE organization_id = ${ORG}`;
