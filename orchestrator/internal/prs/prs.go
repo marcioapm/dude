@@ -226,9 +226,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
+	// What may be a mention: new feedback, and feedback edited into one.
+	heard := append(slices.Clip(fresh), edited...)
 	// Who may wake a fixer: asked of GitHub (cached), before anything is
 	// recorded, so each comment says whether it could.
-	waking, err := s.wakers(ctx, org, gh, slug, append(slices.Clip(fresh), edited...))
+	waking, err := s.wakers(ctx, org, gh, slug, heard)
 	if err != nil {
 		return err
 	}
@@ -361,7 +363,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// Comments addressed to dude, by people who may address it: each a
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
-		for _, f := range append(slices.Clip(fresh), edited...) {
+		for _, f := range heard {
 			if !waking[f.Author] || !forge.AddressedToDude(f, s.FactoryLogins) {
 				continue
 			}
