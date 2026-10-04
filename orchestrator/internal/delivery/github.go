@@ -79,22 +79,12 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 	})
 }
 
-// closeOutTx records the one reason to wake a conducted task's conductor
-// when a pull request of its was merged or closed: keyed by the pull
-// request and how it ended, so every sync that sees it records it once.
-func closeOutTx(ctx context.Context, tx pgx.Tx, org string, st *State, states []PullRequestState) error {
-	for _, p := range states {
-		if err := CloseOutTx(ctx, tx, org, st.TaskID, p.Repo, p.Number, p.State); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // CloseOutTx records the reason to wake a conducted task's conductor for
 // one pull request that ended (merged or closed; any other state records
-// nothing). The pull request syncer records it as it reads the end, the
-// workflow as it weighs it: one reason per (task, key) either way.
+// nothing): keyed by the pull request and how it ended, so every sync that
+// sees it records it once. The pull request syncer records it as it reads
+// the end, the workflow as it weighs it: one reason per (task, key) either
+// way.
 func CloseOutTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int, state string) error {
 	name := fmt.Sprintf("%s#%d", repo, number)
 	var kind, line string

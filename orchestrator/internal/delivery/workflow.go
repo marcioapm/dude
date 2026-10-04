@@ -1020,7 +1020,12 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	if st.conducted() {
 		// The conductor hears each one end once, however often this runs.
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			return closeOutTx(ctx, tx, sc.OrganizationID, st, states)
+			for _, p := range states {
+				if err := CloseOutTx(ctx, tx, sc.OrganizationID, st.TaskID, p.Repo, p.Number, p.State); err != nil {
+					return err
+				}
+			}
+			return nil
 		}); err != nil {
 			return workflow.Result{}, true, err
 		}
