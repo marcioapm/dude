@@ -13,7 +13,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -168,20 +167,7 @@ func TestTheConductorRepliesOnlyOnItsOwnPullRequests(t *testing.T) {
 // and nothing is posted or recorded.
 func TestTheConductorRepliesOnlyToTheCommentsOfThatPullRequest(t *testing.T) {
 	w := conducting(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
-		}
-		return b
-	}
-	task := w.task()
-	w.addWeb(task, "write")
-	w.deliver(task)
-	w.until("two pull requests", func() bool {
-		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review"
-	})
+	task := w.reviewingTwo()
 	w.gh.Comment(1, "alice", "@dude hello")
 	webComment := w.web.Comment(1, "alice", "@dude and here?")
 	w.until("both messages", func() bool { w.sync(); return w.mentions(task) == 2 })
