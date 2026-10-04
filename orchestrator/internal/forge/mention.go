@@ -17,8 +17,23 @@ const DudeMention = "dude"
 // who may be a person whose comments otherwise count.
 const ReplyMarker = "<!-- dude:conductor -->"
 
-// Own says the feedback is a comment the conductor posted.
-func Own(f Feedback) bool { return strings.Contains(f.Body, ReplyMarker) }
+// Own says the feedback is a comment the conductor posted: its last
+// non-blank line is the marker itself, as ConductReply writes it. A person
+// quoting a reply carries the marker inside a blockquote or a code fence,
+// or above their own words, and stays theirs.
+func Own(f Feedback) bool {
+	lines := strings.Split(strings.TrimRight(f.Body, " \t\r\n"), "\n")
+	if strings.TrimSpace(lines[len(lines)-1]) != ReplyMarker {
+		return false
+	}
+	fenced := false
+	for _, l := range lines[:len(lines)-1] {
+		if t := strings.TrimLeft(l, " "); strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fenced = !fenced
+		}
+	}
+	return !fenced
+}
 
 // mentionLogin is what GitHub allows in a login: letters, digits, hyphens.
 var mentionLogin = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
