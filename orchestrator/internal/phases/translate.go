@@ -262,6 +262,9 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
+	if err := s.failUnread(ctx, tx, t.run, UnreadRunFailed); err != nil {
+		return err
+	}
 	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
 }
 
@@ -713,6 +716,9 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	if err := s.failUnread(ctx, tx, t.run, UnreadRunFailed); err != nil {
 		return err
 	}
 	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})

@@ -701,12 +701,24 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		// whole of a delivery — each kept, so the task can be picked back up
 		// where it stopped (phases.Syncer.end).
 		// Kept: one lux has (keep has no meaning for one it never had).
-		if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
+		rows, err := tx.Query(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 			control_reason = $3, ended_at = now(), keep = lux_run_id IS NOT NULL
 			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL)
-			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`,
-			runID, ri.TaskID, db.Nullable(body.Reason)); err != nil {
+			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+			RETURNING id`,
+			runID, ri.TaskID, db.Nullable(body.Reason))
+		if err != nil {
 			return err
+		}
+		aborted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, id := range aborted {
+			ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: id}
+			if err := phases.FailUnreadTx(r.Context(), tx, ref, time.Time{}, phases.UnreadRunAborted); err != nil {
+				return err
+			}
 		}
 		// The task stops too: an aborted Run should not leave its work
 		// item looking like it is still progressing.

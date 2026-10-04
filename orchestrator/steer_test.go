@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -342,4 +343,117 @@ func TestTheConductorIsWokenWhenItsSteerFails(t *testing.T) {
 		})
 		s.wokenWith(s.task, "was not delivered: the run finished before the agent read it")
 	})
+}
+
+// settledOnce checks the conductor was told once that directive id was
+// not delivered, saying why: one steer_failed reason, one note naming it.
+func (s *steering) settledOnce(id, why string) {
+	s.t.Helper()
+	s.wokenWith(s.task, "was not delivered: "+why)
+	for range 3 {
+		s.pump()
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL AND error = $2`, id, why); n != 1 {
+		s.t.Errorf("the steer is not failed with %q", why)
+	}
+	if w := s.steerWakes(); len(w) != 1 || !strings.HasPrefix(w[0], "steer_failed ") {
+		s.t.Errorf("steer wakes: %v, want one steer_failed", w)
+	}
+	notes := 0
+	for _, n := range s.woken(s.task) {
+		if strings.Contains(n, "steer "+id) {
+			notes++
+		}
+	}
+	if notes != 1 {
+		s.t.Errorf("%d notes name the steer, want 1", notes)
+	}
+}
+
+// A Run that ends any way but finishing fails what its agent never read,
+// and the conductor whose steer that was is told once: a pending Run whose
+// submit fails, a running one a person aborts, one whose agent dies.
+func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
+	t.Run("the submit fails", func(t *testing.T) {
+		w := conducting(t)
+		// The implementer's role names no model tier: its submit fails
+		// before lux has it. The conductor's, already submitted, is unmoved.
+		mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models - 'implementer' WHERE id = $1`, w.org)
+		mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models - 'implementer' WHERE organization_id = $1`, w.org)
+		s := &steering{world: w, task: w.task()}
+		s.conductor = w.talk(s.task)
+		s.spec = w.conductorSpecOf(s.task)
+		w.must(s.task, "start_phase", `{"phase":"implement"}`)
+		// The workflow alone: the syncer must not submit it before the steer.
+		deadline := time.Now().Add(20 * time.Second)
+		for s.implementer == "" && time.Now().Before(deadline) {
+			if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+				t.Fatal(err)
+			}
+			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+				AND status = 'pending'`, s.task).Scan(&s.implementer)
+		}
+		if s.implementer == "" {
+			t.Fatal("no pending implementer")
+		}
+		status, out := s.steer(steerArgs(s.implementer, "before you start", false))
+		if status != 200 {
+			t.Fatalf("steer a pending Run: %d %v", status, out)
+		}
+		s.until("the implementer to fail", func() bool {
+			return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND lux_run_id IS NULL`, s.implementer) == 1
+		})
+		s.settledOnce(out["directiveId"].(string), "the run failed before the agent read it")
+	})
+	t.Run("a person aborts it", func(t *testing.T) {
+		s := newSteering(t, conducting(t))
+		_, out := s.steer(steerArgs(s.implementer, "aborted before read", false))
+		id, _ := out["directiveId"].(string)
+		s.until("taken", func() bool {
+			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
+		})
+		if status, body := s.call("/internal/runs/"+s.implementer+"/abort", map[string]any{}); status != 200 {
+			t.Fatalf("abort: %d %v", status, body)
+		}
+		s.settledOnce(id, "the run was aborted before the agent read it")
+	})
+	t.Run("its agent dies", func(t *testing.T) {
+		s := newSteering(t, conducting(t))
+		_, out := s.steer(steerArgs(s.implementer, "dies before read", false))
+		id, _ := out["directiveId"].(string)
+		s.until("taken", func() bool {
+			return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND accepted_at IS NOT NULL`, id) == 1
+		})
+		s.lux.Crash(s.luxRunOf(s.implementer))
+		s.until("the implementer to fail", func() bool {
+			return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, s.implementer) == 1
+		})
+		s.settledOnce(id, "the run failed before the agent read it")
+	})
+}
+
+// A paused Run reads its steers when it resumes: nothing fails them, and
+// the conductor is not woken.
+func TestAPausedRunsSteerStaysQueued(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	if status, body := s.call("/internal/runs/"+s.implementer+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	s.until("paused", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, s.implementer) == 1
+	})
+	status, out := s.steer(steerArgs(s.implementer, "when you are back", false))
+	if status != 200 {
+		t.Fatalf("steer a paused Run: %d %v", status, out)
+	}
+	for range 5 {
+		s.pump()
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NULL AND delivered_at IS NULL`,
+		out["directiveId"]); n != 1 {
+		t.Error("a paused Run's steer did not stay queued")
+	}
+	if w := s.steerWakes(); len(w) != 0 {
+		t.Errorf("steer wakes for a paused Run: %v", w)
+	}
 }
