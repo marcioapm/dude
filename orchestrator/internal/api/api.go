@@ -399,41 +399,6 @@ func attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 	return attached, err
 }
 
-// checkRepeat vets a steer superseding directive superseded of the Run.
-// Repeating its words (Retry, Interrupt now) carries its images
-// (delivery.DirectiveAttachments), so the repeat may have no words of its
-// own, but only if there is something to repeat; and it cannot bring new
-// images, which would be attached and never sent.
-func checkRepeat(ctx context.Context, tx pgx.Tx, runID, superseded, text string, newImages bool) error {
-	required := fail(http.StatusBadRequest, "bad_request", "text or an image is required")
-	var words string
-	err := tx.QueryRow(ctx, `SELECT text FROM directives WHERE id = $1 AND run_id = $2`, superseded, runID).Scan(&words)
-	if err != nil && !db.IsNotFound(err) {
-		return err
-	}
-	if err != nil || words != text {
-		// New words: a message of its own.
-		if strings.TrimSpace(text) == "" && !newImages {
-			return required
-		}
-		return nil
-	}
-	if newImages {
-		return fail(http.StatusBadRequest, "invalid_attachment",
-			"a message sent again carries the images it had: send new images in a new message")
-	}
-	if strings.TrimSpace(words) == "" {
-		carried, err := delivery.DirectiveAttachments(ctx, tx, superseded)
-		if err != nil {
-			return err
-		}
-		if len(carried) == 0 {
-			return required
-		}
-	}
-	return nil
-}
-
 // ownerOnly uses the first active ordered member, independent of credentials.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) error {
 	var ownerID, ownerName *string
@@ -477,45 +442,19 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	empty := strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0
-	if empty && body.Supersedes == "" {
-		return fail(http.StatusBadRequest, "bad_request", "text or an image is required")
-	}
-	if body.Scope == "" {
-		body.Scope = "run"
-	}
 	var out map[string]any
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		ri, err := loadRun(r.Context(), tx, runID)
+		p := principalOf(r)
+		st, err := delivery.Steer(r.Context(), tx, org, delivery.SteerInput{RunID: runID, Text: body.Text, Scope: body.Scope,
+			Supersedes: body.Supersedes, Interrupt: body.Interrupt, AttachmentIDs: body.AttachmentIDs,
+			Actor: delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor}})
 		if err != nil {
-			return err
+			return steerFailure(err)
 		}
-		if !isLive(ri.Status) {
-			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be steered", runID, ri.Status)
-		}
-		if body.Supersedes != "" {
-			if err := checkRepeat(r.Context(), tx, runID, body.Supersedes, body.Text, len(body.AttachmentIDs) > 0); err != nil {
-				return err
-			}
-		}
-		id, createdAt, err := insertDirective(r.Context(), tx, org, runID, ri, body.Text, body.Scope, body.Supersedes, body.Interrupt)
-		if err != nil {
-			return err
-		}
-		attached, err := attach(r.Context(), tx, ri.TaskID, id, body.AttachmentIDs)
-		if err != nil {
-			return err
-		}
-		out = map[string]any{"id": id, "runId": runID, "taskId": ri.TaskID, "text": body.Text,
-			"scope": body.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
-			"deliveredAt": nil, "createdAt": createdAt, "attachments": db.NonNil(attached)}
-		payload := map[string]any{
-			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": db.Nullable(body.Supersedes),
-			"interrupt": body.Interrupt}
-		if len(attached) > 0 {
-			payload["attachments"] = attached
-		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", principalOf(r), payload)
+		out = map[string]any{"id": st.ID, "runId": runID, "taskId": st.TaskID, "text": body.Text,
+			"scope": st.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
+			"deliveredAt": nil, "createdAt": st.CreatedAt, "attachments": db.NonNil(st.Attachments)}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -523,6 +462,20 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 	s.kick()
 	write(w, http.StatusCreated, out)
 	return nil
+}
+
+// steerFailure answers a refused steer as the API always did.
+func steerFailure(err error) error {
+	var se delivery.SteerError
+	if !errors.As(err, &se) {
+		return err
+	}
+	status := map[string]int{"not_found": http.StatusNotFound, "conflict": http.StatusConflict,
+		"not_an_agent": http.StatusConflict}[se.Kind]
+	if status == 0 {
+		status = http.StatusBadRequest
+	}
+	return fail(status, se.Kind, "%s", se.Msg)
 }
 
 // pause records the request; the Run becomes paused once lux has stopped it.
@@ -796,7 +749,7 @@ func read(r *http.Request, v any) error {
 	if r.ContentLength == 0 {
 		return nil
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, delivery.SteerTextMax)).Decode(v); err != nil {
 		return fail(http.StatusBadRequest, "bad_request", "invalid JSON body: %v", err)
 	}
 	return nil
