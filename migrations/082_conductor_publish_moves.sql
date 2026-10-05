@@ -21,9 +21,13 @@ ALTER TABLE conductor_publishes
   -- When lux was asked to push: an ask lux never answers is given up on.
   ADD COLUMN asked_at timestamptz,
   -- The worker's schedule: not before this (a back-off after a transient
-  -- failure, or its own claim), and how many transient failures in a row.
+  -- failure), and how many transient failures in a row.
   ADD COLUMN next_attempt_at timestamptz,
-  ADD COLUMN failures int NOT NULL DEFAULT 0;
+  ADD COLUMN failures int NOT NULL DEFAULT 0,
+  -- The worker carrying it on now: its claim, renewed while it works, and
+  -- until when it holds. Every write of the worker's is guarded on it.
+  ADD COLUMN claim_token text,
+  ADD COLUMN claimed_until timestamptz;
 
 ALTER TABLE conductor_publishes DROP CONSTRAINT conductor_publishes_status_check;
 ALTER TABLE conductor_publishes ADD CONSTRAINT conductor_publishes_status_check
@@ -39,7 +43,7 @@ CREATE INDEX conductor_publishes_due_idx ON conductor_publishes (next_attempt_at
 CREATE INDEX conductor_publishes_moving_idx ON conductor_publishes (task_id) WHERE status = 'moving';
 
 -- The worker claims publishes across organizations.
-GRANT UPDATE (next_attempt_at) ON conductor_publishes TO dude_sweeper;
+GRANT UPDATE (claim_token, claimed_until) ON conductor_publishes TO dude_sweeper;
 
 -- A publish whose move could not be confirmed wakes its conductor.
 ALTER TABLE conductor_wakes DROP CONSTRAINT conductor_wakes_kind_check;

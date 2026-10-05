@@ -229,7 +229,7 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	case "git.push":
 		if t.run.conductor() {
 			// A publish the conductor asked for (edits.go).
-			return publishPushed(ctx, tx, str("requestId"), f.EventData)
+			return publishPushed(ctx, tx, str("requestId"), "", f.EventData)
 		}
 		// Only the push this finish asked for — recorded or not yet (lux can
 		// answer before dude has written that it asked): one an earlier turn

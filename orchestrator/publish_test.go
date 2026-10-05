@@ -609,6 +609,70 @@ func TestALostMoveFollowedByAnExternalPushIsRecorded(t *testing.T) {
 	}
 }
 
+// A worker whose claim expired while its move hung, and a second worker
+// that took the publish over and recorded it: when the first one's move
+// returns, it records nothing — one commit event, and the delivery's heads
+// as the next writer left them.
+func TestAnExpiredPublishClaimRecordsNothing(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	g := newGate()
+	var first atomic.Bool
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if isMove(r) && !first.Swap(true) {
+				g.wait()
+			}
+			return 0
+		}
+	})
+	t.Cleanup(g.release)
+	e.noPublishes = true
+	id := e.publish()
+	// Worker A: passes until one of them hangs at the move.
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		for {
+			select {
+			case <-g.held:
+				return
+			default:
+			}
+			_, _ = e.syncer.SettlePublishes(context.Background())
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	t.Cleanup(func() { g.release(); <-aDone })
+	e.until("worker A's move hangs", func() bool {
+		select {
+		case <-g.held:
+			return true
+		default:
+			return false
+		}
+	})
+	// A's claim lapses; worker B takes the publish over and records it.
+	mustExec(t, e.owner, `UPDATE conductor_publishes SET claimed_until = now() - interval '1 second' WHERE id = $1`, id)
+	e.until("worker B recorded it", func() bool {
+		e.settleOnce()
+		return e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'published'`, id) == 1
+	})
+	// The next writer moves the delivery's head on.
+	mustExec(t, e.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', '"a-later-head"') WHERE task_id = $1`, e.task)
+	g.release()
+	<-aDone
+	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'publishId' = $2`,
+		e.task, id); n != 1 {
+		t.Errorf("%d commit events for one publish, want 1", n)
+	}
+	if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'heads'->>'target' = 'a-later-head'`, e.task); n != 1 {
+		t.Errorf("the expired worker wrote its head %s over the later one", sha)
+	}
+}
+
 // task2 is a second conducted task in the world, its conductor running.
 func (e *editing) task2() string {
 	e.t.Helper()
