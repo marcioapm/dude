@@ -35,6 +35,9 @@ func syncRepo(t *testing.T, noModes bool) (*fakelux.Server, *lux.HTTPClient, str
 	gitIn(t, repo, "checkout", "-q", "work")
 	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "B")
 	gitIn(t, repo, "checkout", "-q", "main")
+	// The checkout on a branch named as the sync's target, where lux's
+	// fast-forward may move it.
+	gitIn(t, work, "checkout", "-q", "-b", "work")
 	return fake, c, runID, repo, work
 }
 
@@ -81,6 +84,21 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		}
 		if got := gitIn(t, work, "rev-parse", "refs/remotes/lux/work"); got != want {
 			t.Errorf("lux/work %s, want %s", got, want)
+		}
+	})
+	t.Run("on another branch: kept, never switched", func(t *testing.T) {
+		_, c, runID, _, work := syncRepo(t, false)
+		gitIn(t, work, "checkout", "-q", "main")
+		before := gitIn(t, work, "rev-parse", "HEAD")
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if ev["status"] != lux.SyncKept || ev["behind"] != 1.0 {
+			t.Errorf("git.sync %v", ev)
+		}
+		if gitIn(t, work, "rev-parse", "HEAD") != before || gitIn(t, work, "symbolic-ref", "HEAD") != "refs/heads/main" {
+			t.Error("the checkout moved or switched")
 		}
 	})
 	t.Run("local changes: kept, saying how far behind", func(t *testing.T) {

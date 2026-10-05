@@ -1142,6 +1142,44 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 	return paths, nil
 }
 
+// Comparison is head against base as GitHub's compare says it: the
+// commits head has that base lacks (AheadBy) and the reverse (BehindBy:
+// base is an ancestor of head only at 0), and each changed file's lines.
+type Comparison struct {
+	AheadBy  int `json:"ahead_by"`
+	BehindBy int `json:"behind_by"`
+	Files    []struct {
+		Filename  string `json:"filename"`
+		Additions int    `json:"additions"`
+		Deletions int    `json:"deletions"`
+	} `json:"files"`
+}
+
+// Lines is the comparison's changed lines: additions and deletions.
+func (c Comparison) Lines() int {
+	n := 0
+	for _, f := range c.Files {
+		n += f.Additions + f.Deletions
+	}
+	return n
+}
+
+// Paths are the comparison's changed files.
+func (c Comparison) Paths() []string {
+	out := make([]string, 0, len(c.Files))
+	for _, f := range c.Files {
+		out = append(out, f.Filename)
+	}
+	return out
+}
+
+// Compare compares head with base, two commits.
+func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparison, error) {
+	var cmp Comparison
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s", slug, base, head), nil, &cmp)
+	return cmp, err
+}
+
 // FastForward moves branch to sha, creating it if it does not exist.
 //
 // Never forced: GitHub refuses the update unless sha descends from the

@@ -75,6 +75,14 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 	status, _ := git("status", "--porcelain", "--untracked-files=no")
 	ahead, behind := count(to+"..HEAD"), count("HEAD.."+to)
 	dirty, diverged := status != "", ahead > 0 && behind > 0
+	// As lux: a fast-forward never switches branches. It moves HEAD only
+	// when HEAD is the target branch, or detached for a sha target.
+	onTarget := false
+	if branch, err := git("symbolic-ref", "-q", "HEAD"); err == nil {
+		onTarget = branch == "refs/heads/"+sr.Ref
+	} else {
+		onTarget = strings.HasPrefix(to, sr.Ref)
+	}
 	ev["from"], ev["to"], ev["ahead"], ev["behind"] = from, to, ahead, behind
 	if dirty {
 		ev["dirty"] = true
@@ -87,7 +95,7 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["status"] = "up-to-date"
 	case sr.Mode == lux.SyncFetch:
 		ev["status"] = "fetched"
-	case dirty || diverged:
+	case dirty || diverged || !onTarget:
 		ev["status"] = lux.SyncKept
 	case ahead > 0:
 		ev["status"] = lux.SyncAhead
@@ -105,16 +113,21 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 }
 
 // pushWorkspace pushes the checkout's HEAD to branch in the bare
-// repository, as lux pushes what the agent committed; the commit pushed.
-func pushWorkspace(work, bare, branch string) (string, error) {
-	sha, err := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
+// repository, as lux pushes what the agent committed; the commit pushed,
+// or base untouched when nothing was committed.
+func pushWorkspace(work, bare, branch, base string) (string, error) {
+	out, err := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
 	if err != nil {
 		return "", err
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == base {
+		return base, nil
 	}
 	if out, err := exec.Command("git", "-C", work, "push", "-q", "--force", bare, "HEAD:refs/heads/"+branch).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git push: %v: %s", err, out)
 	}
-	return strings.TrimSpace(string(sha)), nil
+	return sha, nil
 }
 
 // localCall is a scripted conductor's own work in its checkout
