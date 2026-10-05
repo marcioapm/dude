@@ -174,6 +174,8 @@ export const settingsPatchSchema = z
         parkAfterMinutes: nullable(field("parkAfterMinutes")),
         idleNudgeMinutes: nullable(field("idleNudgeMinutes")),
         conductorWarmMinutes: nullable(field("conductorWarmMinutes")),
+        conductorEditLines: nullable(field("conductorEditLines")),
+        conductorEditFiles: nullable(field("conductorEditFiles")),
       })
       .strict()
       .optional(),

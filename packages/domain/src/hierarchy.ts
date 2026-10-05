@@ -166,6 +166,10 @@ export const deliveryPolicySchema = z
     idleNudgeMinutes: z.number().int().min(0).max(1440),
     /** Minutes a task's conductor stays running after its turn, before it is parked. */
     conductorWarmMinutes: z.number().int().min(1).max(1440),
+    /** The most changed lines (additions and deletions) a conductor may publish at once; past it, it delegates. */
+    conductorEditLines: z.number().int().min(1).max(10_000),
+    /** The most changed files a conductor may publish at once. */
+    conductorEditFiles: z.number().int().min(1).max(1000),
   })
   .partial()
   .strict();
