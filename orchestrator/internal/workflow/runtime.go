@@ -454,6 +454,11 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 		Signals:        run.signals,
 		Attempt:        run.Attempt,
 	})
+	var wait Wait
+	if errors.As(err, &wait) {
+		r.wait(ctx, &run.Run, wait)
+		return
+	}
 	if err != nil {
 		r.log.Warn("workflow step failed", "workflow", run.ID, "step", run.Step, "attempt", run.Attempt, "error", err)
 		r.fail(ctx, &run.Run, err.Error(), false, def)
@@ -601,6 +606,32 @@ func (r *Runtime) fail(ctx context.Context, run *Run, message string, fatal bool
 	})
 	if err != nil {
 		r.log.Error("recording workflow failure failed", "workflow", run.ID, "error", err)
+	}
+}
+
+// Wait is a step that cannot go on yet for a reason that passes on its
+// own (another operation holds the task briefly): the step runs again
+// after After, its signals unconsumed and its attempt not counted.
+type Wait struct {
+	After time.Duration
+	Why   string
+}
+
+func (w Wait) Error() string { return w.Why }
+
+// wait reschedules the step a Wait stopped.
+func (r *Runtime) wait(ctx context.Context, run *Run, w Wait) {
+	awaiting, _ := json.Marshal(db.NonNil(run.AwaitingSignals))
+	err := r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE workflow_runs SET status = 'waiting', last_error = $2, wake_at = now() + $3::interval,
+			       awaiting_signals = $4::jsonb, locked_by = NULL, locked_until = NULL
+			WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $5`,
+			run.ID, w.Why, max(w.After, 100*time.Millisecond).String(), awaiting, r.pollerID)
+		return err
+	})
+	if err != nil {
+		r.log.Error("recording a workflow wait failed", "workflow", run.ID, "error", err)
 	}
 }
 

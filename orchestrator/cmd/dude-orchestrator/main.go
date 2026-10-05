@@ -198,6 +198,9 @@ func run(log *slog.Logger) error {
 	loops := []loop{
 		{"workflow", 250 * time.Millisecond, func(ctx context.Context) (int, error) { return runtime.Dispatch(ctx, stepSlots) }},
 		{"phase-sync", time.Second, syncer.Sweep},
+		// Conductors' publishes, apart from the phase sweep: a slow forge
+		// holds this loop, never the Runs.
+		{"conductor-publishes", time.Second, syncer.SettlePublishes},
 		{"phase-notifier", time.Second, func(ctx context.Context) (int, error) {
 			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status, key string) error {
 				return runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished,
