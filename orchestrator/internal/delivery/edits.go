@@ -470,7 +470,7 @@ func (t PublishTarget) OverLimit(lines, files int) string {
 // phase's would (so the next phase starts from them and the gate's answer
 // at the old heads no longer holds), and the conductor is woken saying
 // what moved and, by repository, what was refused and why (refused), and
-// what could not be confirmed (stalled: StalledNoticeTx). The
+// what could not be confirmed (stalled: stalledNoticeTx). The
 // caller moved the branches, and began with LockRecordingTx in tx.
 // ErrClaimLost, rolling tx back, when the publish is no longer the
 // worker's to record.
@@ -528,7 +528,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 	if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+p.ID, line); err != nil {
 		return err
 	}
-	return StalledNoticeTx(ctx, tx, ref, p.ID, stalled)
+	return stalledNoticeTx(ctx, tx, ref, p.ID, stalled)
 }
 
 // PublishRefusedTx records a publish refused before anything moved, and
@@ -568,13 +568,13 @@ func PublishStalledTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, s
 	if tag.RowsAffected() == 0 {
 		return ErrClaimLost
 	}
-	return StalledNoticeTx(ctx, tx, ref, p.ID, stalled)
+	return stalledNoticeTx(ctx, tx, ref, p.ID, stalled)
 }
 
-// StalledNoticeTx says in Chat, for each repository whose move could not
+// stalledNoticeTx says in Chat, for each repository whose move could not
 // be confirmed, that its task branch is to be checked, and wakes the
 // conductor once for the publish.
-func StalledNoticeTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, stalled map[string]string) error {
+func stalledNoticeTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, stalled map[string]string) error {
 	if len(stalled) == 0 {
 		return nil
 	}
