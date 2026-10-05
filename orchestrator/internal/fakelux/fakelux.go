@@ -522,8 +522,9 @@ type Server struct {
 	// fast-forward or fetch is refused with a 409.
 	NoSyncModes bool
 	// HoldPushes is a lux that accepts a push and never reports it: no
-	// git.push follows.
+	// git.push follows, until ReleasePushes.
 	HoldPushes bool
+	heldPushes []func()
 	// HoldSyncs is a lux that accepts a running Run's sync and never
 	// reports it: no git.sync or sync.done follows.
 	HoldSyncs bool
@@ -1684,58 +1685,89 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.HoldPushes {
+			s.heldPushes = append(s.heldPushes, func() { s.pushNow(run, spec, branch, in.RequestID) })
 			return
 		}
-		// Each repository, in the spec's order, as lux pushes them: its own
-		// result, "skipped" for one that is never pushed.
-		repos := specRepos(spec)
-		first := ""
-		for _, repo := range repos {
-			if repo.Push && first == "" {
-				first = repo.Name
-			}
-		}
-		var results []any
-		for _, repo := range repos {
-			result := map[string]any{"repo": repo.Name}
-			if !repo.Push {
-				result["status"] = "skipped"
-				results = append(results, result)
-				continue
-			}
-			result["branch"] = branch
-			files := map[string]string{}
-			for path, content := range run.behavior.Commit {
-				if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
-					files[rest] = content
-				} else if !ok && repo.Name == first {
-					files[path] = content
-				}
-			}
-			path := s.repoPath(repo.URL)
-			base := head(path, repo.Ref)
-			var sha string
-			var err error
-			if len(files) == 0 && run.workspace != "" {
-				// What the agent committed in its checkout itself, as lux
-				// pushes a checkout's HEAD.
-				sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch, base)
-			} else {
-				sha, err = commit(path, base, branch, files, run.behavior.Message)
-			}
-			switch {
-			case err != nil:
-				result["status"], result["error"] = "failed", err.Error()
-			case sha == base:
-				result["status"], result["commit"] = "up-to-date", sha
-			default:
-				result["status"], result["commit"] = "pushed", sha
-				run.Pushed = true
-			}
-			results = append(results, result)
-		}
-		s.luxEvent(run, "git.push", map[string]any{"requestId": in.RequestID, "results": results})
+		s.pushNow(run, spec, branch, in.RequestID)
 	}()
+}
+
+// ReleasePushes makes the pushes HoldPushes held, now, each reported with
+// its git.push as lux would have.
+func (s *Server) ReleasePushes() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held := s.heldPushes
+	s.heldPushes = nil
+	for _, push := range held {
+		push()
+	}
+}
+
+// AddEvents records n lifecycle events of typ on a Run, as a long-lived
+// Run's history.
+func (s *Server) AddEvents(id, typ string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		for range n {
+			s.luxEvent(run, typ, map[string]any{})
+		}
+	}
+}
+
+// pushNow pushes the Run's checkouts to branch and reports it. Callers
+// hold s.mu.
+func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string) {
+	// Each repository, in the spec's order, as lux pushes them: its own
+	// result, "skipped" for one that is never pushed.
+	repos := specRepos(spec)
+	first := ""
+	for _, repo := range repos {
+		if repo.Push && first == "" {
+			first = repo.Name
+		}
+	}
+	var results []any
+	for _, repo := range repos {
+		result := map[string]any{"repo": repo.Name}
+		if !repo.Push {
+			result["status"] = "skipped"
+			results = append(results, result)
+			continue
+		}
+		result["branch"] = branch
+		files := map[string]string{}
+		for path, content := range run.behavior.Commit {
+			if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
+				files[rest] = content
+			} else if !ok && repo.Name == first {
+				files[path] = content
+			}
+		}
+		path := s.repoPath(repo.URL)
+		base := head(path, repo.Ref)
+		var sha string
+		var err error
+		if len(files) == 0 && run.workspace != "" {
+			// What the agent committed in its checkout itself, as lux
+			// pushes a checkout's HEAD.
+			sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch, base)
+		} else {
+			sha, err = commit(path, base, branch, files, run.behavior.Message)
+		}
+		switch {
+		case err != nil:
+			result["status"], result["error"] = "failed", err.Error()
+		case sha == base:
+			result["status"], result["commit"] = "up-to-date", sha
+		default:
+			result["status"], result["commit"] = "pushed", sha
+			run.Pushed = true
+		}
+		results = append(results, result)
+	}
+	s.luxEvent(run, "git.push", map[string]any{"requestId": requestID, "results": results})
 }
 
 type specRepo struct {

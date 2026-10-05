@@ -20,6 +20,8 @@ ALTER TABLE conductor_publishes
   ADD COLUMN moves jsonb NOT NULL DEFAULT '{}'::jsonb,
   -- When lux was asked to push: an ask lux never answers is given up on.
   ADD COLUMN asked_at timestamptz,
+  -- How far the worker read the conductor's lux events for that push.
+  ADD COLUMN lux_events_after bigint NOT NULL DEFAULT 0,
   -- The worker's schedule: not before this (a back-off after a transient
   -- failure), and how many transient failures in a row.
   ADD COLUMN next_attempt_at timestamptz,

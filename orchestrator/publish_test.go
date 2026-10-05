@@ -673,6 +673,44 @@ func TestAnExpiredPublishClaimRecordsNothing(t *testing.T) {
 	}
 }
 
+// A push lux reported past more than a pass's pages of the Run's events,
+// its follower not running: each pass reads on from where the last one
+// stopped, and the push is found — not given up on because one pass's
+// pages ran out, though the ask is past its bound.
+func TestAnAskedPushPastManyPagesOfEventsIsFound(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e.lux.HoldPushes = true
+	id := e.publish()
+	e.until("asked", func() bool {
+		return e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'asked'`, id) == 1
+	})
+	// From here only the publish worker runs: no follower reports the push.
+	e.noPublishes = true
+	e.syncer.Stop()
+	time.Sleep(200 * time.Millisecond)
+	e.lux.AddEvents(e.luxRunOf(e.cond), "run.note", 21*1000)
+	e.lux.ReleasePushes()
+	mustExec(t, e.owner, `UPDATE conductor_publishes SET asked_at = now() - interval '11 minutes' WHERE id = $1`, id)
+	var status, why string
+	for range 6 {
+		e.due(id)
+		e.settleOnce()
+		if err := e.owner.QueryRow(context.Background(), `SELECT status, COALESCE(error, '') FROM conductor_publishes WHERE id = $1`, id).
+			Scan(&status, &why); err != nil {
+			t.Fatal(err)
+		}
+		if status != delivery.PublishAsked {
+			break
+		}
+	}
+	if status == delivery.PublishRefused || status == delivery.PublishAsked {
+		t.Fatalf("publish %s %q, want the push found", status, why)
+	}
+}
+
 // task2 is a second conducted task in the world, its conductor running.
 func (e *editing) task2() string {
 	e.t.Helper()
