@@ -47,6 +47,17 @@ func newEditing(t *testing.T) *editing {
 	return e
 }
 
+// newCommitted is editing with the conductor woken after implement, its
+// checkout on the task branch's head, and a small fix committed there,
+// ready to publish; returns the commit.
+func newCommitted(t *testing.T) (*editing, string) {
+	t.Helper()
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	return e, e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+}
+
 // work is the conductor's checkout of the task's repository, in the fake lux.
 func (e *editing) work() string {
 	e.t.Helper()
@@ -375,8 +386,7 @@ func TestALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
 	e.cond = w.talk(e.task)
 	w.must(e.task, "start_phase", `{"phase":"implement"}`)
 	w.until("after implement", func() bool { return w.decisionAt(e.task) == delivery.PointImplemented })
-	note := w.wokenWith(e.task, "after implement")
-	_ = note
+	w.wokenWith(e.task, "after implement")
 	w.until("read-only", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND checkout_read_only IS NOT NULL`, e.cond) == 1
 	})
@@ -668,11 +678,7 @@ func TestThePullRequestGateWaitsForAReviewOfTheConductorsCommit(t *testing.T) {
 	e.must(e.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	e.until("after the review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
 	// The scripted reviewer raises its finding: dismissed, then on.
-	var finding string
-	_ = e.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' LIMIT 1`, e.task).Scan(&finding)
-	if finding != "" {
-		e.must(e.task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"fine as it is"}`, finding))
-	}
+	e.dismissOpenFinding()
 	e.must(e.task, "decide", `{"action":"next"}`)
 	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.must(e.task, "decide", `{"action":"ask_person"}`)
@@ -693,11 +699,7 @@ func TestAnEarlierReviewDoesNotClearALaterConductorCommit(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, e.task); n == 0 {
 		t.Fatal("no completed review of the old head")
 	}
-	var finding string
-	_ = e.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' LIMIT 1`, e.task).Scan(&finding)
-	if finding != "" {
-		e.must(e.task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"fine as it is"}`, finding))
-	}
+	e.dismissOpenFinding()
 	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
 	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.wokenWith(e.task, "before the pull request")
@@ -709,13 +711,21 @@ func TestAnEarlierReviewDoesNotClearALaterConductorCommit(t *testing.T) {
 	e.refused(e.task, "decide", `{"action":"ask_person"}`, "the last commit is the conductor's; run a review first")
 	e.must(e.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	e.until("the new head's review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	e.dismissOpenFinding()
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	e.must(e.task, "decide", `{"action":"ask_person"}`)
+}
+
+// dismissOpenFinding dismisses the scripted reviewer's open finding, if it
+// raised one, so the delivery can go on to the pull request.
+func (e *editing) dismissOpenFinding() {
+	e.t.Helper()
+	var finding string
 	_ = e.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' LIMIT 1`, e.task).Scan(&finding)
 	if finding != "" {
 		e.must(e.task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"fine as it is"}`, finding))
 	}
-	e.must(e.task, "decide", `{"action":"next"}`)
-	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
-	e.must(e.task, "decide", `{"action":"ask_person"}`)
 }
 
 // Under Deliver, a head that is the conductor's untested commit goes to a
