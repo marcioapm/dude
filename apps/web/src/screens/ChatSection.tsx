@@ -9,14 +9,14 @@
  * the orchestrator wakes, or replaces once it ended.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/client.ts";
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
-import { conductedLines, runWhat, type ConductorSteer } from "../conducted.ts";
+import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
@@ -130,16 +130,21 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const conducted = useMemo(() => conductedLines(task, events), [task.decider, task.runs, events]); // eslint-disable-line react-hooks/exhaustive-deps -- what the lines are made of
   const linesKey = conducted.map((l) => l.kind === "run"
     ? `${l.id}:${l.run.status}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
-  const lines = useMemo(() => conducted.map((l) => ({
-    id: l.id, at: l.at,
-    node: l.kind === "run"
-      ? <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
-          what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
-          steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />
-      : l.kind === "commit"
-        ? <ChatNotice data-testid="chat-commit" data-sha={l.sha} kind="commit" by="Conductor" text={l.text} at={l.at} />
-        : <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />,
-  })), [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
+  const lines = useMemo(() => {
+    function lineNode(l: ConductedLine): ReactNode {
+      switch (l.kind) {
+        case "run":
+          return <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
+            what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
+            steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />;
+        case "commit":
+          return <ChatNotice data-testid="chat-commit" data-sha={l.sha} kind="commit" by="Conductor" text={l.text} at={l.at} />;
+        default:
+          return <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />;
+      }
+    }
+    return conducted.map((l) => ({ id: l.id, at: l.at, node: lineNode(l) }));
+  }, [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
 
   // Who decides, while a delivery is in progress, and the way to hand it back.
   const [handing, setHanding] = useState(false);
