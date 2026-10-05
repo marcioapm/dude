@@ -123,3 +123,83 @@ def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str,
     expect(line).to_contain_text("Conductor", timeout=30_000)
     expect(line).to_contain_text("README.md")
     assert console_errors == []
+
+
+def _woken_texts(client: ApiClient, task_id: str, words: str) -> list[str]:
+    return [t for e in _events(client, task_id, "conductor.woken") if words in (t := e["payload"].get("text", ""))]
+
+
+def test_a_conductor_stopped_mid_rebase_is_resumed_into_it_and_publishes_once_it_is_finished(
+        client: ApiClient, owner_dsn: str, forge_project: dict, fake_github: FakeGitHub):
+    """The conductor's checkout stopped mid-rebase, through a park and the
+    resume a Chat message makes: lux keeps the rebase, dude tells the
+    conductor how to finish it, and publish is refused until it has."""
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    settings = f"/v1/projects/{forge_project['id']}/settings"
+    assert client.patch(settings, {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet, rebased by the conductor")
+    resp = client.post(f"/v1/tasks/{task['id']}/talk")
+    assert resp.status_code == 201, resp.text
+    conductor = resp.json()["runId"]
+    wait_until(lambda: _point(client, task["id"]) == "start", timeout=90, message="never waited on the start")
+    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
+    wait_until(lambda: _point(client, task["id"]) == "after_implement", timeout=120, message="the implementer never finished")
+    branch = f"dude/{task['id']}/attempt-1"
+    head = wait_until(lambda: fake_github.branch_sha(branch), timeout=30, message="no task branch")
+    rebase = "a rebase is in progress in your checkout"
+
+    # Its own FACTORY.md from before the implementer's, rebased onto the
+    # task branch: both add the file, so the rebase stops on the conflict.
+    # Published so, it is refused, and nothing moves.
+    _say(client, task["id"], "Rebase your version onto the task branch, and publish.",
+         _tool("git", {"args": ["switch", "-q", "-C", "mine", f"lux/{branch}~1"]}),
+         _tool("write", {"path": "FACTORY.md", "content": "the conductor's\n"}),
+         _tool("commit", {"message": "The conductor's FACTORY.md"}),
+         _tool("git", {"args": ["rebase", f"lux/{branch}"]}),
+         _tool("publish", {"message": "mid-rebase"}))
+    refused = wait_until(lambda: _woken_texts(client, task["id"], "was refused, nothing moved"), timeout=90,
+                         message="the publish mid-rebase was never refused")
+    assert f"greeter: {rebase}: finish or abort it, then publish." in refused[0], refused
+    publishes = query(owner_dsn, "SELECT status, error FROM conductor_publishes WHERE task_id = %s", (task["id"],))
+    assert [p["status"] for p in publishes] == ["refused"], publishes
+    assert fake_github.branch_sha(branch) == head
+
+    # Stopped: parked past its warm period (the suite's seconds). The task
+    # branch moves on meanwhile, so the rebase is behind it.
+    told = len(_woken_texts(client, task["id"], rebase))
+    assert client.patch(settings, {"delivery": {"conductorWarmMinutes": None}}).status_code == 200
+    wait_until(lambda: (r := client.get_run(conductor))["status"] == "paused" and r["dudePause"] == "conductor",
+               timeout=60, message="the conductor was never parked")
+    assert client.patch(settings, {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
+    moved_on = fake_github.commit(branch, "A person's commit")
+
+    # A Chat message resumes the same conductor, and the resume's sync
+    # tells it the rebase is still there, behind, and how to finish it.
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "Where were we?"})
+    assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
+    after = wait_until(lambda: _woken_texts(client, task["id"], rebase)[told:], timeout=90,
+                       message="the resumed conductor was never told of its rebase")
+    want = (f"greeter: {rebase} (1 behind the task branch): resolve and `git rebase --continue`, "
+            f"or `git rebase --abort`; then `git merge lux/{branch}`.")
+    assert any(want in t for t in after), after
+    assert all("switch" not in t for t in after), after
+    assert [r["cause"] for r in query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,))] == ["conductor"]
+
+    # Still mid-rebase: refused again.
+    _say(client, task["id"], "Publish as it is.", _tool("publish", {}))
+    wait_until(lambda: len(_woken_texts(client, task["id"], "was refused, nothing moved")) == 2, timeout=90,
+               message="the publish after the resume was never refused")
+    assert fake_github.branch_sha(branch) == moved_on
+
+    # Resolved, continued, the task branch merged in: published.
+    _say(client, task["id"], "Resolve it, finish the rebase, take the branch in and publish.",
+         _tool("write", {"path": "FACTORY.md", "content": "both\n"}),
+         _tool("git", {"args": ["add", "FACTORY.md"]}),
+         _tool("git", {"args": ["-c", "core.editor=true", "rebase", "--continue"]}),
+         _tool("git", {"args": ["merge", "-q", "--no-edit", f"lux/{branch}"]}),
+         _tool("publish", {"message": "the rebased FACTORY.md"}))
+    wait_until(lambda: _woken_with(client, task["id"], "is on the task branch"), timeout=90,
+               message="the finished rebase was never published")
+    assert fake_github.branch_sha(branch) not in (head, moved_on)
+    assert "The conductor's FACTORY.md" in fake_github.branch_log(branch)
