@@ -77,6 +77,8 @@ type publishRow struct {
 	Now time.Time
 	// This worker's claim (conductor_publishes.claim_token).
 	Claim string
+	// How far lux's events were read for an asked publish's push.
+	EventsAfter int64
 }
 
 func (p publishRow) ref() delivery.RunRef {
@@ -108,7 +110,7 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 			SELECT p.id, p.organization_id, r.project_id, p.task_id, p.run_id, p.request_id, p.status,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), p.message, p.push_result,
 				COALESCE(p.workflow_run_id, ''), COALESCE(p.attempt, 0), p.moves, COALESCE(p.branch, ''),
-				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now(), p.claim_token
+				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now(), p.claim_token, p.lux_events_after
 			FROM claimed p JOIN runs r ON r.id = p.run_id ORDER BY p.created_at`,
 			publishSlots, publishClaim.String(), askedGiveUp.String())
 		if err != nil {
@@ -255,26 +257,37 @@ func (s *Syncer) askPush(ctx context.Context, p publishRow) error {
 		return errPublishTransient{err}
 	}
 	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+		// lux's events are read for its git.push from the last one the
+		// conductor's follower had read: the push comes after the ask.
 		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'asked', asked_at = now(), failures = 0,
-				next_attempt_at = now() + $2::interval
+				next_attempt_at = now() + $2::interval,
+				lux_events_after = (SELECT lux_after_event FROM runs WHERE id = conductor_publishes.run_id)
 			WHERE id = $1 AND status = 'requested' AND claim_token = $3`, p.ID, askedEvery.String(), p.Claim)
 		return err
 	})
 }
 
+// askedPages is how many pages of lux's events one pass reads.
+const askedPages = 20
+
 // awaitPush looks for lux's report of a push it accepted that the
 // conductor's follower has not recorded (it ended, or the orchestrator
-// restarted): its git.push among the lux Run's events, by request id.
-// Given up on, refused, once askedGiveUp has passed.
+// restarted): its git.push among the lux Run's events, by request id,
+// read on from where the last pass stopped (lux_events_after), a few
+// pages a pass. Given up on, refused, only once a pass has read to lux's
+// last event and askedGiveUp has passed.
 func (s *Syncer) awaitPush(ctx context.Context, p publishRow) error {
+	after, atHead := p.EventsAfter, p.LuxRunID == ""
 	if p.LuxRunID != "" {
-		var after int64
-		for range 20 {
+		for range askedPages {
 			frames, err := s.Lux.Events(ctx, p.LuxRunID, after)
 			if err != nil {
 				if le, ok := lux.AsError(err); ok && !le.Retryable() {
+					// lux will never list the Run's events again.
+					atHead = true
 					break
 				}
+				s.eventsRead(ctx, p, after)
 				return errPublishTransient{err}
 			}
 			for _, f := range frames {
@@ -290,15 +303,31 @@ func (s *Syncer) awaitPush(ctx context.Context, p publishRow) error {
 				}
 			}
 			if len(frames) == 0 {
+				atHead = true
 				break
 			}
 		}
 	}
-	if p.AskedLong {
+	if p.AskedLong && atHead {
 		return s.refusePublish(ctx, p, "lux never reported the push")
 	}
+	s.eventsRead(ctx, p, after)
 	s.publishAt(ctx, p, askedEvery, false)
 	return nil
+}
+
+// eventsRead keeps how far lux's events were read for the publish's push.
+func (s *Syncer) eventsRead(ctx context.Context, p publishRow, after int64) {
+	if after == p.EventsAfter {
+		return
+	}
+	if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET lux_events_after = GREATEST(lux_events_after, $3)
+			WHERE id = $1 AND status = 'asked' AND claim_token = $2`, p.ID, p.Claim, after)
+		return err
+	}); err != nil {
+		s.Log.Warn("keeping a conductor's publish's place in lux's events failed", "publish", p.ID, "error", err)
+	}
 }
 
 // pushResult is lux's git.push.
