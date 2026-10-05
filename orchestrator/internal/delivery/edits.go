@@ -14,6 +14,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -44,6 +45,7 @@ const (
 	PublishMoving    = "moving"
 	PublishPublished = "published"
 	PublishRefused   = "refused"
+	PublishStalled   = "stalled"
 )
 
 // writerPhases (SQL list): the phases whose Runs push to the task branch.
@@ -324,14 +326,40 @@ type Move struct {
 	Lines        int      `json:"lines"`
 	Status       string   `json:"status"`
 	Error        string   `json:"error,omitempty"`
+	// When its fast-forward was first sent (AttemptMoveTx): from then on
+	// the branch may have moved whatever the forge answered.
+	AttemptedAt *time.Time `json:"attemptedAt,omitempty"`
 }
 
-// A Move's status.
+// A Move's status. Stalled: its fast-forward was sent and whether it
+// landed could not be confirmed (MoveUncertainFor).
 const (
 	MovePending = "pending"
 	MoveMoved   = "moved"
 	MoveRefused = "refused"
+	MoveStalled = "stalled"
 )
+
+// MoveUncertainFor is how long a sent fast-forward whose outcome the forge
+// will not confirm is reconciled before it is settled as stalled.
+const MoveUncertainFor = 30 * time.Minute
+
+// ErrNotMoving: the publish was settled meanwhile.
+var ErrNotMoving = errors.New("the publish is no longer moving")
+
+// AttemptMoveTx records, before the first fast-forward of repo's task
+// branch is sent, that it was; returns when it first was.
+func AttemptMoveTx(ctx context.Context, tx pgx.Tx, pubID, repo string) (time.Time, error) {
+	var at time.Time
+	err := tx.QueryRow(ctx, `UPDATE conductor_publishes
+		SET moves = jsonb_set(moves, ARRAY[$2::text, 'attemptedAt'], COALESCE(moves->$2->'attemptedAt', to_jsonb(now())))
+		WHERE id = $1 AND status = 'moving' AND moves ? $2
+		RETURNING (moves->$2->>'attemptedAt')::timestamptz`, pubID, repo).Scan(&at)
+	if db.IsNotFound(err) {
+		return at, ErrNotMoving
+	}
+	return at, err
+}
 
 // ErrNotReserved: what the comparisons measured is no longer the task's
 // (its heads moved, a step holds the delivery, or the publish was settled
@@ -397,12 +425,13 @@ func (t PublishTarget) OverLimit(lines, files int) string {
 // settled and at least one moved: the delivery's heads advance as a
 // phase's would (so the next phase starts from them and the gate's answer
 // at the old heads no longer holds), and the conductor is woken saying
-// what moved and, by repository, what was refused and why (refused). The
+// what moved and, by repository, what was refused and why (refused), and
+// what could not be confirmed (stalled: StalledNoticeTx). The
 // caller moved the branches. ErrStepRunning when a step of the delivery
 // holds it now, whose transition would write over the heads: recorded
 // after it.
 func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID string, heads map[string]PublishHead,
-	refused map[string]string) error {
+	refused, stalled map[string]string) error {
 	var locked bool
 	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1 FOR UPDATE`,
 		workflowID).Scan(&locked); err != nil {
@@ -437,6 +466,9 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 	for _, repo := range slices.Sorted(maps.Keys(refused)) {
 		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
 	}
+	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
+		notMoved = append(notMoved, fmt.Sprintf("%s could not be confirmed at %s", repo, short(stalled[repo])))
+	}
 	raw, _ := json.Marshal(heads)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(),
 			error = NULLIF($3, ''), next_attempt_at = NULL
@@ -455,7 +487,10 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 			pubID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
 	}
 	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+pubID, line)
-	return err
+	if err != nil {
+		return err
+	}
+	return StalledNoticeTx(ctx, tx, ref, pubID, stalled)
 }
 
 // PublishRefusedTx records a publish refused before anything moved, and
@@ -469,6 +504,45 @@ func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, why str
 	}
 	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID,
 		fmt.Sprintf("Your publish %s was refused, nothing moved: %s", pubID, clip(oneLine(why), 220)))
+	return err
+}
+
+// PublishStalledTx settles a moving publish none of whose moves was
+// confirmed and some of which may have landed (stalled, by repository the
+// head it was sent to move to): nothing is recorded as published, the
+// fence is released, and Chat and the conductor are told to check.
+func PublishStalledTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, stalled map[string]string) error {
+	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'stalled', settled_at = now(), next_attempt_at = NULL,
+			error = 'the move could not be confirmed'
+		WHERE id = $1 AND status = 'moving'
+		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' IN ('moved', 'pending'))`, pubID)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return StalledNoticeTx(ctx, tx, ref, pubID, stalled)
+}
+
+// StalledNoticeTx says in Chat, for each repository whose move could not
+// be confirmed, that its task branch is to be checked, and wakes the
+// conductor once for the publish.
+func StalledNoticeTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, stalled map[string]string) error {
+	if len(stalled) == 0 {
+		return nil
+	}
+	var said []string
+	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
+		text := fmt.Sprintf("dude could not confirm whether %s's task branch moved to %s; check the branch", repo, stalled[repo])
+		said = append(said, fmt.Sprintf("%s to %s", repo, short(stalled[repo])))
+		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
+			TaskID: ref.TaskID, RunID: ref.RunID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+			CorrelationID: ref.TaskID, Payload: map[string]any{"about": "publish_stalled", "publishId": pubID, "repo": repo,
+				"text": text}}); err != nil {
+			return err
+		}
+	}
+	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_stalled", "publish_stalled:"+pubID,
+		fmt.Sprintf("Your publish %s could not be confirmed on the task branch (%s): check the branch before you publish again.",
+			pubID, strings.Join(said, ", ")))
 	return err
 }
 

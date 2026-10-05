@@ -71,6 +71,8 @@ type publishRow struct {
 	Branch                                               string
 	AskedLong                                            bool
 	Failures                                             int
+	// The database's clock as it was claimed.
+	Now time.Time
 }
 
 func (p publishRow) ref() delivery.RunRef {
@@ -96,7 +98,7 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 			SELECT p.id, p.organization_id, r.project_id, p.task_id, p.run_id, p.request_id, p.status,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), p.message, p.push_result,
 				COALESCE(p.workflow_run_id, ''), COALESCE(p.attempt, 0), p.moves, COALESCE(p.branch, ''),
-				COALESCE(p.asked_at < now() - $3::interval, false), p.failures
+				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now()
 			FROM claimed p JOIN runs r ON r.id = p.run_id ORDER BY p.created_at`,
 			publishSlots*4, publishClaim.String(), askedGiveUp.String())
 		if err != nil {
@@ -315,7 +317,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		}
 		cmp, err := gh.Compare(ctx, slug, from, res.Commit)
 		if err != nil {
-			if forge.Transient(err) {
+			if !forgeRefused(err) {
 				return errPublishTransient{err}
 			}
 			return s.refusePublish(ctx, p, fmt.Sprintf("comparing %s with the task branch failed: %v", res.Repo, err))
@@ -363,28 +365,58 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 // never those that moved — then fast-forwarded one by one, each result
 // kept as it happens. Then what moved is recorded (recordPublish), or,
 // with nothing moved, the publish is refused.
+//
+// A forge refusing for good (forgeRefused) refuses a repository whose
+// move was never sent. One whose move was sent and whose outcome the
+// forge will not confirm is asked again with back-off until
+// delivery.MoveUncertainFor has passed since it was first sent, then
+// settled as stalled: never recorded as moved, never as not moved.
 func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 	gh, err := s.Forges.For(ctx, p.Org)
 	if err != nil {
 		return err
 	}
-	if gh == nil {
-		return errPublishTransient{errors.New("no forge credential to read the task branch with")}
-	}
 	keep := func(repo string, m delivery.Move) error {
 		p.Moves[repo] = m
 		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.MovedTx(ctx, tx, p.ID, repo, m) })
 	}
+	// unconfirmed settles a sent move as stalled once its time is up, or
+	// asks again later.
+	unconfirmed := func(repo string, m delivery.Move, cause error) error {
+		if p.Now.Sub(*m.AttemptedAt) < delivery.MoveUncertainFor {
+			return errPublishTransient{cause}
+		}
+		m.Status, m.Error = delivery.MoveStalled, fmt.Sprintf("could not confirm it moved to %s: %v", m.Head, cause)
+		return keep(repo, m)
+	}
 	names := slices.Sorted(maps.Keys(p.Moves))
 	var pending []string
+	var transient error
 	for _, name := range names {
 		m := p.Moves[name]
 		if m.Status != delivery.MovePending {
 			continue
 		}
-		at, err := gh.BranchSHA(ctx, m.Slug, p.Branch)
+		at, err := branchSHA(ctx, gh, m.Slug, p.Branch)
 		if err != nil {
-			return errPublishTransient{err}
+			switch {
+			case m.AttemptedAt != nil:
+				err = unconfirmed(name, m, err)
+			case forgeRefused(err):
+				m.Status, m.Error = delivery.MoveRefused, fmt.Sprintf("reading %s's task branch failed: %v", name, err)
+				err = keep(name, m)
+			default:
+				err = errPublishTransient{err}
+			}
+			var te errPublishTransient
+			if errors.As(err, &te) {
+				transient = err
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		if at == m.Head {
 			m.Status = delivery.MoveMoved
@@ -394,6 +426,10 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 			continue
 		}
 		pending = append(pending, name)
+	}
+	if transient != nil {
+		// Nothing more is sent while a repository's state is unknown.
+		return transient
 	}
 	if len(pending) > 0 {
 		var why string
@@ -405,18 +441,39 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 		}
 		for _, name := range pending {
 			m := p.Moves[name]
-			if why == "" {
-				err := gh.FastForward(ctx, m.Slug, p.Branch, m.Head)
-				switch {
-				case err == nil:
-					m.Status = delivery.MoveMoved
-				case forge.Transient(err):
-					return errPublishTransient{err}
-				default:
-					m.Status, m.Error = delivery.MoveRefused, fmt.Sprintf("the task branch moved meanwhile (%v): `git merge lux/%s`, then publish again",
-						err, p.Branch)
+			if why != "" {
+				m.Status, m.Error = delivery.MoveRefused, why
+				if err := keep(name, m); err != nil {
+					return err
 				}
-			} else {
+				continue
+			}
+			if m.AttemptedAt == nil {
+				var at time.Time
+				if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) (err error) {
+					at, err = delivery.AttemptMoveTx(ctx, tx, p.ID, name)
+					return err
+				}); err != nil {
+					return err
+				}
+				m.AttemptedAt = &at
+				p.Moves[name] = m
+			}
+			err := gh.FastForward(ctx, m.Slug, p.Branch, m.Head)
+			switch {
+			case err == nil:
+				m.Status = delivery.MoveMoved
+			case !forgeRefused(err):
+				// Sent, and no answer to trust: it may have landed.
+				if err := unconfirmed(name, m, err); err != nil {
+					return err
+				}
+				continue
+			default:
+				why := fmt.Sprintf("the forge refused the move: %v", err)
+				if e := (*forge.Error)(nil); errors.As(err, &e) && e.Status == 422 {
+					why = fmt.Sprintf("the task branch moved meanwhile (%v): `git merge lux/%s`, then publish again", err, p.Branch)
+				}
 				m.Status, m.Error = delivery.MoveRefused, why
 			}
 			if err := keep(name, m); err != nil {
@@ -427,6 +484,35 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 	return s.recordPublish(ctx, p)
 }
 
+// errNoForge: the organization has no forge credential to move with.
+var errNoForge = errors.New("no forge credential to read the task branch with")
+
+// branchSHA is forge.GitHub.BranchSHA, errNoForge without a forge.
+func branchSHA(ctx context.Context, gh *forge.GitHub, slug, branch string) (string, error) {
+	if gh == nil {
+		return "", errNoForge
+	}
+	return gh.BranchSHA(ctx, slug, branch)
+}
+
+// forgeRefused says the forge refused for good: 401 or 403 that is not a
+// rate limit, 404 or 422, or no forge credential. Rate limits, 5xx, no
+// answer and anything else may pass.
+func forgeRefused(err error) bool {
+	if errors.Is(err, errNoForge) {
+		return true
+	}
+	var e *forge.Error
+	if !errors.As(err, &e) || forge.Transient(err) {
+		return false
+	}
+	switch e.Status {
+	case 401, 403, 404, 422:
+		return true
+	}
+	return false
+}
+
 // recordPublish records a publish whose moves are all settled: the pull
 // request heads, git.commit_created and the delivery's heads from what
 // moved, and the outcome wake; refused when nothing moved. A step holding
@@ -434,13 +520,19 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 	heads := map[string]delivery.PublishHead{}
 	refused := map[string]string{}
+	stalled := map[string]string{}
 	for name, m := range p.Moves {
 		switch m.Status {
 		case delivery.MoveMoved:
 			heads[name] = delivery.PublishHead{SHA: m.Head, Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
 		case delivery.MoveRefused:
 			refused[name] = m.Error
+		case delivery.MoveStalled:
+			stalled[name] = m.Head
 		}
+	}
+	if len(heads) == 0 && len(stalled) > 0 {
+		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.PublishStalledTx(ctx, tx, p.ref(), p.ID, stalled) })
 	}
 	if len(heads) == 0 {
 		var why []string
@@ -469,7 +561,7 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 				return err
 			}
 		}
-		return delivery.PublishedTx(ctx, tx, p.ref(), p.ID, p.WorkflowID, heads, refused)
+		return delivery.PublishedTx(ctx, tx, p.ref(), p.ID, p.WorkflowID, heads, refused, stalled)
 	})
 	if errors.Is(err, delivery.ErrStepRunning) {
 		// Sooner than a waiting step's retry (delivery.ErrPublishMoving),

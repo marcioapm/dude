@@ -426,6 +426,132 @@ func TestASlowForgeDoesNotHoldThePhaseSweep(t *testing.T) {
 	g.release()
 }
 
+func isBranchRead(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/ref/heads/")
+}
+
+// due makes a live publish due now, as its back-off had passed.
+func (e *editing) due(id string) {
+	e.t.Helper()
+	mustExec(e.t, e.owner, `UPDATE conductor_publishes SET next_attempt_at = NULL WHERE id = $1`, id)
+}
+
+// settleOnce runs one pass of the publish worker.
+func (e *editing) settleOnce() {
+	e.t.Helper()
+	if _, err := e.syncer.SettlePublishes(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// A forge that refuses for good to read the task branch, before any move
+// was sent: the repository is refused, the publish settles with nothing
+// moved, and the fence is gone — the hand-back goes through.
+func TestAForgeRefusingToReadTheBranchBeforeAMoveRefusesThePublish(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	before := e.gh.SHA(e.branch)
+	var moves atomic.Int64
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if isMove(r) {
+				moves.Add(1)
+			}
+			if isBranchRead(r) {
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	id := e.publish()
+	status, why := e.published(id)
+	if status != delivery.PublishRefused || !strings.Contains(why, "403") {
+		t.Fatalf("publish %s: %q, want refused for the forge's 403", status, why)
+	}
+	if n := moves.Load(); n != 0 {
+		t.Errorf("%d moves sent", n)
+	}
+	e.refusedUnmoved(id, before, "403")
+	if status, out := e.call("/internal/tasks/"+e.task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+		t.Errorf("the hand-back after the refusal: %d %v", status, out)
+	}
+}
+
+// A move sent and answered 502, then a forge that will not let the branch
+// be read: reconciled with back-off while the move may still be confirmed,
+// then, 30 minutes after it was sent, settled as stalled — nothing
+// recorded as published, the fence released, Chat and the conductor told.
+func TestAMoveTheForgeWillNotConfirmStallsAfterItsBound(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	before := e.gh.SHA(e.branch)
+	var answered, readable atomic.Bool
+	readable.Store(true)
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if isMove(r) && !answered.Swap(true) {
+				return http.StatusBadGateway
+			}
+			if isBranchRead(r) && !readable.Load() {
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	id := e.publish()
+	e.until("the move sent, its answer a 502", func() bool {
+		return answered.Load() && e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving'
+			AND moves->'target' ? 'attemptedAt' AND failures > 0`, id) == 1
+	})
+	e.noPublishes = true
+	readable.Store(false)
+	// Within its bound: asked again, still moving.
+	e.due(id)
+	e.settleOnce()
+	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving' AND next_attempt_at > now()`, id); n != 1 {
+		t.Fatal("an unconfirmed move within its bound is not reconciled again later")
+	}
+	mustExec(t, e.owner, `UPDATE conductor_publishes SET moves = jsonb_set(moves, '{target,attemptedAt}',
+		to_jsonb(now() - interval '31 minutes')), next_attempt_at = NULL WHERE id = $1`, id)
+	e.settleOnce()
+	var status string
+	if err := e.owner.QueryRow(context.Background(), `SELECT status FROM conductor_publishes WHERE id = $1`, id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != delivery.PublishStalled {
+		t.Fatalf("publish %s, want stalled", status)
+	}
+	if got := e.gh.SHA(e.branch); got != before {
+		t.Errorf("the task branch moved to %s", got)
+	}
+	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND heads IS NULL`, id); n != 1 {
+		t.Error("a stalled publish recorded heads")
+	}
+	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'publishId' = $2`,
+		e.task, id); n != 0 {
+		t.Errorf("%d commit events for a move never confirmed", n)
+	}
+	if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'heads'->>'target' = $2`, e.task, sha); n != 0 {
+		t.Error("the delivery's head moved to an unconfirmed commit")
+	}
+	want := "dude could not confirm whether target's task branch moved to " + sha + "; check the branch"
+	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'text' = $2`,
+		e.task, want); n != 1 {
+		t.Errorf("%d Chat notices saying %q", n, want)
+	}
+	if n := e.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'publish_stalled' AND key = 'publish_stalled:' || $2`,
+		e.task, id); n != 1 {
+		t.Errorf("%d publish_stalled wakes", n)
+	}
+	if status, out := e.call("/internal/tasks/"+e.task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+		t.Errorf("the hand-back after the stall: %d %v", status, out)
+	}
+}
+
 // task2 is a second conducted task in the world, its conductor running.
 func (e *editing) task2() string {
 	e.t.Helper()
