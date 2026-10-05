@@ -118,10 +118,12 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 
 // operation is the git operation in progress in the checkout work, as lux
 // names it (lux.Operation*), or "". The sequencer alone is a multi-commit
-// cherry-pick or revert stopped between picks.
+// cherry-pick or revert stopped between picks. rebase-apply is git am's
+// as well as an apply-backend rebase's: am alone writes "applying" in it.
 func operation(work string) string {
 	for _, m := range []struct{ path, op string }{
 		{"rebase-merge", lux.OperationRebase},
+		{"rebase-apply/applying", lux.OperationAm},
 		{"rebase-apply", lux.OperationRebase},
 		{"MERGE_HEAD", lux.OperationMerge},
 		{"CHERRY_PICK_HEAD", lux.OperationCherryPick},
