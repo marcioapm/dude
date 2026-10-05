@@ -443,6 +443,19 @@ describe("what the Chat is made of", () => {
     ]);
   });
 
+  test("a commit the conductor published is its line, with its short sha and files; a phase's is not", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const lines = conductedLines({ decider: "conductor", runs: [] }, [
+      ev("git.commit_created", { repo: "greeter", headSha: sha, changedPaths: ["README.md", "src/a.ts"], by: "conductor" }, 1, CONDUCTOR),
+      ev("git.commit_created", { repo: "greeter", headSha: "fedcba9876", changedPaths: ["x.ts"] }, 2, "run_impl"),
+    ]);
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    expect(line!.kind).toBe("commit");
+    expect(line!.kind === "commit" && [line.sha, line.paths, line.text]).toEqual(["0123456",
+      ["README.md", "src/a.ts"], "The conductor published greeter@0123456: README.md, src/a.ts."]);
+  });
+
   test("the history says the conductor's work is conducted", () => {
     const line = taskHistory({ status: "running", decider: "conductor", runs: [run({ id: "a", status: "running", conductorRunId: CONDUCTOR })] }, [], [], null, String);
     expect(line.lead).toBe("Conducting");

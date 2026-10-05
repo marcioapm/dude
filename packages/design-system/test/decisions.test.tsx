@@ -101,4 +101,10 @@ describe("who decides", () => {
     expect(h).toContain('data-kind="decision"');
     expect(plain(h)).toContain("El Duderino: Waiting on the conductor.");
   });
+
+  test("a commit the conductor published is its line, signed by it", () => {
+    const h = html(<ChatNotice kind="commit" by="Conductor" text="The conductor published app@0123456: README.md." at={0} />);
+    expect(h).toContain('data-kind="commit"');
+    expect(plain(h)).toContain("Conductor: The conductor published app@0123456: README.md.");
+  });
 });
