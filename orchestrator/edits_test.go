@@ -24,6 +24,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -282,6 +283,44 @@ func TestACheckoutLineOnAFailedNoteIsToldAgain(t *testing.T) {
 		return e.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'conductor.woken'
 			AND strpos(payload->>'text', 'has local changes') > 0`, next) == 1
 	})
+}
+
+// A conductor started in a new attempt, before anything of that attempt
+// is on its task branch, is checked out on the default branch — not on the
+// attempt's branch, which does not exist yet, though the last attempt
+// published.
+func TestAConductorInANewAttemptStartsFromTheDefaultBranch(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	// Attempt 2's implementer never finishes: its branch stays unmade.
+	e.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Reply: "ok"}
+	}
+	mustExec(t, e.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, e.task)
+	if status, body := e.call("/internal/tasks/"+e.task+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	e.until("attempt 2's implementer", func() bool {
+		return e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, e.task) == 1
+	})
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	if status, out := e.chat(e.task, "where are we?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	next, _, _ := e.conductor(e.task)
+	var spec lux.Spec
+	_ = json.Unmarshal([]byte(e.conductorSpecOf(e.task)), &spec)
+	if spec.Git == nil || spec.Git.Repositories[0].Ref != "main" {
+		t.Fatalf("the new conductor's checkout: %+v, want main", spec.Git)
+	}
+	e.until("the new conductor answered", func() bool { return len(e.said(next)) >= 1 })
+	if n := e.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, next); n != 0 {
+		t.Error("the new conductor failed")
+	}
 }
 
 // A checkout with commits on top of the task branch is ahead, and told so.
