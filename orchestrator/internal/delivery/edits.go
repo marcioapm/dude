@@ -153,22 +153,28 @@ const publishLive = `('requested', 'asked', 'pushed', 'moving')`
 var ErrPublishMoving = workflow.Wait{After: time.Second,
 	Why: "the conductor's publish is moving the task branch now; try again in a moment"}
 
-// publishMoving (SQL, $1 the task): a publish of its conductor's is moving
-// its task branch.
-const publishMoving = `EXISTS (SELECT 1 FROM conductor_publishes m WHERE m.task_id = $1 AND m.status = 'moving')`
-
 // RefuseWhileMovingTx is ErrPublishMoving when the task's publish is
 // moving. The caller holds the lock the reservation takes for what it
 // fences (ReservePublishTx).
 func RefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	var moving bool
-	if err := tx.QueryRow(ctx, `SELECT `+publishMoving, taskID).Scan(&moving); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM conductor_publishes WHERE task_id = $1 AND status = 'moving')`,
+		taskID).Scan(&moving); err != nil {
 		return err
 	}
 	if moving {
 		return ErrPublishMoving
 	}
 	return nil
+}
+
+// lockAndRefuseWhileMovingTx is RefuseWhileMovingTx for a caller that
+// does not hold the delivery's row: it locks it first, for the rest of tx.
+func lockAndRefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
+		return err
+	}
+	return RefuseWhileMovingTx(ctx, tx, taskID)
 }
 
 // RefuseUnmovedTx settles a conductor's publishes that have not moved
