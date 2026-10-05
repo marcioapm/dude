@@ -228,9 +228,9 @@ type PublishTarget struct {
 }
 
 // PublishOf is a publish as its settlement checks it: its conductor, and
-// the delivery and attempt it was asked on ("" and 0 from before they
-// were recorded, unchecked). Claim is the worker's claim on it
-// (conductor_publishes.claim_token); its writes land only while it holds.
+// the delivery and attempt it was asked on. Claim is the worker's claim on
+// it (conductor_publishes.claim_token); its writes land only while it
+// holds.
 type PublishOf struct {
 	ID, TaskID, RunID, WorkflowID string
 	Attempt                       int
@@ -290,7 +290,7 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 		return d, "this task has no delivery in progress", nil
 	case Ended(d.TaskStatus):
 		return d, "this task is " + d.TaskStatus, nil
-	case p.WorkflowID != "" && d.WorkflowID != p.WorkflowID || p.Attempt != 0 && d.State.Attempt != p.Attempt:
+	case d.WorkflowID != p.WorkflowID || d.State.Attempt != p.Attempt:
 		return d, "the task was started over since you published", nil
 	case !d.State.conducted():
 		return d, refusedPolicy, nil
