@@ -253,6 +253,37 @@ func TestAKeptCheckoutIsToldInTheWakeNote(t *testing.T) {
 	}
 }
 
+// A checkout line added to a wake note is one of the note's reasons: the
+// note failing unread (its conductor ended before reading it) tells the
+// line again, to the conductor after.
+func TestACheckoutLineOnAFailedNoteIsToldAgain(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	e.commit(map[string]string{"NOTE.md": "mine\n"})
+	if err := os.WriteFile(filepath.Join(e.work(), "WIP.md"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.git("add", "WIP.md")
+	old := e.luxRunOf(e.cond)
+	// Nothing reaches the old conductor's agent from here on.
+	e.lux.BeforeInput = func(runID, _ string) bool { return runID != old }
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("the line on the note", func() bool {
+		return e.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL
+			AND strpos(text, 'has local changes') > 0`, e.cond) == 1
+	})
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	if status, out := e.chat(e.task, "are you there?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	next, _, _ := e.conductor(e.task)
+	e.until("the next conductor told the line", func() bool {
+		return e.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'conductor.woken'
+			AND strpos(payload->>'text', 'has local changes') > 0`, next) == 1
+	})
+}
+
 // A checkout with commits on top of the task branch is ahead, and told so.
 func TestAnAheadCheckoutIsToldInTheWakeNote(t *testing.T) {
 	e := newEditing(t)

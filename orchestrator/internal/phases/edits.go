@@ -244,7 +244,14 @@ func tellConductor(ctx context.Context, tx pgx.Tx, r phaseRun, key, line string)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE directives SET text = text || E'\n\n' || $2
 		WHERE id = $1 AND sent_at IS NULL AND claimed_at IS NULL AND failed_at IS NULL`, note, line)
-	if err != nil || tag.RowsAffected() == 1 {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		// An attempt of the note's, as the wake's own reasons are: if the
+		// note fails unread, the line is told again (RequeueWakesTx).
+		_, err = tx.Exec(ctx, `INSERT INTO conductor_wake_attempts (organization_id, wake_id, conductor_run_id, directive_id)
+			VALUES ($1, $2, $3, $4)`, r.Org, wake, r.ID, note)
 		return err
 	}
 	// Claimed meanwhile: the line wakes it on its own.
