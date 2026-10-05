@@ -129,14 +129,14 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message,
 			workflow_run_id, attempt, branch)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, ref.Org, ref.TaskID, ref.RunID, "publish-"+id,
-		clip(strings.TrimSpace(message), 2000), d.WorkflowID, d.State.Attempt, d.branch(ref.TaskID)); err != nil {
+		clip(strings.TrimSpace(message), 2000), d.WorkflowID, d.State.Attempt, d.Branch(ref.TaskID)); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 
-// branch is the delivery's task branch.
-func (d *Delivery) branch(taskID string) string {
+// Branch is the delivery's task branch.
+func (d *Delivery) Branch(taskID string) string {
 	if d.State.Branch != "" {
 		return d.State.Branch
 	}
@@ -317,7 +317,7 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarg
 	if err != nil {
 		return t, err
 	}
-	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.branch(p.TaskID), nonNilMap(d.State.Heads), !held
+	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.Branch(p.TaskID), nonNilMap(d.State.Heads), !held
 	var projectPolicy, orgPolicy []byte
 	if err := tx.QueryRow(ctx, `SELECT p.delivery_policy, o.delivery_policy FROM tasks t JOIN projects p ON p.id = t.project_id
 		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, p.TaskID).Scan(&projectPolicy, &orgPolicy); err != nil {
@@ -401,7 +401,7 @@ func ReservePublishTx(ctx context.Context, tx pgx.Tx, p PublishOf, heads map[str
 	}
 	raw, _ := json.Marshal(moves)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'moving', moves = $2::jsonb, branch = $3, workflow_run_id = $4
-		WHERE id = $1 AND status = 'pushed' AND `+claimed(5), p.ID, raw, d.branch(p.TaskID), d.WorkflowID, p.Claim)
+		WHERE id = $1 AND status = 'pushed' AND `+claimed(5), p.ID, raw, d.Branch(p.TaskID), d.WorkflowID, p.Claim)
 	if err != nil {
 		return "", err
 	}
