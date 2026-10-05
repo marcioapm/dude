@@ -474,6 +474,39 @@ func TestTheSweepDoesNotSpinWhileASyncIsOutstanding(t *testing.T) {
 	}
 }
 
+// A conductor parked on a lux with sync modes, resumed on one without: the
+// resume's refusal leaves it read-only, Chat says so once, publish is
+// refused, and the resume carries no move and no sync without a mode.
+func TestAResumeOnALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.syncer.ConductorWarm = 1
+	e.until("the conductor parked", func() bool { _, status, _ := e.conductor(e.task); return status == "paused" })
+	e.syncer.ConductorWarm = 1 << 40
+	e.lux.NoSyncModes = true
+	if status, _ := e.chat(e.task, "resume without modes"); status != 200 {
+		t.Fatalf("chat %d", status)
+	}
+	e.heard("resume without modes")
+	e.refused(e.task, "publish", `{}`, "read-only")
+	for _, r := range e.lux.Runs() {
+		if r.ID != e.luxRunOf(e.cond) {
+			continue
+		}
+		for _, refs := range r.ResumeSyncs {
+			for _, ref := range refs {
+				if ref.Mode == "" || ref.Mode == lux.SyncMove {
+					t.Errorf("the resume fell back to %q: %v", ref.Mode, refs)
+				}
+			}
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+		AND payload->>'about' = 'checkout_read_only'`, e.task); n != 1 {
+		t.Errorf("%d read-only notices", n)
+	}
+}
+
 // Publish: the conductor's commit goes to the task branch, by
 // fast-forward; the pull request's head follows; git.commit_created is
 // the conductor's; the delivery's heads move; it is woken saying so.
