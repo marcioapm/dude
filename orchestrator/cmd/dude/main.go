@@ -19,6 +19,8 @@
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
+//	dude pr reply PR TEXT [--in-reply-to ID]
+//	                                      a conductor's: answer on its task's pull request
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
@@ -79,7 +81,7 @@ func run(args []string, out io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
-		cmd == "phase" || cmd == "finding") {
+		cmd == "phase" || cmd == "finding" || cmd == "pr") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -315,6 +317,20 @@ func run(args []string, out io.Writer) error {
 			return errors.New(`usage: dude finding dismiss ID --reason "why"`)
 		}
 		return show(out, *asJSON, call("dismiss_finding", map[string]any{"id": args[0], "reason": *reason}))
+	case "pr reply":
+		inReplyTo := fs.String("in-reply-to", "", "the comment answered (issue-comment-…, line-comment-…, review-…)")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) < 2 {
+			return errors.New(`usage: dude pr reply PR "what to post" [--in-reply-to ID]`)
+		}
+		body := map[string]any{"pr": args[0], "text": strings.Join(args[1:], " ")}
+		if *inReplyTo != "" {
+			body["in_reply_to"] = *inReplyTo
+		}
+		return show(out, *asJSON, call("reply_on_pull_request", body))
 	case "task update":
 		goal := fs.String("goal", "", "the task's goal, whole")
 		clear := fs.Bool("no-criteria", false, "clear the acceptance criteria")
@@ -553,6 +569,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
                                              open_pull_request (after the person answered Open)
   dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is
+  dude pr reply PR TEXT [--in-reply-to ID]   a conductor's: answer on its task's pull request (PR is 12
+                                             or repo#12) as dude's GitHub login; a line-comment-… is
+                                             answered in its thread, anything else quoted
   dude task update [--goal G] [--criterion C]... [--no-criteria]
                                              a conductor's: write what Chat settled into the task,
                                              before the implementer starts

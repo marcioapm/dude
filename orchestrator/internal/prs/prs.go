@@ -103,9 +103,25 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	status, err := gh.PullRequest(ctx, slug, pr.Number)
+	// A pull request already recorded as ended is read again for what was
+	// said on it (a mention), not for its checks: its branch may have moved
+	// on with later work, whose head and checks are not what it ended with.
+	// Read in full only if it is open again (reopened).
+	var status forge.Status
+	ended := !isOpen(pr.State)
+	if ended {
+		if status, err = gh.Discussion(ctx, slug, pr.Number); err == nil && isOpen(status.State) {
+			ended = false
+		}
+	}
+	if !ended {
+		status, err = gh.PullRequest(ctx, slug, pr.Number)
+	}
 	if err != nil {
 		return err
+	}
+	if ended {
+		frozen(&status, pr)
 	}
 	// No CI reports unknown, and so does a new head before CI has
 	// registered on it. On a pull request that has had CI, a head within
@@ -122,7 +138,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		grace = DefaultCIGrace
 	}
 	hadCI := pr.HadCI || status.Checks != forge.ChecksUnknown
-	if status.Checks == forge.ChecksUnknown && pr.HadCI && time.Since(headSeenAt) < grace {
+	if status.Checks == forge.ChecksUnknown && pr.HadCI && !ended && time.Since(headSeenAt) < grace {
 		status.Checks = forge.ChecksPending
 	}
 	// A head dude did not push: a person pushed, or GitHub's Update
@@ -148,7 +164,13 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	var fresh []forge.Feedback
+	// fresh is feedback not recorded yet; edited is feedback recorded
+	// before, whose words now address dude and have reached no conductor
+	// yet: a comment edited into a mention. A mention is delivered once
+	// per comment, by Chat's own record of it (delivery.MentionTx), not by
+	// whether the comment was recorded. rewritten is feedback recorded
+	// before whose body differs from the last one recorded.
+	var fresh, edited, rewritten []forge.Feedback
 	var workflowRunID, workflowStep string
 	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -160,18 +182,39 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		for i, f := range listed {
 			ids[i] = f.ID
 		}
-		rows, err := tx.Query(ctx, `SELECT payload->>'feedbackId' FROM events WHERE task_id = $1
-			AND event_type = $2 AND payload->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvPullRequestCommented, ids)
+		rows, err := tx.Query(ctx, `SELECT DISTINCT ON (payload->>'feedbackId') payload->>'feedbackId',
+			COALESCE(payload->>'body', '') FROM events WHERE task_id = $1
+			AND event_type IN ($2, $3) AND payload->>'feedbackId' = ANY($4)
+			ORDER BY payload->>'feedbackId', cursor DESC`,
+			pr.TaskID, delivery.EvPullRequestCommented, delivery.EvPullRequestCommentEdited, ids)
 		if err != nil {
 			return err
 		}
-		seen, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		bodies := map[string]string{} // the last body recorded, by feedback id
+		var id, body string
+		if _, err := pgx.ForEachRow(rows, []any{&id, &body}, func() error { bodies[id] = body; return nil }); err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, `SELECT payload->'github'->>'feedbackId' FROM events WHERE task_id = $1
+			AND event_type = $2 AND payload->'github'->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvChatMessage, ids)
+		if err != nil {
+			return err
+		}
+		mentioned, err := pgx.CollectRows(rows, pgx.RowTo[string])
 		if err != nil {
 			return err
 		}
 		for _, f := range listed {
-			if !slices.Contains(seen, f.ID) {
+			body, seen := bodies[f.ID]
+			switch {
+			case !seen:
 				fresh = append(fresh, f)
+				continue
+			case body != f.Body:
+				rewritten = append(rewritten, f)
+			}
+			if !slices.Contains(mentioned, f.ID) && forge.AddressedToDude(f, s.FactoryLogins) {
+				edited = append(edited, f)
 			}
 		}
 		return nil
@@ -179,9 +222,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
+	// What may be a mention: new feedback, and feedback edited into one.
+	heard := append(slices.Clip(fresh), edited...)
 	// Who may wake a fixer: asked of GitHub (cached), before anything is
 	// recorded, so each comment says whether it could.
-	waking, err := s.wakers(ctx, org, gh, slug, fresh)
+	waking, err := s.wakers(ctx, org, gh, slug, heard)
 	if err != nil {
 		return err
 	}
@@ -196,6 +241,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
+	if ended {
+		checksJSON, reviewsJSON = pr.ChecksJSON, pr.ReviewsJSON
+	}
 	if !isOpen(status.State) {
 		// What it was when it closed is what it stays.
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
@@ -204,7 +252,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
 		if n := len(listed); n > 0 {
-			if t, err := time.Parse(time.RFC3339, listed[n-1].CreatedAt); err == nil {
+			// An edited comment lists by its edit but sorts by its creation:
+			// the cursor never moves back to it.
+			if t, err := time.Parse(time.RFC3339, listed[n-1].CreatedAt); err == nil && (cursor == nil || t.After(*cursor)) {
 				cursor = &t
 			}
 		}
@@ -274,11 +324,25 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				path = f.Path
 			}
 			p := map[string]any{"feedbackId": f.ID, "author": f.Author, "body": f.Body, "path": path, "kind": f.Kind}
-			if !waking[f.Author] && forge.IsActionableComment(f, s.FactoryLogins) {
+			if f.URL != "" {
+				p["url"] = f.URL
+			}
+			addressed := forge.AddressedToDude(f, s.FactoryLogins)
+			switch {
+			case forge.Own(f):
+				p["own"] = true
+			case !waking[f.Author] && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
 				// Shown on the task, not acted on: say why.
 				p["ignored"] = "not_permitted"
+			case addressed:
+				// A message to the task's conductor, not a fixer's.
+				p["addressed"] = "conductor"
 			}
 			changes = append(changes, change{delivery.EvPullRequestCommented, p})
+		}
+		for _, f := range rewritten {
+			changes = append(changes, change{delivery.EvPullRequestCommentEdited, map[string]any{"feedbackId": f.ID,
+				"author": f.Author, "body": f.Body, "kind": f.Kind}})
 		}
 		for _, c := range changes {
 			c.payload["number"], c.payload["repo"] = pr.Number, pr.RepoName
@@ -292,17 +356,40 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 			recorded = append(recorded, id)
 		}
+		// Comments addressed to dude, by people who may address it: each a
+		// message to the task's conductor, with the record of it, so a
+		// comment recorded is never one whose message was lost.
+		for _, f := range heard {
+			if !waking[f.Author] || !forge.AddressedToDude(f, s.FactoryLogins) {
+				continue
+			}
+			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
+				Repo: pr.RepoName, Number: pr.Number, Feedback: f}); err != nil {
+				return err
+			}
+		}
 		// The delivery the pull request is from: a task started over has a
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
-		err = tx.QueryRow(ctx, `SELECT w.id, w.step FROM workflow_runs w JOIN pull_requests p ON p.id = $2
+		var decider string
+		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', '') FROM workflow_runs w
+			JOIN pull_requests p ON p.id = $2
 			WHERE w.task_id = $1 AND w.status IN ('running', 'waiting')
 			  AND COALESCE(w.state->>'branch', p.head_branch) = p.head_branch
-			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep)
+			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep, &decider)
 		if db.IsNotFound(err) {
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		// Its end is the conductor's to close out, recorded here with the
+		// end itself: the workflow may be waiting on something else (a
+		// person's decision on a sibling closed), and hear of it never.
+		if status.State != pr.State && decider == delivery.DeciderConductor {
+			return delivery.CloseOutTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number, status.State)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -389,6 +476,18 @@ func (s *Syncer) pushedByDude(ctx context.Context, org, taskID, sha string) (boo
 }
 
 func isOpen(state string) bool { return state == forge.StateOpen || state == forge.StateDraft }
+
+// frozen sets a read of a pull request that stays ended to what was
+// recorded when it ended: its head, checks and reviews. The branch moves
+// on with work outside it (delivery.OpenPullRequests opens that work a
+// pull request of its own by comparing heads), and neither that work's
+// checks nor a later review are this pull request's.
+func frozen(status *forge.Status, pr tracked) {
+	status.HeadSHA, status.Checks, status.Review = pr.HeadSHA, pr.Checks, pr.Review
+	status.CheckList, status.Reviews = nil, nil
+	_ = json.Unmarshal(pr.ChecksJSON, &status.CheckList)
+	_ = json.Unmarshal(pr.ReviewsJSON, &status.Reviews)
+}
 
 func failingNames(checks []forge.Check) []string {
 	var out []string
@@ -594,13 +693,17 @@ func (s *Syncer) process(ctx context.Context, org, event string, payload json.Ra
 		return nil // not about a pull request
 	}
 
+	// A comment or review on any tracked pull request, merged or closed
+	// too: a mention there still reaches the task's conductor, and a
+	// terminal state reads no fixer feedback (forge.Classify).
+	discussed := event == "issue_comment" || event == "pull_request_review" || event == "pull_request_review_comment"
 	var prIDs []string
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// A closed pull request too, when GitHub says something happened to
 		// it (reopened): otherwise its reopening would never be read.
 		rows, err := tx.Query(ctx, `SELECT pr.id, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE (pr.state IN ('draft', 'open') OR $3 AND pr.state = 'closed') AND (pr.number = $1 OR pr.head_sha = $2)`,
-			number, sha, event == "pull_request")
+			WHERE (pr.state IN ('draft', 'open') OR $3 AND pr.state = 'closed' OR $4) AND (pr.number = $1 OR pr.head_sha = $2)`,
+			number, sha, event == "pull_request", discussed && number > 0)
 		if err != nil {
 			return err
 		}
@@ -627,15 +730,23 @@ func (s *Syncer) process(ctx context.Context, org, event string, payload json.Ra
 	return nil
 }
 
-// Reconcile syncs open PRs not looked at within `every`: the backstop for
-// deliveries GitHub never sent or dude never received.
+// endedPollWindow: how long after a pull request is merged or closed the
+// reconciler still reads it, for a mention whose webhook was lost. Past
+// it, only a webhook reads it: polling every ended pull request forever
+// would spend the rate limit on conversations that have gone quiet.
+const endedPollWindow = 7 * 24 * time.Hour
+
+// Reconcile syncs open PRs, and recently ended ones, not looked at within
+// `every`: the backstop for deliveries GitHub never sent or dude never
+// received.
 func (s *Syncer) Reconcile(ctx context.Context, every time.Duration) (int, error) {
 	type due struct{ ID, Org string }
 	var batch []due
 	if err := s.DB.InSystem(ctx, "pr-reconciler", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, organization_id FROM pull_requests
-			WHERE state IN ('draft', 'open') AND (last_polled_at IS NULL OR last_polled_at < now() - $1::interval)
-			ORDER BY last_polled_at NULLS FIRST LIMIT 20`, every.String())
+			WHERE (state IN ('draft', 'open') OR COALESCE(merged_at, closed_at) > now() - $2::interval)
+			  AND (last_polled_at IS NULL OR last_polled_at < now() - $1::interval)
+			ORDER BY last_polled_at NULLS FIRST LIMIT 20`, every.String(), endedPollWindow.String())
 		if err != nil {
 			return err
 		}

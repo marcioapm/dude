@@ -134,7 +134,7 @@ func isBot(author string) bool {
 
 // IsActionableComment decides whether one piece of feedback asks for a change.
 func IsActionableComment(f Feedback, factoryLogins []string) bool {
-	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" {
+	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) {
 		return false
 	}
 	// The factory's own comments are not feedback on the factory's work.
@@ -159,7 +159,8 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 // otherwise, which is the common case and the reason this exists.
 //
 // feedback is what may wake a fixer: its authors already passed the
-// organization's rule for who may (MayWake).
+// organization's rule for who may (MayWake). A comment addressed to dude
+// is a message to the task's conductor, not a fixer's (AddressedToDude).
 func Classify(prior, current Status, feedback []Feedback, factoryLogins []string) *Signal {
 	if current.State == StateMerged || current.State == StateClosed {
 		if prior.State == current.State {
@@ -170,7 +171,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 
 	var actionable []ActionableFeedback
 	for _, f := range feedback {
-		if IsActionableComment(f, factoryLogins) {
+		if IsActionableComment(f, factoryLogins) && !AddressedToDude(f, factoryLogins) {
 			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}

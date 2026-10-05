@@ -119,8 +119,13 @@ export interface HumanTurn {
   intent: Extract<HumanIntent, "steer" | "answer" | "message">;
   /** Who said it. */
   by: ActorRef | null;
-  /** The task's conductor wrote it (a steer of a Run it conducts), not a person. */
+  /** The task's conductor wrote it (a steer of a Run it conducts, or its reply on a pull request), not a person. */
   conductor: boolean;
+  /**
+   * It came from, or went to, a pull request: a comment addressed to dude
+   * (by its GitHub login), or the conductor's reply there. Where to read it.
+   */
+  github: GithubRef | null;
   text: string;
   at: string;
   /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
@@ -148,6 +153,22 @@ export interface HumanTurn {
 }
 
 export type SteerLands = "next_step" | "next_turn";
+
+/** A Chat message's pull request: which, the comment, and its author's login (none for the conductor's reply). */
+export interface GithubRef {
+  login: string | null;
+  repo: string;
+  number: number;
+  url: string | null;
+}
+
+function githubOf(value: unknown): GithubRef | null {
+  if (!value || typeof value !== "object") return null;
+  const g = value as Record<string, unknown>;
+  if (typeof g.repo !== "string" || typeof g.number !== "number") return null;
+  return { login: typeof g.login === "string" ? g.login : null, repo: g.repo, number: g.number,
+    url: typeof g.url === "string" && g.url.startsWith("https://") ? g.url : null };
+}
 
 /**
  * An event the agent (or a script it ran) recorded with `dude event`: a
@@ -607,15 +628,21 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ChatMessage: {
-        // A person's message to a task's conductor: the first is in its
-        // briefing; each later one is delivered as a steer is (a directive).
+        // A message to a task's conductor: the first is in its briefing;
+        // each later one is delivered as a steer is (a directive). One from
+        // a pull request is signed by its GitHub login; the conductor's
+        // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const github = githubOf(payload.github);
         const turn: HumanTurn = {
           ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
           directiveId,
+          conductor: payload.by === "conductor",
+          github,
           // A message handed on from an earlier conductor keeps its images.
           attachments: attachmentsOf(payload.attachments),
         };
+        if (github?.login) turn.by = { id: `github:${github.login}`, name: `${github.login} (GitHub)` };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
@@ -1073,7 +1100,7 @@ function landsOf(value: unknown): SteerLands | null {
 
 function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: string, deliveredAt: string | null): HumanTurn {
   return {
-    kind: "human", id: event.eventId, intent, by: humanActor(event), conductor: false, text, at: event.occurredAt, deliveredAt,
+    kind: "human", id: event.eventId, intent, by: humanActor(event), conductor: false, github: null, text, at: event.occurredAt, deliveredAt,
     acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
     attachments: [],
   };

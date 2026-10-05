@@ -31,8 +31,15 @@ func LockChat(ctx context.Context, tx pgx.Tx, taskID string) error {
 }
 
 // Writer is who wrote in a task's Chat: the ledger's actor, and the person
-// behind it ("" for none).
-type Writer struct{ ActorType, ActorID, Person string }
+// behind it ("" for none). A message from elsewhere (a pull request
+// comment) names its author (Name), is shown in Chat as its author wrote
+// it (Shown, where the conductor is told more), and carries where it came
+// from (Via, added to its chat.message).
+type Writer struct {
+	ActorType, ActorID, Person string
+	Name, Shown                string
+	Via                        map[string]any
+}
 
 // StartConductor creates the task's conductor: a Run with no phase, role
 // conductor, from the task's head in each repository (the default branch
@@ -47,6 +54,9 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	var person string
 	if w.Person != "" {
 		_ = tx.QueryRow(ctx, `SELECT name FROM people WHERE id = $1`, w.Person).Scan(&person)
+	}
+	if person == "" {
+		person = w.Name
 	}
 	briefing, err := briefing(ctx, tx, taskID, id, person, message, woken)
 	if err != nil {
@@ -90,9 +100,15 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	return id, err
 }
 
-// ChatEvent records a person's message in the task's Chat, on the
-// conductor's Run.
+// ChatEvent records a message in the task's Chat, on the conductor's Run,
+// with where it came from (w.Via) when it came from elsewhere.
 func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map[string]any) error {
+	for k, v := range w.Via {
+		payload[k] = v
+	}
+	if w.Shown != "" {
+		payload["text"] = w.Shown
+	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvChatMessage, OrganizationID: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: ref.RunID,
 		ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: ref.TaskID, Payload: payload,

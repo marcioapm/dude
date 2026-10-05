@@ -157,7 +157,15 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
-  `aborted`.
+  `aborted`. Under the conductor, ready to merge (or no longer) is dude's
+  line in Chat (`chat.notice`) and wakes nobody; a pull request merged or
+  closed wakes it once (`pr_merged`, `pr_closed`). A comment that
+  mentions `@dude` (or a factory login), by someone who may wake a fixer,
+  is not fixer feedback: it is a `chat.message` to the task's conductor,
+  once per comment (`delivery.MentionTx`), which changes nobody's
+  decisions; the conductor answers on the pull request
+  (`reply_on_pull_request`, `dude pr reply`), and its replies, marked
+  `forge.ReplyMarker`, are its own when read back.
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that
@@ -428,8 +436,8 @@ In rough priority order.
 3. **Budgets as loop bounds** — a cost cap per Run and per task.
 4. **The tester phase** (browser QA with recorded evidence) and artifacts
    from lux. Design in [`phased-runs.md`](phased-runs.md).
-5. **GitHub App** in place of the PAT, and registering webhooks
-   automatically when a project is added (`forge.EnsureWebhook` exists).
+5. **GitHub App** in place of the PAT. (Webhooks are registered when a
+   project or repository is added, and on connecting in Settings.)
 6. **lux push with an expected base commit**, which would remove the
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any

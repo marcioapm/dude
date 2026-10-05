@@ -29,6 +29,8 @@ const (
 	ActorSystem = "system"
 	ActorAgent  = "agent"
 	ActorHuman  = "human"
+	// Someone outside dude, through an integration: a GitHub login.
+	ActorIntegration = "integration"
 )
 
 type Event struct {

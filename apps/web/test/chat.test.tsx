@@ -124,7 +124,50 @@ describe("the conductor's transcript", () => {
     const turns = project([ev("chat.message", { text: "see", directiveId: "dir_x", attachments: [image] }, MARCIO)], "running").turns;
     expect(turns[0]?.kind === "human" && turns[0].attachments.map((a) => a.id)).toEqual(["att_x"]);
   });
+
+  test("a message from a pull request is its GitHub login's; the conductor's reply there is the conductor's", () => {
+    const turns = project(githubEvents(), "running").turns.filter((t) => t.kind === "human");
+    const [asked, replied] = turns;
+    expect(asked?.kind === "human" && [asked.by?.name, asked.conductor, asked.github?.url, asked.deliveredAt]).toEqual(
+      ["alice (GitHub)", false, "https://github.test/acme/greeter/pull/3#issuecomment-9", at(1)]);
+    expect(replied?.kind === "human" && [replied.conductor, replied.text, replied.github?.repo, replied.deliveredAt]).toEqual(
+      [true, "Because the task says greet.", "greeter", at(2)]);
+  });
 });
+
+/** A conductor asked on a pull request, which replied there. */
+function githubEvents(): PersistedEvent[] {
+  cursor = 200;
+  return [
+    ev("chat.message", { text: "@dude why greet()?", directiveId: "dir_gh", github: { login: "alice", repo: "greeter", number: 3,
+      feedbackId: "issue-comment-9", kind: "comment", url: "https://github.test/acme/greeter/pull/3#issuecomment-9" } },
+    { type: "integration", id: "github:alice" }, 0),
+    ev("run.directive.delivered", { directiveId: "dir_gh", read: true }, undefined, 1),
+    ev("chat.message", { text: "Because the task says greet.", by: "conductor", github: { repo: "greeter", number: 3,
+      feedbackId: "issue-comment-10", url: "https://github.test/acme/greeter/pull/3#issuecomment-10", inReplyTo: "issue-comment-9" } },
+    { type: "agent", id: CONDUCTOR }, 2),
+  ];
+}
+
+describe("a pull request in Chat", () => {
+  test("a mention is signed by its GitHub login and links to the comment; the conductor's reply links to where it went", async () => {
+    const page = await chatPage(new ChatClient({ status: "running" }, [...conductorEvents(), ...githubEvents()]));
+    const turns = await until(() => {
+      const t = [...page.querySelectorAll<HTMLElement>("[data-testid=human-turn][data-by]")];
+      return t.length === 2 ? t : null;
+    }, "the two GitHub turns");
+    const [asked, replied] = turns;
+    expect(asked!.getAttribute("data-by")).toBe("github");
+    expect(asked!.textContent).toContain("alice (GitHub)");
+    expect(asked!.textContent).toContain("@dude why greet()?");
+    expect(asked!.querySelector("[data-testid=github-source] a")?.getAttribute("href")).toBe("https://github.test/acme/greeter/pull/3#issuecomment-9");
+    expect(asked!.querySelector("[data-testid=github-source]")?.textContent).toBe("On greeter#3 on GitHub");
+    expect(replied!.getAttribute("data-by")).toBe("conductor");
+    expect(replied!.textContent).toContain("Conductor");
+    expect(replied!.querySelector("[data-testid=github-source]")?.textContent).toBe("Replied on greeter#3 on GitHub");
+  });
+});
+
 
 /** The fixture task, with a conductor (or none) and its events. */
 class ChatClient extends FixtureClient {

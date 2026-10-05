@@ -3,7 +3,7 @@
  * the conductor takes the task's decisions: each Run it started, where it
  * started; each decision the delivery waited on it for; and what happened
  * on the pull requests that wakes nobody — an approval, checks passing,
- * ready to merge — as dude's notices. From the task's Runs and its ledger,
+ * ready to merge or no longer — as dude's notices. From the task's Runs and its ledger,
  * which the task page already reads.
  */
 
@@ -45,8 +45,9 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
       case EventTypes.PullRequestChecksChanged:
         if (p.to === "passing") out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: `${pr(p)}: checks passing.` });
         break;
-      case "task.ready_to_merge":
-        out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: "Ready to merge: approved, checks passing. Merging is yours." });
+      case EventTypes.ChatNotice:
+        // dude's own line, in its words: ready to merge, or no longer.
+        if (typeof p.text === "string" && p.text) out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: p.text });
         break;
     }
   }

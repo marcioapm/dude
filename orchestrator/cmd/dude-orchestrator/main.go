@@ -213,6 +213,11 @@ func run(log *slog.Logger) error {
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
+			// And a few repositories' missing webhooks, each pass, counting
+			// nothing for the loop: a backlog would run it without pause.
+			if err := pullRequests.RepairWebhooks(ctx); err != nil {
+				log.Warn("repairing webhooks failed", "error", err)
+			}
 			return pullRequests.Reconcile(ctx, set.ReconcileEvery)
 		}},
 	}
@@ -260,7 +265,7 @@ func run(log *slog.Logger) error {
 	var tools *http.Server
 	if addr := set.ToolsListen; addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
-			Kick: serverService.Kick}).Handler(),
+			Kick: serverService.Kick, Forges: forges}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			log.Info("agent tools listening", "addr", addr, "url", agent.ToolsURL)

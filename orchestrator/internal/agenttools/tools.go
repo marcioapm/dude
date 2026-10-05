@@ -95,6 +95,12 @@ var tools = []tool{
 		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
 		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
 		"started on this attempt.", conductors, updateTask),
+	define("reply_on_pull_request", "Answer on one of your task's pull requests, as dude's GitHub login: for a "+
+		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
+		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
+		"request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. "+
+		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted.",
+		conductors, replyOnPullRequest).before(forgeFor),
 }
 
 // ---- list_tasks --------------------------------------------------------------
