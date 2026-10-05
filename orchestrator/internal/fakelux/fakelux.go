@@ -1752,7 +1752,11 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 		work, op := "", ""
 		if run.workspace != "" {
 			work = filepath.Join(run.workspace, "repos", repo.Name)
-			op = operation(work)
+			if op, err = operation(work); err != nil {
+				result["status"], result["error"] = "failed", operationUnknown(err)
+				results = append(results, result)
+				continue
+			}
 		}
 		if op != "" {
 			// As lux: nothing of a checkout mid-operation is bundled.

@@ -8,6 +8,7 @@ package fakelux_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,44 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 				t.Errorf("pushed anyway: %s", out)
 			}
 		})
+	}
+}
+
+// With a git that cannot say where an operation keeps its state, nothing
+// tells whether one is in progress: the push fails, nothing bundled, and
+// the sync fails.
+func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
+	ctx := context.Background()
+	cl, runID, repo, work := conflictRepo(t)
+	gitFails(t, work, "rebase", "lux/work")
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	wrapper := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --git-path ] && exit 1; done\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := cl.Push(ctx, runID, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	push := lastPush(t, cl, runID)
+	if len(push.Results) != 1 || push.Results[0].Status != "failed" ||
+		!strings.Contains(push.Results[0].Error, "could not tell whether an operation is in progress: ") {
+		t.Errorf("git.push %+v", push)
+	}
+	if out, err := exec.Command(real, "-C", repo, "rev-parse", "--verify", "-q", "refs/heads/pub").CombinedOutput(); err == nil {
+		t.Errorf("pushed anyway: %s", out)
+	}
+	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := lastSync(t, cl, runID); ev["status"] != "failed" ||
+		!strings.Contains(fmt.Sprint(ev["error"]), "could not tell whether an operation is in progress: ") {
+		t.Errorf("git.sync %v", ev)
 	}
 }
 
