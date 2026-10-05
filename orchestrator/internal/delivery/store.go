@@ -122,11 +122,8 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		}
 		if Publishes[in.Phase] {
 			// A writer waits for the conductor's publish moving the task
-			// branch: under the delivery's row, which the reservation takes.
-			if _, err := LoadDelivery(ctx, tx, in.TaskID); err != nil {
-				return err
-			}
-			if err := RefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
+			// branch.
+			if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
 				return err
 			}
 		}
@@ -369,12 +366,8 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 // status moves — a person answering must not revive an aborted one.
 func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, from, status, reason string) (bool, error) {
 	if Ended(status) {
-		// Not while the conductor's publish moves the task branch: under
-		// the delivery's row, which the reservation takes.
-		if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
-			return false, err
-		}
-		if err := RefuseWhileMovingTx(ctx, tx, taskID); err != nil {
+		// Not while the conductor's publish moves the task branch.
+		if err := lockAndRefuseWhileMovingTx(ctx, tx, taskID); err != nil {
 			return false, err
 		}
 	}
