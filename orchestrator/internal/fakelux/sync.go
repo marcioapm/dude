@@ -75,6 +75,10 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 	status, _ := git("status", "--porcelain", "--untracked-files=no")
 	ahead, behind := count(to+"..HEAD"), count("HEAD.."+to)
 	dirty, diverged := status != "", ahead > 0 && behind > 0
+	op := operation(work)
+	if op != "" {
+		ev["operation"] = op
+	}
 	// As lux: a fast-forward never switches branches. It moves HEAD only
 	// when HEAD is the target branch, or detached for a sha target.
 	onTarget := false
@@ -91,11 +95,11 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["diverged"] = true
 	}
 	switch {
-	case ahead == 0 && behind == 0:
+	case ahead == 0 && behind == 0 && op == "":
 		ev["status"] = "up-to-date"
 	case sr.Mode == lux.SyncFetch:
 		ev["status"] = "fetched"
-	case dirty || diverged || !onTarget:
+	case op != "" || dirty || diverged || !onTarget:
 		ev["status"] = lux.SyncKept
 	case ahead > 0:
 		ev["status"] = lux.SyncAhead
@@ -110,6 +114,33 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		}
 		run.at[repo.Name] = to
 	}
+}
+
+// operation is the git operation in progress in the checkout work, as lux
+// names it (lux.Operation*), or "". The sequencer alone is a multi-commit
+// cherry-pick or revert stopped between picks.
+func operation(work string) string {
+	for _, m := range []struct{ path, op string }{
+		{"rebase-merge", lux.OperationRebase},
+		{"rebase-apply", lux.OperationRebase},
+		{"MERGE_HEAD", lux.OperationMerge},
+		{"CHERRY_PICK_HEAD", lux.OperationCherryPick},
+		{"REVERT_HEAD", lux.OperationRevert},
+		{"sequencer", lux.OperationSequencer},
+	} {
+		out, err := exec.Command("git", "-C", work, "rev-parse", "--git-path", m.path).Output()
+		if err != nil {
+			return ""
+		}
+		path := strings.TrimSpace(string(out))
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(work, path)
+		}
+		if _, err := os.Stat(path); err == nil {
+			return m.op
+		}
+	}
+	return ""
 }
 
 // pushWorkspace pushes the checkout's HEAD to branch in the bare

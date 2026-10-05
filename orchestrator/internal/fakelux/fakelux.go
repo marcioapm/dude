@@ -1749,10 +1749,22 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 		base := head(path, repo.Ref)
 		var sha string
 		var err error
-		if len(files) == 0 && run.workspace != "" {
+		work, op := "", ""
+		if run.workspace != "" {
+			work = filepath.Join(run.workspace, "repos", repo.Name)
+			op = operation(work)
+		}
+		if op != "" {
+			// As lux: nothing of a checkout mid-operation is bundled.
+			result["status"], result["operation"] = lux.PushRefused, op
+			result["error"] = fmt.Sprintf("a %s is in progress in the checkout: finish or abort it, then push", op)
+			results = append(results, result)
+			continue
+		}
+		if len(files) == 0 && work != "" {
 			// What the agent committed in its checkout itself, as lux
 			// pushes a checkout's HEAD.
-			sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch, base)
+			sha, err = pushWorkspace(work, path, branch, base)
 		} else {
 			sha, err = commit(path, base, branch, files, run.behavior.Message)
 		}
