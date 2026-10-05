@@ -683,6 +683,41 @@ func TestThePullRequestGateWaitsForAReviewOfTheConductorsCommit(t *testing.T) {
 	e.until("the pull request", func() bool { return len(e.gh.Pulls()) == 1 })
 }
 
+// A review completed before the conductor's commit does not clear it: the
+// gate refuses until a review ran on the commit itself.
+func TestAnEarlierReviewDoesNotClearALaterConductorCommit(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.must(e.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	e.until("the old head's review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, e.task); n == 0 {
+		t.Fatal("no completed review of the old head")
+	}
+	var finding string
+	_ = e.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' LIMIT 1`, e.task).Scan(&finding)
+	if finding != "" {
+		e.must(e.task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"fine as it is"}`, finding))
+	}
+	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	e.wokenWith(e.task, "before the pull request")
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nnit\n"})
+	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	e.refused(e.task, "decide", `{"action":"ask_person"}`, "the last commit is the conductor's; run a review first")
+	e.must(e.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	e.until("the new head's review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	_ = e.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' LIMIT 1`, e.task).Scan(&finding)
+	if finding != "" {
+		e.must(e.task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"fine as it is"}`, finding))
+	}
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	e.must(e.task, "decide", `{"action":"ask_person"}`)
+}
+
 // Under Deliver, a head that is the conductor's untested commit goes to a
 // review instead of the pull request, and Chat says so.
 func TestDeliverReviewsTheConductorsCommitBeforeThePullRequest(t *testing.T) {
