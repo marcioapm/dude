@@ -521,6 +521,9 @@ type Server struct {
 	// NoSyncModes is a lux from before sync modes: a sync or resume naming
 	// fast-forward or fetch is refused with a 409.
 	NoSyncModes bool
+	// HoldPushes is a lux that accepts a push and never reports it: no
+	// git.push follows.
+	HoldPushes bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -1677,6 +1680,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.HoldPushes {
+			return
+		}
 		// Each repository, in the spec's order, as lux pushes them: its own
 		// result, "skipped" for one that is never pushed.
 		repos := specRepos(spec)

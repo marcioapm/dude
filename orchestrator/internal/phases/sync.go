@@ -343,9 +343,6 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.wakeConductors(ctx); err != nil {
 		s.Log.Warn("waking conductors failed", "error", err)
 	}
-	if err := s.settlePublishes(ctx); err != nil {
-		s.Log.Warn("carrying conductors' publishes on failed", "error", err)
-	}
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err

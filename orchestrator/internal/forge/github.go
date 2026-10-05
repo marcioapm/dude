@@ -1194,6 +1194,21 @@ func (g *GitHub) FastForward(ctx context.Context, slug, branch, sha string) erro
 	return err
 }
 
+// BranchSHA is the commit a branch is at, "" when it does not exist.
+func (g *GitHub) BranchSHA(ctx context.Context, slug, branch string) (string, error) {
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+branch, nil, &ref)
+	var e *Error
+	if asError(err, &e) && e.NotFound() {
+		return "", nil
+	}
+	return ref.Object.SHA, err
+}
+
 // DeleteBranch removes a branch; one already gone is not an error.
 func (g *GitHub) DeleteBranch(ctx context.Context, slug, branch string) error {
 	err := g.do(ctx, "DELETE", "/repos/"+slug+"/git/refs/heads/"+branch, nil, nil)

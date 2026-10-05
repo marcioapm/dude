@@ -175,6 +175,13 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	if !slices.Contains(p.Phases(), in.Phase) {
 		return "", refusef("%s cannot start at this decision (%s); it can start %s", in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
+	if Publishes[in.Phase] {
+		if err := RefuseWhileMovingTx(ctx, tx, ref.TaskID); errors.Is(err, ErrPublishMoving) {
+			return "", refusef("your publish is moving the task branch now; start %s again in a moment", in.Phase)
+		} else if err != nil {
+			return "", err
+		}
+	}
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
 		return "", refusef("categories are for review, findings for fix")
 	}

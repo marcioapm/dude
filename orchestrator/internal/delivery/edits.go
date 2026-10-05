@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -40,6 +41,7 @@ const (
 	PublishRequested = "requested"
 	PublishAsked     = "asked"
 	PublishPushed    = "pushed"
+	PublishMoving    = "moving"
 	PublishPublished = "published"
 	PublishRefused   = "refused"
 )
@@ -101,7 +103,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	var writer, inFlight bool
 	if err := tx.QueryRow(ctx, `SELECT `+liveWriter+`,
-		EXISTS (SELECT 1 FROM conductor_publishes WHERE run_id = $2 AND status IN ('requested', 'asked', 'pushed'))`,
+		EXISTS (SELECT 1 FROM conductor_publishes WHERE run_id = $2 AND status IN `+publishLive+`)`,
 		ref.TaskID, ref.RunID).Scan(&writer, &inFlight); err != nil {
 		return "", err
 	}
@@ -112,11 +114,75 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 		return "", refusef("a publish of yours is under way: you are woken when it is done")
 	}
 	id := ids.New("pub")
-	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message)
-		VALUES ($1, $2, $3, $4, $5, $6)`, id, ref.Org, ref.TaskID, ref.RunID, "publish-"+id, clip(strings.TrimSpace(message), 2000)); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message,
+			workflow_run_id, attempt, branch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, ref.Org, ref.TaskID, ref.RunID, "publish-"+id,
+		clip(strings.TrimSpace(message), 2000), d.WorkflowID, d.State.Attempt, d.branch(ref.TaskID)); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// branch is the delivery's task branch.
+func (d *Delivery) branch(taskID string) string {
+	if d.State.Branch != "" {
+		return d.State.Branch
+	}
+	return BranchFor(taskID, d.State.Attempt)
+}
+
+// publishLive (SQL list): the statuses of a publish not settled yet.
+const publishLive = `('requested', 'asked', 'pushed', 'moving')`
+
+// ErrPublishMoving: the task's conductor's publish is moving its task
+// branch now (a reservation of a second or so). Writers wait, and so do
+// replacing or ending its conductor, changing its decider and ending the
+// task; an API caller is answered 409, a workflow step runs again soon.
+var ErrPublishMoving = workflow.Wait{After: time.Second,
+	Why: "the conductor's publish is moving the task branch now; try again in a moment"}
+
+// publishMoving (SQL, $1 the task): a publish of its conductor's is moving
+// its task branch.
+const publishMoving = `EXISTS (SELECT 1 FROM conductor_publishes m WHERE m.task_id = $1 AND m.status = 'moving')`
+
+// RefuseWhileMovingTx is ErrPublishMoving when the task's publish is
+// moving. The caller holds the lock the reservation takes for what it
+// fences (ReservePublishTx).
+func RefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	var moving bool
+	if err := tx.QueryRow(ctx, `SELECT `+publishMoving, taskID).Scan(&moving); err != nil {
+		return err
+	}
+	if moving {
+		return ErrPublishMoving
+	}
+	return nil
+}
+
+// RefuseUnmovedTx settles a conductor's publishes that have not moved
+// anything as refused, saying why, as it ends; ErrPublishMoving while one
+// is moving, which must finish first.
+func RefuseUnmovedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error {
+	rows, err := tx.Query(ctx, `SELECT id, status FROM conductor_publishes WHERE run_id = $1 AND status IN `+publishLive+`
+		FOR UPDATE`, ref.RunID)
+	if err != nil {
+		return err
+	}
+	live, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Status string }])
+	if err != nil {
+		return err
+	}
+	for _, p := range live {
+		if p.Status == PublishMoving {
+			return ErrPublishMoving
+		}
+	}
+	for _, p := range live {
+		if err := PublishRefusedTx(ctx, tx, ref, p.ID, why); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PublishHead is what a publish took to one repository's task branch.
@@ -143,30 +209,86 @@ type PublishTarget struct {
 	Settled bool
 }
 
-// LoadPublishTarget reads a publish's target in tx, re-checking what
-// ConductPublish checked: someone may have handed the decisions back, or
-// started a writer, since.
-func LoadPublishTarget(ctx context.Context, tx pgx.Tx, taskID, runID string) (PublishTarget, error) {
-	var t PublishTarget
-	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil {
-		return t, err
+// PublishOf is a publish as its settlement checks it: its conductor, and
+// the delivery and attempt it was asked on ("" and 0 from before they
+// were recorded, unchecked).
+type PublishOf struct {
+	ID, TaskID, RunID, WorkflowID string
+	Attempt                       int
+}
+
+// publishEligibleTx is why the publish may not go on now, "" when it may:
+// what ConductPublish checked, again — its conductor live and not ending,
+// its checkout writable, it still deciding, no other writer, and the
+// delivery and attempt it was asked on still the task's, not ended. With
+// lock, the task's Chat lock, then the conductor's Run, then the
+// delivery's row are held for the rest of tx: what ending or replacing the
+// conductor, changing the decider and starting a writer take.
+func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (*Delivery, string, error) {
+	runLock, load := "", ReadDelivery
+	if lock {
+		if err := LockChat(ctx, tx, p.TaskID); err != nil {
+			return nil, "", err
+		}
+		runLock, load = " FOR NO KEY UPDATE", LoadDelivery
 	}
-	var live, writer bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $2 AND `+LiveConductor+`), `+liveWriter,
-		taskID, runID).Scan(&live, &writer); err != nil {
-		return t, err
+	var live bool
+	var readOnly string
+	err := tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND NOT COALESCE(`+Ending+`, false), COALESCE(r.checkout_read_only, '')
+		FROM runs r WHERE r.id = $1`+runLock, p.RunID).Scan(&live, &readOnly)
+	if err != nil && !db.IsNotFound(err) {
+		return nil, "", err
+	}
+	d, err := load(ctx, tx, p.TaskID)
+	if err != nil {
+		return nil, "", err
+	}
+	if lock && d != nil {
+		// Read again past the lock, in a statement of its own: the locking
+		// one's task status may predate a change it waited for.
+		if d, err = ReadDelivery(ctx, tx, p.TaskID); err != nil {
+			return nil, "", err
+		}
+	}
+	var writer bool
+	if err := tx.QueryRow(ctx, `SELECT `+liveWriter, p.TaskID).Scan(&writer); err != nil {
+		return nil, "", err
 	}
 	switch {
 	case !live:
-		t.Refused = "you are no longer this task's conductor"
-	case d == nil || !d.Live() || Ended(d.TaskStatus):
-		t.Refused = "this task has no delivery in progress"
+		return d, "you are no longer this task's conductor", nil
+	case readOnly != "":
+		return d, "your checkout is read-only for this conversation: " + readOnly, nil
+	case d == nil || !d.Live():
+		return d, "this task has no delivery in progress", nil
+	case Ended(d.TaskStatus):
+		return d, "this task is " + d.TaskStatus, nil
+	case p.WorkflowID != "" && d.WorkflowID != p.WorkflowID || p.Attempt != 0 && d.State.Attempt != p.Attempt:
+		return d, "the task was started over since you published", nil
 	case !d.State.conducted():
-		t.Refused = refusedPolicy
+		return d, refusedPolicy, nil
 	case writer:
-		t.Refused = refusedWriter
+		return d, refusedWriter, nil
 	}
+	return d, "", nil
+}
+
+// PublishEligibleTx is why the publish may not go on now, "" when it may
+// (publishEligibleTx, unlocked).
+func PublishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf) (string, error) {
+	_, why, err := publishEligibleTx(ctx, tx, p, false)
+	return why, err
+}
+
+// LoadPublishTarget reads a publish's target in tx and whether it may go
+// on (PublishEligibleTx).
+func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarget, error) {
+	var t PublishTarget
+	d, why, err := publishEligibleTx(ctx, tx, p, false)
+	if err != nil {
+		return t, err
+	}
+	t.Refused = why
 	if d == nil {
 		return t, nil
 	}
@@ -175,13 +297,10 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, taskID, runID string) (Pu
 		d.WorkflowID).Scan(&locked); err != nil {
 		return t, err
 	}
-	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.State.Branch, nonNilMap(d.State.Heads), !locked
-	if t.Branch == "" {
-		t.Branch = BranchFor(taskID, d.State.Attempt)
-	}
+	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.branch(p.TaskID), nonNilMap(d.State.Heads), !locked
 	var projectPolicy, orgPolicy []byte
 	if err := tx.QueryRow(ctx, `SELECT p.delivery_policy, o.delivery_policy FROM tasks t JOIN projects p ON p.id = t.project_id
-		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, taskID).Scan(&projectPolicy, &orgPolicy); err != nil {
+		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, p.TaskID).Scan(&projectPolicy, &orgPolicy); err != nil {
 		return t, err
 	}
 	policy, err := ResolvePolicy(orgPolicy, projectPolicy)
@@ -190,6 +309,79 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, taskID, runID string) (Pu
 	}
 	t.MaxLines, t.MaxFiles = policy.ConductorEditLines, policy.ConductorEditFiles
 	return t, nil
+}
+
+// Move is one repository's part of a moving publish: its task branch from
+// From (what the comparison measured, a branch name where the task had no
+// head) to Head, and how that went (MoveStatus).
+type Move struct {
+	RepoID       string   `json:"repoId"`
+	Slug         string   `json:"slug"`
+	From         string   `json:"from"`
+	Base         string   `json:"base"`
+	Head         string   `json:"head"`
+	ChangedPaths []string `json:"changedPaths"`
+	Lines        int      `json:"lines"`
+	Status       string   `json:"status"`
+	Error        string   `json:"error,omitempty"`
+}
+
+// A Move's status.
+const (
+	MovePending = "pending"
+	MoveMoved   = "moved"
+	MoveRefused = "refused"
+)
+
+// ErrNotReserved: what the comparisons measured is no longer the task's
+// (its heads moved, a step holds the delivery, or the publish was settled
+// meanwhile); measure again.
+var ErrNotReserved = errors.New("the publish could not be reserved as measured")
+
+// ReservePublishTx records the publish as moving with its moves, once
+// everything that let it go on still holds, under the locks that fence
+// it (publishEligibleTx with lock): while it moves, no writer starts, its
+// conductor is not ended or replaced, its decider does not change and its
+// task does not end. Returns why it is refused instead, "" once reserved;
+// ErrNotReserved to measure again.
+func ReservePublishTx(ctx context.Context, tx pgx.Tx, p PublishOf, heads map[string]string, moves map[string]Move) (string, error) {
+	d, why, err := publishEligibleTx(ctx, tx, p, true)
+	if err != nil || why != "" {
+		return why, err
+	}
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1`,
+		d.WorkflowID).Scan(&locked); err != nil {
+		return "", err
+	}
+	if locked || !maps.Equal(nonNilMap(d.State.Heads), nonNilMap(heads)) {
+		return "", ErrNotReserved
+	}
+	raw, _ := json.Marshal(moves)
+	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'moving', moves = $2::jsonb, branch = $3, workflow_run_id = $4
+		WHERE id = $1 AND status = 'pushed'`, p.ID, raw, d.branch(p.TaskID), d.WorkflowID)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotReserved
+	}
+	return "", nil
+}
+
+// RecheckMovingTx is why a moving publish's repositories not moved yet
+// may no longer move, "" when they may (publishEligibleTx with lock).
+func RecheckMovingTx(ctx context.Context, tx pgx.Tx, p PublishOf) (string, error) {
+	_, why, err := publishEligibleTx(ctx, tx, p, true)
+	return why, err
+}
+
+// MovedTx records one repository's move as it happens.
+func MovedTx(ctx context.Context, tx pgx.Tx, pubID, repo string, m Move) error {
+	raw, _ := json.Marshal(m)
+	_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET moves = jsonb_set(moves, ARRAY[$2::text], $3::jsonb)
+		WHERE id = $1 AND status = 'moving'`, pubID, repo, raw)
+	return err
 }
 
 // OverLimit is the refusal for a publish of lines in files past the
@@ -201,13 +393,16 @@ func (t PublishTarget) OverLimit(lines, files int) string {
 	return ""
 }
 
-// PublishedTx records a publish that moved the task branch: the delivery's
-// heads advance as a phase's would (so the next phase starts from them and
-// the gate's answer at the old heads no longer holds), and the conductor
-// is woken saying so. The caller moved the branch. ErrStepRunning when a
-// step of the delivery holds it now, whose transition would write over
-// the heads: tried again after it (moving the branch again is a no-op).
-func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID string, heads map[string]PublishHead) error {
+// PublishedTx records a moving publish once each repository's move is
+// settled and at least one moved: the delivery's heads advance as a
+// phase's would (so the next phase starts from them and the gate's answer
+// at the old heads no longer holds), and the conductor is woken saying
+// what moved and, by repository, what was refused and why (refused). The
+// caller moved the branches. ErrStepRunning when a step of the delivery
+// holds it now, whose transition would write over the heads: recorded
+// after it.
+func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID string, heads map[string]PublishHead,
+	refused map[string]string) error {
 	var locked bool
 	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1 FOR UPDATE`,
 		workflowID).Scan(&locked); err != nil {
@@ -238,26 +433,37 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 		WHERE id = $1`, workflowID, rawHeads, rawPaths); err != nil {
 		return err
 	}
+	var notMoved []string
+	for _, repo := range slices.Sorted(maps.Keys(refused)) {
+		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
+	}
 	raw, _ := json.Marshal(heads)
-	if _, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(), error = NULL
-		WHERE id = $1`, pubID, raw); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(),
+			error = NULLIF($3, ''), next_attempt_at = NULL
+		WHERE id = $1 AND status = 'moving'`, pubID, raw, clip(strings.Join(notMoved, "; "), 1000))
+	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	var commits []string
 	for _, repo := range slices.Sorted(maps.Keys(heads)) {
 		commits = append(commits, repo+"@"+short(heads[repo].SHA))
 	}
-	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+pubID,
-		fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
-			pubID, strings.Join(commits, " "), lines, len(paths)))
+	line := fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
+		pubID, strings.Join(commits, " "), lines, len(paths))
+	if len(notMoved) > 0 {
+		line = fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
+			pubID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
+	}
+	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+pubID, line)
 	return err
 }
 
-// PublishRefusedTx records a publish refused once lux had pushed: nothing
-// moved, and the conductor is woken with why.
+// PublishRefusedTx records a publish refused before anything moved, and
+// wakes the conductor with why.
 func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, why string) error {
-	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'refused', error = $2, settled_at = now()
-		WHERE id = $1 AND status IN ('requested', 'asked', 'pushed')`, pubID, clip(why, 1000))
+	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'refused', error = $2, settled_at = now(), next_attempt_at = NULL
+		WHERE id = $1 AND status IN `+publishLive+`
+		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' = 'moved')`, pubID, clip(why, 1000))
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}

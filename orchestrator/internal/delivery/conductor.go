@@ -123,9 +123,20 @@ const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_stat
 	AND r.lux_stop_reason IS NULL AND r.control = 'none')`
 
 // EndConductor completes a conductor that can no longer be resumed, and
-// hands what it was sent and never read to the next (HandOver). The caller
-// holds the task's Chat lock.
+// hands what it was sent and never read to the next (HandOver); its
+// publishes that moved nothing are refused. ErrPublishMoving while one of
+// them moves the task branch. The caller holds the task's Chat lock.
 func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error {
+	var ending bool
+	if err := tx.QueryRow(ctx, `SELECT `+Ending+` FROM runs r WHERE r.id = $1 FOR NO KEY UPDATE`, ref.RunID).Scan(&ending); err != nil || !ending {
+		if db.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if err := RefuseUnmovedTx(ctx, tx, ref, "your conductor ended before it was published"); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), lux_stop_reason = 'complete'
 		WHERE r.id = $1 AND `+Ending, ref.RunID)
 	if err != nil || tag.RowsAffected() == 0 {

@@ -2,7 +2,6 @@ package phases
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -31,7 +29,7 @@ import (
 // Its publish: lux pushes its checkout to its own branch; then, as a
 // phase's work is published, the task branch is fast-forwarded to it,
 // after the checks only the pushed commit can answer — current, small,
-// and something to publish.
+// and something to publish (publish.go).
 
 // checkoutSyncWait bounds how long what is queued for a conductor waits
 // for its checkout's sync to be reported: past it, it is heard anyway.
@@ -232,209 +230,4 @@ func oneLineClip(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
-}
-
-// ---- publish -------------------------------------------------------------
-
-// publishPushed records lux's git.push for a publish of the conductor's.
-func publishPushed(ctx context.Context, tx pgx.Tx, requestID string, raw json.RawMessage) error {
-	_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET push_result = $2::jsonb, status = 'pushed'
-		WHERE request_id = $1 AND status IN ('requested', 'asked')`, requestID, raw)
-	return err
-}
-
-// publishRow is a publish to carry on, with its conductor's lux Run.
-type publishRow struct {
-	ID, Org, ProjectID, TaskID, RunID, RequestID, Status string
-	LuxRunID, LuxState, Message                          string
-	PushResult                                           json.RawMessage
-	BaseSHAs                                             map[string]string
-}
-
-// settlePublishes carries each publish on: asked of lux, then, once
-// pushed, published or refused.
-func (s *Syncer) settlePublishes(ctx context.Context) error {
-	var todo []publishRow
-	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT p.id, p.organization_id, r.project_id, p.task_id, p.run_id, p.request_id, p.status,
-				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), p.message, p.push_result, r.base_shas
-			FROM conductor_publishes p JOIN runs r ON r.id = p.run_id
-			WHERE p.status IN ('requested', 'pushed') ORDER BY p.created_at LIMIT 100`)
-		if err != nil {
-			return err
-		}
-		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[publishRow])
-		return err
-	}); err != nil {
-		return err
-	}
-	for _, p := range todo {
-		var err error
-		if p.Status == delivery.PublishRequested {
-			err = s.askPush(ctx, p)
-		} else {
-			err = s.settlePublish(ctx, p)
-		}
-		if err != nil {
-			s.Log.Warn("a conductor's publish failed", "publish", p.ID, "error", err)
-		}
-	}
-	return nil
-}
-
-func (p publishRow) ref() delivery.RunRef {
-	return delivery.RunRef{Org: p.Org, ProjectID: p.ProjectID, TaskID: p.TaskID, RunID: p.RunID}
-}
-
-func (s *Syncer) refusePublish(ctx context.Context, p publishRow, why string) error {
-	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, why) })
-}
-
-// askPush asks lux to push the conductor's checkouts to its branch.
-func (s *Syncer) askPush(ctx context.Context, p publishRow) error {
-	if p.LuxRunID == "" || p.LuxState != "running" {
-		return s.refusePublish(ctx, p, "your container is not running; publish again once you are")
-	}
-	if err := s.Lux.Push(ctx, p.LuxRunID, p.RequestID); err != nil {
-		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			return s.refusePublish(ctx, p, "lux would not push: "+le.Message)
-		}
-		return err
-	}
-	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'asked' WHERE id = $1 AND status = 'requested'`, p.ID)
-		return err
-	})
-}
-
-// settlePublish takes a pushed publish to the task branch: refused, with
-// nothing moved, when its conductor no longer decides, another writer is
-// at work, a pushed commit does not descend from the task branch's head,
-// nothing was committed, or it is past the project's limit; else each
-// repository's task branch is fast-forwarded (never forced), its pull
-// request's head updated, and the commit recorded as the conductor's.
-func (s *Syncer) settlePublish(ctx context.Context, p publishRow) error {
-	var target delivery.PublishTarget
-	var repos []delivery.Repository
-	if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) (err error) {
-		if target, err = delivery.LoadPublishTarget(ctx, tx, p.TaskID, p.RunID); err != nil {
-			return err
-		}
-		repos, err = delivery.TaskRepositories(ctx, tx, p.TaskID)
-		return err
-	}); err != nil {
-		return err
-	}
-	if target.Refused != "" {
-		return s.refusePublish(ctx, p, target.Refused)
-	}
-	if !target.Settled {
-		return nil // a step of the delivery is running: its heads may move
-	}
-	var push struct {
-		Results []struct {
-			Repo, Branch, Commit, Status, Error string
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(p.PushResult, &push); err != nil {
-		return s.refusePublish(ctx, p, "lux's push result is unreadable")
-	}
-	byName := map[string]delivery.Repository{}
-	for _, repo := range repos {
-		byName[repo.Name] = repo
-	}
-	gh, err := s.Forges.For(ctx, p.Org)
-	if err != nil {
-		return err
-	}
-	if gh == nil {
-		return s.refusePublish(ctx, p, "no forge credential to publish with")
-	}
-	type move struct {
-		repo     delivery.Repository
-		slug     string
-		from, to string
-		cmp      forge.Comparison
-	}
-	var moves []move
-	lines, files := 0, 0
-	for _, res := range push.Results {
-		repo, known := byName[res.Repo]
-		switch {
-		case res.Status == "skipped" || known && repo.Access == "read":
-			continue
-		case !known:
-			return s.refusePublish(ctx, p, fmt.Sprintf("lux pushed %s, which this task does not name", res.Repo))
-		case res.Status != "pushed" && res.Status != "up-to-date":
-			return s.refusePublish(ctx, p, fmt.Sprintf("the push of %s failed: %s", res.Repo, res.Error))
-		case res.Commit == "":
-			continue
-		}
-		slug := forge.SlugFromURL(repo.URL)
-		if slug == "" {
-			return s.refusePublish(ctx, p, "no forge to publish "+repo.URL+" to")
-		}
-		// Measured against the task branch's head, or the default branch
-		// where the task has none yet.
-		from := target.Heads[res.Repo]
-		if from == "" {
-			from = repo.DefaultBranch
-		}
-		cmp, err := gh.Compare(ctx, slug, from, res.Commit)
-		if err != nil {
-			if forge.Transient(err) {
-				return err
-			}
-			return s.refusePublish(ctx, p, fmt.Sprintf("comparing %s with the task branch failed: %v", res.Repo, err))
-		}
-		if cmp.BehindBy > 0 {
-			return s.refusePublish(ctx, p, fmt.Sprintf(delivery.RefusedBehind, target.Branch))
-		}
-		if cmp.AheadBy == 0 {
-			continue
-		}
-		lines += cmp.Lines()
-		files += len(cmp.Files)
-		moves = append(moves, move{repo: repo, slug: slug, from: from, to: res.Commit, cmp: cmp})
-	}
-	if len(moves) == 0 {
-		return s.refusePublish(ctx, p, delivery.RefusedNothing)
-	}
-	if why := target.OverLimit(lines, files); why != "" {
-		return s.refusePublish(ctx, p, why)
-	}
-	heads := map[string]delivery.PublishHead{}
-	for _, m := range moves {
-		if err := gh.FastForward(ctx, m.slug, target.Branch, m.to); err != nil {
-			if forge.Transient(err) {
-				return err
-			}
-			return s.refusePublish(ctx, p, fmt.Sprintf("the task branch in %s moved meanwhile (%v): `git merge lux/%s`, then publish again",
-				m.repo.Name, err, target.Branch))
-		}
-		base := m.from
-		if target.Heads[m.repo.Name] == "" {
-			base = ""
-		}
-		heads[m.repo.Name] = delivery.PublishHead{SHA: m.to, Base: base, ChangedPaths: db.NonNil(m.cmp.Paths()), Lines: m.cmp.Lines()}
-	}
-	r := phaseRun{ID: p.RunID, Org: p.Org, ProjectID: p.ProjectID, TaskID: p.TaskID}
-	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-		for name, h := range heads {
-			// As a phase's publish: the pull request on the branch has a new
-			// head, whose checks are yet to run.
-			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(),
-				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
-				WHERE task_id = $1 AND repository_id = $2 AND head_branch = $4 AND state IN ('open', 'draft')
-				  AND head_sha IS DISTINCT FROM $3`, p.TaskID, byName[name].ID, h.SHA, target.Branch); err != nil {
-				return err
-			}
-			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": name, "baseSha": h.Base, "headSha": h.SHA, "branch": target.Branch, "changedPaths": h.ChangedPaths,
-				"lines": h.Lines, "by": delivery.RoleConductor, "publishId": p.ID, "message": p.Message}); err != nil {
-				return err
-			}
-		}
-		return delivery.PublishedTx(ctx, tx, p.ref(), p.ID, target.WorkflowID, heads)
-	})
 }

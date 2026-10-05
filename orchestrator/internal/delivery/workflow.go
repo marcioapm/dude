@@ -567,18 +567,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = slices.DeleteFunc(slices.Clone(d.FindingIDs), func(id string) bool { return !slices.Contains(open, id) })
 		}
 	}
-	// Counted once per fix step, however often the step is replayed: the
-	// Run's creation key doubles as the marker that it was counted.
-	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	if existing == "" {
-		if err := w.s.MarkAttempted(ctx, sc.OrganizationID, open); err != nil {
-			return workflow.Result{}, err
-		}
-	}
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs = open; d.apply(p) })
+	// Counted once per fix step, however often the step is replayed: with
+	// the Run's creation, which a replay finds by its key.
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs, p.CountAttempts = open, true; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}

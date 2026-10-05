@@ -74,6 +74,8 @@ type world struct {
 	actor string
 	// The orchestrator's internal API, as the backend calls it.
 	api string
+	// pump leaves conductors' publishes to a worker of the test's own.
+	noPublishes bool
 }
 
 func newWorld(t *testing.T) *world {
@@ -264,6 +266,11 @@ func (w *world) pump() {
 	}
 	if _, err := w.syncer.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
+	}
+	if !w.noPublishes {
+		if _, err := w.syncer.SettlePublishes(ctx); err != nil {
+			w.t.Fatal(err)
+		}
 	}
 	if _, err := w.artifacts.Sweep(ctx); err != nil {
 		w.t.Fatal(err)

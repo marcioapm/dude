@@ -454,6 +454,11 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	if from == to {
 		return false, nil
 	}
+	// Not while the conductor's publish moves the task branch: the caller
+	// holds the delivery's row (LoadDelivery), which the reservation takes.
+	if err := RefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+		return false, err
+	}
 	st.Decider = to
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text)) WHERE id = $1`,
 		wfID, to); err != nil {
