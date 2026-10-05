@@ -769,6 +769,10 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if msg := s.syncModeProblem(in.Sync); msg != "" {
+		writeErr(w, 409, "sync_mode_unsupported", msg)
+		return
+	}
 	if run.State != "running" {
 		writeErr(w, 409, "not_running", "run is "+run.State+": sync a running Run, or resume it with sync")
 		return
@@ -797,6 +801,14 @@ func (s *Server) applySync(run *Run, sync []lux.SyncRef, requestID string) bool 
 			continue
 		}
 		to := head(s.repoPath(specRepos(spec)[i].URL), sr.Ref)
+		if sr.Mode != "" && sr.Mode != lux.SyncMove {
+			s.safeSync(run, spec, specRepos(spec)[i], sr, to, ev)
+			if ev["status"] == "fast-forward" {
+				changed = true
+			}
+			s.luxEvent(run, "git.sync", ev)
+			continue
+		}
 		if run.at == nil {
 			run.at = map[string]string{}
 		}

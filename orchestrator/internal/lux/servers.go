@@ -98,6 +98,41 @@ type CreateServer struct {
 type SyncRef struct {
 	Repo string `json:"repo"`
 	Ref  string `json:"ref"`
+	// How it may move: SyncMove (lux's default, "" on the wire),
+	// SyncFastForward or SyncFetch. A lux without modes refuses the safe
+	// ones with a 409 (SyncModesRefused).
+	Mode string `json:"mode,omitempty"`
+}
+
+// Sync modes. Every non-failed sync in a safe mode sets
+// refs/remotes/lux/<ref> in the checkout, and its git.sync event carries
+// {mode, status, ahead, behind, dirty?, diverged?}.
+const (
+	SyncMove = "move"
+	// Moves the checkout only when nothing can be lost; otherwise it is
+	// left as it is, SyncKept (local changes, or the histories diverged)
+	// or SyncAhead (local commits on top).
+	SyncFastForward = "fast-forward"
+	// Never moves the checkout.
+	SyncFetch = "fetch"
+
+	SyncKept  = "kept"
+	SyncAhead = "ahead"
+)
+
+// SyncModesRefused says lux refused a sync for its mode: a 409 that is
+// none of the refusals a sync or resume gives for the Run's state. A lux
+// from before sync modes answers a safe mode so.
+func SyncModesRefused(err error) bool {
+	e, ok := AsError(err)
+	if !ok || e.Status != http.StatusConflict {
+		return false
+	}
+	switch e.Code {
+	case "not_running", "not_resumable", "no_snapshot", "snapshot_unavailable":
+		return false
+	}
+	return true
 }
 
 // FeedEvent is one event of the tenant's feed, GET /v1/events.
