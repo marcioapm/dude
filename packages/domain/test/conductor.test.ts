@@ -24,6 +24,14 @@ describe("the conductor's settings", () => {
     expect(settingsPatchSchema.safeParse({ roles: { orchestrator: { tier: "mtr_thinker" } } }).success).toBe(false);
   });
 
+  test("its edit limit is a delivery setting: whole lines and files, at least one", () => {
+    expect(settingsPatchSchema.safeParse({ delivery: { conductorEditLines: 60, conductorEditFiles: 3 } }).success).toBe(true);
+    expect(settingsPatchSchema.safeParse({ delivery: { conductorEditLines: null, conductorEditFiles: null } }).success).toBe(true);
+    for (const bad of [{ conductorEditLines: 0 }, { conductorEditFiles: 0 }, { conductorEditLines: 1.5 }, { conductorEditFiles: "3" }]) {
+      expect(settingsPatchSchema.safeParse({ delivery: bad }).success).toBe(false);
+    }
+  });
+
   test("its machine follows no other role", () => {
     const sizes = [{ id: "std", isDefault: true }, { id: "small", isDefault: false }, { id: "big", isDefault: false }];
     expect(resolveMachineSize("conductor", { organization: { implementer: { machineSize: "big" } } }, sizes))

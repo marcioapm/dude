@@ -300,6 +300,8 @@ export const SETTINGS: SettingsResponse = {
     parkAfterMinutes: { value: 10, source: "organization" },
     idleNudgeMinutes: { value: 0, source: "organization" },
     conductorWarmMinutes: { value: 5, source: "organization" },
+    conductorEditLines: { value: 60, source: "organization" },
+    conductorEditFiles: { value: 3, source: "organization" },
   },
   canEdit: true,
 };
