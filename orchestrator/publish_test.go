@@ -552,6 +552,63 @@ func TestAMoveTheForgeWillNotConfirmStallsAfterItsBound(t *testing.T) {
 	}
 }
 
+// The forge moved the branch and its answer was lost, and then someone
+// pushed on top before the retry: the move is recorded as published at
+// the conductor's commit, the descendant is not taken as the conductor's,
+// and the branch is never moved back.
+func TestALostMoveFollowedByAnExternalPushIsRecorded(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	var lost atomic.Bool
+	var moves atomic.Int64
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if !isMove(r) {
+				return 0
+			}
+			moves.Add(1)
+			if !lost.Swap(true) {
+				if out, err := exec.Command("git", "-C", e.gh.Repo, "update-ref", "refs/heads/"+e.branch, sha).CombinedOutput(); err != nil {
+					t.Errorf("update-ref: %v %s", err, out)
+				}
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	id := e.publish()
+	e.until("moved, its answer lost", func() bool {
+		return lost.Load() && e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving'
+			AND next_attempt_at > now()`, id) == 1
+	})
+	descendant := e.gh.CommitOnTop(e.branch, "a person's commit on top")
+	if descendant == "" {
+		t.Fatal("no descendant pushed")
+	}
+	e.due(id)
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("accepted move lost after a descendant was pushed: %s %q", status, why)
+	}
+	if n := moves.Load(); n != 1 {
+		t.Errorf("%d moves sent, want the first only", n)
+	}
+	if got := e.gh.SHA(e.branch); got != descendant {
+		t.Errorf("the task branch at %s, want the descendant %s kept", got, descendant)
+	}
+	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND heads->'target'->>'sha' = $2`, id, sha); n != 1 {
+		t.Error("the publish's head is not the conductor's commit")
+	}
+	if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'heads'->>'target' = $2`, e.task, sha); n != 1 {
+		t.Error("the delivery's head is not the conductor's commit")
+	}
+	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'by' = 'conductor'
+		AND payload->>'headSha' = $2`, e.task, descendant); n != 0 {
+		t.Error("the descendant was recorded as the conductor's")
+	}
+}
+
 // task2 is a second conducted task in the world, its conductor running.
 func (e *editing) task2() string {
 	e.t.Helper()
