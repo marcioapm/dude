@@ -696,6 +696,13 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	// Never untested at the pull request: a head that is the conductor's
+	// commit is reviewed first, whoever decides.
+	if len(st.PullRequestIDs) == 0 {
+		if res, diverted, err := w.reviewUntested(ctx, sc, st); diverted || err != nil {
+			return res, err
+		}
+	}
 	// The gate holds at the opening itself: a delivery taken over after the
 	// policy chose to open waits for the person's answer like any other, and
 	// one handed back after the conductor entered the gate opens only with

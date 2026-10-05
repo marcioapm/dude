@@ -231,6 +231,14 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		// A gate the conductor entered stays one handed back: Deliver goes
 		// on only with the person's Open or Draft, or their confirmation.
 		if d.Point == PointBeforePR && st.GateRequired && !st.gateHeld() {
+			// Its head the conductor's untested commit: reviewed first.
+			if res, diverted, err := w.reviewUntested(ctx, sc, st); diverted || err != nil {
+				if diverted {
+					st.Decision = nil
+					st.Decisions++
+				}
+				return res, err
+			}
 			ok, err := w.gateAuthorized(ctx, sc, st)
 			if err != nil {
 				return workflow.Result{}, err
@@ -267,12 +275,21 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 }
 
 // gateAuthorized says whether a gate the conductor entered may open under
-// Deliver: an authorization at the heads now (gateHeld), or the person's
+// Deliver: never at a head that is a conductor's commit no review or test
+// Run has run on (UntestedConductorHeadTx); else an authorization at the
+// heads now (gateHeld), or the person's
 // Open or Draft at them. The answer is only read here; the step's result
 // asks for it to be recorded (authorizeGate), which the transition does
 // under the row lock and the step's lease (authorizeAtCommitTx). Until
 // then gateHeld is false: the opening waits for the recorded one.
 func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+	var untested bool
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		untested, err = UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads)
+		return err
+	}); err != nil || untested {
+		return false, err
+	}
 	if st.gateHeld() {
 		return true, nil
 	}

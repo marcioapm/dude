@@ -23,6 +23,7 @@
 //	                                      a conductor's: answer on its task's pull request
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
 //	dude publish FILE [--name NAME]       keep a file for people (local)
+//	dude publish [--message M]            a conductor's: publish its commits
 //	dude tools                            what this run may use
 //
 // Output is indented JSON.
@@ -354,12 +355,17 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("update_task", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
+		message := fs.String("message", "", "a conductor's: what its commits do, for Chat")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
-		if len(args) != 1 {
-			return errors.New("usage: dude publish FILE [--name NAME]")
+		// No file: a conductor publishing its commits to the task branch.
+		if len(args) == 0 && *name == "" {
+			return show(out, *asJSON, call("publish", map[string]any{"message": *message}))
+		}
+		if len(args) != 1 || *message != "" {
+			return errors.New("usage: dude publish FILE [--name NAME], or a conductor's dude publish [--message M]")
 		}
 		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(args[0], *name) })
 	}
@@ -576,6 +582,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              a conductor's: write what Chat settled into the task,
                                              before the implementer starts
   dude publish FILE [--name NAME]            keep a file for people, shown with the task
+  dude publish [--message M]                 a conductor's: take what you committed in your checkout
+                                             to the task branch (small changes only; you are woken
+                                             when it is published or refused)
   dude tools                                 the tools this run may use
   dude --version                             this CLI's version
 
