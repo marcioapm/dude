@@ -18,6 +18,7 @@
 package fakeagent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -169,9 +170,29 @@ func ConductorScript(briefing string) string {
 	}
 	var b strings.Builder
 	for _, c := range ConductorCalls(message) {
+		if Local(c[0]) {
+			b.WriteString(localScript(c[0], c[1]))
+			continue
+		}
 		fmt.Fprintf(&b, "http dude POST /tools/%s %s\n", c[0], c[1])
 	}
 	return b.String() + "echo " + ConductorReply(task, message)
+}
+
+// localScript is a local call as lux-fake's script says it: write and
+// commit; git has no lux-fake equivalent and is left out.
+func localScript(name, args string) string {
+	var in struct {
+		Path, Content, Message string
+	}
+	_ = json.Unmarshal([]byte(args), &in)
+	switch name {
+	case LocalWrite:
+		return fmt.Sprintf("write %s %s\n", in.Path, strings.ReplaceAll(in.Content, "\n", " "))
+	case LocalCommit:
+		return "commit " + in.Message + "\n"
+	}
+	return ""
 }
 
 // ConductorCallPrefix starts a line of a person's message that the
@@ -179,6 +200,21 @@ func ConductorScript(briefing string) string {
 // NAME with those arguments, as a real conductor would decide to — what
 // lets a test drive the conductor's decisions through Chat.
 const ConductorCallPrefix = "tool: "
+
+// The scripted conductor's own work in its checkout, named as tools in a
+// message (ConductorCalls) but done in the container rather than called
+// on dude: write {"path","content"} writes a file in its first
+// repository, commit {"message"} commits everything there, and git
+// {"args"} runs git there (the fake lux only).
+const (
+	LocalWrite  = "write"
+	LocalCommit = "commit"
+	LocalGit    = "git"
+)
+
+// Local says whether a call is the scripted conductor's own work in its
+// checkout rather than one of dude's tools.
+func Local(name string) bool { return name == LocalWrite || name == LocalCommit || name == LocalGit }
 
 // ConductorCalls are the tool calls an input asks the scripted conductor
 // for, in order: each line "tool: NAME {json}" ([name, JSON arguments]).

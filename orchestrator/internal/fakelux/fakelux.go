@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -517,6 +518,9 @@ type Server struct {
 	// production lux is today, that is everything queued, failed with a
 	// phase-less lux.input {requestId, error}.
 	FailUnreadOnInterrupt bool
+	// NoSyncModes is a lux from before sync modes: a sync or resume naming
+	// fast-forward or fetch is refused with a 409.
+	NoSyncModes bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -1243,6 +1247,10 @@ func conductorAsked(input string, first bool) string {
 // agenttools.) Callers hold s.mu; the call is made without it, since dude
 // may be slow. A failure is said in the agent's reply.
 func (s *Server) callTool(run *Run, tool, args string) {
+	if fakeagent.Local(tool) {
+		s.localCall(run, tool, args)
+		return
+	}
 	var spec struct {
 		Secrets  []lux.Secret `json:"secrets"`
 		Workload struct {
@@ -1696,7 +1704,15 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 			}
 			path := s.repoPath(repo.URL)
 			base := head(path, repo.Ref)
-			sha, err := commit(path, base, branch, files, run.behavior.Message)
+			var sha string
+			var err error
+			if len(files) == 0 && run.workspace != "" {
+				// What the agent committed in its checkout itself, as lux
+				// pushes a checkout's HEAD.
+				sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch)
+			} else {
+				sha, err = commit(path, base, branch, files, run.behavior.Message)
+			}
 			switch {
 			case err != nil:
 				result["status"], result["error"] = "failed", err.Error()
@@ -1932,9 +1948,14 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
 	// secret the Run has must come again, non-empty.
-	if missing := missingSecrets(run.Spec, in.Secrets); len(missing) > 0 {
+	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 {
 		s.mu.Unlock()
-		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(missing, ", "))
+		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
+		return
+	}
+	if msg := s.syncModeProblem(in.Sync); msg != "" {
+		s.mu.Unlock()
+		writeErr(w, 409, "sync_mode_unsupported", msg)
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
