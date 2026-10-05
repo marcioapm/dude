@@ -335,6 +335,9 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 			}
 		}
 	case "open_pull_request":
+		if err := untestedRefusal(ctx, tx, st); err != nil {
+			return nil, err
+		}
 		draft, err := GateAnswer(ctx, tx, st)
 		if err != nil {
 			return nil, err
@@ -389,8 +392,12 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 }
 
 // askGate asks the pull request gate's question on the conductor's Run, at
-// the heads the delivery is at.
+// the heads the delivery is at; refused while the head is a conductor's
+// commit nothing has reviewed.
 func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt string) (string, error) {
+	if err := untestedRefusal(ctx, tx, st); err != nil {
+		return "", err
+	}
 	id, err := AskTx(ctx, tx, ref, prompt, GateChoices)
 	if err != nil {
 		return "", err
@@ -408,6 +415,10 @@ func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
 	var open bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL
 		AND status = 'open')`, st.TaskID).Scan(&open); err != nil || open {
+		return err
+	}
+	// Not asked at an untested head: the step that parked goes to a review.
+	if untested, err := UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads); err != nil || untested {
 		return err
 	}
 	var runID string

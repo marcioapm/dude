@@ -352,6 +352,22 @@ func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (d
 	return conducted(delivery.ConductReply(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
 }
 
+type publishIn struct {
+	Message string `json:"message,omitempty" jsonschema:"what the commits do, in a line, for Chat; your commit messages stay as they are"`
+}
+
+func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string]any, error) {
+	id, err := delivery.ConductPublish(ctx, tx, c.run(), in.Message)
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	return map[string]any{"publishId": id, "status": "publishing",
+		"next": "lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused."}, nil
+}
+
 type updateTaskIn struct {
 	Goal               *string   `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
 	AcceptanceCriteria *[]string `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`

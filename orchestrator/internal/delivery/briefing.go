@@ -33,16 +33,21 @@ type RepoHead struct {
 }
 
 // TaskHeads is the task's head in each repository it names: its pull
-// request's head commit, else the last commit dude published for it; a
-// repository with neither has none ("", the default branch).
+// request's head commit, else the last commit dude published for it — a
+// phase's, or its conductor's; a repository with neither has none ("",
+// the default branch).
 func TaskHeads(ctx context.Context, tx pgx.Tx, taskID string) ([]RepoHead, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT repo.name,
 		  COALESCE(
 		    (SELECT pr.head_sha FROM pull_requests pr WHERE pr.task_id = $1 AND pr.repository_id = repo.id
 		       AND pr.head_sha IS NOT NULL ORDER BY pr.updated_at DESC LIMIT 1),
-		    (SELECT r.heads->repo.name->>'sha' FROM runs r WHERE r.task_id = $1 AND r.heads ? repo.name
-		       ORDER BY r.ended_at DESC NULLS LAST LIMIT 1),
+		    (SELECT h.sha FROM (
+		       SELECT r.heads->repo.name->>'sha' AS sha, r.ended_at AS at FROM runs r WHERE r.task_id = $1 AND r.heads ? repo.name
+		       UNION ALL
+		       SELECT p.heads->repo.name->>'sha', p.settled_at FROM conductor_publishes p
+		         WHERE p.task_id = $1 AND p.status = 'published' AND p.heads ? repo.name) h
+		     ORDER BY h.at DESC NULLS LAST LIMIT 1),
 		    ''),
 		  COALESCE((SELECT r.branch FROM runs r WHERE r.task_id = $1 AND r.heads ? repo.name AND r.branch IS NOT NULL
 		       ORDER BY r.ended_at DESC NULLS LAST LIMIT 1), '')
