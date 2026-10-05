@@ -204,11 +204,6 @@ func (s *Syncer) publishAt(ctx context.Context, p publishRow, after time.Duratio
 	}
 }
 
-// publishNow makes the publish due again at once: it moved on a status.
-func (s *Syncer) publishNow(ctx context.Context, p publishRow) {
-	s.publishAt(ctx, p, 0, false)
-}
-
 func (s *Syncer) refusePublish(ctx context.Context, p publishRow, why string) error {
 	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
 		return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, p.Claim, why)
@@ -574,20 +569,16 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 // errNoForge: the organization has no forge credential to move with.
 var errNoForge = errors.New("no forge credential to read the task branch with")
 
-// branchSHA is forge.GitHub.BranchSHA, errNoForge without a forge.
-func branchSHA(ctx context.Context, gh *forge.GitHub, slug, branch string) (string, error) {
-	if gh == nil {
-		return "", errNoForge
-	}
-	return gh.BranchSHA(ctx, slug, branch)
-}
-
 // reached says whether branch already contains head: at it, or at a
 // descendant of it (the forge's compare head...current behind by none), as
 // when a move landed and someone pushed on top before it was confirmed.
 // What is on top is not the publish's, and the branch is never moved back.
+// errNoForge without a forge.
 func reached(ctx context.Context, gh *forge.GitHub, slug, branch, head string) (bool, error) {
-	at, err := branchSHA(ctx, gh, slug, branch)
+	if gh == nil {
+		return false, errNoForge
+	}
+	at, err := gh.BranchSHA(ctx, slug, branch)
 	if err != nil || at == head || at == "" {
 		return at == head, err
 	}
