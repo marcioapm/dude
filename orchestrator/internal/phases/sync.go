@@ -82,6 +82,9 @@ type Syncer struct {
 	// much earlier, so a retry a minute out is exercised without the wait.
 	// Zero outside tests.
 	RetryAhead time.Duration
+	// For tests: how long a conductor's input waits for its checkout's
+	// sync to be reported; zero is checkoutSyncWait.
+	CheckoutSyncWait time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
 	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration
@@ -1734,12 +1737,15 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	if r.Status != statusRunning || r.LuxState != "running" {
 		return false, nil
 	}
+	var upTo *time.Time
 	if r.conductor() {
 		// A wake note waits for the conductor's checkout to be brought
 		// current, and says how that went (edits.go).
-		if hold, err := s.keepCurrent(ctx, r); hold || err != nil {
-			return hold, err
+		hold, issued, cutoff, err := s.keepCurrent(ctx, r)
+		if hold || err != nil {
+			return issued, err
 		}
+		upTo = cutoff
 	}
 	type directive struct {
 		ID, Text  string
@@ -1751,7 +1757,8 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, COALESCE(resends, '')
-			FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL ORDER BY created_at`, r.ID)
+			FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL
+			  AND ($2::timestamptz IS NULL OR created_at <= $2) ORDER BY created_at`, r.ID, upTo)
 		if err != nil {
 			return err
 		}

@@ -524,6 +524,9 @@ type Server struct {
 	// HoldPushes is a lux that accepts a push and never reports it: no
 	// git.push follows.
 	HoldPushes bool
+	// HoldSyncs is a lux that accepts a running Run's sync and never
+	// reports it: no git.sync or sync.done follows.
+	HoldSyncs bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.

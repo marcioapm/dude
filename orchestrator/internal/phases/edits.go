@@ -33,7 +33,15 @@ import (
 
 // checkoutSyncWait bounds how long what is queued for a conductor waits
 // for its checkout's sync to be reported: past it, it is heard anyway.
+// Syncer.CheckoutSyncWait overrides it for tests.
 const checkoutSyncWait = 30 * time.Second
+
+func (s *Syncer) syncWait() time.Duration {
+	if s.CheckoutSyncWait > 0 {
+		return s.CheckoutSyncWait
+	}
+	return checkoutSyncWait
+}
 
 // currentRefs are the conductor's repositories to bring to the task
 // branch: those it may change and holds, where the task branch exists.
@@ -118,46 +126,66 @@ func (s *Syncer) checkoutReadOnly(ctx context.Context, r phaseRun, cause error) 
 
 // keepCurrent runs before what is queued for a running conductor is sent:
 // a sync of its checkout when nothing was synced since the input was
-// queued. Returns whether the input waits (a sync in flight).
-func (s *Syncer) keepCurrent(ctx context.Context, r phaseRun) (bool, error) {
-	var pending, due bool
+// queued. hold: the input waits for a sync in flight. issued: a sync was
+// asked for now — progress for the sweep; waiting on one already asked
+// is not. upTo, when set, bounds what may be sent now by when it was
+// queued: a sync in flight past its bound releases only the batch that
+// waited on it, without its outcome line, before newer input asks for a
+// sync of its own.
+//
+// The bound counts from the oldest input waiting, never from the latest
+// sync: input that keeps arriving cannot hold the first back.
+func (s *Syncer) keepCurrent(ctx context.Context, r phaseRun) (hold, issued bool, upTo *time.Time, err error) {
+	var inFlight, expired, due bool
+	var askedAt *time.Time
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// In flight, short of its bound; or something queued since the last.
-		return tx.QueryRow(ctx, `SELECT r.checkout_sync_id IS NOT NULL AND cardinality(r.checkout_sync_repos) > 0
-				AND r.checkout_sync_at > now() - make_interval(secs => $2),
+		return tx.QueryRow(ctx, `SELECT r.checkout_sync_id IS NOT NULL AND cardinality(r.checkout_sync_repos) > 0,
+			COALESCE((SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
+				<= now() - make_interval(secs => $2), false),
 			r.checkout_read_only IS NULL AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id
-				AND d.sent_at IS NULL AND d.failed_at IS NULL AND d.created_at > COALESCE(r.checkout_sync_at, '-infinity'))
-			FROM runs r WHERE r.id = $1`, r.ID, checkoutSyncWait.Seconds()).Scan(&pending, &due)
+				AND d.sent_at IS NULL AND d.failed_at IS NULL AND d.created_at > COALESCE(r.checkout_sync_at, '-infinity')),
+			r.checkout_sync_at
+			FROM runs r WHERE r.id = $1`, r.ID, s.syncWait().Seconds()).Scan(&inFlight, &expired, &due, &askedAt)
 	}); err != nil {
-		return false, err
+		return false, false, nil, err
 	}
-	if pending {
-		return true, nil
+	if inFlight {
+		if !expired {
+			return true, false, nil, nil
+		}
+		// Past its bound: no longer waited on; what it covered goes now.
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET checkout_sync_id = NULL, checkout_sync_repos = '{}' WHERE id = $1`, r.ID)
+			return err
+		}); err != nil {
+			return false, false, nil, err
+		}
+		return false, false, askedAt, nil
 	}
 	if !due {
-		return false, nil
+		return false, false, nil, nil
 	}
 	refs, err := s.currentRefs(ctx, r)
 	if err != nil {
-		return false, err
+		return false, false, nil, err
 	}
 	id := fmt.Sprintf("sync-%s-%d", r.ID, time.Now().UnixNano())
 	// Recorded before lux is asked (its git.sync may come first), and
 	// cleared when it was not.
 	if err := s.syncAsked(ctx, r, id, refs); err != nil || len(refs) == 0 {
-		return false, err
+		return false, false, nil, err
 	}
 	err = s.Lux.SyncRun(ctx, r.LuxRunID, id, refs)
 	switch {
 	case lux.SyncModesRefused(err):
-		return true, s.checkoutReadOnly(ctx, r, err)
+		return true, true, nil, s.checkoutReadOnly(ctx, r, err)
 	case err != nil:
 		// Not running after all, or lux unreachable: the input goes, and
 		// the next one tries again.
 		s.Log.Debug("syncing a conductor's checkout failed", "run", r.ID, "error", err)
-		return false, s.syncAsked(ctx, r, id, nil)
+		return false, false, nil, s.syncAsked(ctx, r, id, nil)
 	}
-	return true, nil
+	return true, true, nil, nil
 }
 
 // checkoutSynced records one repository's git.sync of a conductor's

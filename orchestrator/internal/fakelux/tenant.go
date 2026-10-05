@@ -778,6 +778,10 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.Syncs = append(run.Syncs, in.Sync)
+	if s.HoldSyncs {
+		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
+		return
+	}
 	changed := s.applySync(run, in.Sync, in.RequestID)
 	s.luxEvent(run, "sync.done", map[string]any{"requestId": in.RequestID, "changed": changed})
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
