@@ -136,7 +136,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       ? <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
           what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
           steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />
-      : <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />,
+      : l.kind === "commit"
+        ? <ChatNotice data-testid="chat-commit" data-sha={l.sha} kind="commit" by="Conductor" text={l.text} at={l.at} />
+        : <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />,
   })), [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
 
   // Who decides, while a delivery is in progress, and the way to hand it back.
