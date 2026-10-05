@@ -442,11 +442,11 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 // carryMove takes a moving publish to its end. Each repository not known
 // to have moved is first read from the forge: at its intended head or a
 // descendant of it (reached), it moved (an earlier attempt's request
-// landed). Those still to move are
-// judged again under the publish's locks (delivery.RecheckMovingTx) —
-// never those that moved — then fast-forwarded one by one, each result
-// kept as it happens. Then what moved is recorded (recordPublish), or,
-// with nothing moved, the publish is refused.
+// landed). Those still to move are judged again under the publish's locks
+// (delivery.RecheckMovingTx) — never those that moved — then
+// fast-forwarded one by one, each result kept as it happens. Then what
+// moved is recorded (recordPublish), or, with nothing moved, the publish
+// is refused.
 //
 // A forge refusing for good (forgeRefused) refuses a repository whose
 // move was never sent. One whose move was sent and whose outcome the
@@ -490,12 +490,9 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 			default:
 				err = errPublishTransient{err}
 			}
-			var te errPublishTransient
-			if errors.As(err, &te) {
+			if te := (errPublishTransient{}); errors.As(err, &te) {
 				transient = err
-				continue
-			}
-			if err != nil {
+			} else if err != nil {
 				return err
 			}
 			continue
@@ -633,9 +630,7 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 		for _, name := range slices.Sorted(maps.Keys(refused)) {
 			why = append(why, refused[name])
 		}
-		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-			return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, p.Claim, strings.Join(why, "; "))
-		})
+		return s.refusePublish(ctx, p, strings.Join(why, "; "))
 	}
 	r := phaseRun{ID: p.RunID, Org: p.Org, ProjectID: p.ProjectID, TaskID: p.TaskID}
 	err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
