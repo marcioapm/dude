@@ -369,6 +369,48 @@ func TestASignalSurvivesAStepThatFails(t *testing.T) {
 	}
 }
 
+// A step woken by a signal that returns Wait is not run again before its
+// After, though the signal stays in its inbox for the retry.
+func TestAWaitHoldsAStepWokenByASignalUntilItsTime(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	calls := 0
+	var seen []int
+	h.rt.Register(&Definition{Type: "test.wait", InitialStep: "park", Steps: map[string]Step{
+		"park": func(context.Context, StepContext) (Result, error) {
+			return Result{Next: "blocked", AwaitSignals: []string{"go"}}, nil
+		},
+		"blocked": func(_ context.Context, sc StepContext) (Result, error) {
+			calls++
+			seen = append(seen, len(sc.Signals))
+			if calls == 1 {
+				return Result{}, Wait{After: time.Second, Why: "publish moving"}
+			}
+			return Result{}, nil
+		},
+	}})
+	id := h.start("test.wait")
+	h.tick()
+	if err := h.rt.Signal(ctx, h.org, id, "go", nil, "once"); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	for range 20 {
+		h.tick()
+	}
+	if calls != 1 {
+		t.Fatalf("the waiting step ran %d times before its After, want 1", calls)
+	}
+	// Its After has passed.
+	if _, err := h.owner.Exec(ctx, `UPDATE workflow_runs SET wake_at = now(), wait_until = now() WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if run := h.get(id); run.Status != "completed" || calls != 2 || seen[1] != 1 {
+		t.Fatalf("after its After: status %s, %d runs, signals seen %v; want completed on the kept signal", run.Status, calls, seen)
+	}
+}
+
 // A key the definition owns is written from outside the steps: a step
 // that read the state before the write returns it without the write, and
 // its transition must not undo it. Keys it does not own are the step's.

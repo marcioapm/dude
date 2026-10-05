@@ -37,3 +37,7 @@ CREATE INDEX conductor_publishes_moving_idx ON conductor_publishes (task_id) WHE
 
 -- The worker claims publishes across organizations.
 GRANT UPDATE (next_attempt_at) ON conductor_publishes TO dude_sweeper;
+
+-- A workflow step that returned Wait is not run before this, not even for a
+-- signal already in its inbox: the signal stays for the retry.
+ALTER TABLE workflow_runs ADD COLUMN wait_until timestamptz;
