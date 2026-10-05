@@ -147,11 +147,59 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
-		if ev["mode"] != "fetch" || ev["behind"] != 1.0 || gitIn(t, work, "rev-parse", "HEAD") != before {
+		if ev["status"] != "fetched" || ev["mode"] != "fetch" || ev["ahead"] != 0.0 || ev["behind"] != 1.0 ||
+			gitIn(t, work, "rev-parse", "HEAD") != before {
 			t.Errorf("git.sync %v", ev)
 		}
 		if gitIn(t, work, "rev-parse", "refs/remotes/lux/work") != gitIn(t, repo, "rev-parse", "work") {
 			t.Error("no lux/work")
+		}
+	})
+	t.Run("detached, a branch target: kept", func(t *testing.T) {
+		_, c, runID, _, work := syncRepo(t, false)
+		gitIn(t, work, "checkout", "-q", "--detach")
+		before := gitIn(t, work, "rev-parse", "HEAD")
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if ev["status"] != lux.SyncKept || ev["behind"] != 1.0 || gitIn(t, work, "rev-parse", "HEAD") != before {
+			t.Errorf("detached, a branch target: %v", ev)
+		}
+	})
+	t.Run("detached, a sha target: fast-forwarded", func(t *testing.T) {
+		_, c, runID, repo, work := syncRepo(t, false)
+		gitIn(t, work, "checkout", "-q", "--detach")
+		want := gitIn(t, repo, "rev-parse", "work")
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: want, Mode: lux.SyncFastForward}}); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if ev["status"] != "fast-forward" || gitIn(t, work, "rev-parse", "HEAD") != want {
+			t.Errorf("detached, a sha target: %v", ev)
+		}
+	})
+	t.Run("already there: up-to-date", func(t *testing.T) {
+		_, c, runID, repo, work := syncRepo(t, false)
+		gitIn(t, work, "fetch", "-q", "origin", "work")
+		gitIn(t, work, "merge", "-q", "--ff-only", gitIn(t, repo, "rev-parse", "work"))
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if ev["status"] != "up-to-date" || ev["ahead"] != 0.0 || ev["behind"] != 0.0 {
+			t.Errorf("git.sync %v", ev)
+		}
+	})
+	t.Run("a ref that does not exist: failed", func(t *testing.T) {
+		_, c, runID, _, work := syncRepo(t, false)
+		before := gitIn(t, work, "rev-parse", "HEAD")
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "nowhere", Mode: lux.SyncFastForward}}); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if ev["status"] != "failed" || ev["error"] == "" || gitIn(t, work, "rev-parse", "HEAD") != before {
+			t.Errorf("git.sync %v", ev)
 		}
 	})
 }
