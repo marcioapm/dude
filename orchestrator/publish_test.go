@@ -190,6 +190,19 @@ func TestAMovingPublishHoldsOffWritersAndTheConductorsEnd(t *testing.T) {
 	if status, out := e.call("/internal/runs/"+e.cond+"/abort", map[string]any{}); status != 409 {
 		t.Errorf("stopping the conductor while moving: %d %v", status, out)
 	}
+	// Its container stopped meanwhile: Chat would end it and start another,
+	// and waits instead.
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	if status, out := e.chat(e.task, "replace while moving"); status != 409 {
+		t.Errorf("Chat replacing the conductor while moving: %d %v", status, out)
+	}
+	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, e.task); n != 1 {
+		t.Errorf("%d conductors, want no replacement", n)
+	}
+	if n := e.count(`SELECT count(*) FROM runs WHERE id = $1 AND status <> 'completed'`, e.cond); n != 1 {
+		t.Error("the moving publish's conductor was completed")
+	}
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'running' WHERE id = $1`, e.cond)
 	// The workflow's own writer step waits too.
 	if _, err := e.store().CreatePhaseRun(context.Background(), e.org, delivery.PhaseRun{TaskID: e.task, Phase: delivery.PhaseFix}); err == nil {
 		t.Error("a fix Run was created while the publish moved")
@@ -401,16 +414,46 @@ func TestAnAskedPublishIsNotStranded(t *testing.T) {
 	})
 }
 
-// A forge that hangs holds the publish worker, never the phase sweep: a
-// message to another task's conductor is heard meanwhile.
+// A forge that hangs holds the publish worker, never the phase sweep:
+// while a publish's comparison is held at the forge, sweeps bounded on
+// their own deliver a message to another task's conductor, before the
+// forge answers and without the held request being given up on.
 func TestASlowForgeDoesNotHoldThePhaseSweep(t *testing.T) {
-	e, g, _ := pausedAtCompare(t)
+	e := newEditing(t)
 	other := e.task2()
+	oc, _, _ := e.conductor(other)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	g := newGate()
+	var compares atomic.Int64
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if isCompare(r) {
+				compares.Add(1)
+				// Held until the gate opens or its caller gives up: a
+				// sweep holding it is let go by the sweep's own bound.
+				g.once.Do(func() { close(g.held) })
+				select {
+				case <-g.open:
+				case <-r.Context().Done():
+				}
+			}
+			return 0
+		}
+	})
+	e.settleInBackground()
+	t.Cleanup(g.release)
+	e.publish()
+	select {
+	case <-g.held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the comparison was never asked for")
+	}
 	if status, _ := e.chat(other, "hello over here"); status != 200 {
 		t.Fatal(status)
 	}
-	oc, _, _ := e.conductor(other)
-	e.until("the other conductor heard it", func() bool {
+	heard := func() bool {
 		for _, r := range e.lux.Runs() {
 			if r.ID != e.luxRunOf(oc) {
 				continue
@@ -422,7 +465,27 @@ func TestASlowForgeDoesNotHoldThePhaseSweep(t *testing.T) {
 			}
 		}
 		return false
-	})
+	}
+	// Shorter than the forge client's own request timeout, so only the
+	// sweep's bound, never the forge's, can let a held sweep go.
+	deadline := time.Now().Add(10 * time.Second)
+	for !heard() {
+		if time.Now().After(deadline) {
+			t.Fatal("the other conductor did not hear its message while the publish was held at the forge")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = e.syncer.Sweep(ctx)
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case <-g.open:
+		t.Fatal("the gate opened before the message was heard")
+	default:
+	}
+	if n := compares.Load(); n != 1 {
+		t.Errorf("%d comparisons while the first was held, want 1", n)
+	}
 	g.release()
 }
 
@@ -720,7 +783,8 @@ func (e *editing) task2() string {
 }
 
 // A forge failing for a while is asked again with back-off, not on every
-// pass: a handful of comparisons in five seconds.
+// pass: a failing comparison schedules the next one past the pass, passes
+// before then ask nothing, and the next failure waits longer.
 func TestATransientForgeFailureBacksOff(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
@@ -736,18 +800,66 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 			return 0
 		}
 	})
+	e.noPublishes = true
 	id := e.publish()
-	e.until("compared once", func() bool { return compares.Load() > 0 })
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		e.pump()
-		time.Sleep(20 * time.Millisecond)
+	// The worker asks lux to push; the conductor's follower records it.
+	e.until("pushed", func() bool {
+		if e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'pushed'`, id) == 1 {
+			return true
+		}
+		e.settleOnce()
+		return false
+	})
+	ctx := context.Background()
+	// delay is how far past the database time before the pass its next
+	// attempt was put.
+	delay := func(before time.Time) time.Duration {
+		t.Helper()
+		var next time.Time
+		var failures int
+		if err := e.owner.QueryRow(ctx, `SELECT next_attempt_at, failures FROM conductor_publishes WHERE id = $1`, id).
+			Scan(&next, &failures); err != nil {
+			t.Fatal(err)
+		}
+		if failures == 0 {
+			t.Fatal("the failure was not counted")
+		}
+		return next.Sub(before)
 	}
-	if n := compares.Load(); n > 4 {
-		t.Errorf("%d comparisons in five seconds", n)
+	dbNow := func() time.Time {
+		t.Helper()
+		var now time.Time
+		if err := e.owner.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+		return now
 	}
-	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'pushed' AND failures > 0
-		AND next_attempt_at > now()`, id); n != 1 {
-		t.Error("the publish is not backing off")
+	// Counted from here: a pass racing the follower's report may have
+	// compared once already.
+	base := compares.Load()
+	e.due(id)
+	before := dbNow()
+	e.settleOnce()
+	if n := compares.Load() - base; n != 1 {
+		t.Fatalf("%d comparisons in one pass", n)
+	}
+	first := delay(before)
+	if first < time.Second {
+		t.Fatalf("the next attempt is %v after the failing pass, want a back-off", first)
+	}
+	for range 5 {
+		e.settleOnce()
+	}
+	if n := compares.Load() - base; n != 1 {
+		t.Errorf("%d comparisons after passes before the back-off was up, want 1", n)
+	}
+	e.due(id)
+	before = dbNow()
+	e.settleOnce()
+	if n := compares.Load() - base; n != 2 {
+		t.Errorf("%d comparisons once due, want 2", n)
+	}
+	if second := delay(before); second <= first {
+		t.Errorf("the second back-off %v is not longer than the first %v", second, first)
 	}
 }
