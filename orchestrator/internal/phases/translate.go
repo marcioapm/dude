@@ -243,7 +243,7 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		return err
 	case "git.sync":
 		if t.run.conductor() {
-			return t.checkoutSynced(ctx, tx, s, d)
+			return t.checkoutSynced(ctx, tx, f.EventData)
 		}
 	}
 	if strings.HasPrefix(f.EventType, "server.") {

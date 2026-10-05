@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -188,11 +189,9 @@ func (s *Syncer) keepCurrent(ctx context.Context, r phaseRun) (hold, issued bool
 // checkoutSynced records one repository's git.sync of a conductor's
 // checkout: one of the sync in flight's, which is then no longer awaited;
 // told when it did not simply come current.
-func (t *translator) checkoutSynced(ctx context.Context, tx pgx.Tx, s *Syncer, d map[string]any) error {
-	str := func(k string) string { v, _ := d[k].(string); return v }
-	num := func(k string) int { v, _ := d[k].(float64); return int(v) }
-	flag := func(k string) bool { v, _ := d[k].(bool); return v }
-	if str("mode") == "" || str("mode") == lux.SyncMove {
+func (t *translator) checkoutSynced(ctx context.Context, tx pgx.Tx, raw json.RawMessage) error {
+	var res lux.SyncResult
+	if err := json.Unmarshal(raw, &res); err != nil || res.Mode == "" || res.Mode == lux.SyncMove {
 		return nil
 	}
 	var syncID string
@@ -200,19 +199,18 @@ func (t *translator) checkoutSynced(ctx context.Context, tx pgx.Tx, s *Syncer, d
 			checkout_synced_at = CASE WHEN checkout_sync_repos = ARRAY[$2]::text[] THEN now() ELSE checkout_synced_at END
 		WHERE id = $1 AND checkout_sync_id IS NOT NULL AND $2 = ANY (checkout_sync_repos)
 		  AND (NULLIF($3, '') IS NULL OR checkout_sync_id = $3)
-		RETURNING checkout_sync_id`, t.run.ID, str("repo"), str("requestId")).Scan(&syncID)
+		RETURNING checkout_sync_id`, t.run.ID, res.Repo, res.RequestID).Scan(&syncID)
 	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	line := delivery.CheckoutLine(str("repo"), str("ref"), str("status"), str("error"), num("ahead"), num("behind"),
-		flag("dirty"), flag("diverged"))
+	line := delivery.CheckoutLine(res)
 	if line == "" {
 		return nil
 	}
-	return tellConductor(ctx, tx, t.run, "checkout:"+syncID+":"+str("repo"), line)
+	return tellConductor(ctx, tx, t.run, "checkout:"+syncID+":"+res.Repo, line)
 }
 
 // tellConductor gives the conductor a line about its checkout with what it

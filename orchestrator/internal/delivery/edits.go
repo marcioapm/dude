@@ -15,6 +15,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -657,24 +658,29 @@ func (w *steps) reviewUntested(ctx context.Context, sc workflow.StepContext, st 
 
 // CheckoutLine is the line a conductor is told about one repository's
 // sync to the task branch, when it did not simply bring the checkout
-// current: "" for up-to-date or fast-forward.
-func CheckoutLine(repo, ref, status, errText string, ahead, behind int, dirty, diverged bool) string {
+// current: "" for up-to-date or fast-forward. An operation in progress
+// is told whatever the status, with only the commands git accepts in it.
+func CheckoutLine(s lux.SyncResult) string {
+	repo, ref, ahead, behind := s.Repo, s.Ref, s.Ahead, s.Behind
 	merge := fmt.Sprintf("`git merge lux/%s`", ref)
-	switch status {
+	if s.Operation != "" {
+		return operationLine(repo, ref, s.Operation, behind)
+	}
+	switch s.Status {
 	case "", "up-to-date", "fast-forward":
 		return ""
 	case "kept":
-		if !dirty && !diverged && ahead == 0 {
+		if !s.Dirty && !s.Diverged && ahead == 0 {
 			// Nothing of its own in the way: HEAD is not on the task branch,
 			// and lux never switches it.
 			return fmt.Sprintf("%s: your checkout is %d behind and not on the task branch; `git switch -C %s lux/%s` to take it.",
 				repo, behind, ref, ref)
 		}
 		var why []string
-		if dirty {
+		if s.Dirty {
 			why = append(why, "has local changes")
 		}
-		if diverged || ahead > 0 {
+		if s.Diverged || ahead > 0 {
 			why = append(why, fmt.Sprintf("%d commits of its own", ahead))
 		}
 		if len(why) == 0 {
@@ -684,7 +690,27 @@ func CheckoutLine(repo, ref, status, errText string, ahead, behind int, dirty, d
 	case "ahead":
 		return fmt.Sprintf("%s: your checkout is %d ahead of the task branch and not behind: publish, or keep working.", repo, ahead)
 	case "failed":
-		return fmt.Sprintf("%s: your checkout could not be brought current (%s); it is as you left it.", repo, clip(oneLine(errText), 120))
+		return fmt.Sprintf("%s: your checkout could not be brought current (%s); it is as you left it.", repo, clip(oneLine(s.Error), 120))
 	}
-	return fmt.Sprintf("%s: your checkout is %d behind and %d ahead (%s); %s to take the task branch in.", repo, behind, ahead, status, merge)
+	return fmt.Sprintf("%s: your checkout is %d behind and %d ahead (%s); %s to take the task branch in.", repo, behind, ahead, s.Status, merge)
+}
+
+// operationLine tells a checkout stopped mid-operation how to finish or
+// abort it. Switching branches or merging is refused by git until then,
+// so neither is advised before it.
+func operationLine(repo, ref, op string, behind int) string {
+	what, finish := "a "+op, fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
+	switch op {
+	case lux.OperationSequencer:
+		what = "a cherry-pick or revert of several commits"
+		finish = "resolve and `git cherry-pick --continue` (or `git revert --continue`), or `git cherry-pick --abort` (or `git revert --abort`)"
+	case lux.OperationRebase, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
+	default:
+		finish = "finish or abort it"
+	}
+	then := ""
+	if behind > 0 {
+		then = fmt.Sprintf("; then `git merge lux/%s`", ref)
+	}
+	return fmt.Sprintf("%s: %s is in progress in your checkout (%d behind the task branch): %s%s.", repo, what, behind, finish, then)
 }
