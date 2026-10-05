@@ -1,6 +1,6 @@
 package fakelux_test
 
-// A checkout stopped mid-operation (a conflicting rebase, merge,
+// A checkout stopped mid-operation (a conflicting rebase, git am, merge,
 // cherry-pick, revert, or a multi-commit pick between picks): its sync
 // names the operation and keeps the checkout, and its push is refused,
 // nothing bundled.
@@ -81,18 +81,27 @@ func lastPush(t *testing.T, c *lux.HTTPClient, runID string) lux.PushResult {
 func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
-		op    string
-		start func(t *testing.T, work string)
+		name, op string
+		start    func(t *testing.T, work string)
 	}{
-		{lux.OperationRebase, func(t *testing.T, work string) { gitFails(t, work, "rebase", "lux/work") }},
-		{lux.OperationMerge, func(t *testing.T, work string) { gitFails(t, work, "merge", "lux/work") }},
-		{lux.OperationCherryPick, func(t *testing.T, work string) { gitFails(t, work, "cherry-pick", "lux/work") }},
-		{lux.OperationRevert, func(t *testing.T, work string) {
+		{"rebase", lux.OperationRebase, func(t *testing.T, work string) { gitFails(t, work, "rebase", "lux/work") }},
+		// The apply backend keeps its state in rebase-apply, as git am does.
+		{"rebase --apply", lux.OperationRebase, func(t *testing.T, work string) { gitFails(t, work, "rebase", "--apply", "lux/work") }},
+		{"am", lux.OperationAm, func(t *testing.T, work string) {
+			patch := filepath.Join(t.TempDir(), "p.patch")
+			if err := os.WriteFile(patch, []byte(gitIn(t, work, "format-patch", "-1", "--stdout", "lux/work")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitFails(t, work, "am", patch)
+		}},
+		{"merge", lux.OperationMerge, func(t *testing.T, work string) { gitFails(t, work, "merge", "lux/work") }},
+		{"cherry-pick", lux.OperationCherryPick, func(t *testing.T, work string) { gitFails(t, work, "cherry-pick", "lux/work") }},
+		{"revert", lux.OperationRevert, func(t *testing.T, work string) {
 			// Reverting the first f.txt after a second rewrote it.
 			commitFile(t, work, "mine again\n", "again")
 			gitFails(t, work, "revert", "--no-edit", "HEAD~1")
 		}},
-		{lux.OperationSequencer, func(t *testing.T, work string) {
+		{"sequencer", lux.OperationSequencer, func(t *testing.T, work string) {
 			// Two picks, the first conflicting and then committed by hand:
 			// the sequencer waits for --continue with no pick in progress.
 			gitIn(t, work, "branch", "two", "lux/work")
@@ -103,7 +112,7 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 			commitFile(t, work, "resolved\n", "resolved")
 		}},
 	} {
-		t.Run(c.op, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			cl, runID, repo, work := conflictRepo(t)
 			c.start(t, work)
 			// The task branch moves on meanwhile: the checkout is behind it.
@@ -134,7 +143,7 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 			}
 			push := lastPush(t, cl, runID)
 			if len(push.Results) != 1 || push.Results[0].Status != lux.PushRefused || push.Results[0].Operation != c.op ||
-				!strings.Contains(push.Results[0].Error, "a "+c.op+" is in progress in the checkout: finish or abort it, then push") {
+				!strings.Contains(push.Results[0].Error, " is in progress in the checkout: finish or abort it, then push") {
 				t.Errorf("git.push %+v", push)
 			}
 			if out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "-q", "refs/heads/pub").CombinedOutput(); err == nil {

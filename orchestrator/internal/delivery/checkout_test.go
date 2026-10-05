@@ -19,6 +19,9 @@ func TestACheckoutLineMidOperationGivesOnlyWhatGitAccepts(t *testing.T) {
 		{lux.OperationRebase, lux.SyncKept, 3, []string{
 			"app: a rebase is in progress in your checkout (3 behind the task branch): " +
 				"resolve and `git rebase --continue`, or `git rebase --abort`; then `git merge lux/dude/t/1`."}},
+		{lux.OperationAm, lux.SyncKept, 2, []string{
+			"app: a `git am` is in progress in your checkout (2 behind the task branch): " +
+				"resolve and `git am --continue`, or `git am --abort`; then `git merge lux/dude/t/1`."}},
 		{lux.OperationMerge, lux.SyncKept, 1, []string{"a merge is in progress", "`git merge --continue`", "`git merge --abort`"}},
 		{lux.OperationCherryPick, lux.SyncKept, 1, []string{"a cherry-pick is in progress", "`git cherry-pick --continue`", "`git cherry-pick --abort`"}},
 		{lux.OperationRevert, lux.SyncKept, 1, []string{"a revert is in progress", "`git revert --continue`", "`git revert --abort`"}},
@@ -46,5 +49,12 @@ func TestACheckoutLineMidOperationGivesOnlyWhatGitAccepts(t *testing.T) {
 		if c.behind == 0 && strings.Contains(line, "lux/") {
 			t.Errorf("%s: %q merges a task branch it is not behind", c.op, line)
 		}
+	}
+}
+
+func TestAPublishMidAmIsRefusedNamingGitAm(t *testing.T) {
+	want := "app: a `git am` is in progress in your checkout: finish or abort it, then publish."
+	if got := MidOperationRefusal("app", lux.OperationAm); got != want {
+		t.Errorf("%q, want %q", got, want)
 	}
 }

@@ -703,7 +703,7 @@ func operationLine(repo, ref, op string, behind int) string {
 	switch op {
 	case lux.OperationSequencer:
 		finish = "resolve and `git cherry-pick --continue` (or `git revert --continue`), or `git cherry-pick --abort` (or `git revert --abort`)"
-	case lux.OperationRebase, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
+	case lux.OperationRebase, lux.OperationAm, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
 	default:
 		finish = "finish or abort it"
 	}
@@ -720,6 +720,8 @@ func operationName(op string) string {
 	switch op {
 	case lux.OperationSequencer:
 		return "a cherry-pick or revert of several commits"
+	case lux.OperationAm:
+		return "a `git am`"
 	case "":
 		return "a git operation"
 	}

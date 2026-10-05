@@ -140,10 +140,12 @@ type SyncResult struct {
 }
 
 // Operations git can be stopped in the middle of, as lux names them.
-// OperationSequencer is a multi-commit cherry-pick or revert between picks.
+// OperationSequencer is a multi-commit cherry-pick or revert between picks;
+// OperationAm is a git am stopped on a patch.
 const (
 	OperationMerge      = "merge"
 	OperationRebase     = "rebase"
+	OperationAm         = "am"
 	OperationCherryPick = "cherry-pick"
 	OperationRevert     = "revert"
 	OperationSequencer  = "sequencer"
