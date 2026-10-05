@@ -574,8 +574,14 @@ func TestAMoveTheForgeWillNotConfirmStallsAfterItsBound(t *testing.T) {
 	readable.Store(false)
 	// Within its bound: asked again, still moving.
 	e.due(id)
+	var passed time.Time
+	if err := e.owner.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&passed); err != nil {
+		t.Fatal(err)
+	}
 	e.settleOnce()
-	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving' AND next_attempt_at > now()`, id); n != 1 {
+	// Scheduled past the pass, not merely still in the future now: a host
+	// pause after the pass must not fail a correct schedule.
+	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving' AND next_attempt_at > $2`, id, passed); n != 1 {
 		t.Fatal("an unconfirmed move within its bound is not reconciled again later")
 	}
 	mustExec(t, e.owner, `UPDATE conductor_publishes SET moves = jsonb_set(moves, '{target,attemptedAt}',
@@ -811,21 +817,6 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 		return false
 	})
 	ctx := context.Background()
-	// delay is how far past the database time before the pass its next
-	// attempt was put.
-	delay := func(before time.Time) time.Duration {
-		t.Helper()
-		var next time.Time
-		var failures int
-		if err := e.owner.QueryRow(ctx, `SELECT next_attempt_at, failures FROM conductor_publishes WHERE id = $1`, id).
-			Scan(&next, &failures); err != nil {
-			t.Fatal(err)
-		}
-		if failures == 0 {
-			t.Fatal("the failure was not counted")
-		}
-		return next.Sub(before)
-	}
 	dbNow := func() time.Time {
 		t.Helper()
 		var now time.Time
@@ -834,32 +825,49 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 		}
 		return now
 	}
+	// backedOff runs one failing pass and checks the back-off it scheduled.
+	// The worker writes now() + wait during the pass, so with the database
+	// clock read just before and just after it, next-after <= wait <=
+	// next-before however long the host paused: the wait the policy asks
+	// for must lie in that window.
+	backedOff := func(failures int, want time.Duration) {
+		t.Helper()
+		before := dbNow()
+		e.settleOnce()
+		after := dbNow()
+		var next time.Time
+		var got int
+		if err := e.owner.QueryRow(ctx, `SELECT next_attempt_at, failures FROM conductor_publishes WHERE id = $1`, id).
+			Scan(&next, &got); err != nil {
+			t.Fatal(err)
+		}
+		const slack = 10 * time.Millisecond
+		if got != failures || next.Sub(after) > want+slack || next.Sub(before) < want-slack {
+			t.Fatalf("after failure %d (counted %d): the next attempt is %v to %v past the pass, want a back-off of %v",
+				failures, got, next.Sub(after), next.Sub(before), want)
+		}
+	}
 	// Counted from here: a pass racing the follower's report may have
 	// compared once already.
 	base := compares.Load()
 	e.due(id)
-	before := dbNow()
-	e.settleOnce()
+	backedOff(1, 2*time.Second)
 	if n := compares.Load() - base; n != 1 {
 		t.Fatalf("%d comparisons in one pass", n)
 	}
-	first := delay(before)
-	if first < time.Second {
-		t.Fatalf("the next attempt is %v after the failing pass, want a back-off", first)
-	}
+	// Not due: passes leave it alone. The deadline is pushed far out so a
+	// host pause cannot make it due under the test; when it is set is what
+	// backedOff checks.
+	mustExec(t, e.owner, `UPDATE conductor_publishes SET next_attempt_at = now() + interval '1 day' WHERE id = $1`, id)
 	for range 5 {
 		e.settleOnce()
 	}
 	if n := compares.Load() - base; n != 1 {
-		t.Errorf("%d comparisons after passes before the back-off was up, want 1", n)
+		t.Errorf("%d comparisons while the back-off was not up, want 1", n)
 	}
 	e.due(id)
-	before = dbNow()
-	e.settleOnce()
+	backedOff(2, 4*time.Second)
 	if n := compares.Load() - base; n != 2 {
 		t.Errorf("%d comparisons once due, want 2", n)
-	}
-	if second := delay(before); second <= first {
-		t.Errorf("the second back-off %v is not longer than the first %v", second, first)
 	}
 }
