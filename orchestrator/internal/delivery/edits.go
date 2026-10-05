@@ -55,6 +55,15 @@ const writerPhases = `('implement', 'fix', 'simplify')`
 // ErrStepRunning: a step of the delivery holds it; try again after.
 var ErrStepRunning = errors.New("a step of the delivery is running")
 
+// stepHolds says whether a step of the delivery wfID holds its lease now;
+// lock (" FOR UPDATE", or "") locks its row for the rest of tx.
+func stepHolds(ctx context.Context, tx pgx.Tx, wfID, lock string) (bool, error) {
+	var held bool
+	err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1`+lock,
+		wfID).Scan(&held)
+	return held, err
+}
+
 // liveWriter (SQL, $1 the task): a phase Run that pushes to the task
 // branch, not ended.
 const liveWriter = `EXISTS (SELECT 1 FROM runs w WHERE w.task_id = $1 AND w.phase IN ` + writerPhases + `
@@ -65,7 +74,8 @@ const liveWriter = `EXISTS (SELECT 1 FROM runs w WHERE w.task_id = $1 AND w.phas
 // Refused, writing nothing, unless it is the live conductor, it takes the
 // delivery's decisions, its checkout is writable, and no other writer is
 // at work; the limit and whether its checkout is current are checked once
-// lux has pushed (SettlePublish). Returns the publish's id.
+// lux has pushed (the publish worker, phases.SettlePublishes). Returns the
+// publish's id.
 func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) (string, error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return "", err
@@ -303,12 +313,11 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarg
 	if d == nil {
 		return t, nil
 	}
-	var locked bool
-	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1`,
-		d.WorkflowID).Scan(&locked); err != nil {
+	held, err := stepHolds(ctx, tx, d.WorkflowID, "")
+	if err != nil {
 		return t, err
 	}
-	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.branch(p.TaskID), nonNilMap(d.State.Heads), !locked
+	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.branch(p.TaskID), nonNilMap(d.State.Heads), !held
 	var projectPolicy, orgPolicy []byte
 	if err := tx.QueryRow(ctx, `SELECT p.delivery_policy, o.delivery_policy FROM tasks t JOIN projects p ON p.id = t.project_id
 		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, p.TaskID).Scan(&projectPolicy, &orgPolicy); err != nil {
@@ -383,12 +392,11 @@ func ReservePublishTx(ctx context.Context, tx pgx.Tx, p PublishOf, heads map[str
 	if err != nil || why != "" {
 		return why, err
 	}
-	var locked bool
-	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1`,
-		d.WorkflowID).Scan(&locked); err != nil {
+	held, err := stepHolds(ctx, tx, d.WorkflowID, "")
+	if err != nil {
 		return "", err
 	}
-	if locked || !maps.Equal(nonNilMap(d.State.Heads), nonNilMap(heads)) {
+	if held || !maps.Equal(nonNilMap(d.State.Heads), nonNilMap(heads)) {
 		return "", ErrNotReserved
 	}
 	raw, _ := json.Marshal(moves)
@@ -426,16 +434,15 @@ func MovedTx(ctx context.Context, tx pgx.Tx, p PublishOf, repo string, m Move) e
 // rest of tx. ErrStepRunning when a step of the delivery holds it now;
 // ErrClaimLost when the publish is settled or no longer the worker's.
 func LockRecordingTx(ctx context.Context, tx pgx.Tx, p PublishOf) error {
-	var locked bool
-	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1 FOR UPDATE`,
-		p.WorkflowID).Scan(&locked); err != nil {
+	held, err := stepHolds(ctx, tx, p.WorkflowID, " FOR UPDATE")
+	if err != nil {
 		return err
 	}
-	if locked {
+	if held {
 		return ErrStepRunning
 	}
 	var ours bool
-	err := tx.QueryRow(ctx, `SELECT status = 'moving' AND `+claimed(2)+` FROM conductor_publishes WHERE id = $1 FOR UPDATE`,
+	err = tx.QueryRow(ctx, `SELECT status = 'moving' AND `+claimed(2)+` FROM conductor_publishes WHERE id = $1 FOR UPDATE`,
 		p.ID, p.Claim).Scan(&ours)
 	if err == nil && !ours || db.IsNotFound(err) {
 		return ErrClaimLost
@@ -468,8 +475,8 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 	lines := 0
 	for repo, h := range heads {
 		next[repo] = h.SHA
-		for _, p := range h.ChangedPaths {
-			paths = append(paths, repo+"/"+p)
+		for _, path := range h.ChangedPaths {
+			paths = append(paths, repo+"/"+path)
 		}
 		lines += h.Lines
 	}
@@ -502,22 +509,20 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 	if tag.RowsAffected() == 0 {
 		return ErrClaimLost
 	}
-	pubID := p.ID
 	var commits []string
 	for _, repo := range slices.Sorted(maps.Keys(heads)) {
 		commits = append(commits, repo+"@"+short(heads[repo].SHA))
 	}
 	line := fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
-		pubID, strings.Join(commits, " "), lines, len(paths))
+		p.ID, strings.Join(commits, " "), lines, len(paths))
 	if len(notMoved) > 0 {
 		line = fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
-			pubID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
+			p.ID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
 	}
-	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+pubID, line)
-	if err != nil {
+	if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+p.ID, line); err != nil {
 		return err
 	}
-	return StalledNoticeTx(ctx, tx, ref, pubID, stalled)
+	return StalledNoticeTx(ctx, tx, ref, p.ID, stalled)
 }
 
 // PublishRefusedTx records a publish refused before anything moved, and
