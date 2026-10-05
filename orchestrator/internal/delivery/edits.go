@@ -180,7 +180,7 @@ func RefuseUnmovedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) err
 		}
 	}
 	for _, p := range live {
-		if err := PublishRefusedTx(ctx, tx, ref, p.ID, why); err != nil {
+		if err := PublishRefusedTx(ctx, tx, ref, p.ID, "", why); err != nil {
 			return err
 		}
 	}
@@ -213,11 +213,20 @@ type PublishTarget struct {
 
 // PublishOf is a publish as its settlement checks it: its conductor, and
 // the delivery and attempt it was asked on ("" and 0 from before they
-// were recorded, unchecked).
+// were recorded, unchecked). Claim is the worker's claim on it
+// (conductor_publishes.claim_token); its writes land only while it holds.
 type PublishOf struct {
 	ID, TaskID, RunID, WorkflowID string
 	Attempt                       int
+	Claim                         string
 }
+
+// ErrClaimLost: the publish was settled, or another worker claimed it,
+// since this worker did; it writes nothing more.
+var ErrClaimLost = errors.New("the publish's claim was lost")
+
+// claimed (SQL, $n the claim): the publish's claim is still the worker's.
+func claimed(n int) string { return fmt.Sprintf("claim_token = $%d", n) }
 
 // publishEligibleTx is why the publish may not go on now, "" when it may:
 // what ConductPublish checked, again — its conductor live and not ending,
@@ -344,19 +353,16 @@ const (
 // will not confirm is reconciled before it is settled as stalled.
 const MoveUncertainFor = 30 * time.Minute
 
-// ErrNotMoving: the publish was settled meanwhile.
-var ErrNotMoving = errors.New("the publish is no longer moving")
-
 // AttemptMoveTx records, before the first fast-forward of repo's task
 // branch is sent, that it was; returns when it first was.
-func AttemptMoveTx(ctx context.Context, tx pgx.Tx, pubID, repo string) (time.Time, error) {
+func AttemptMoveTx(ctx context.Context, tx pgx.Tx, p PublishOf, repo string) (time.Time, error) {
 	var at time.Time
 	err := tx.QueryRow(ctx, `UPDATE conductor_publishes
 		SET moves = jsonb_set(moves, ARRAY[$2::text, 'attemptedAt'], COALESCE(moves->$2->'attemptedAt', to_jsonb(now())))
-		WHERE id = $1 AND status = 'moving' AND moves ? $2
-		RETURNING (moves->$2->>'attemptedAt')::timestamptz`, pubID, repo).Scan(&at)
+		WHERE id = $1 AND status = 'moving' AND moves ? $2 AND `+claimed(3)+`
+		RETURNING (moves->$2->>'attemptedAt')::timestamptz`, p.ID, repo, p.Claim).Scan(&at)
 	if db.IsNotFound(err) {
-		return at, ErrNotMoving
+		return at, ErrClaimLost
 	}
 	return at, err
 }
@@ -387,7 +393,7 @@ func ReservePublishTx(ctx context.Context, tx pgx.Tx, p PublishOf, heads map[str
 	}
 	raw, _ := json.Marshal(moves)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'moving', moves = $2::jsonb, branch = $3, workflow_run_id = $4
-		WHERE id = $1 AND status = 'pushed'`, p.ID, raw, d.branch(p.TaskID), d.WorkflowID)
+		WHERE id = $1 AND status = 'pushed' AND `+claimed(5), p.ID, raw, d.branch(p.TaskID), d.WorkflowID, p.Claim)
 	if err != nil {
 		return "", err
 	}
@@ -405,10 +411,35 @@ func RecheckMovingTx(ctx context.Context, tx pgx.Tx, p PublishOf) (string, error
 }
 
 // MovedTx records one repository's move as it happens.
-func MovedTx(ctx context.Context, tx pgx.Tx, pubID, repo string, m Move) error {
+func MovedTx(ctx context.Context, tx pgx.Tx, p PublishOf, repo string, m Move) error {
 	raw, _ := json.Marshal(m)
-	_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET moves = jsonb_set(moves, ARRAY[$2::text], $3::jsonb)
-		WHERE id = $1 AND status = 'moving'`, pubID, repo, raw)
+	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET moves = jsonb_set(moves, ARRAY[$2::text], $3::jsonb)
+		WHERE id = $1 AND status = 'moving' AND `+claimed(4), p.ID, repo, raw, p.Claim)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrClaimLost
+	}
+	return err
+}
+
+// LockRecordingTx begins recording a moving publish, before anything is
+// written for it: the delivery's row, then the publish's, locked for the
+// rest of tx. ErrStepRunning when a step of the delivery holds it now;
+// ErrClaimLost when the publish is settled or no longer the worker's.
+func LockRecordingTx(ctx context.Context, tx pgx.Tx, p PublishOf) error {
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1 FOR UPDATE`,
+		p.WorkflowID).Scan(&locked); err != nil {
+		return err
+	}
+	if locked {
+		return ErrStepRunning
+	}
+	var ours bool
+	err := tx.QueryRow(ctx, `SELECT status = 'moving' AND `+claimed(2)+` FROM conductor_publishes WHERE id = $1 FOR UPDATE`,
+		p.ID, p.Claim).Scan(&ours)
+	if err == nil && !ours || db.IsNotFound(err) {
+		return ErrClaimLost
+	}
 	return err
 }
 
@@ -427,19 +458,11 @@ func (t PublishTarget) OverLimit(lines, files int) string {
 // at the old heads no longer holds), and the conductor is woken saying
 // what moved and, by repository, what was refused and why (refused), and
 // what could not be confirmed (stalled: StalledNoticeTx). The
-// caller moved the branches. ErrStepRunning when a step of the delivery
-// holds it now, whose transition would write over the heads: recorded
-// after it.
-func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID string, heads map[string]PublishHead,
+// caller moved the branches, and began with LockRecordingTx in tx.
+// ErrClaimLost, rolling tx back, when the publish is no longer the
+// worker's to record.
+func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads map[string]PublishHead,
 	refused, stalled map[string]string) error {
-	var locked bool
-	if err := tx.QueryRow(ctx, `SELECT locked_by IS NOT NULL AND locked_until > now() FROM workflow_runs WHERE id = $1 FOR UPDATE`,
-		workflowID).Scan(&locked); err != nil {
-		return err
-	}
-	if locked {
-		return ErrStepRunning
-	}
 	next := map[string]string{}
 	var paths []string
 	lines := 0
@@ -459,7 +482,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 			COALESCE(state->'heads', '{}'::jsonb) || $2::jsonb),
 			'{changedPaths}', (SELECT COALESCE(jsonb_agg(DISTINCT p ORDER BY p), '[]'::jsonb)
 				FROM jsonb_array_elements_text(COALESCE(state->'changedPaths', '[]'::jsonb) || $3::jsonb) p))
-		WHERE id = $1`, workflowID, rawHeads, rawPaths); err != nil {
+		WHERE id = $1`, p.WorkflowID, rawHeads, rawPaths); err != nil {
 		return err
 	}
 	var notMoved []string
@@ -472,10 +495,14 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 	raw, _ := json.Marshal(heads)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(),
 			error = NULLIF($3, ''), next_attempt_at = NULL
-		WHERE id = $1 AND status = 'moving'`, pubID, raw, clip(strings.Join(notMoved, "; "), 1000))
-	if err != nil || tag.RowsAffected() == 0 {
+		WHERE id = $1 AND status = 'moving' AND `+claimed(4), p.ID, raw, clip(strings.Join(notMoved, "; "), 1000), p.Claim)
+	if err != nil {
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrClaimLost
+	}
+	pubID := p.ID
 	var commits []string
 	for _, repo := range slices.Sorted(maps.Keys(heads)) {
 		commits = append(commits, repo+"@"+short(heads[repo].SHA))
@@ -494,13 +521,21 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, workflowID s
 }
 
 // PublishRefusedTx records a publish refused before anything moved, and
-// wakes the conductor with why.
-func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, why string) error {
+// wakes the conductor with why. claim is the worker's claim on it, ""
+// for a caller holding the publish's row lock (RefuseUnmovedTx), to whom
+// a publish settled already is no error.
+func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, claim, why string) error {
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'refused', error = $2, settled_at = now(), next_attempt_at = NULL
-		WHERE id = $1 AND status IN `+publishLive+`
-		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' = 'moved')`, pubID, clip(why, 1000))
-	if err != nil || tag.RowsAffected() == 0 {
+		WHERE id = $1 AND status IN `+publishLive+` AND ($3 = '' OR claim_token = $3)
+		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' = 'moved')`, pubID, clip(why, 1000), claim)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		if claim != "" {
+			return ErrClaimLost
+		}
+		return nil
 	}
 	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID,
 		fmt.Sprintf("Your publish %s was refused, nothing moved: %s", pubID, clip(oneLine(why), 220)))
@@ -511,15 +546,18 @@ func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, why str
 // confirmed and some of which may have landed (stalled, by repository the
 // head it was sent to move to): nothing is recorded as published, the
 // fence is released, and Chat and the conductor are told to check.
-func PublishStalledTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, stalled map[string]string) error {
+func PublishStalledTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, stalled map[string]string) error {
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'stalled', settled_at = now(), next_attempt_at = NULL,
 			error = 'the move could not be confirmed'
-		WHERE id = $1 AND status = 'moving'
-		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' IN ('moved', 'pending'))`, pubID)
-	if err != nil || tag.RowsAffected() == 0 {
+		WHERE id = $1 AND status = 'moving' AND `+claimed(2)+`
+		  AND NOT EXISTS (SELECT 1 FROM jsonb_each(moves) m WHERE m.value->>'status' IN ('moved', 'pending'))`, p.ID, p.Claim)
+	if err != nil {
 		return err
 	}
-	return StalledNoticeTx(ctx, tx, ref, pubID, stalled)
+	if tag.RowsAffected() == 0 {
+		return ErrClaimLost
+	}
+	return StalledNoticeTx(ctx, tx, ref, p.ID, stalled)
 }
 
 // StalledNoticeTx says in Chat, for each repository whose move could not

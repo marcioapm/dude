@@ -52,11 +52,13 @@ const (
 )
 
 // publishPushed records lux's git.push for a publish of the conductor's:
-// due at once.
-func publishPushed(ctx context.Context, tx pgx.Tx, requestID string, raw json.RawMessage) error {
+// due at once. claim is the worker's claim on it, "" for the conductor's
+// follower, which holds none: its report ends any worker's claim, so a
+// worker still waiting on the push does not put the publish off.
+func publishPushed(ctx context.Context, tx pgx.Tx, requestID, claim string, raw json.RawMessage) error {
 	_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET push_result = $2::jsonb, status = 'pushed', next_attempt_at = NULL,
-			failures = 0
-		WHERE request_id = $1 AND status IN ('requested', 'asked')`, requestID, raw)
+			failures = 0, claim_token = NULL, claimed_until = NULL
+		WHERE request_id = $1 AND status IN ('requested', 'asked') AND ($3 = '' OR claim_token = $3)`, requestID, raw, claim)
 	return err
 }
 
@@ -73,6 +75,8 @@ type publishRow struct {
 	Failures                                             int
 	// The database's clock as it was claimed.
 	Now time.Time
+	// This worker's claim (conductor_publishes.claim_token).
+	Claim string
 }
 
 func (p publishRow) ref() delivery.RunRef {
@@ -80,27 +84,33 @@ func (p publishRow) ref() delivery.RunRef {
 }
 
 func (p publishRow) of() delivery.PublishOf {
-	return delivery.PublishOf{ID: p.ID, TaskID: p.TaskID, RunID: p.RunID, WorkflowID: p.WorkflowID, Attempt: p.Attempt}
+	return delivery.PublishOf{ID: p.ID, TaskID: p.TaskID, RunID: p.RunID, WorkflowID: p.WorkflowID, Attempt: p.Attempt, Claim: p.Claim}
 }
 
-// SettlePublishes is one pass of the publish worker: it claims the
-// publishes due, oldest due first, and carries each on, a few at once.
-// Returns how many it claimed.
+// SettlePublishes is one pass of the publish worker: it claims as many of
+// the publishes due as it has slots, oldest due first, and carries each on
+// at once. Each claim is a token of its own, renewed while its publish is
+// carried on; every write of the worker's is guarded on it, so a worker
+// whose claim lapsed and was taken over writes nothing more. Returns how
+// many it claimed.
 func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 	var todo []publishRow
 	if err := s.DB.InSystem(ctx, "conductor-publishes", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH due AS (
 				SELECT id FROM conductor_publishes
 				WHERE status IN ('requested', 'asked', 'pushed', 'moving') AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+				  AND (claimed_until IS NULL OR claimed_until <= now())
 				ORDER BY next_attempt_at NULLS FIRST, created_at LIMIT $1 FOR UPDATE SKIP LOCKED),
-			claimed AS (UPDATE conductor_publishes c SET next_attempt_at = now() + $2::interval FROM due WHERE c.id = due.id
+			claimed AS (UPDATE conductor_publishes c SET claim_token = gen_random_uuid()::text,
+					claimed_until = now() + $2::interval
+				FROM due WHERE c.id = due.id
 				RETURNING c.*)
 			SELECT p.id, p.organization_id, r.project_id, p.task_id, p.run_id, p.request_id, p.status,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), p.message, p.push_result,
 				COALESCE(p.workflow_run_id, ''), COALESCE(p.attempt, 0), p.moves, COALESCE(p.branch, ''),
-				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now()
+				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now(), p.claim_token
 			FROM claimed p JOIN runs r ON r.id = p.run_id ORDER BY p.created_at`,
-			publishSlots*4, publishClaim.String(), askedGiveUp.String())
+			publishSlots, publishClaim.String(), askedGiveUp.String())
 		if err != nil {
 			return err
 		}
@@ -110,20 +120,63 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, publishSlots)
 	for _, p := range todo {
 		wg.Add(1)
-		slots <- struct{}{}
 		go func() {
-			defer func() { <-slots; wg.Done() }()
-			if err := s.settlePublish(ctx, p); err != nil {
-				s.Log.Warn("a conductor's publish failed", "publish", p.ID, "error", err)
-				s.publishLater(ctx, p, err)
-			}
+			defer wg.Done()
+			s.carryClaimed(ctx, p)
 		}()
 	}
 	wg.Wait()
 	return len(todo), nil
+}
+
+// carryClaimed carries one claimed publish on, renewing its claim
+// meanwhile, and lets the claim go once done.
+func (s *Syncer) carryClaimed(ctx context.Context, p publishRow) {
+	done := make(chan struct{})
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		t := time.NewTicker(publishClaim / 3)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				// A failed renewal is not fatal: every write is guarded on
+				// the claim, so losing it makes them no-ops.
+				_ = s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET claimed_until = now() + $3::interval
+						WHERE id = $1 AND claim_token = $2`, p.ID, p.Claim, publishClaim.String())
+					return err
+				})
+			}
+		}
+	}()
+	err := s.settlePublish(ctx, p)
+	close(done)
+	<-renewed
+	switch {
+	case errors.Is(err, delivery.ErrClaimLost):
+	case err != nil:
+		s.Log.Warn("a conductor's publish failed", "publish", p.ID, "error", err)
+		s.publishLater(ctx, p, err)
+	default:
+		s.release(ctx, p)
+	}
+}
+
+// release lets the worker's claim on the publish go, when it still holds it.
+func (s *Syncer) release(ctx context.Context, p publishRow) {
+	if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET claim_token = NULL, claimed_until = NULL
+			WHERE id = $1 AND claim_token = $2`, p.ID, p.Claim)
+		return err
+	}); err != nil {
+		s.Log.Warn("releasing a conductor's publish failed", "publish", p.ID, "error", err)
+	}
 }
 
 // publishLater schedules a publish after a failure that may pass: a
@@ -134,13 +187,15 @@ func (s *Syncer) publishLater(ctx context.Context, p publishRow, cause error) {
 	s.publishAt(ctx, p, wait, true)
 }
 
-// publishAt sets when the publish is next carried on; failed counts a
-// failure toward its back-off, else the count starts over.
+// publishAt sets when the publish is next carried on, letting its claim
+// go; failed counts a failure toward its back-off, else the count starts
+// over. Nothing when the claim is no longer this worker's.
 func (s *Syncer) publishAt(ctx context.Context, p publishRow, after time.Duration, failed bool) {
 	if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET next_attempt_at = now() + $2::interval,
-				failures = CASE WHEN $3 THEN failures + 1 ELSE 0 END
-			WHERE id = $1 AND status IN ('requested', 'asked', 'pushed', 'moving')`, p.ID, after.String(), failed)
+				failures = CASE WHEN $3 THEN failures + 1 ELSE 0 END, claim_token = NULL, claimed_until = NULL
+			WHERE id = $1 AND status IN ('requested', 'asked', 'pushed', 'moving') AND claim_token = $4`,
+			p.ID, after.String(), failed, p.Claim)
 		return err
 	}); err != nil {
 		s.Log.Warn("scheduling a conductor's publish failed", "publish", p.ID, "error", err)
@@ -153,7 +208,9 @@ func (s *Syncer) publishNow(ctx context.Context, p publishRow) {
 }
 
 func (s *Syncer) refusePublish(ctx context.Context, p publishRow, why string) error {
-	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, why) })
+	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+		return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, p.Claim, why)
+	})
 }
 
 // errPublishTransient wraps a forge or lux failure that may pass.
@@ -200,7 +257,7 @@ func (s *Syncer) askPush(ctx context.Context, p publishRow) error {
 	return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'asked', asked_at = now(), failures = 0,
 				next_attempt_at = now() + $2::interval
-			WHERE id = $1 AND status = 'requested'`, p.ID, askedEvery.String())
+			WHERE id = $1 AND status = 'requested' AND claim_token = $3`, p.ID, askedEvery.String(), p.Claim)
 		return err
 	})
 }
@@ -229,7 +286,7 @@ func (s *Syncer) awaitPush(ctx context.Context, p publishRow) error {
 					RequestID string `json:"requestId"`
 				}
 				if json.Unmarshal(f.EventData, &d) == nil && d.RequestID == p.RequestID {
-					return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return publishPushed(ctx, tx, p.RequestID, f.EventData) })
+					return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return publishPushed(ctx, tx, p.RequestID, p.Claim, f.EventData) })
 				}
 			}
 			if len(frames) == 0 {
@@ -379,7 +436,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 	}
 	keep := func(repo string, m delivery.Move) error {
 		p.Moves[repo] = m
-		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.MovedTx(ctx, tx, p.ID, repo, m) })
+		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.MovedTx(ctx, tx, p.of(), repo, m) })
 	}
 	// unconfirmed settles a sent move as stalled once its time is up, or
 	// asks again later.
@@ -452,7 +509,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 			if m.AttemptedAt == nil {
 				var at time.Time
 				if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) (err error) {
-					at, err = delivery.AttemptMoveTx(ctx, tx, p.ID, name)
+					at, err = delivery.AttemptMoveTx(ctx, tx, p.of(), name)
 					return err
 				}); err != nil {
 					return err
@@ -549,7 +606,7 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 		}
 	}
 	if len(heads) == 0 && len(stalled) > 0 {
-		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.PublishStalledTx(ctx, tx, p.ref(), p.ID, stalled) })
+		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.PublishStalledTx(ctx, tx, p.ref(), p.of(), stalled) })
 	}
 	if len(heads) == 0 {
 		var why []string
@@ -557,11 +614,15 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 			why = append(why, refused[name])
 		}
 		return s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-			return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, strings.Join(why, "; "))
+			return delivery.PublishRefusedTx(ctx, tx, p.ref(), p.ID, p.Claim, strings.Join(why, "; "))
 		})
 	}
 	r := phaseRun{ID: p.RunID, Org: p.Org, ProjectID: p.ProjectID, TaskID: p.TaskID}
 	err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+		// Still this worker's and not settled, before anything is written.
+		if err := delivery.LockRecordingTx(ctx, tx, p.of()); err != nil {
+			return err
+		}
 		for _, name := range slices.Sorted(maps.Keys(heads)) {
 			h, m := heads[name], p.Moves[name]
 			// As a phase's publish: the pull request on the branch has a new
@@ -572,13 +633,23 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 				  AND head_sha IS DISTINCT FROM $3`, p.TaskID, m.RepoID, h.SHA, p.Branch); err != nil {
 				return err
 			}
+			// Once per publish and repository, under the publish's row lock.
+			var said bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+				AND payload->>'publishId' = $3 AND payload->>'repo' = $4)`,
+				p.TaskID, delivery.EvGitCommitCreated, p.ID, name).Scan(&said); err != nil {
+				return err
+			}
+			if said {
+				continue
+			}
 			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
 				"repo": name, "baseSha": h.Base, "headSha": h.SHA, "branch": p.Branch, "changedPaths": h.ChangedPaths,
 				"lines": h.Lines, "by": delivery.RoleConductor, "publishId": p.ID, "message": p.Message}); err != nil {
 				return err
 			}
 		}
-		return delivery.PublishedTx(ctx, tx, p.ref(), p.ID, p.WorkflowID, heads, refused, stalled)
+		return delivery.PublishedTx(ctx, tx, p.ref(), p.of(), heads, refused, stalled)
 	})
 	if errors.Is(err, delivery.ErrStepRunning) {
 		// Sooner than a waiting step's retry (delivery.ErrPublishMoving),
