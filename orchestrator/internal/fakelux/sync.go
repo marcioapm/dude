@@ -1,13 +1,17 @@
 package fakelux
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -71,11 +75,15 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["status"], ev["error"] = "failed", out
 		return
 	}
+	op, err := operation(work)
+	if err != nil {
+		ev["status"], ev["error"] = "failed", operationUnknown(err)
+		return
+	}
 	from, _ := git("rev-parse", "HEAD")
 	status, _ := git("status", "--porcelain", "--untracked-files=no")
 	ahead, behind := count(to+"..HEAD"), count("HEAD.."+to)
 	dirty, diverged := status != "", ahead > 0 && behind > 0
-	op := operation(work)
 	if op != "" {
 		ev["operation"] = op
 	}
@@ -120,7 +128,8 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 // names it (lux.Operation*), or "". The sequencer alone is a multi-commit
 // cherry-pick or revert stopped between picks. rebase-apply is git am's
 // as well as an apply-backend rebase's: am alone writes "applying" in it.
-func operation(work string) string {
+// An error is that it could not be told: lux then neither syncs nor pushes.
+func operation(work string) (string, error) {
 	for _, m := range []struct{ path, op string }{
 		{"rebase-merge", lux.OperationRebase},
 		{"rebase-apply/applying", lux.OperationAm},
@@ -130,19 +139,32 @@ func operation(work string) string {
 		{"REVERT_HEAD", lux.OperationRevert},
 		{"sequencer", lux.OperationSequencer},
 	} {
-		out, err := exec.Command("git", "-C", work, "rev-parse", "--git-path", m.path).Output()
+		ctx, cancel := context.WithTimeout(context.Background(), operationCheckTimeout)
+		out, err := exec.CommandContext(ctx, "git", "-C", work, "rev-parse", "--git-path", m.path).Output()
+		cancel()
 		if err != nil {
-			return ""
+			return "", fmt.Errorf("git rev-parse --git-path %s: %w", m.path, err)
 		}
 		path := strings.TrimSpace(string(out))
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(work, path)
 		}
-		if _, err := os.Stat(path); err == nil {
-			return m.op
+		switch _, err := os.Stat(path); {
+		case err == nil:
+			return m.op, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", err
 		}
 	}
-	return ""
+	return "", nil
+}
+
+// operationCheckTimeout bounds each git command of operation.
+const operationCheckTimeout = 10 * time.Second
+
+// operationUnknown is the error of a sync or push whose operation check failed.
+func operationUnknown(err error) string {
+	return "could not tell whether an operation is in progress: " + err.Error()
 }
 
 // pushWorkspace pushes the checkout's HEAD to branch in the bare
