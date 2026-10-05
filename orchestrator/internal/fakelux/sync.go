@@ -126,9 +126,11 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 
 // operation is the git operation in progress in the checkout work, as lux
 // names it (lux.Operation*), or "". The sequencer alone is a multi-commit
-// cherry-pick or revert stopped between picks. rebase-apply is git am's
-// as well as an apply-backend rebase's: am alone writes "applying" in it.
-// An error is that it could not be told: lux then neither syncs nor pushes.
+// cherry-pick or revert stopped between picks, active only with picks left
+// in sequencer/todo: git ignores a sequencer directory without it.
+// rebase-apply is git am's as well as an apply-backend rebase's: am alone
+// writes "applying" in it. An error is that it could not be told: lux then
+// neither syncs nor pushes.
 func operation(work string) (string, error) {
 	for _, m := range []struct{ path, op string }{
 		{"rebase-merge", lux.OperationRebase},
@@ -137,7 +139,7 @@ func operation(work string) (string, error) {
 		{"MERGE_HEAD", lux.OperationMerge},
 		{"CHERRY_PICK_HEAD", lux.OperationCherryPick},
 		{"REVERT_HEAD", lux.OperationRevert},
-		{"sequencer", lux.OperationSequencer},
+		{"sequencer/todo", lux.OperationSequencer},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), operationCheckTimeout)
 		out, err := exec.CommandContext(ctx, "git", "-C", work, "rev-parse", "--git-path", m.path).Output()
