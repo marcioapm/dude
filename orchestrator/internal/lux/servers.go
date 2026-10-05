@@ -120,6 +120,58 @@ const (
 	SyncAhead = "ahead"
 )
 
+// SyncResult is one repository's git.sync event data.
+type SyncResult struct {
+	Repo      string `json:"repo"`
+	Ref       string `json:"ref"`
+	RequestID string `json:"requestId,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
+	Ahead     int    `json:"ahead"`
+	Behind    int    `json:"behind"`
+	Dirty     bool   `json:"dirty,omitempty"`
+	Diverged  bool   `json:"diverged,omitempty"`
+	// The git operation in progress in the checkout (Operation*), whatever
+	// the status; "" when none. Mid-operation a fast-forward is SyncKept.
+	Operation string `json:"operation,omitempty"`
+}
+
+// Operations git can be stopped in the middle of, as lux names them.
+// OperationSequencer is a multi-commit cherry-pick or revert between picks.
+const (
+	OperationMerge      = "merge"
+	OperationRebase     = "rebase"
+	OperationCherryPick = "cherry-pick"
+	OperationRevert     = "revert"
+	OperationSequencer  = "sequencer"
+)
+
+// PushResult is a git.push event's data.
+type PushResult struct {
+	RequestID string           `json:"requestId,omitempty"`
+	Results   []PushRepoResult `json:"results"`
+}
+
+// PushRepoResult is one repository's part of a push. Status is pushed,
+// up-to-date, skipped, failed or PushRefused.
+type PushRepoResult struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	Commit string `json:"commit,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// Set with PushRefused: the operation in progress in the checkout.
+	Operation string `json:"operation,omitempty"`
+}
+
+// PushRefused: lux would not push the repository, an operation being in
+// progress in its checkout; nothing was bundled. Definitive until the
+// operation is finished or aborted.
+const PushRefused = "refused"
+
 // SyncModesRefused says lux refused a sync for its mode: a 409 that is
 // none of the refusals a sync or resume gives for the Run's state. A lux
 // from before sync modes answers a safe mode so.
