@@ -699,10 +699,9 @@ func CheckoutLine(s lux.SyncResult) string {
 // abort it. Switching branches or merging is refused by git until then,
 // so neither is advised before it.
 func operationLine(repo, ref, op string, behind int) string {
-	what, finish := "a "+op, fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
+	finish := fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
 	switch op {
 	case lux.OperationSequencer:
-		what = "a cherry-pick or revert of several commits"
 		finish = "resolve and `git cherry-pick --continue` (or `git revert --continue`), or `git cherry-pick --abort` (or `git revert --abort`)"
 	case lux.OperationRebase, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
 	default:
@@ -712,5 +711,23 @@ func operationLine(repo, ref, op string, behind int) string {
 	if behind > 0 {
 		then = fmt.Sprintf("; then `git merge lux/%s`", ref)
 	}
-	return fmt.Sprintf("%s: %s is in progress in your checkout (%d behind the task branch): %s%s.", repo, what, behind, finish, then)
+	return fmt.Sprintf("%s: %s is in progress in your checkout (%d behind the task branch): %s%s.",
+		repo, operationName(op), behind, finish, then)
+}
+
+// operationName is a git operation lux reported, as the conductor reads it.
+func operationName(op string) string {
+	switch op {
+	case lux.OperationSequencer:
+		return "a cherry-pick or revert of several commits"
+	case "":
+		return "a git operation"
+	}
+	return "a " + op
+}
+
+// MidOperationRefusal is why a publish is refused when lux would not push
+// repo, an operation (lux.Operation*) being in progress in its checkout.
+func MidOperationRefusal(repo, op string) string {
+	return fmt.Sprintf("%s: %s is in progress in your checkout: finish or abort it, then publish.", repo, operationName(op))
 }
