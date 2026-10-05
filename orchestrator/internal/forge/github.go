@@ -162,7 +162,12 @@ type Feedback struct {
 	Body      string
 	Path      string
 	CreatedAt string
+	// When a comment was last edited, as GitHub says (RFC 3339); equal to
+	// CreatedAt for one never edited, empty for a review.
+	UpdatedAt string
 	Kind      string
+	// Where a person reads it on GitHub, when GitHub said.
+	URL string
 }
 
 // Error is GitHub refusing a request.
@@ -222,6 +227,13 @@ func Transient(err error) bool {
 	// No answer from GitHub at all: the request never completed.
 	var u *Unreachable
 	return errors.As(err, &u)
+}
+
+// RateLimited says GitHub refused for its rate limit: a 429, or a 403
+// it marks as one (markRateLimit, or its own message).
+func RateLimited(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && (e.Status == 429 || e.Status == 403 && Transient(err))
 }
 
 // Refused says GitHub answered, and would not: a refusal (403, 404, 422…)
@@ -522,14 +534,8 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if st.Checks, st.CheckList, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
 		return Status{}, err
 	}
-	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
-	if err != nil {
+	if err := g.readReviews(ctx, slug, number, p, &st); err != nil {
 		return Status{}, err
-	}
-	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
-	owner, _, _ := strings.Cut(slug, "/")
-	for _, t := range p.RequestedTeams {
-		st.Reviews = append(st.Reviews, Review{Login: owner + "/" + t.Slug, State: "REQUESTED", Team: true})
 	}
 	if st.State != StateOpen && st.State != StateDraft {
 		return st, nil
@@ -552,6 +558,31 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 		return Status{}, err
 	}
 	return st, nil
+}
+
+// Discussion reads a pull request without its checks or mergeability: its
+// state, head and reviews, which is what Feedback needs to list what was
+// said on it. For a pull request that has ended, read for a mention.
+func (g *GitHub) Discussion(ctx context.Context, slug string, number int) (Status, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return Status{}, err
+	}
+	st := Status{PullRequestRef: p.ref()}
+	return st, g.readReviews(ctx, slug, number, p, &st)
+}
+
+func (g *GitHub) readReviews(ctx context.Context, slug string, number int, p ghPull, st *Status) error {
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
+		return err
+	}
+	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
+	owner, _, _ := strings.Cut(slug, "/")
+	for _, t := range p.RequestedTeams {
+		st.Reviews = append(st.Reviews, Review{Login: owner + "/" + t.Slug, State: "REQUESTED", Team: true})
+	}
+	return nil
 }
 
 // mergeable reads GitHub's two mergeable fields and the distance from the
@@ -818,6 +849,8 @@ type ghComment struct {
 	Body      string  `json:"body"`
 	Path      string  `json:"path"`
 	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	HTMLURL   string  `json:"html_url"`
 	User      *ghUser `json:"user"`
 }
 
@@ -826,6 +859,7 @@ type ghReview struct {
 	Body        string  `json:"body"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at"`
+	HTMLURL     string  `json:"html_url"`
 	User        *ghUser `json:"user"`
 }
 
@@ -861,10 +895,12 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since str
 	reviews := st.reviews
 	var out []Feedback
 	for _, c := range issue {
-		out = append(out, Feedback{ID: fmt.Sprintf("issue-comment-%d", c.ID), Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt, Kind: KindComment})
+		out = append(out, Feedback{ID: fmt.Sprintf("issue-comment-%d", c.ID), Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt,
+			UpdatedAt: c.UpdatedAt, Kind: KindComment, URL: c.HTMLURL})
 	}
 	for _, c := range line {
-		out = append(out, Feedback{ID: fmt.Sprintf("line-comment-%d", c.ID), Author: login(c.User), Body: c.Body, Path: c.Path, CreatedAt: c.CreatedAt, Kind: KindLineComment})
+		out = append(out, Feedback{ID: fmt.Sprintf("line-comment-%d", c.ID), Author: login(c.User), Body: c.Body, Path: c.Path,
+			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Kind: KindLineComment, URL: c.HTMLURL})
 	}
 	for _, r := range reviews {
 		// A reviewer who writes only "please rename this" in the review box
@@ -877,11 +913,14 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since str
 		if r.State == "CHANGES_REQUESTED" {
 			kind = KindChangesRequested
 		}
-		out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt, Kind: kind})
+		out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt,
+			Kind: kind, URL: r.HTMLURL})
 	}
+	// GitHub's `since` is by last update: a comment edited since is listed
+	// with its current words, however long ago it was made.
 	filtered := out[:0]
 	for _, f := range out {
-		if since == "" || f.CreatedAt >= since {
+		if since == "" || f.CreatedAt >= since || f.UpdatedAt >= since {
 			filtered = append(filtered, f)
 		}
 	}

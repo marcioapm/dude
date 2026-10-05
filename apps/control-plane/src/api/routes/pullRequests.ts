@@ -191,13 +191,14 @@ async function registerWebhooks(ctx: RequestContext): Promise<Response> {
   return json(await register(ctx, input.url, input.repositoryId));
 }
 
-async function register(ctx: RequestContext, base: string, repositoryId?: string): Promise<unknown> {
+async function register(ctx: RequestContext, base: string, repositoryId?: string, background = false): Promise<unknown> {
   const { organizationId } = ctx.principal;
   const origin = base.replace(/\/+$/, "");
   await withOrg(organizationId, (scope) => scope.sql`
     UPDATE forge_credentials SET public_url = ${origin} WHERE forge = 'github'`);
   const res = await orchestrator(organizationId, "POST", "/internal/webhooks/register",
-    JSON.stringify({ url: `${origin}${webhookPath(organizationId)}`, ...(repositoryId ? { repositoryId } : {}) }),
+    JSON.stringify({ url: `${origin}${webhookPath(organizationId)}`, ...(repositoryId ? { repositoryId } : {}),
+      ...(background ? { background } : {}) }),
     ctx.principal);
   const body = (await res.json()) as { error?: { message?: string; code?: string } };
   if (!res.ok) throw new HttpError(res.status, body.error?.message ?? "registering webhooks failed", body.error?.code ?? "error");
@@ -297,11 +298,14 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   });
 
   // Registering is a courtesy on connect: the token is saved whether or
-  // not GitHub lets it add hooks, and settings say which it could not.
+  // not GitHub lets it add hooks, and settings say which it could not. In
+  // the background, only where a hook is missing: two GitHub calls per
+  // repository must not hold the save, and the orchestrator's repair
+  // finishes what a rate limit or a restart leaves undone.
   let registered: unknown = null;
   if (input.publicUrl) {
     try {
-      registered = await register(ctx, input.publicUrl);
+      registered = await register(ctx, input.publicUrl, undefined, true);
     } catch (err) {
       registered = { error: err instanceof Error ? err.message : String(err) };
     }

@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -267,6 +267,8 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "076_runs_conductor_run_idx.sql",
       "077_conductor_steer.sql",
       "078_events_run_lands_idx.sql",
+      "079_conductor_github.sql",
+      "080_webhook_repair.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -311,7 +313,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },

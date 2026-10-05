@@ -84,13 +84,15 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,dismiss_finding,emit_event,findings,get_memory,"+
-		"list_epics,list_repositories,list_tasks,pull_requests,remember,request_repository,run_diff,search_memory,start_phase,steer,update_task" {
+		"list_epics,list_repositories,list_tasks,pull_requests,remember,reply_on_pull_request,request_repository,run_diff,"+
+		"search_memory,start_phase,steer,update_task" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
-	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task", "steer"} {
+	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task", "steer",
+		"reply_on_pull_request"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}
@@ -167,6 +169,15 @@ func TestTheConductorsDecisionsFromTheShell(t *testing.T) {
 	}
 	if out, err := dude("steer", "run_nope"); err == nil || !strings.Contains(out, "usage") {
 		t.Errorf("dude steer without words: %v\n%s", err, out)
+	}
+	// dude pr reply reaches reply_on_pull_request with its pull request:
+	// this task has none numbered 7, which the tool says.
+	if out, err := dude("pr", "reply", "web#7", "Because", "of", "X.", "--in-reply-to", "issue-comment-1"); err == nil ||
+		!strings.Contains(out, "web#7 is not a pull request of your task") {
+		t.Errorf("dude pr reply: %v\n%s", err, out)
+	}
+	if out, err := dude("pr", "reply", "7"); err == nil || !strings.Contains(out, "usage") {
+		t.Errorf("dude pr reply without words: %v\n%s", err, out)
 	}
 }
 

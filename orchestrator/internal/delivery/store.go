@@ -32,8 +32,11 @@ const (
 	EvPullRequestChecks    = "pull_request.checks_changed"
 	EvPullRequestReviewed  = "pull_request.reviewed"
 	EvPullRequestCommented = "pull_request.commented"
-	EvPullRequestMerged    = "pull_request.merged"
-	EvPullRequestClosed    = "pull_request.closed"
+	// Feedback recorded before whose words changed on GitHub: its current
+	// body, for a reply quoting it. Neither fixer feedback nor a mention.
+	EvPullRequestCommentEdited = "pull_request.comment_edited"
+	EvPullRequestMerged        = "pull_request.merged"
+	EvPullRequestClosed        = "pull_request.closed"
 	// Someone other than dude pushed to the pull request's branch: the
 	// next fix starts from their commit.
 	EvPullRequestPushed = "pull_request.pushed"
@@ -351,26 +354,6 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		_, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", status, reason)
 		return err
-	})
-}
-
-// SetTaskStatusFrom moves the task only from the given status.
-func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, from, status, reason)
-		return err
-	})
-}
-
-// ReadyToMerge moves the task from review to ready to merge and records
-// that it is, for whoever is told when something waits on them — together.
-func (s *Store) ReadyToMerge(ctx context.Context, org string, st *State, pullRequests int) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		moved, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "review", "ready_to_merge", "approved, checks passing")
-		if err != nil || !moved {
-			return err
-		}
-		return emitTx(ctx, tx, org, st, EvReadyToMerge, map[string]any{"pullRequests": pullRequests})
 	})
 }
 

@@ -1017,6 +1017,19 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	if err != nil {
 		return workflow.Result{}, true, err
 	}
+	if st.conducted() {
+		// The conductor hears each one end once, however often this runs.
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			for _, p := range states {
+				if err := CloseOutTx(ctx, tx, sc.OrganizationID, st.TaskID, p.Repo, p.Number, p.State); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return workflow.Result{}, true, err
+		}
+	}
 	var open, merged, closed int
 	for _, s := range states {
 		switch s.State {
@@ -1064,12 +1077,10 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		// someone else pushed.
 		ready = ready && forge.Ready(s.Status)
 	}
-	if open > 0 && ready {
-		// The move and its event in one transaction: an event lost to a
-		// retry would never be written again (the status has moved).
-		return w.s.ReadyToMerge(ctx, sc.OrganizationID, st, open)
-	}
-	return w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer ready to merge")
+	// The move, its event and the conductor's Chat notice in one
+	// transaction: one lost to a retry would never be written again (the
+	// status has moved).
+	return w.s.moveReadiness(ctx, sc.OrganizationID, st, states, open > 0 && ready, open)
 }
 
 // escalate stops and asks for a person, and waits for their decision

@@ -231,6 +231,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
         client={client}
         open={replacing}
         onOpenChange={setReplacing}
+        publicUrl={(connection.connected ? connection.webhook.publicUrl : null) ?? window.location.origin}
         onSaved={() => {
           setVerification(null);
           void load();
@@ -241,8 +242,14 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
   );
 }
 
-/** Mounted only while open, so each opening starts empty. */
-function TokenDialog(props: { client: ApiClient; open: boolean; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
+/**
+ * Mounted only while open, so each opening starts empty. Saving registers
+ * dude's webhook on every repository, delivering to `publicUrl` (where
+ * this browser reaches dude, or where the organization's hooks already
+ * deliver), which dude keeps: a project or repository added later gets
+ * its webhook there too.
+ */
+function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [token, setToken] = useState("");
   const [apiBase, setApiBase] = useState("");
   const { busy, problem, save } = useSave();
@@ -258,7 +265,7 @@ function TokenDialog(props: { client: ApiClient; open: boolean; onOpenChange: (o
       problem={problem}
       onSubmit={() =>
         void save(
-          () => props.client.connectForge(token.trim(), apiBase.trim() || undefined),
+          () => props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {
             props.onOpenChange(false);
             props.onSaved();
