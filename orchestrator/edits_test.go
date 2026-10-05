@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -330,6 +331,76 @@ func TestALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A lux that never reports a sync holds a conductor's input at most the
+// sync's bound, counted from the oldest input waiting: later messages do
+// not push the first back. (The bound is 3 s here, 30 s in production;
+// the messages come at 0, 1 and 4 s, as at 0, 10 and 40.)
+func TestASyncLuxNeverReportsHoldsTheFirstMessageOnlyItsBound(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	const wait = 3 * time.Second
+	e.syncer.CheckoutSyncWait = wait
+	e.lux.HoldSyncs = true
+	lr := e.luxRunOf(e.cond)
+	heard := func(want string) bool {
+		for _, r := range e.lux.Runs() {
+			if r.ID == lr && slices.ContainsFunc(r.Inputs, func(in string) bool { return strings.Contains(in, want) }) {
+				return true
+			}
+		}
+		return false
+	}
+	start := time.Now()
+	sent := 0
+	at := []time.Duration{0, time.Second, 4 * time.Second}
+	var firstHeard time.Duration
+	for time.Since(start) < 3*wait && firstHeard == 0 {
+		if sent < len(at) && time.Since(start) >= at[sent] {
+			if status, _ := e.chat(e.task, fmt.Sprintf("message %d", sent)); status != 200 {
+				t.Fatalf("chat %d", status)
+			}
+			sent++
+		}
+		e.pump()
+		if heard("message 0") {
+			firstHeard = time.Since(start)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if firstHeard == 0 || firstHeard > wait+wait/2 {
+		t.Fatalf("the first message heard after %v, want within about %v", firstHeard, wait)
+	}
+}
+
+// While a sync of the conductor's checkout is outstanding, the sweep has
+// nothing to do for it: asking for the sync is progress, waiting on it is
+// not, so the orchestrator's loop goes back to its interval.
+func TestTheSweepDoesNotSpinWhileASyncIsOutstanding(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.lux.HoldSyncs = true
+	if status, _ := e.chat(e.task, "while syncing"); status != 200 {
+		t.Fatal(status)
+	}
+	ctx := context.Background()
+	e.until("the sync asked for", func() bool {
+		return e.count(`SELECT count(*) FROM runs WHERE id = $1 AND cardinality(checkout_sync_repos) > 0`, e.cond) == 1
+	})
+	busy := 0
+	for range 20 {
+		n, err := e.syncer.Sweep(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			busy++
+		}
+	}
+	if busy > 1 {
+		t.Errorf("%d of 20 sweeps said they did something while the sync was outstanding", busy)
 	}
 }
 
