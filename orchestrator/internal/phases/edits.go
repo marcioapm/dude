@@ -62,10 +62,7 @@ func (s *Syncer) currentRefs(ctx context.Context, r phaseRun) ([]lux.SyncRef, er
 		if err != nil || d == nil {
 			return err
 		}
-		branch := d.State.Branch
-		if branch == "" {
-			branch = delivery.BranchFor(r.TaskID, d.State.Attempt)
-		}
+		branch := d.Branch(r.TaskID)
 		repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
 		if err != nil {
 			return err
