@@ -192,6 +192,29 @@ func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
 	}
 }
 
+// An empty sequencer directory left behind is no operation git knows of:
+// the sync names none and the push goes through.
+func TestAStaleEmptySequencerIsNoOperation(t *testing.T) {
+	ctx := context.Background()
+	cl, runID, repo, work := conflictRepo(t)
+	if err := os.Mkdir(filepath.Join(work, gitIn(t, work, "rev-parse", "--git-path", "sequencer")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := lastSync(t, cl, runID); ev["operation"] != nil || ev["status"] != lux.SyncKept {
+		t.Errorf("git.sync %v", ev)
+	}
+	if err := cl.Push(ctx, runID, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if push := lastPush(t, cl, runID); len(push.Results) != 1 || push.Results[0].Status != "pushed" ||
+		push.Results[0].Operation != "" || push.Results[0].Commit != gitIn(t, repo, "rev-parse", "pub") {
+		t.Errorf("git.push %+v", push)
+	}
+}
+
 // With the operation finished, the same checkout syncs with no operation
 // and pushes.
 func TestAFinishedRebaseSyncsAndPushes(t *testing.T) {
