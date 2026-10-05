@@ -67,10 +67,7 @@ func (e *editing) settleInBackground() {
 // at the fake GitHub: what happens next happens between the push and the
 // reservation.
 func pausedAtCompare(t *testing.T) (*editing, *gate, string) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, _ := newCommitted(t)
 	g := newGate()
 	e.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
@@ -159,10 +156,7 @@ func TestAPublishIsJudgedAgainBeforeItMoves(t *testing.T) {
 // conductor is not replaced or stopped, and the decider does not change:
 // each waits, or is refused saying to try again.
 func TestAMovingPublishHoldsOffWritersAndTheConductorsEnd(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, _ := newCommitted(t)
 	g := newGate()
 	e.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
@@ -328,10 +322,7 @@ func TestAMovedPublishIsRecordedOnRetry(t *testing.T) {
 		e.wokenWith(e.task, "is on the task branch")
 	}
 	t.Run("a lease taken after the move", func(t *testing.T) {
-		e := newEditing(t)
-		e.wokenWith(e.task, "after implement")
-		e.current()
-		sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+		e, sha := newCommitted(t)
 		var leased atomic.Bool
 		e.gh.Set(func(s *fakegithub.Server) {
 			s.Intercept = func(r *http.Request) int {
@@ -356,10 +347,7 @@ func TestAMovedPublishIsRecordedOnRetry(t *testing.T) {
 		moved(t, e, id, sha)
 	})
 	t.Run("the forge's answer lost", func(t *testing.T) {
-		e := newEditing(t)
-		e.wokenWith(e.task, "after implement")
-		e.current()
-		sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+		e, sha := newCommitted(t)
 		var lost atomic.Bool
 		e.gh.Set(func(s *fakegithub.Server) {
 			s.Intercept = func(r *http.Request) int {
@@ -386,10 +374,7 @@ func TestAMovedPublishIsRecordedOnRetry(t *testing.T) {
 // stopped, with its wake; and given up on after its bound.
 func TestAnAskedPublishIsNotStranded(t *testing.T) {
 	asked := func(t *testing.T) (*editing, string) {
-		e := newEditing(t)
-		e.wokenWith(e.task, "after implement")
-		e.current()
-		e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+		e, _ := newCommitted(t)
 		e.lux.HoldPushes = true
 		id := e.publish()
 		e.until("asked", func() bool {
@@ -511,10 +496,7 @@ func (e *editing) settleOnce() {
 // was sent: the repository is refused, the publish settles with nothing
 // moved, and the fence is gone — the hand-back goes through.
 func TestAForgeRefusingToReadTheBranchBeforeAMoveRefusesThePublish(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, _ := newCommitted(t)
 	before := e.gh.SHA(e.branch)
 	var moves atomic.Int64
 	e.gh.Set(func(s *fakegithub.Server) {
@@ -547,10 +529,7 @@ func TestAForgeRefusingToReadTheBranchBeforeAMoveRefusesThePublish(t *testing.T)
 // then, 30 minutes after it was sent, settled as stalled — nothing
 // recorded as published, the fence released, Chat and the conductor told.
 func TestAMoveTheForgeWillNotConfirmStallsAfterItsBound(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, sha := newCommitted(t)
 	before := e.gh.SHA(e.branch)
 	var answered, readable atomic.Bool
 	readable.Store(true)
@@ -626,10 +605,7 @@ func TestAMoveTheForgeWillNotConfirmStallsAfterItsBound(t *testing.T) {
 // the conductor's commit, the descendant is not taken as the conductor's,
 // and the branch is never moved back.
 func TestALostMoveFollowedByAnExternalPushIsRecorded(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, sha := newCommitted(t)
 	var lost atomic.Bool
 	var moves atomic.Int64
 	e.gh.Set(func(s *fakegithub.Server) {
@@ -683,10 +659,7 @@ func TestALostMoveFollowedByAnExternalPushIsRecorded(t *testing.T) {
 // returns, it records nothing — one commit event, and the delivery's heads
 // as the next writer left them.
 func TestAnExpiredPublishClaimRecordsNothing(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, sha := newCommitted(t)
 	g := newGate()
 	var first atomic.Bool
 	e.gh.Set(func(s *fakegithub.Server) {
@@ -747,10 +720,7 @@ func TestAnExpiredPublishClaimRecordsNothing(t *testing.T) {
 // stopped, and the push is found — not given up on because one pass's
 // pages ran out, though the ask is past its bound.
 func TestAnAskedPushPastManyPagesOfEventsIsFound(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, _ := newCommitted(t)
 	e.lux.HoldPushes = true
 	id := e.publish()
 	e.until("asked", func() bool {
@@ -792,10 +762,7 @@ func (e *editing) task2() string {
 // pass: a failing comparison schedules the next one past the pass, passes
 // before then ask nothing, and the next failure waits longer.
 func TestATransientForgeFailureBacksOff(t *testing.T) {
-	e := newEditing(t)
-	e.wokenWith(e.task, "after implement")
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+	e, _ := newCommitted(t)
 	var compares atomic.Int64
 	e.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
