@@ -325,13 +325,6 @@ func (s *Syncer) eventsRead(ctx context.Context, p publishRow, after int64) {
 	}
 }
 
-// pushResult is lux's git.push.
-type pushResult struct {
-	Results []struct {
-		Repo, Branch, Commit, Status, Error string
-	} `json:"results"`
-}
-
 // measurePublish checks a pushed publish against the task branch — each
 // pushed commit descends from its head, something was committed, and it
 // is within the project's limit — then reserves it with its moves, and
@@ -357,9 +350,20 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		s.publishAt(ctx, p, time.Second, false)
 		return nil
 	}
-	var push pushResult
+	var push lux.PushResult
 	if err := json.Unmarshal(p.PushResult, &push); err != nil {
 		return s.refusePublish(ctx, p, "lux's push result is unreadable")
+	}
+	// A repository mid-operation was not pushed, and will not be until the
+	// conductor finishes or aborts it: refused for good, nothing moved.
+	var midOperation []string
+	for _, res := range push.Results {
+		if res.Status == lux.PushRefused {
+			midOperation = append(midOperation, delivery.MidOperationRefusal(res.Repo, res.Operation))
+		}
+	}
+	if len(midOperation) > 0 {
+		return s.refusePublish(ctx, p, strings.Join(midOperation, "; "))
 	}
 	byName := map[string]delivery.Repository{}
 	for _, repo := range repos {

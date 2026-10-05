@@ -6,6 +6,8 @@ package orchestrator_test
 // fake lux keeps the Run's one checkout.
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // rebaseLine is what the conductor is told of a rebase in progress in its
@@ -71,4 +75,144 @@ func TestARunningConductorMidRebaseIsToldHowToFinishIt(t *testing.T) {
 	if !e.midRebase() {
 		t.Error("the sync ended the rebase")
 	}
+}
+
+// refusedMidRebase publishes from a checkout mid-rebase: refused for the
+// rebase, the conductor woken saying so, and the task branch unmoved.
+func (e *editing) refusedMidRebase() {
+	e.t.Helper()
+	before := e.gh.SHA(e.branch)
+	status, why := e.published(e.publish())
+	want := "target: a rebase is in progress in your checkout: finish or abort it, then publish."
+	if status != delivery.PublishRefused || why != want {
+		e.t.Errorf("publish %s: %q, want refused saying %q", status, why, want)
+	}
+	e.wokenWith(e.task, "was refused, nothing moved: "+want)
+	if got := e.gh.SHA(e.branch); got != before {
+		e.t.Errorf("the task branch moved to %s", got)
+	}
+	if !e.midRebase() {
+		e.t.Error("the publish ended the rebase")
+	}
+}
+
+// finishRebase resolves the conflict and continues the rebase.
+func (e *editing) finishRebase() {
+	e.t.Helper()
+	if err := os.WriteFile(filepath.Join(e.work(), "FIXED.md"), []byte("both\n"), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.git("add", "FIXED.md")
+	c := exec.Command("git", "-C", e.work(), "-c", "user.name=c", "-c", "user.email=c@x", "rebase", "--continue")
+	c.Env = append(os.Environ(), "GIT_EDITOR=true")
+	if out, err := c.CombinedOutput(); err != nil {
+		e.t.Fatalf("rebase --continue: %v %s", err, out)
+	}
+}
+
+// A publish mid-rebase is refused, for good: the publish is settled, not
+// retried, and nothing moves.
+func TestAPublishMidRebaseIsRefused(t *testing.T) {
+	e := diverged(t)
+	e.conflictingRebase()
+	e.refusedMidRebase()
+}
+
+// A conductor stopped mid-rebase and resumed: the resume's sync keeps the
+// checkout, naming the rebase; the conductor hears it with the message
+// that resumed it; the rebase is still there and publish is refused. Once
+// the rebase is finished, publish fast-forwards the task branch.
+func TestAConductorStoppedMidRebaseAndResumedFinishesItThenPublishes(t *testing.T) {
+	e := diverged(t)
+	e.conflictingRebase()
+	e.syncer.ConductorWarm = 1
+	e.until("the conductor stopped", func() bool { _, status, _ := e.conductor(e.task); return status == "paused" })
+	e.syncer.ConductorWarm = 1 << 40
+	lr := e.luxRunOf(e.cond)
+	// The task branch moves on while it is stopped (a person's commit on
+	// GitHub), so the rebase is now behind it.
+	e.gh.CommitOnTop(e.branch, "later")
+	before := e.lastSync(lr).seq
+	told := len(e.inputsSaying(lr, rebaseLine))
+	if status, _ := e.chat(e.task, "back to it"); status != 200 {
+		t.Fatalf("chat %d", status)
+	}
+	var sync lux.SyncResult
+	e.until("the resume's sync", func() bool {
+		s := e.lastSync(lr)
+		sync = s.SyncResult
+		return s.seq > before && s.RequestID == ""
+	})
+	if sync.Status != lux.SyncKept || sync.Operation != lux.OperationRebase || sync.Behind != 1 {
+		t.Errorf("the resume's sync %+v, want kept for a rebase, 1 behind", sync)
+	}
+	e.until("the rebase line after the resume", func() bool { return len(e.inputsSaying(lr, rebaseLine)) > told })
+	line := e.inputsSaying(lr, rebaseLine)[told]
+	if want := "target: a rebase is in progress in your checkout (1 behind the task branch): resolve and `git rebase --continue`, " +
+		"or `git rebase --abort`; then `git merge lux/" + e.branch + "`."; !strings.Contains(line, want) {
+		t.Errorf("heard %q, want %q", line, want)
+	}
+	if id, _, _ := e.conductor(e.task); id != e.cond {
+		t.Fatalf("a new conductor %s, not the one resumed", id)
+	}
+	if !e.midRebase() {
+		t.Fatal("the resume ended the rebase")
+	}
+	e.refusedMidRebase()
+
+	e.finishRebase()
+	e.git("fetch", "-q", "origin")
+	e.git("merge", "-q", "--no-edit", e.gh.SHA(e.branch))
+	sha := e.git("rev-parse", "HEAD")
+	status, why := e.published(e.publish())
+	if status != delivery.PublishPublished {
+		t.Fatalf("publish after the rebase %s: %s", status, why)
+	}
+	if got := e.gh.SHA(e.branch); got != sha {
+		t.Errorf("the task branch at %s, want the rebased %s", got, sha)
+	}
+}
+
+// inputsSaying is every input the lux Run's agent was given containing
+// want, in order.
+func (e *editing) inputsSaying(luxRunID, want string) []string {
+	var out []string
+	for _, in := range runOf(e, luxRunID).Inputs {
+		if strings.Contains(in, want) {
+			out = append(out, in)
+		}
+	}
+	return out
+}
+
+func runOf(e *editing, luxRunID string) *fakelux.Run {
+	for _, r := range e.lux.Runs() {
+		if r.ID == luxRunID {
+			return r
+		}
+	}
+	e.t.Fatalf("no lux Run %s", luxRunID)
+	return nil
+}
+
+type syncSeen struct {
+	lux.SyncResult
+	seq int64
+}
+
+// lastSync is the lux Run's latest git.sync event, and its event id.
+func (e *editing) lastSync(luxRunID string) syncSeen {
+	e.t.Helper()
+	var last syncSeen
+	frames, err := e.syncer.Lux.Events(context.Background(), luxRunID, 0)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, f := range frames {
+		if f.EventType == "git.sync" {
+			last = syncSeen{seq: f.EventID}
+			_ = json.Unmarshal(f.EventData, &last.SyncResult)
+		}
+	}
+	return last
 }
