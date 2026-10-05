@@ -1587,6 +1587,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		run.taken = map[string]bool{}
 	}
 	run.taken[in.RequestID] = true
+	run.Calls = append(run.Calls, "input")
 	if len(images) > 0 {
 		if run.attachments == nil {
 			run.attachments = map[string][]attachmentMeta{}
@@ -1709,7 +1710,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 			if len(files) == 0 && run.workspace != "" {
 				// What the agent committed in its checkout itself, as lux
 				// pushes a checkout's HEAD.
-				sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch)
+				sha, err = pushWorkspace(filepath.Join(run.workspace, "repos", repo.Name), path, branch, base)
 			} else {
 				sha, err = commit(path, base, branch, files, run.behavior.Message)
 			}

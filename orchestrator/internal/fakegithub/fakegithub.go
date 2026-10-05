@@ -732,21 +732,29 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	out, err := s.git("diff", "--name-only", base, head)
+	out, err := s.git("diff", "--numstat", base, head)
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
 	files := []any{}
-	for _, f := range strings.Split(out, "\n") {
-		if f != "" {
-			files = append(files, map[string]string{"filename": f})
+	for _, line := range strings.Split(out, "\n") {
+		// "<added>\t<deleted>\t<path>"; "-" for a binary file's counts.
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
 		}
+		added, _ := strconv.Atoi(parts[0])
+		deleted, _ := strconv.Atoi(parts[1])
+		files = append(files, map[string]any{"filename": parts[2], "additions": added, "deletions": deleted})
 	}
-	// Commits on base that head lacks: how far behind head is.
+	// Commits on base that head lacks: how far behind head is; and the
+	// reverse.
 	behind, _ := s.git("rev-list", "--count", head+".."+base)
+	ahead, _ := s.git("rev-list", "--count", base+".."+head)
 	n, _ := strconv.Atoi(behind)
-	write(w, 200, map[string]any{"files": files, "behind_by": n})
+	a, _ := strconv.Atoi(ahead)
+	write(w, 200, map[string]any{"files": files, "behind_by": n, "ahead_by": a})
 }
 
 func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {
