@@ -359,8 +359,9 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 }
 
 // carryMove takes a moving publish to its end. Each repository not known
-// to have moved is first read from the forge: at its intended head, it
-// moved (an earlier attempt's request landed). Those still to move are
+// to have moved is first read from the forge: at its intended head or a
+// descendant of it (reached), it moved (an earlier attempt's request
+// landed). Those still to move are
 // judged again under the publish's locks (delivery.RecheckMovingTx) —
 // never those that moved — then fast-forwarded one by one, each result
 // kept as it happens. Then what moved is recorded (recordPublish), or,
@@ -397,7 +398,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 		if m.Status != delivery.MovePending {
 			continue
 		}
-		at, err := branchSHA(ctx, gh, m.Slug, p.Branch)
+		at, err := reached(ctx, gh, m.Slug, p.Branch, m.Head)
 		if err != nil {
 			switch {
 			case m.AttemptedAt != nil:
@@ -418,7 +419,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 			}
 			continue
 		}
-		if at == m.Head {
+		if at {
 			m.Status = delivery.MoveMoved
 			if err := keep(name, m); err != nil {
 				return err
@@ -493,6 +494,22 @@ func branchSHA(ctx context.Context, gh *forge.GitHub, slug, branch string) (stri
 		return "", errNoForge
 	}
 	return gh.BranchSHA(ctx, slug, branch)
+}
+
+// reached says whether branch already contains head: at it, or at a
+// descendant of it (the forge's compare head...current behind by none), as
+// when a move landed and someone pushed on top before it was confirmed.
+// What is on top is not the publish's, and the branch is never moved back.
+func reached(ctx context.Context, gh *forge.GitHub, slug, branch, head string) (bool, error) {
+	at, err := branchSHA(ctx, gh, slug, branch)
+	if err != nil || at == head || at == "" {
+		return at == head, err
+	}
+	cmp, err := gh.Compare(ctx, slug, head, at)
+	if err != nil {
+		return false, err
+	}
+	return cmp.BehindBy == 0, nil
 }
 
 // forgeRefused says the forge refused for good: 401 or 403 that is not a
