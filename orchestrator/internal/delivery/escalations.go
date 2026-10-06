@@ -50,20 +50,33 @@ type EscalationDecision struct {
 }
 
 // LockEscalationTx takes the locks a path that reads or changes an
-// escalation's decision takes, in dude's lock order:
+// escalation's decision takes. Every such path begins with the same prefix:
 //
 //	LockChat (where the path takes it) → the latest delivery (LoadDelivery)
-//	→ the task's row (LockTaskTx) → questions → Runs.
+//	→ the task's row (LockTaskTx)
 //
-// It is the order of the delivery's other writers: parked → AskTx →
-// SetTaskStatusTx, and an ending SetTaskStatusTx (lockAndRefuseWhileMovingTx
-// before its UPDATE tasks). The delivery's FOR UPDATE, granted after a wait,
-// returns the row's newest version, so a decision committed meanwhile is
-// seen. The task's row is locked in a statement of its own after it, and
-// its status re-read there: the delivery statement's join reads the task as
-// of its snapshot. Ownership changes take the task's row (setTaskPeople,
-// passOnTasks), so an owner read after this is the current one. The
-// delivery is nil when the task has none; the task's row is locked anyway.
+// as do the delivery's other writers (parked → AskTx → SetTaskStatusTx; an
+// ending SetTaskStatusTx; markDone; recovery). What follows differs:
+//
+//	banner (no Chat)      kept Runs (ResumeKeptTx/ReleaseKeptTx) → open escalation questions
+//	answer to a conductor the question → its Run → the owner's person (answered_by_person FK)
+//	Chat                  the conductor's Run → its question
+//	decide_escalation     reads only
+//
+// Among these paths the delivery's row serializes the suffixes, so their
+// differing orders cannot cycle. Paths that skip the prefix are another
+// matter: a publish (Chat → conductor Run → delivery) is serialized with
+// answer and Chat by the Chat lock; it is not with the banner releasing a
+// failed, kept conductor, and a Run-ending trigger (Run → questions)
+// opposes answer's question → Run. Both pre-existing: dude issue #TBD.
+//
+// The delivery's FOR UPDATE, granted after a wait, returns the row's newest
+// version, so a decision committed meanwhile is seen. The task's row is
+// locked in a statement of its own after it, and its status re-read there:
+// the delivery statement's join reads the task as of its snapshot.
+// Ownership changes take the task's row (setTaskPeople, passOnTasks), so an
+// owner read after this is the current one. The delivery is nil when the
+// task has none; the task's row is locked anyway.
 func LockEscalationTx(ctx context.Context, tx pgx.Tx, taskID string) (projectID string, d *Delivery, err error) {
 	if d, err = LoadDelivery(ctx, tx, taskID); err != nil {
 		return "", nil, err
