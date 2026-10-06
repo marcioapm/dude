@@ -126,7 +126,8 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 			FROM preview_servers s WHERE s.run_id = r.id) ps
 		WHERE r.kind = 'preview' AND r.wakeable
 		  AND (r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused') OR r.lux_stop_reason IS DISTINCT FROM 'cancel')
-		  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())) w
+		  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
+		  AND (r.op_token IS NULL OR r.op_deadline <= now())) w
 	WHERE status IN ('pending', 'completed', 'failed', 'aborted') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL OR reap
 	   OR (status IN ('scheduled', 'starting', 'running') AND lux_run_id <> '')
 	   OR (status = 'paused' AND lux_run_id <> '' AND lux_state NOT IN ('stopped', 'failed', 'lost'))
@@ -430,14 +431,16 @@ func (p *Previews) primaryRepoName(ctx context.Context, r wakeRun) (string, erro
 }
 
 // claimWake takes the wake the sweep selected for this orchestrator, once
-// it is due: false when another holds it, it was done meanwhile, or it was
-// replaced (startFailed's next wake, after its backoff, is the next sweep's).
+// it is due: false when another holds it, it was done meanwhile, it was
+// replaced (startFailed's next wake, after its backoff, is the next
+// sweep's), or a resume or replacement of the preview is in progress.
 func (p *Previews) claimWake(ctx context.Context, r *wakeRun) (bool, error) {
 	var ok bool
 	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `UPDATE runs SET wake_claimed_at = now() WHERE id = $1 AND wake_wanted_at = $3
 			AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 			AND (wake_claimed_at IS NULL OR wake_claimed_at < now() - make_interval(secs => $2))
+			AND (op_token IS NULL OR op_deadline <= now())
 			RETURNING lux_start_event, lux_after_event, wake_claimed_at`, r.ID, wakeClaimFor.Seconds(), *r.WakeWanted).
 			Scan(&r.StartBefore, &r.ObservedAfter, &r.ClaimedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -462,18 +465,19 @@ func (p *Previews) releaseWake(ctx context.Context, r wakeRun, retryIn time.Dura
 	})
 }
 
-// ownsWake: this wake's claim is still the preview's (not expired and
-// taken over, not replaced by startFailed, not done). With FOR UPDATE the
-// row is held until the transaction ends, so no takeover's claim commits
-// in between.
-func ownsWake(ctx context.Context, tx pgx.Tx, r wakeRun, lock bool) (bool, error) {
-	q := `SELECT COALESCE(wake_claimed_at = $2 AND wake_wanted_at = $3 AND lux_run_id IS NOT DISTINCT FROM NULLIF($4, '')
-		AND lux_generation = $5, false) FROM runs WHERE id = $1`
-	if lock {
-		q += ` FOR UPDATE`
-	}
+// ownsWakeSQL (over runs, $1 the run id): the wake's claim is still the
+// one this orchestrator set ($2, for wake $3), on the Run and generation
+// it read ($4, $5): not expired and taken over, not replaced by
+// startFailed, not done.
+const ownsWakeSQL = `wake_claimed_at = $2 AND wake_wanted_at = $3 AND lux_run_id IS NOT DISTINCT FROM NULLIF($4, '')
+	AND lux_generation = $5`
+
+// ownsWake: this wake's claim is still the preview's (ownsWakeSQL), and
+// the preview is live: a stopped one is acted on no further.
+func ownsWake(ctx context.Context, tx pgx.Tx, r wakeRun) (bool, error) {
 	var owned bool
-	err := tx.QueryRow(ctx, q, r.ID, r.ClaimedAt, *r.WakeWanted, r.LuxRunID, r.Generation).Scan(&owned)
+	err := tx.QueryRow(ctx, `SELECT COALESCE(`+ownsWakeSQL+` AND `+liveStatus+`, false) FROM runs WHERE id = $1`,
+		r.ID, r.ClaimedAt, *r.WakeWanted, r.LuxRunID, r.Generation).Scan(&owned)
 	return owned, err
 }
 
@@ -569,30 +573,24 @@ func (p *Previews) replaceWoken(ctx context.Context, r wakeRun, cancel bool) err
 
 // replaceRun retires the wake's lux Run, cancelled first when cancel (lux
 // keeps a Run it can resume until it is cancelled), only while the wake's
-// claim is this orchestrator's: an orchestrator whose claim expired must
-// not end the Run another has woken since. The row is held from the check
-// through the cancel and the retirement, so a takeover's claim waits for
-// them. false: the claim or the Run moved on, and nothing was done.
+// claim is this orchestrator's and the preview is live: an orchestrator
+// whose claim expired must not end the Run another has woken since. The
+// row is reserved (operation.go) from that check through the retirement,
+// so no other claim, resume or replacement acts on it meanwhile. false:
+// the claim or the Run moved on, the preview was stopped, or another
+// operation holds it; the retirement is not recorded.
 func (p *Previews) replaceRun(ctx context.Context, r *wakeRun, cancel bool) (bool, error) {
-	won := false
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		owned, err := ownsWake(ctx, tx, *r, true)
-		if err != nil || !owned {
-			return err
+	op, _, err := p.reserve(ctx, r.Org, r.ID, opReplace, ownsWakeSQL, r.ClaimedAt, *r.WakeWanted, r.LuxRunID, r.Generation)
+	if err != nil || op == nil {
+		return false, err
+	}
+	won, err := p.replaceReserved(ctx, op, r.previewRun, cancel, func(tx pgx.Tx) (bool, error) {
+		if owned, err := ownsWake(ctx, tx, *r); err != nil || !owned {
+			return false, err
 		}
-		if err := p.carryServers(ctx, tx, r.previewRun); err != nil {
-			return err
-		}
-		if cancel {
-			if err := p.cancelForReplacement(ctx, r.previewRun); err != nil {
-				return err
-			}
-		} else {
-			p.unfollow(r.ID)
-		}
-		won, err = retireRun(ctx, tx, *r)
-		return err
-	}); err != nil || !won {
+		return retireRun(ctx, tx, *r)
+	})
+	if err != nil || !won {
 		return false, err
 	}
 	r.LuxRunID, r.LuxState = "", ""
@@ -849,7 +847,7 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	// submit of the same generation has the same key, so lux makes one Run).
 	var owned bool
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		owned, err = ownsWake(ctx, tx, r, false)
+		owned, err = ownsWake(ctx, tx, r)
 		return err
 	}); err != nil || !owned {
 		return err
@@ -876,20 +874,42 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 			repos = append(repos, repo.Name)
 		}
 	}
+	var holds string
+	var live bool
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// machine: the size this lux Run was submitted on; a later generation
 		// records its own. Its first start begins here, before any of its
 		// events (lux_start_event 1), so a failure before its first running
 		// is a failed start; StartBefore 0 makes every event of it newer
-		// than the submit's answer.
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
+		// than the submit's answer. Recorded only on a live preview.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
 			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1,
 			preview_secrets = $9, carried_servers = '[]'
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got,
-			acceptedSecrets(lr))
-		return err
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6 AND `+liveStatus, r.ID, lr.ID, lr.State, db.NonNil(repos), branch,
+			r.Generation, machine, got, acceptedSecrets(lr)); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_run_id, ''), `+liveStatus+` FROM runs WHERE id = $1`, r.ID).Scan(&holds, &live)
 	}); err != nil {
 		return err
+	}
+	switch {
+	case !live && holds != lr.ID:
+		// Stopped while this submit was in flight: the Run it made is no
+		// preview's, and nothing else would cancel it.
+		p.Log.Info("a preview was stopped while its new Run was submitted; cancelling that Run", "run", r.ID, "luxRun", lr.ID)
+		if err := p.Lux.Cancel(ctx, lr.ID); err != nil {
+			if le, ok := lux.AsError(err); !ok || le.Retryable() {
+				return err
+			}
+		}
+		return nil
+	case !live:
+		// Stopped once its Run was recorded: the sweep cancels it.
+		return nil
+	case holds != lr.ID:
+		// Another holds the preview on a Run of its own.
+		return nil
 	}
 	r.StartBefore = 0
 	if err := p.attachAll(ctx, r, lr.ID); err != nil {

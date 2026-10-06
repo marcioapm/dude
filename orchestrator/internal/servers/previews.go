@@ -62,6 +62,9 @@ type Previews struct {
 	// How long a wake's drain may page lux's events in all; zero is 30
 	// seconds.
 	DrainFor time.Duration
+	// How long a resume or replacement holds its preview's row reserved
+	// while it calls lux (operation.go); zero is 90 seconds.
+	OperationFor time.Duration
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc
@@ -102,6 +105,8 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 			       OR (r.status IN ('completed', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
+			  -- A resume or replacement in progress: left to it (operation.go).
+			  AND (r.op_token IS NULL OR r.op_deadline <= now())
 			-- Every live preview, those with something to do first.
 			ORDER BY (r.status IN ('pending', 'completed', 'failed') OR cardinality(r.pending_starts) > 0
 			          OR t.status IN ('done', 'failed', 'aborted')) DESC, r.created_at
@@ -769,51 +774,54 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	spec.Secrets = append(spec.Secrets, projectSecrets...)
 	login.Apply(&spec)
 	// Resumed only while the preview is parked on this lux Run, with the
-	// row held until the resume is recorded: a replacement (replaceParked)
-	// holds it too, so neither acts on a Run the other has moved on.
+	// row reserved (operation.go) until the resume is recorded: a
+	// replacement (replaceParked) reserves it too, so neither acts on a Run
+	// the other has moved on. A preview stopped meanwhile records nothing,
+	// and the sweep cancels the Run as for any stop.
+	op, _, err := p.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
+	if err != nil || op == nil {
+		return err
+	}
+	octx, stop := op.context(ctx)
+	defer stop()
+	// lux answers a Run already resuming as it did the first time; a
+	// refusal (cancelled or finished meanwhile) is for good.
 	var refused *lux.Error
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if parked, err := parkedOn(ctx, tx, r); err != nil || !parked {
-			return err
-		}
-		// lux answers a Run already resuming as it did the first time; a
-		// refusal (cancelled or finished meanwhile) is for good.
-		lr, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
+	err = op.call(octx, func(c context.Context) error {
+		var err error
+		lr, err = p.Lux.Resume(c, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			refused = le
-			return nil
+			refused, err = le, nil
 		}
-		if err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL, dude_pause = NULL,
-			active_since = now() WHERE id = $1 AND status = 'paused'`, r.ID, lr.State)
+		return err
+	})
+	if err != nil {
+		p.release(ctx, op)
+		return err
+	}
+	if refused != nil {
+		defer p.release(ctx, op)
+		return p.fail(ctx, r, "lux refused to resume the preview: "+refused.Message)
+	}
+	_, err = p.finish(ctx, op, func(tx pgx.Tx) (bool, error) {
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $4, lux_stop_reason = NULL, dude_pause = NULL,
+			active_since = now() WHERE id = $1 AND `+parkedOnSQL, r.ID, r.LuxRunID, r.Generation, lr.State)
 		if err != nil || tag.RowsAffected() == 0 {
-			return err
+			return false, err
 		}
 		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.unparked", OrganizationID: r.Org, ProjectID: r.ProjectID,
 			TaskID: r.TaskID, RunID: r.ID, ActorType: ledger.ActorSystem, ActorID: r.ID, Source: ledger.SourceRunner,
 			CorrelationID: r.TaskID, Payload: map[string]any{"reason": "unused"}}); err != nil {
-			return err
+			return false, err
 		}
-		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "resumed"})
-	}); err != nil {
-		return err
-	}
-	if refused != nil {
-		return p.fail(ctx, r, "lux refused to resume the preview: "+refused.Message)
-	}
-	return nil
+		return true, phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "resumed"})
+	})
+	return err
 }
 
-// parkedOn holds a parked eager preview's row, and says whether it is still
-// parked on the lux Run and generation the sweep read.
-func parkedOn(ctx context.Context, tx pgx.Tx, r previewRun) (bool, error) {
-	var parked bool
-	err := tx.QueryRow(ctx, `SELECT status = 'paused' AND lux_run_id IS NOT DISTINCT FROM $2 AND lux_generation = $3
-		FROM runs WHERE id = $1 FOR UPDATE`, r.ID, r.LuxRunID, r.Generation).Scan(&parked)
-	return parked, err
-}
+// parkedOnSQL (over runs, $1 the run id): a parked eager preview still
+// parked on the lux Run ($2) and generation ($3) the sweep read.
+const parkedOnSQL = `status = 'paused' AND lux_run_id IS NOT DISTINCT FROM $2 AND lux_generation = $3`
 
 // startPending starts the servers a person asked for while the preview
 // was parked, now that it runs.

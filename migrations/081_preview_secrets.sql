@@ -51,3 +51,13 @@ ALTER TABLE runs ADD COLUMN preview_secrets text[] NOT NULL DEFAULT '{}';
 -- new Run once it is recorded, then cleared. The spec's and a wakeable
 -- preview's own servers come with the new Run anyway.
 ALTER TABLE runs ADD COLUMN carried_servers jsonb NOT NULL DEFAULT '[]';
+
+-- A preview's resume or replacement in progress: the orchestrator holding
+-- op_token calls lux with no transaction open, and records the outcome
+-- only while its token is still the row's. Others leave the row alone
+-- until op_deadline; past it, the holder makes no further call to lux and
+-- the row may be taken over.
+ALTER TABLE runs ADD COLUMN op_token text,
+  ADD COLUMN op_kind text CHECK (op_kind IN ('resume', 'replace')),
+  ADD COLUMN op_deadline timestamptz,
+  ADD CONSTRAINT runs_op_whole CHECK ((op_token IS NULL) = (op_kind IS NULL) AND (op_token IS NULL) = (op_deadline IS NULL));
