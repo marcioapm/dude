@@ -559,3 +559,49 @@ func TestAnAnswerWhileTheConductorsPublishRechecksWaitsForIt(t *testing.T) {
 		t.Errorf("the owner's answer while the publish rechecked: %d, want 200", status)
 	}
 }
+
+// Marking a task done and recovering a stopped one each lock the delivery
+// before the task, as every other writer of both does. Another transaction
+// holds the delivery, the route is seen waiting on it holding nothing, then
+// the holder locks the task too and commits: no deadlock victim, and the
+// route then goes on (200).
+func TestDoneAndRecoveryLockTheDeliveryBeforeTheTask(t *testing.T) {
+	for _, c := range []struct{ route, status string }{{"done", "review"}, {"recover", "failed"}} {
+		t.Run(c.route, func(t *testing.T) {
+			w, task := stuck(t)
+			ana := w.person("Ana")
+			w.assignOwner(task, ana)
+			// An ended delivery: a task in review may be marked done; a
+			// failed one stopped at its escalation may be retried.
+			mustExec(t, w.owner, `UPDATE tasks SET status = $2::task_status WHERE id = $1`, task, c.status)
+			mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'completed' WHERE task_id = $1`, task)
+			if c.route == "recover" {
+				mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{stopped}', state->'escalation') WHERE task_id = $1`, task)
+			}
+			ctx := context.Background()
+			tx, err := w.second().Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := delivery.LoadDelivery(ctx, tx, task); err != nil {
+				t.Fatal(err)
+			}
+			finished := make(chan int, 1)
+			go func() {
+				status, _ := w.callAs(ana, "/internal/tasks/"+task+"/"+c.route, map[string]any{"action": "retry"})
+				finished <- status
+			}()
+			w.waiters(1)
+			if err := delivery.LockTaskTx(ctx, tx, task, nil); err != nil {
+				t.Fatalf("the delivery's holder locking the task: %v (deadlock: %v)", err, deadlocked(err))
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if status := <-finished; status != 200 {
+				t.Errorf("%s while the delivery was held: %d, want 200", c.route, status)
+			}
+		})
+	}
+}
