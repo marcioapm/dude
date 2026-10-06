@@ -1,6 +1,7 @@
 package fakelux
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -34,8 +35,8 @@ func redact(values map[string]string, s string) string {
 		add(url.QueryEscape(v), name)
 		add(url.PathEscape(v), name)
 		add(hex.EncodeToString([]byte(v)), name)
-		quoted, _ := json.Marshal(v)
-		add(string(quoted[1:len(quoted)-1]), name)
+		add(jsonString(v, true), name)
+		add(jsonString(v, false), name)
 	}
 	sort.Slice(pats, func(i, j int) bool { return len(pats[i].from) > len(pats[j].from) })
 	type span struct{ start, end, pat int }
@@ -77,4 +78,14 @@ func redact(values map[string]string, s string) string {
 	flush()
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// jsonString is v as a JSON string literal without its quotes, with or
+// without the HTML escapes json.Marshal adds, as lux's shim has both.
+func jsonString(v string, escapeHTML bool) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(escapeHTML)
+	_ = enc.Encode(v)
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSuffix(b.String(), "\n"), `"`), `"`)
 }
