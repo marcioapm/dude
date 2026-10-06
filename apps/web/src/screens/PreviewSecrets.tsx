@@ -125,10 +125,11 @@ function changedWords(s: PreviewSecret): string {
   return s.updatedBy ? `Changed by ${s.updatedBy.name} · ${when}` : `Changed ${when}`;
 }
 
-/** Ctrl/⌘+Enter in the value submits: Enter there is a new line. */
+/** Ctrl/⌘+Enter in the value submits: Enter there is a new line (or, masked, nothing). */
 function submitOnModEnter(canSubmit: boolean, submit: () => void) {
   return (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || !(e.target instanceof HTMLTextAreaElement)) return;
+    const inValue = e.target instanceof HTMLTextAreaElement || (e.target instanceof HTMLInputElement && e.target.type === "password");
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || !inValue) return;
     e.preventDefault();
     if (canSubmit) submit();
   };
