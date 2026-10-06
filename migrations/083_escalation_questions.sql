@@ -14,3 +14,11 @@ ALTER TABLE questions
   ADD COLUMN answered_by_person text REFERENCES people(id) ON DELETE SET NULL;
 
 CREATE INDEX questions_escalation_idx ON questions (task_id, escalation) WHERE escalation IS NOT NULL;
+
+-- The scripted agent's fake/stuck (a reviewer that judges every fix of its
+-- finding "still", to get a review stuck) is a test model a tier may request.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/command',
+                   'fake/stuck')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

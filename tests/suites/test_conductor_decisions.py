@@ -171,3 +171,52 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
                message="after the hand-back, Deliver never fixed the feedback")
     policy_fix = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
     assert len(policy_fix) == 1 and policy_fix[0]["conductorRunId"] is None, policy_fix
+
+
+def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
+                                                            owner_dsn: str):
+    """The abs run's stall: the review gets stuck, the conductor asks with the
+    escalation's actions as choices, the owner answers "Your call", and the
+    conductor retries with decide_escalation: the next fix round runs."""
+    project = _conducting(client, forge_project)
+    models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    assert client.patch(f"/v1/projects/{project['id']}/settings",
+                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
+    task = client.create_task(project["id"], "Greet, and get stuck on review")
+    conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
+    _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
+    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
+    _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
+    _say(client, task["id"], "Review it.", _tool("decide", {"action": "next"}))
+    _waiting_on(client, task["id"], "after_review", "the review never came back")
+    _say(client, task["id"], "Fix it.", _tool("start_phase", {"phase": "fix"}))
+    _waiting_on(client, task["id"], "after_fix", "the fix never came back")
+    _say(client, task["id"], "Again.", _tool("decide", {"action": "next"}))
+
+    # Stuck: escalated to a person, the conductor told how it works.
+    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=90,
+               message="the review never got stuck")
+    wait_until(lambda: any("Escalated to a person: stuck" in n and "decide_escalation" in n for n in _woken(client, task["id"])),
+               timeout=60, message="the conductor was never told of the escalation")
+    _say(client, task["id"], "Ask me.", _tool("ask_person", {"question": "Stuck on one finding. Retry once more?",
+                                                            "choices": ["Retry as proposed", "Accept as it is", "Stop"],
+                                                            "actions": ["retry", "accept", "stop"]}))
+    question = wait_until(lambda: query(owner_dsn, "SELECT id FROM questions WHERE task_id = %s AND escalation IS NOT NULL",
+                                        (task["id"],)), timeout=60, message="the escalation's question was never asked")[0]
+    # The banner stays while the question is open: a person may still use it.
+    assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
+    fixes = len(_phases(client, task["id"], "fix"))
+
+    # "Your call": a free answer decides nothing; the conductor decides.
+    assert _say(client, task["id"], "Your call, use your judgement.")["questionId"] == question["id"]
+    assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
+    _say(client, task["id"], "Retry.", _tool("decide_escalation", {"action": "retry", "note": "One narrow round."}))
+    wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 1, timeout=90,
+               message="the conductor's retry never started the next fix round")
+    assert _task(client, task["id"]).get("escalation") is None
+    decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"]
+    assert len(decided) == 1 and decided[0]["payload"]["by"] == "conductor", decided
+    assert decided[0]["payload"]["questionId"] == question["id"] and decided[0]["actor"]["id"] == conductor, decided
+    # The retry's fix goes back to the conductor, at its next decision.
+    _waiting_on(client, task["id"], "after_fix", "the retry's fix never came back to the conductor")
