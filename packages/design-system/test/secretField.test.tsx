@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 const seen: string[] = [];
-function Harness({ initial = "" }: { readonly initial?: string }) {
+function Harness({ initial = "" }: { readonly initial?: string | undefined }) {
   const [v, setV] = useState(initial);
   return <SecretField label="Value" hint="Saved once." value={v} onChange={(next) => { seen.push(next); setV(next); }} />;
 }
