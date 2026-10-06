@@ -11,8 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -361,6 +363,160 @@ func TestAWakeableReplacementKeepsAManuallyAddedServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A server a person added to a parked preview keeps its own definition
+// when, before the Run is replaced, a recipe that starts in previews takes
+// its name: the replacement has the servers the old Run had, and the old
+// one never had that recipe. The next fresh preview gets the recipe.
+func TestACarriedServerKeepsItsDefinitionWhenARecipeTakesItsName(t *testing.T) {
+	w := newWorld(t)
+	w.previews.Minute = time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.secret("SEED_LLM_KEY", seedKey)
+	_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("web ready", func() bool {
+		return len(w.luxRuns()) == 1 && w.lux.ServerStates(w.luxRuns()[0].ID)["web"] == "ready"
+	})
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{
+		"name": "probe", "port": 4100, "command": "npm run manual-probe", "env": map[string]string{"PROBE_MODE": "manual"},
+	}); code != 201 {
+		t.Fatalf("add a server = %d %v", code, out)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+	w.previews.Minute = time.Millisecond
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	w.previews.Minute = time.Hour
+	w.recipe("probe", 4200, "npm run recipe-probe", "", nil, true)
+	w.removeSecret("SEED_LLM_KEY")
+	mustExec(t, w.owner, `UPDATE runs SET pending_starts = ARRAY['probe'] WHERE id = $1`, runID)
+	w.until("the new Run running, the asked-for start made", func() bool {
+		return len(w.luxRuns()) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND pending_starts = '{}'`, runID) == 1
+	})
+	next := w.luxRuns()[1]
+	w.until("probe ready on the new Run", func() bool { return w.lux.ServerStates(next.ID)["probe"] == "ready" })
+	list, err := w.previews.Lux.Servers(context.Background(), next.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe *lux.Server
+	for i := range list {
+		if list[i].Name == "probe" {
+			probe = &list[i]
+		}
+	}
+	if probe == nil || probe.Port != 4100 || probe.FromSpec || !slices.Equal(probe.Command, []string{"sh", "-c", "npm run manual-probe"}) {
+		t.Fatalf("probe on the new Run = %+v; want the person's server, port 4100", probe)
+	}
+	if env := w.lux.ServerEnv(next.ID, "probe"); env["PROBE_MODE"] != "manual" {
+		t.Errorf("probe's environment on the new Run = %v", env)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND carried_servers = '[]'`, runID); n != 1 {
+		t.Errorf("the carry was not cleared once restored:\n%s", w.preview(runID))
+	}
+	if spec := submitted(t, next); slices.ContainsFunc(spec.Workload.Servers, func(s lux.ServerInput) bool { return s.Name == "probe" }) {
+		t.Errorf("the replacement's spec declares the recipe probe: %+v", spec.Workload.Servers)
+	}
+}
+
+// lux added a carried server and its answer was lost; the retry is
+// answered name_taken by the server that add made. That is the carry
+// restored: the definitions match. A server of that name with another
+// definition is not: the carry is kept, the restore fails to be retried,
+// and the log names the server, never a value.
+func TestARestoredServersNameTakenCountsOnlyForItsOwnDefinition(t *testing.T) {
+	for _, same := range []bool{true, false} {
+		name := "a lost answer, replayed"
+		if !same {
+			name = "another server of the name"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.previews.Minute = time.Hour
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			w.secret("SEED_LLM_KEY", seedKey)
+			_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
+			runID := out["run"].(map[string]any)["id"].(string)
+			w.until("web ready", func() bool {
+				return len(w.luxRuns()) == 1 && w.lux.ServerStates(w.luxRuns()[0].ID)["web"] == "ready"
+			})
+			if code, out := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{
+				"name": "probe", "port": 4100, "command": "npm run probe", "env": map[string]string{"PROBE_MODE": seedKey},
+			}); code != 201 {
+				t.Fatalf("add a server = %d %v", code, out)
+			}
+			mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+			w.previews.Minute = time.Millisecond
+			w.until("parked", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+			})
+			w.previews.Minute = time.Hour
+			lost := &lostAddAnswer{Client: w.previews.Lux, name: "probe"}
+			if !same {
+				lost.replace = &lux.ServerInput{Name: "probe", Port: 4300, Command: []string{"sh", "-c", "other"}}
+			}
+			w.previews.Lux = lost
+			var logs lockedBuffer
+			w.previews.Log = slog.New(slog.NewTextHandler(&logs, nil))
+			w.removeSecret("SEED_LLM_KEY")
+			mustExec(t, w.owner, `UPDATE runs SET pending_starts = ARRAY['probe'] WHERE id = $1`, runID)
+			if same {
+				w.until("the new Run running with the carry restored", func() bool {
+					return len(w.luxRuns()) == 2 &&
+						w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND carried_servers = '[]'`, runID) == 1
+				})
+				return
+			}
+			w.until("the restore refused", func() bool { return lost.Retried() })
+			if _, err := w.previews.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NULL AND carried_servers <> '[]'`, runID); n != 1 {
+				t.Errorf("the carry was dropped, or the new Run recorded, though another server holds its name:\n%s", w.preview(runID))
+			}
+			if got := logs.String(); !strings.Contains(got, "server=probe") || strings.Contains(got, seedKey) {
+				t.Errorf("the log should name the server and no value:\n%s", got)
+			}
+		})
+	}
+}
+
+// lostAddAnswer adds a server named name to lux, then answers as if the
+// answer was lost; with replace, what lux adds is replace instead (another
+// server took the name). Its retry gets lux's own answer.
+type lostAddAnswer struct {
+	lux.Client
+	name    string
+	replace *lux.ServerInput
+	mu      sync.Mutex
+	adds    int
+}
+
+func (c *lostAddAnswer) AddServer(ctx context.Context, runID string, in lux.ServerInput) (lux.Server, error) {
+	c.mu.Lock()
+	c.adds++
+	first := c.adds == 1
+	c.mu.Unlock()
+	if in.Name != c.name || !first {
+		return c.Client.AddServer(ctx, runID, in)
+	}
+	if c.replace != nil {
+		in = *c.replace
+	}
+	if _, err := c.Client.AddServer(ctx, runID, in); err != nil {
+		return lux.Server{}, err
+	}
+	return lux.Server{}, errors.New("the add's answer was lost after lux took it")
+}
+
+func (c *lostAddAnswer) Retried() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.adds > 1
 }
 
 // lostSubmitAnswer passes a submit to lux, then, once, loses lux's answer

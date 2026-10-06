@@ -317,6 +317,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	var repos []previewRef
 	var recipes []Recipe
 	var secrets []lux.Secret
+	var carried []lux.ServerInput
 	var settings PreviewSettings
 	var machine *delivery.Machine
 	var image string
@@ -361,6 +362,9 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 			return err
 		}
 		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT carried_servers FROM runs WHERE id = $1`, r.ID).Scan(&carried); err != nil {
 			return err
 		}
 		secrets, err = loadSecrets(ctx, tx, r.ProjectID)
@@ -422,6 +426,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		}
 		spec.Workload.Servers = append(spec.Workload.Servers, in)
 	}
+	spec.Workload.Servers = withoutCarried(spec.Workload.Servers, carried)
 	// A login that cannot be had now is an error the sweep retries.
 	login, err := phases.LoginFor(ctx, p.Registry, image, nil)
 	if err != nil {

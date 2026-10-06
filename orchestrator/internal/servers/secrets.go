@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -181,11 +182,14 @@ func recordCarried(ctx context.Context, tx pgx.Tx, r previewRun, list []lux.Serv
 	return err
 }
 
-// restoreServers adds the servers carryServers recorded to the preview's
+// restoreServers adds the servers recordCarried recorded to the preview's
 // new lux Run, before the submit is recorded: a retry of the same submit
-// (same key, same Run) adds them again, one there already being as good.
-// One lux refuses for good (the Run ended meanwhile, a server it will not
-// take) is left out; the recording clears them.
+// (same key, same Run) adds them again. A name lux says is taken counts as
+// restored only when the server holding it is the carried one (a replay
+// of an add whose answer was lost); another one there is an error to
+// retry, the carry kept. One lux refuses for good otherwise (the Run ended
+// meanwhile, a server it will not take) is left out; the recording clears
+// them.
 func (p *Previews) restoreServers(ctx context.Context, r previewRun, luxRunID string) error {
 	var carried []lux.ServerInput
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -195,11 +199,11 @@ func (p *Previews) restoreServers(ctx context.Context, r previewRun, luxRunID st
 	}
 	for _, in := range carried {
 		_, err := p.Lux.AddServer(ctx, luxRunID, in)
-		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			if le.Code != "name_taken" {
-				p.Log.Warn("a server added to the preview's replaced Run was not added to the new one", "run", r.ID,
-					"server", in.Name, "error", le.Message)
-			}
+		if le, ok := lux.AsError(err); ok && le.Code == "name_taken" {
+			err = p.sameServer(ctx, r, luxRunID, in)
+		} else if ok && !le.Retryable() {
+			p.Log.Warn("a server added to the preview's replaced Run was not added to the new one", "run", r.ID,
+				"server", in.Name, "error", le.Message)
 			err = nil
 		}
 		if err != nil {
@@ -207,6 +211,38 @@ func (p *Previews) restoreServers(ctx context.Context, r previewRun, luxRunID st
 		}
 	}
 	return nil
+}
+
+// sameServer: the server named in.Name on the Run is the carried one, by
+// port, command, workdir and env. An error otherwise, naming the server
+// and none of its values.
+func (p *Previews) sameServer(ctx context.Context, r previewRun, luxRunID string, in lux.ServerInput) error {
+	list, err := p.Lux.Servers(ctx, luxRunID)
+	if err != nil {
+		return err
+	}
+	for _, sv := range list {
+		if sv.Name != in.Name {
+			continue
+		}
+		if sv.Port == in.Port && slices.Equal(sv.Command, in.Command) && sv.Workdir == in.Workdir && maps.Equal(sv.Env, in.Env) {
+			return nil
+		}
+		break
+	}
+	p.Log.Warn("another server holds the name of a server carried to the preview's new Run; restoring it later", "run", r.ID,
+		"server", in.Name)
+	return fmt.Errorf("preview %s: another server holds the name of carried server %s", r.ID, in.Name)
+}
+
+// withoutCarried leaves out of a replacement's spec the project's servers
+// whose names a carried server has: the replacement has the servers the
+// old Run had, and a recipe of that name came after it (recipes reach a
+// Run only when it is made). The next new preview gets the recipe.
+func withoutCarried(servers []lux.ServerInput, carried []lux.ServerInput) []lux.ServerInput {
+	return slices.DeleteFunc(servers, func(s lux.ServerInput) bool {
+		return slices.ContainsFunc(carried, func(c lux.ServerInput) bool { return c.Name == s.Name })
+	})
 }
 
 // replaceParked puts a parked preview of the eager path back to pending
