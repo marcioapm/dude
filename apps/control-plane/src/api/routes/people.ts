@@ -372,14 +372,13 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing";
     if (rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) return "lastAdmin";
-    // Removing them changes who owns their tasks: those rows are locked
-    // first, as every owner change locks its task, so the orchestrator's
-    // escalation decisions (which check the owner under that lock) see the
-    // owner before or after, never a removal half done. In id order, so two
-    // removals cannot deadlock.
-    await scope.sql`
-      SELECT 1 FROM tasks WHERE id IN (SELECT task_id FROM task_people WHERE person_id = ${id})
-      ORDER BY id FOR UPDATE`;
+    // Their tasks are not locked ahead: holding this person's row while
+    // waiting on a task deadlocks with putTaskPeople, which holds the task
+    // and takes this row's KEY SHARE re-inserting them. An orchestrator
+    // decision holding a task's row (delivery.LockEscalationTx) is still
+    // serialized with this: if it read the owner first, passOnTasks' UPDATE
+    // of that task waits for it (the decision, then the removal); if that
+    // UPDATE came first, the decision waits and reads the new owner.
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
