@@ -9,8 +9,11 @@ import { ENV_NAME } from "./servers.ts";
  * values (orchestrator/internal/servers).
  */
 
-/** Names dude declares as lux secrets of its own: a preview would get two of them. */
-export const DUDE_SECRET_NAMES = ["GIT_TOKEN", "DUDE_TOOLS_AUTH"] as const;
+/**
+ * Names dude declares as lux secrets of its own (orchestrator/internal/phases):
+ * a preview declaring one twice is refused by lux.
+ */
+export const DUDE_SECRET_NAMES = ["GIT_TOKEN", "DUDE_TOOLS_AUTH", "DUDE_REGISTRY_AUTH"] as const;
 
 /** A value's most UTF-8 bytes: well under lux's 8 MiB request and Linux's 128 KiB per variable. */
 export const SECRET_VALUE_MAX_BYTES = 32 * 1024;
@@ -23,7 +26,7 @@ export function secretNameShapeProblem(name: string): string | null {
   if (!ENV_NAME.test(name)) return "Use letters, digits and _ only, starting with a letter or _.";
   if (/^lux_/i.test(name)) return "Names starting with LUX_ are lux’s own.";
   if (name === "GIT_TOKEN") return "dude sets GIT_TOKEN itself, from the GitHub connection.";
-  if (name === "DUDE_TOOLS_AUTH") return "dude sets DUDE_TOOLS_AUTH itself.";
+  if ((DUDE_SECRET_NAMES as readonly string[]).includes(name)) return `dude sets ${name} itself.`;
   return null;
 }
 
