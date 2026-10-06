@@ -10,7 +10,7 @@
  * Requires DATABASE_URL: a role that can create databases (the owner).
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { join } from "node:path";
 import { closePool, setPool } from "../src/db/client.ts";
@@ -52,11 +52,13 @@ let adminKey: string;
 let memberKey: string;
 let otherKey: string;
 
-/** Every answer's body, as the client got it, to look for values in. */
-const answers: Array<{ what: string; text: string }> = [];
-
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+/**
+ * One request through the public router. Every answer is checked as it
+ * arrives: no value, and no part of one, in its body, whatever the route
+ * or the status.
+ */
 async function call(key: string, method: string, path: string, body?: unknown): Promise<{ status: number; json: Json }> {
   const res = await router.handle(
     new Request(`http://dude.test${path}`, {
@@ -66,8 +68,23 @@ async function call(key: string, method: string, path: string, body?: unknown): 
     }),
   );
   const text = await res.text();
-  answers.push({ what: `${method} ${path} ${res.status}`, text });
+  const what = `${method} ${path} ${res.status}`;
+  for (const v of VALUES) expect(`${what}: ${text.includes(v)}`).toBe(`${what}: false`);
+  // Escaped as JSON, or in part.
+  expect(`${what}: ${text.includes("LEAKCANARY")}`).toBe(`${what}: false`);
   return { status: res.status, json: text ? JSON.parse(text) : null };
+}
+
+/** A secret the scenario starts with, added as an editor would. */
+async function seed(name: string, value: string): Promise<Json> {
+  const added = await call(adminKey, "POST", secretsPath(), { name, value });
+  expect(added.status).toBe(201);
+  return added.json;
+}
+
+async function storedValue(name: string): Promise<string | undefined> {
+  const [row] = await owner`SELECT value FROM project_secrets WHERE project_id = ${PROJECT} AND name = ${name}`;
+  return row?.value;
 }
 
 const secretsPath = (project = PROJECT) => `/v1/projects/${project}/secrets`;
@@ -107,6 +124,13 @@ afterAll(async () => {
   await admin?.end();
 });
 
+// Every test starts from the project as beforeAll left it: no secret, and
+// the one server, web, whose env sets PORT.
+beforeEach(async () => {
+  await owner`DELETE FROM project_secrets WHERE project_id = ${PROJECT}`;
+  await owner`DELETE FROM project_servers WHERE project_id = ${PROJECT} AND name <> 'web'`;
+});
+
 describe("a project's secrets", () => {
   test("start empty", async () => {
     expect(await call(memberKey, "GET", secretsPath())).toEqual({ status: 200, json: { secrets: [] } });
@@ -122,56 +146,58 @@ describe("a project's secrets", () => {
     expect(listed.json.secrets).toEqual([added.json]);
 
     // Stored exactly as given.
-    const [row] = await owner`SELECT value FROM project_secrets WHERE name = 'SEED_LLM_KEY'`;
-    expect(row.value).toBe(VALUE);
+    expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
   });
 
   test("a PEM keeps its newlines, and its hint is its body's", async () => {
     const added = await call(adminKey, "POST", secretsPath(), { name: "SIGNING_KEY_PEM", value: PEM });
     expect(added.status).toBe(201);
     expect(added.json.hint).toBe("L3oM");
-    const [row] = await owner`SELECT value FROM project_secrets WHERE name = 'SIGNING_KEY_PEM'`;
-    expect(row.value).toBe(PEM);
+    expect(await storedValue("SIGNING_KEY_PEM")).toBe(PEM);
   });
 
   test("an editor replaces a value; the hint follows it", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     const replaced = await call(adminKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: REPLACED });
     expect(replaced.status).toBe(200);
     expect(replaced.json).toMatchObject({ name: "SEED_LLM_KEY", hint: "e2b8" });
-    const [row] = await owner`SELECT value FROM project_secrets WHERE name = 'SEED_LLM_KEY'`;
-    expect(row.value).toBe(REPLACED);
+    expect(await storedValue("SEED_LLM_KEY")).toBe(REPLACED);
   });
 
   test("a member may read but not add, replace or remove", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     for (const [method, path, body] of [
-      ["POST", secretsPath(), { name: "MEMBER_KEY", value: VALUE }],
-      ["PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: VALUE }],
+      ["POST", secretsPath(), { name: "MEMBER_KEY", value: REPLACED }],
+      ["PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: REPLACED }],
       ["DELETE", `${secretsPath()}/SEED_LLM_KEY`, undefined],
     ] as const) {
       expect((await call(memberKey, method, path, body)).status).toBe(403);
     }
     const listed = await call(memberKey, "GET", secretsPath());
     expect(listed.status).toBe(200);
-    expect(listed.json.secrets.map((s: { name: string }) => s.name)).toEqual(["SEED_LLM_KEY", "SIGNING_KEY_PEM"]);
-    const [row] = await owner`SELECT value FROM project_secrets WHERE name = 'SEED_LLM_KEY'`;
-    expect(row.value).toBe(REPLACED);
+    expect(listed.json.secrets.map((s: { name: string }) => s.name)).toEqual(["SEED_LLM_KEY"]);
+    expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
   });
 
   test("another organization's project is not found, whoever asks", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     expect((await call(otherKey, "GET", secretsPath())).status).toBe(404);
-    expect((await call(otherKey, "POST", secretsPath(), { name: "X", value: VALUE })).status).toBe(404);
-    expect((await call(otherKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: VALUE })).status).toBe(404);
+    expect((await call(otherKey, "POST", secretsPath(), { name: "X", value: REPLACED })).status).toBe(404);
+    expect((await call(otherKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: REPLACED })).status).toBe(404);
     expect((await call(otherKey, "DELETE", `${secretsPath()}/SEED_LLM_KEY`)).status).toBe(404);
     expect((await call(adminKey, "GET", secretsPath(OTHER_PROJECT))).status).toBe(404);
-    expect((await call(adminKey, "POST", secretsPath(OTHER_PROJECT), { name: "X", value: VALUE })).status).toBe(404);
-    const [row] = await owner`SELECT value FROM project_secrets WHERE name = 'SEED_LLM_KEY'`;
-    expect(row.value).toBe(REPLACED);
+    expect((await call(adminKey, "POST", secretsPath(OTHER_PROJECT), { name: "X", value: REPLACED })).status).toBe(404);
+    expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
+    const [{ n }] = await owner`SELECT count(*)::int AS n FROM project_secrets WHERE name = 'X'`;
+    expect(n).toBe(0);
   });
 
   test("a name the project has is a conflict; replacing or removing one it lacks is not found", async () => {
-    const dup = await call(adminKey, "POST", secretsPath(), { name: "SEED_LLM_KEY", value: VALUE });
+    await seed("SEED_LLM_KEY", VALUE);
+    const dup = await call(adminKey, "POST", secretsPath(), { name: "SEED_LLM_KEY", value: REPLACED });
     expect(dup.status).toBe(409);
     expect(dup.json.error.message).toBe("There is already a SEED_LLM_KEY. Replace its value instead.");
+    expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
     expect((await call(adminKey, "PUT", `${secretsPath()}/NOPE`, { value: VALUE })).status).toBe(404);
     expect((await call(adminKey, "DELETE", `${secretsPath()}/NOPE`)).status).toBe(404);
   });
@@ -180,9 +206,11 @@ describe("a project's secrets", () => {
     const res = await call(adminKey, "POST", secretsPath(), { name: "PORT", value: VALUE });
     expect(res.status).toBe(409);
     expect(res.json.error.message).toBe("Server web sets PORT in its own environment, which would override this. Rename one of them.");
+    expect(await storedValue("PORT")).toBeUndefined();
   });
 
   test("what cannot be a name or a value is refused", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     for (const body of [
       { name: "SEED-LLM-KEY", value: VALUE },
       { name: "LUX_TOKEN", value: VALUE },
@@ -199,10 +227,12 @@ describe("a project's secrets", () => {
     }
     expect((await call(adminKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: "" })).status).toBe(400);
     const names = (await call(memberKey, "GET", secretsPath())).json.secrets.map((s: { name: string }) => s.name);
-    expect(names).toEqual(["SEED_LLM_KEY", "SIGNING_KEY_PEM"]);
+    expect(names).toEqual(["SEED_LLM_KEY"]);
+    expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
   });
 
   test("a recipe whose env sets a secret's name is refused, naming the server and the variable", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     const api = { name: "api", port: 8080, command: "go run .", env: [{ name: "SEED_LLM_KEY", value: "x" }] };
     const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, api);
     expect(res.status).toBe(409);
@@ -214,44 +244,59 @@ describe("a project's secrets", () => {
   });
 
   test("an editor removes one", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
+    await seed("SIGNING_KEY_PEM", PEM);
     expect((await call(adminKey, "DELETE", `${secretsPath()}/SIGNING_KEY_PEM`)).status).toBe(204);
     expect((await call(memberKey, "GET", secretsPath())).json.secrets.map((s: { name: string }) => s.name)).toEqual(["SEED_LLM_KEY"]);
+    expect(await storedValue("SIGNING_KEY_PEM")).toBeUndefined();
   });
 
+  // One sequence, in order: an add, another, a replace and a remove, each
+  // audited as it happens.
   test("each change is audited by name and action alone", async () => {
+    const [{ since }] = await owner`SELECT COALESCE(max(cursor), 0) AS since FROM events`;
+    await seed("SEED_LLM_KEY", VALUE);
+    await seed("SIGNING_KEY_PEM", PEM);
+    expect((await call(adminKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: REPLACED })).status).toBe(200);
+    expect((await call(adminKey, "DELETE", `${secretsPath()}/SIGNING_KEY_PEM`)).status).toBe(204);
     const rows = await owner`SELECT payload FROM events WHERE project_id = ${PROJECT} AND event_type = 'settings.updated'
-                             AND payload->'changed' ? 'secrets' ORDER BY cursor`;
+                             AND payload->'changed' ? 'secrets' AND cursor > ${since} ORDER BY cursor`;
     expect(rows.map((r: { payload: Json }) => r.payload.changed)).toEqual([
       { secrets: { SEED_LLM_KEY: "added" } },
       { secrets: { SIGNING_KEY_PEM: "added" } },
       { secrets: { SEED_LLM_KEY: "replaced" } },
       { secrets: { SIGNING_KEY_PEM: "removed" } },
     ]);
-    const all = JSON.stringify(await owner`SELECT payload FROM events`);
+    const all = JSON.stringify(await owner`SELECT payload FROM events WHERE cursor > ${since}`);
     for (const v of [...VALUES, "LEAKCANARY", "3f9a", "e2b8", "L3oM"]) expect(all).not.toContain(v);
   });
 
   test("no answer of any route carried a value, or any part of one", async () => {
-    // The project's other reads too.
-    await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`);
-    await call(memberKey, "GET", `/v1/projects/${PROJECT}`);
-    await call(memberKey, "GET", `/v1/projects/${PROJECT}/settings`);
-    expect(answers.length).toBeGreaterThan(30);
-    for (const { what, text } of answers) {
-      for (const v of VALUES) expect(`${what}: ${text.includes(v)}`).toBe(`${what}: false`);
-      // Escaped as JSON, or in part.
-      expect(`${what}: ${text.includes("LEAKCANARY")}`).toBe(`${what}: false`);
+    // call checks each answer; here, the project's reads with secrets in it.
+    await seed("SEED_LLM_KEY", VALUE);
+    await seed("SIGNING_KEY_PEM", PEM);
+    for (const path of [secretsPath(), `/v1/projects/${PROJECT}/servers`, `/v1/projects/${PROJECT}`, `/v1/projects/${PROJECT}/settings`]) {
+      // Whatever it answers (the settings read asks the orchestrator, not
+      // running here), its body carries no value.
+      await call(memberKey, "GET", path);
     }
+    expect((await call(memberKey, "GET", secretsPath())).json.secrets.map((s: { name: string }) => s.name)).toEqual(["SEED_LLM_KEY", "SIGNING_KEY_PEM"]);
   });
 });
 
 describe("migration 081", () => {
   test("secrets are the organization's alone", async () => {
+    await seed("SEED_LLM_KEY", VALUE);
     const seen = await app.begin(async (tx) => {
       await tx`SELECT set_config('app.organization_id', ${OTHER}, true)`;
       return tx`SELECT name FROM project_secrets`;
     });
     expect(seen).toHaveLength(0);
+    const own = await app.begin(async (tx) => {
+      await tx`SELECT set_config('app.organization_id', ${ORG}, true)`;
+      return tx`SELECT name FROM project_secrets`;
+    });
+    expect(own.map((r: { name: string }) => r.name)).toEqual(["SEED_LLM_KEY"]);
   });
 
   test("the sweepers cannot read them", async () => {
