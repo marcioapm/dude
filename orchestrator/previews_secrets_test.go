@@ -270,6 +270,99 @@ func TestAWakeAfterASecretWasRemovedSubmitsANewRunNotCountedAsAFailure(t *testin
 	}
 }
 
+// A server a person added to a parked eager preview (not one of the
+// project's autostart servers), then a declared secret removed: the new
+// Run has that server too, and the start the person asked for is made on
+// it once it runs.
+func TestAReplacementForARemovedSecretKeepsAManuallyAddedServer(t *testing.T) {
+	w := newWorld(t)
+	w.previews.Minute = time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.secret("SEED_LLM_KEY", seedKey)
+	_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("web ready", func() bool {
+		return len(w.luxRuns()) == 1 && w.lux.ServerStates(w.luxRuns()[0].ID)["web"] == "ready"
+	})
+	mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+	w.previews.Minute = time.Millisecond
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	w.previews.Minute = time.Hour
+	w.removeSecret("SEED_LLM_KEY")
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{
+		"name": "probe", "port": 4100, "command": "npm run probe", "env": map[string]string{"PROBE_MODE": "deep"},
+	}); code != 201 {
+		t.Fatalf("add a server to the parked preview = %d %v", code, out)
+	}
+	w.until("the new Run running, the asked-for start made", func() bool {
+		return len(w.luxRuns()) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND pending_starts = '{}'`, runID) == 1
+	})
+	next := w.luxRuns()[1]
+	w.until("probe ready on the new Run", func() bool { return w.lux.ServerStates(next.ID)["probe"] == "ready" })
+	if env := w.lux.ServerEnv(next.ID, "probe"); env["PROBE_MODE"] != "deep" {
+		t.Errorf("probe's environment on the new Run = %v", env)
+	}
+	if w.lux.ServerStates(next.ID)["web"] == "" {
+		t.Errorf("the new Run's servers = %v", w.lux.ServerStates(next.ID))
+	}
+}
+
+// A server a person added to a running wakeable preview stays its own
+// across the replacements of its Run: one for a declared secret removed,
+// and one for a start that failed before it ran (startFailed's new Run).
+func TestAWakeableReplacementKeepsAManuallyAddedServer(t *testing.T) {
+	for _, why := range []string{"secret removed", "failed start"} {
+		t.Run(why, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.secret("SEED_LLM_KEY", seedKey)
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			w.open(web)
+			w.running(runID, "web")
+			old := w.luxRuns()[0]
+			if code, out := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{
+				"name": "probe", "port": 4100, "command": "npm run probe", "env": map[string]string{"PROBE_MODE": "deep"},
+			}); code != 201 {
+				t.Fatalf("add a server to the running preview = %d %v", code, out)
+			}
+			w.lux.Idle(web)
+			w.until("parked", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+			})
+			if why == "secret removed" {
+				w.removeSecret("SEED_LLM_KEY")
+			} else {
+				w.lux.FailStarts("dude.preview="+runID, 1)
+			}
+			w.lux.RequestServer(web, "/")
+			w.untilPreview(runID, "a new Run running", func() bool {
+				runs := w.luxRuns()
+				return len(runs) == 2 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_run_id = $2`,
+					runID, runs[1].ID) == 1
+			})
+			if !slices.Contains(w.lux.CallsOf(old.ID), "cancel") {
+				t.Errorf("old Run's calls %v; want it cancelled", w.lux.CallsOf(old.ID))
+			}
+			next := w.luxRuns()[1]
+			if _, ok := w.lux.ServerStates(next.ID)["probe"]; !ok {
+				t.Fatalf("the new Run's servers = %v; want probe kept", w.lux.ServerStates(next.ID))
+			}
+			if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/probe/start", nil); code >= 300 {
+				t.Fatalf("start probe = %d %v", code, out)
+			}
+			w.until("probe ready on the new Run", func() bool { return w.lux.ServerStates(next.ID)["probe"] == "ready" })
+			if env := w.lux.ServerEnv(next.ID, "probe"); env["PROBE_MODE"] != "deep" {
+				t.Errorf("probe's environment on the new Run = %v", env)
+			}
+		})
+	}
+}
+
 // lostSubmitAnswer passes a submit to lux, then, once, loses lux's answer
 // after running after: what changed before dude's retry.
 type lostSubmitAnswer struct {

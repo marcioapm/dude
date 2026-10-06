@@ -464,7 +464,9 @@ type Server struct {
 	Name string `json:"name"`
 	Port int    `json:"port"`
 	// nil for a server that is only a port someone else serves on.
-	Command []string `json:"command"`
+	Command []string          `json:"command"`
+	Workdir string            `json:"workdir"`
+	Env     map[string]string `json:"env"`
 	// Declared in the Run's spec: lux starts it on every start of the Run.
 	FromSpec bool `json:"fromSpec"`
 	// stopped, starting, ready, unreachable or exited.
