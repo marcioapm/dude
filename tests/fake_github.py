@@ -246,6 +246,14 @@ class FakeGitHub:
         )
         return result.stdout.split()
 
+    def file_at(self, branch: str, path: str) -> str | None:
+        """A file's contents on a branch; None when it is absent."""
+        result = subprocess.run(
+            ["git", "show", f"refs/heads/{branch}:{path}"],
+            cwd=self.bare, capture_output=True, text=True,
+        )
+        return result.stdout if result.returncode == 0 else None
+
     def branch_log(self, branch: str) -> list[str]:
         result = subprocess.run(
             ["git", "log", "--format=%s", f"refs/heads/{branch}"],

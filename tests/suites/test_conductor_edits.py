@@ -203,3 +203,4 @@ def test_a_conductor_stopped_mid_rebase_is_resumed_into_it_and_publishes_once_it
                message="the finished rebase was never published")
     assert fake_github.branch_sha(branch) not in (head, moved_on)
     assert "The conductor's FACTORY.md" in fake_github.branch_log(branch)
+    assert fake_github.file_at(branch, "FACTORY.md") == "both\n"
