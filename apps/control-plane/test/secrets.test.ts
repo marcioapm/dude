@@ -189,6 +189,7 @@ describe("a project's secrets", () => {
       { name: "lux_token", value: VALUE },
       { name: "GIT_TOKEN", value: VALUE },
       { name: "DUDE_TOOLS_AUTH", value: VALUE },
+      { name: "L".repeat(64), value: VALUE },
       { name: "EMPTY", value: "" },
       { name: "NUL", value: `a\0${VALUE}` },
       { name: "BIG", value: VALUE + "x".repeat(32 * 1024) },
@@ -261,7 +262,7 @@ describe("migration 081", () => {
   });
 
   test("the database refuses a name lux would, whoever writes it", async () => {
-    for (const name of ["LUX_X", "lux_x", "1X", "A-B"]) {
+    for (const name of ["LUX_X", "lux_x", "1X", "A-B", "A".repeat(64)]) {
       await expect((async () => owner`INSERT INTO project_secrets (project_id, organization_id, name, value, hint)
                          VALUES (${PROJECT}, ${ORG}, ${name}, 'v', 'v')`)()).rejects.toThrow();
     }

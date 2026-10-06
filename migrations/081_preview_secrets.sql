@@ -10,10 +10,11 @@
 CREATE TABLE project_secrets (
   project_id      text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  -- An environment variable's name, as lux takes one; never LUX_ (any
-  -- case). The API refuses dude's own names (GIT_TOKEN, DUDE_TOOLS_AUTH)
-  -- and names a recipe's env sets.
-  name            text NOT NULL CHECK (name ~ '^[A-Za-z_][A-Za-z0-9_]*$' AND name !~* '^lux_'),
+  -- An environment variable's name, as lux takes one (at most 63
+  -- characters); never LUX_ (any case). The API refuses dude's own names
+  -- (GIT_TOKEN, DUDE_TOOLS_AUTH, DUDE_REGISTRY_AUTH) and names a recipe's
+  -- env sets.
+  name            text NOT NULL CHECK (name ~ '^[A-Za-z_][A-Za-z0-9_]{0,62}$' AND name !~* '^lux_'),
   -- Exactly as given, newlines included. lux refuses an empty one, and a
   -- process's environment cannot hold a NUL (Postgres text cannot either).
   value           text NOT NULL CHECK (value <> '' AND octet_length(value) <= 32768),
