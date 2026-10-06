@@ -71,6 +71,10 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	var t stoppedTask
 	forUpdate := ""
 	if lock {
+		// The delivery's row before the task's (delivery.LockEscalationTx).
+		if _, err := delivery.LoadDelivery(ctx, tx, taskID); err != nil {
+			return t, err
+		}
 		forUpdate = "FOR UPDATE OF t"
 	}
 	var state []byte

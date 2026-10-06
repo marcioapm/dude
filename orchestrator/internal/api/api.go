@@ -583,16 +583,17 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 	var out map[string]any
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// A conductor's question may decide the task's escalation: its
-		// task's row is locked before the question, the order every
-		// escalation path takes (delivery.LockEscalationTx). A question's
-		// task and Run never change, so reading them unlocked is safe.
+		// delivery and task are locked before the question, in
+		// delivery.LockEscalationTx's order, and the owner is read after.
+		// A question's task and Run never change, so reading them unlocked
+		// is safe.
 		var taskID, role string
 		if err := tx.QueryRow(r.Context(), `SELECT q.task_id, COALESCE(r.role::text, '') FROM questions q
 			JOIN runs r ON r.id = q.run_id WHERE q.id = $1`, questionID).Scan(&taskID, &role); err != nil && !db.IsNotFound(err) {
 			return err
 		}
 		if role == delivery.RoleConductor {
-			if err := delivery.LockTaskTx(r.Context(), tx, taskID, nil); err != nil {
+			if _, _, err := delivery.LockEscalationTx(r.Context(), tx, taskID); err != nil {
 				return escalationFailure(err)
 			}
 		}
@@ -853,6 +854,11 @@ func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org str
 func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) error {
 	id := r.PathValue("id")
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		// The delivery's row before the task's (delivery.LockEscalationTx):
+		// marking it done locks the delivery again (SetTaskStatusTx).
+		if _, err := delivery.LoadDelivery(r.Context(), tx, id); err != nil {
+			return err
+		}
 		var projectID, status string
 		var open bool
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,

@@ -1,8 +1,8 @@
 package orchestrator_test
 
 // Every way an escalation is decided, racing another: each takes the task's
-// row first and reads the delivery after it, so exactly one decision lands,
-// and none deadlocks. Each race is driven deterministically: one side holds
+// delivery, then its row (delivery.LockEscalationTx), so exactly one decision
+// lands, and none deadlocks. Each race is driven deterministically: one side holds
 // its locks, the other is started and seen waiting on a lock, then the first
 // is released.
 

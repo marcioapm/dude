@@ -79,14 +79,14 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 			}
 			return err
 		}
-		// The message may answer the conductor's question about the
-		// escalation: the task's row before the delivery and the question,
-		// as every escalation path takes them (delivery.LockEscalationTx).
-		if err := delivery.LockTaskTx(r.Context(), tx, taskID, nil); err != nil {
-			return err
-		}
 		decider, err := s.decideFor(r.Context(), tx, org, taskID, writer, talk)
 		if err != nil {
+			return err
+		}
+		// The message may answer the conductor's question about the
+		// escalation: the task's row after the delivery decideFor locked,
+		// before the question (delivery.LockEscalationTx's order).
+		if err := delivery.LockTaskTx(r.Context(), tx, taskID, nil); err != nil {
 			return err
 		}
 		var runID string
