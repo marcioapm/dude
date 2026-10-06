@@ -56,10 +56,15 @@ describe("SecretField", () => {
   test("starts masked, and the eye shows and hides it, saying which", async () => {
     const { area, eye } = await render(PEM);
     expect(area.getAttribute("data-masked")).toBe("true");
+    // One row of dots, one per character, hidden from assistive technology (the field itself is read).
+    const dots = host!.querySelector('[data-testid="secret-dots"]')!;
+    expect(dots.textContent).toBe("•".repeat(PEM.length));
+    expect(dots.getAttribute("aria-hidden")).toBe("true");
     expect(eye.getAttribute("aria-label")).toBe("Show value");
     expect(eye.getAttribute("aria-pressed")).toBe("false");
     await act(async () => eye.click());
     expect(area.getAttribute("data-masked")).toBeNull();
+    expect(host!.querySelector('[data-testid="secret-dots"]')).toBeNull();
     expect(eye.getAttribute("aria-label")).toBe("Hide value");
     expect(eye.getAttribute("aria-pressed")).toBe("true");
     await act(async () => eye.click());

@@ -30,9 +30,10 @@ export function secretLength(value: string): string {
 /**
  * A value to be written once and not read back: an API key, a PEM block.
  * Multi-line and kept exactly as typed, masked until the eye shows it.
- * Masked, it is one row (its line breaks are drawn as dots too, so its
- * shape says nothing), and the length line beside the hint says how much
- * is there, so a pasted key can be trusted whole. Password managers and
+ * Masked, it is one row of dots, one per character (its line breaks too,
+ * so its shape says nothing), drawn over the textarea's transparent text;
+ * the length line beside the hint says how much is there, so a pasted key
+ * can be trusted whole. Password managers and
  * spellcheck are told to leave it alone.
  */
 export const SecretField = forwardRef<HTMLTextAreaElement, SecretFieldProps>(function SecretField(
@@ -91,6 +92,11 @@ export const SecretField = forwardRef<HTMLTextAreaElement, SecretFieldProps>(fun
           aria-describedby={message || length ? hintId : undefined}
           {...rest}
         />
+        {!revealed && value ? (
+          <span className={cx(inputStyles["mono"], styles["dots"])} aria-hidden="true" data-testid="secret-dots">
+            {"•".repeat(Math.min(Array.from(value).length, 400))}
+          </span>
+        ) : null}
         <span className={styles["trail"]}>
           <IconButton
             icon="eye"
