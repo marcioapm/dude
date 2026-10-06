@@ -736,7 +736,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 			return err
 		}
 		_ = json.Unmarshal(raw, &criteria)
-		rows, err := tx.Query(ctx, `SELECT category, severity::text, status::text, title FROM review_findings
+		rows, err := tx.Query(ctx, `SELECT category || COALESCE(' · ' || topic, ''), severity::text, status::text, title FROM review_findings
 			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, taskID, st.Attempt)
 		if err != nil {
 			return err

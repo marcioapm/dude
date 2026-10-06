@@ -150,9 +150,12 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   decides): the same `delivery.Steer` a person's steer goes through, marked
   the conductor's (`directives.conductor_run_id`, `run.steered` by its Run);
   its read or failure wakes it (`steer_read`, `steer_failed`).
-- A clean re-review resolves open findings **of its own category that a fixer
-  has already attempted** (`phases.RecordFindings`). That rule is what lets
-  the loop converge.
+- A re-review judges every open finding **a fixer has already attempted**:
+  each goes to the reviewer of its category (the flavour of the review Run
+  that reported it; the reviewer's own word is its `topic`), or, when this
+  round has none, to the policy's required reviewer the round has, else its
+  first. Those it judges fixed are resolved (`phases.RecordFindings`). That
+  rule is what lets the loop converge.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
