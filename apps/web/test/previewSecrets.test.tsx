@@ -3,13 +3,15 @@
  * so when there are none, and is read-only for someone who cannot edit; the
  * Add and Replace dialogs refuse what the API would, in the mockup's words,
  * and every change says so in a toast naming the secret. Mounted in
- * happy-dom against the fixture client, which keeps no value.
+ * happy-dom against the fixture client, which keeps no value; controls are
+ * found by role and label, as assistive technology finds them.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { PreviewSecret, RecipeEnvNames } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
+import { allByRole, byLabel, byRole } from "../../../packages/design-system/test/queries.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PreviewSecretsRow, SECRETS_HELP, SECRETS_NOTE } from "../src/screens/PreviewSecrets.tsx";
 
@@ -25,6 +27,7 @@ const SECRETS: PreviewSecret[] = [
   { name: "STRIPE_TEST_KEY", hint: "x7Qb", updatedAt: new Date(Date.now() - 3 * 864e5).toISOString(), updatedBy: { id: "u_r", name: "Rui" } },
 ];
 const RECIPES: RecipeEnvNames[] = [{ name: "web", env: [{ name: "PORT" }, { name: "NODE_ENV" }] }];
+const PEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nk3Lq9bF0rT2yVf8mWJxQ1s0ZpN4cD6eH5aR7uGvKtYwE9iL3oM\n-----END PRIVATE KEY-----";
 
 /** Records what the row asked of the API, and answers as the API would. */
 class Recording extends FixtureClient {
@@ -60,8 +63,11 @@ async function render({ secrets = SECRETS, canEdit = true }: { secrets?: Preview
 
 const press = (el: Element) =>
   act(async () => void el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
-const dialog = () => until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+const dialog = () => until(() => allByRole(document.body, "dialog")[0], "the dialog");
 const toasts = () => [...document.querySelectorAll("[data-toast]")].map((t) => t.textContent ?? "");
+/** The row's table as names and shown values. */
+const tableRows = (scope: HTMLElement) =>
+  allByRole(byRole(scope, "table", "Secrets"), "row").slice(1).map((r) => allByRole(r, "cell").slice(0, 2).map((c) => c.textContent));
 
 async function typeInto(el: HTMLInputElement | HTMLTextAreaElement, text: string) {
   await act(async () => {
@@ -70,66 +76,72 @@ async function typeInto(el: HTMLInputElement | HTMLTextAreaElement, text: string
   });
 }
 
+/** A paste of text into the masked value, as the browser sends one: every line of it. */
+async function pasteInto(el: HTMLElement, text: string) {
+  await act(async () => {
+    const e = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+    e.clipboardData = { getData: (type: string) => (type === "text/plain" ? text : "") };
+    el.dispatchEvent(e);
+  });
+}
+
 async function menuItem(container: HTMLElement, secret: string, label: string) {
-  await press(container.querySelector(`[aria-label="Actions for ${secret}"]`)!);
-  const item = await until(() => [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((i) => i.textContent?.includes(label)), label);
-  await click(item);
+  await press(byRole(container, "button", `Actions for ${secret}`));
+  await click(await until(() => allByRole(document.body, "menuitem", label)[0], label));
 }
 
 describe("the Secrets row", () => {
   test("lists each secret by name and hint, with the help and the note", async () => {
     const { container } = await render();
-    const row = container.querySelector("[data-testid=preview-secrets]")!;
-    expect(row.textContent).toContain("Secrets");
-    expect(row.textContent).toContain(SECRETS_HELP);
-    const rows = [...row.querySelectorAll("tr[data-secret]")].map((r) => [...r.querySelectorAll("td")].slice(0, 2).map((c) => c.textContent));
-    expect(rows).toEqual([["SEED_LLM_KEY", "…3f9a"], ["STRIPE_TEST_KEY", "…x7Qb"]]);
-    expect(row.textContent).toContain(SECRETS_NOTE);
+    expect(container.textContent).toContain("Secrets");
+    expect(container.textContent).toContain(SECRETS_HELP);
+    expect(tableRows(container)).toEqual([["SEED_LLM_KEY", "…3f9a"], ["STRIPE_TEST_KEY", "…x7Qb"]]);
+    expect(container.textContent).toContain(SECRETS_NOTE);
     expect(SECRETS_NOTE).toBe("A new value reaches running previews when they next wake. A secret added or removed reaches previews started after the change; restart a preview to give it the change now.");
-    expect(row.querySelector("[data-testid=add-secret]")?.textContent).toBe("Add secret");
+    byRole(container, "button", "Add secret");
     // Who changed it is the row's tooltip, not a column.
-    expect(row.querySelector("thead")?.textContent).toBe("NameValueActions");
+    expect(allByRole(byRole(container, "table", "Secrets"), "columnheader").map((h) => h.textContent)).toEqual(["Name", "Value", "Actions"]);
   });
 
   test("a row's tooltip says who changed it and when", async () => {
     const { container } = await render();
-    const row = container.querySelector<HTMLElement>("tr[data-secret=SEED_LLM_KEY]")!;
+    const row = allByRole(byRole(container, "table", "Secrets"), "row").find((r) => r.textContent?.includes("SEED_LLM_KEY"))!;
     await act(async () => void row.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })));
-    const tip = await until(() => document.querySelector("[role=tooltip]")?.textContent, "the tooltip");
+    const tip = await until(() => allByRole(document.body, "tooltip")[0]?.textContent, "the tooltip");
     expect(tip).toMatch(/^Changed by Márcio · /);
   });
 
   test("says when there are none, with Add secret", async () => {
     const { container } = await render({ secrets: [] });
-    const empty = container.querySelector("[data-testid=secrets-empty]")!;
-    expect(empty.textContent).toContain("No secrets");
-    expect(empty.textContent).toContain("Add a value a preview needs but shouldn’t be in the repository: a seed script’s API key, a test payment key.");
-    expect(empty.querySelector("[data-testid=add-secret]")).not.toBeNull();
-    expect(container.querySelector("table")).toBeNull();
+    expect(container.textContent).toContain("No secrets");
+    expect(container.textContent).toContain("Add a value a preview needs but shouldn’t be in the repository: a seed script’s API key, a test payment key.");
+    byRole(container, "button", "Add secret");
+    expect(allByRole(container, "table")).toHaveLength(0);
   });
 
   test("is read-only for someone who cannot edit: no menus, no Add", async () => {
     const { container } = await render({ canEdit: false });
-    expect(container.querySelectorAll("tr[data-secret]")).toHaveLength(2);
-    expect(container.querySelector("[aria-label^='Actions for']")).toBeNull();
-    expect(container.querySelector("[data-testid=add-secret]")).toBeNull();
+    expect(tableRows(container)).toHaveLength(2);
+    expect(allByRole(container, "button").filter((b) => b.getAttribute("aria-label")?.startsWith("Actions for"))).toHaveLength(0);
+    expect(allByRole(container, "button", "Add secret")).toHaveLength(0);
     const empty = await render({ secrets: [], canEdit: false });
     expect(empty.container.textContent).toContain("No secrets");
-    expect(empty.container.querySelector("[data-testid=add-secret]")).toBeNull();
+    expect(allByRole(empty.container, "button", "Add secret")).toHaveLength(0);
   });
 });
 
 describe("Add a secret", () => {
   async function open() {
     const r = await render();
-    await click(r.container.querySelector("[data-testid=add-secret]")!);
+    await click(byRole(r.container, "button", "Add secret"));
     const d = await dialog();
     return {
       ...r,
       d,
-      name: d.querySelector<HTMLInputElement>("[data-testid=secret-name]")!,
-      value: d.querySelector<HTMLTextAreaElement>("textarea")!,
-      submit: d.ownerDocument.querySelector<HTMLButtonElement>("[data-testid=secret-save]")!,
+      name: byLabel<HTMLInputElement>(d, "Name"),
+      value: () => byLabel<HTMLInputElement | HTMLTextAreaElement>(d, "Value"),
+      submit: byRole<HTMLButtonElement>(d, "button", "Add secret"),
+      cancel: byRole<HTMLButtonElement>(d, "button", "Cancel"),
     };
   }
 
@@ -142,15 +154,16 @@ describe("Add a secret", () => {
     expect(submit.disabled).toBe(true);
     await typeInto(name, "SIGNING_KEY_PEM");
     expect(submit.disabled).toBe(true);
-    const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nk3Lq9bF0rT2yVf8mWJxQ1s0ZpN4cD6eH5aR7uGvKtYwE9iL3oM\n-----END PRIVATE KEY-----";
-    await typeInto(value, pem);
-    expect(d.querySelector("[data-testid=secret-length]")?.textContent).toBe("4 lines · 157 characters");
+    // Masked, a paste brings every line.
+    expect(value().getAttribute("type")).toBe("password");
+    await pasteInto(value(), PEM);
+    expect(d.textContent).toContain("4 lines · 157 characters");
     expect(submit.disabled).toBe(false);
   });
 
   test("each name the API refuses is refused here, in the mockup's words", async () => {
     const { d, name, value, submit } = await open();
-    await typeInto(value, "sk-test-4b1d");
+    await typeInto(value(), "sk-test-4b1d");
     for (const [typed, said] of [
       ["SEED-LLM-KEY", "Use letters, digits and _ only, starting with a letter or _."],
       ["LUX_TOKEN", "Names starting with LUX_ are lux’s own."],
@@ -169,22 +182,56 @@ describe("Add a secret", () => {
   test("a value with a NUL is refused; one made of spaces is a value", async () => {
     const { d, name, value, submit } = await open();
     await typeInto(name, "OK_NAME");
-    await typeInto(value, "a\0b");
+    await typeInto(value(), "a\0b");
     expect(d.textContent).toContain("A value cannot contain a NUL character.");
     expect(submit.disabled).toBe(true);
-    await typeInto(value, "  ");
+    await typeInto(value(), "  ");
     expect(submit.disabled).toBe(false);
   });
 
   test("adds it as typed, and the toast names it", async () => {
-    const { client, name, value, submit, changed } = await open();
+    const { client, d, name, value, submit, changed } = await open();
     await typeInto(name, "NEW_KEY");
-    await typeInto(value, "line 1\nline 2\n");
+    // Shown, a line break is typed.
+    await click(byRole(d, "button", "Show value"));
+    expect(value().tagName).toBe("TEXTAREA");
+    await typeInto(value(), "line 1\nline 2\n");
     await click(submit);
     await until(() => toasts().some((t) => t.includes("NEW_KEY added")), "the toast");
     expect(client.asked).toEqual([`add NEW_KEY ${JSON.stringify("line 1\nline 2\n")}`]);
     expect(changed()).toBe(1);
-    expect(document.querySelector("[role=dialog]")).toBeNull();
+    expect(allByRole(document.body, "dialog")).toHaveLength(0);
+  });
+
+  test("Cancel clears the value before Add is opened again", async () => {
+    const { container, name, value, cancel, client } = await open();
+    await typeInto(name, "CANCEL_KEY");
+    await typeInto(value(), "cancel-secret-canary");
+    await click(cancel);
+    expect(allByRole(document.body, "dialog")).toHaveLength(0);
+    expect(document.body.innerHTML).not.toContain("cancel-secret-canary");
+    await click(byRole(container, "button", "Add secret"));
+    const reopened = await dialog();
+    expect(byLabel<HTMLInputElement>(reopened, "Value").value).toBe("");
+    expect(client.asked).toEqual([]);
+  });
+
+  test("a rejected save stays open, says why, and can be retried", async () => {
+    const { client, d, name, value, submit, changed } = await open();
+    await typeInto(name, "RETRY_KEY");
+    await typeInto(value(), "retry-secret-canary");
+    const add = client.addProjectSecret.bind(client);
+    client.addProjectSecret = async () => { throw new Error("The server is unavailable."); };
+    await click(submit);
+    await until(() => d.textContent?.includes("The server is unavailable."), "the save's error");
+    expect(changed()).toBe(0);
+    expect(value().value).toBe("retry-secret-canary");
+    expect(submit.disabled).toBe(false);
+    expect(toasts().some((t) => t.includes("RETRY_KEY added"))).toBe(false);
+    client.addProjectSecret = add;
+    await click(submit);
+    await until(() => allByRole(document.body, "dialog").length === 0, "closed after the retry");
+    expect(changed()).toBe(1);
   });
 });
 
@@ -196,9 +243,9 @@ describe("Replace and Remove", () => {
     expect(d.textContent).toContain("Replace SEED_LLM_KEY");
     expect(d.textContent).toContain("Now ends in 3f9a.");
     expect(d.textContent).toContain("Running previews get the new value when they next wake.");
-    const submit = document.querySelector<HTMLButtonElement>("[data-testid=secret-replace]")!;
+    const submit = byRole<HTMLButtonElement>(d, "button", "Replace");
     expect(submit.disabled).toBe(true);
-    await typeInto(d.querySelector("textarea")!, "sk-live-e2b8");
+    await typeInto(byLabel(d, "New value"), "sk-live-e2b8");
     expect(submit.disabled).toBe(false);
     await click(submit);
     await until(() => toasts().some((t) => t.includes("SEED_LLM_KEY value replaced")), "the toast");
@@ -207,8 +254,8 @@ describe("Replace and Remove", () => {
 
   test("the row menu is Replace value, a separator, then Remove in danger", async () => {
     const { container } = await render();
-    await press(container.querySelector(`[aria-label="Actions for STRIPE_TEST_KEY"]`)!);
-    const menu = await until(() => document.querySelector("[role=menu]"), "the menu");
+    await press(byRole(container, "button", "Actions for STRIPE_TEST_KEY"));
+    const menu = await until(() => allByRole(document.body, "menu")[0], "the menu");
     const items = [...menu.querySelectorAll("[role=menuitem], [role=separator]")].map((el) => el.getAttribute("role") === "separator" ? "—" : el.textContent);
     expect(items).toEqual(["Replace value", "—", "Remove"]);
   });
@@ -218,7 +265,7 @@ describe("Replace and Remove", () => {
     await menuItem(container, "STRIPE_TEST_KEY", "Remove");
     const d = await dialog();
     expect(d.textContent).toContain("Remove STRIPE_TEST_KEY?");
-    await click(document.querySelector("[data-testid=secret-remove]")!);
+    await click(byRole(d, "button", "Remove"));
     await until(() => toasts().some((t) => t.includes("STRIPE_TEST_KEY removed")), "the toast");
     expect(client.asked).toEqual(["remove STRIPE_TEST_KEY"]);
     await settle();
