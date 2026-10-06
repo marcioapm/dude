@@ -765,16 +765,24 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	}
 	spec.Secrets = append(spec.Secrets, projectSecrets...)
 	login.Apply(&spec)
-	// lux answers a Run already resuming as it did the first time; a
-	// refusal (cancelled or finished meanwhile) is for good.
-	lr, err = p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
-	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		return p.fail(ctx, r, "lux refused to resume the preview: "+le.Message)
-	}
-	if err != nil {
-		return err
-	}
-	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	// Resumed only while the preview is parked on this lux Run, with the
+	// row held until the resume is recorded: a replacement (replaceParked)
+	// holds it too, so neither acts on a Run the other has moved on.
+	var refused *lux.Error
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if parked, err := parkedOn(ctx, tx, r); err != nil || !parked {
+			return err
+		}
+		// lux answers a Run already resuming as it did the first time; a
+		// refusal (cancelled or finished meanwhile) is for good.
+		lr, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
+		if le, ok := lux.AsError(err); ok && !le.Retryable() {
+			refused = le
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL, dude_pause = NULL,
 			active_since = now() WHERE id = $1 AND status = 'paused'`, r.ID, lr.State)
 		if err != nil || tag.RowsAffected() == 0 {
@@ -786,7 +794,22 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 			return err
 		}
 		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "resumed"})
-	})
+	}); err != nil {
+		return err
+	}
+	if refused != nil {
+		return p.fail(ctx, r, "lux refused to resume the preview: "+refused.Message)
+	}
+	return nil
+}
+
+// parkedOn holds a parked eager preview's row, and says whether it is still
+// parked on the lux Run and generation the sweep read.
+func parkedOn(ctx context.Context, tx pgx.Tx, r previewRun) (bool, error) {
+	var parked bool
+	err := tx.QueryRow(ctx, `SELECT status = 'paused' AND lux_run_id IS NOT DISTINCT FROM $2 AND lux_generation = $3
+		FROM runs WHERE id = $1 FOR UPDATE`, r.ID, r.LuxRunID, r.Generation).Scan(&parked)
+	return parked, err
 }
 
 // startPending starts the servers a person asked for while the preview
