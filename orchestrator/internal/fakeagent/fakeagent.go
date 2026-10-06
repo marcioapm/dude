@@ -74,6 +74,13 @@ var LiveEdits = map[string]string{
 	"README.md": "# target\n\nChanged while the agent works.\n",
 }
 
+// StuckModel's reviewer raises its finding as the scripted one does, and
+// judges every fix of it "still": a review loop that gets stuck.
+const StuckModel = "fake/stuck"
+
+// StillVerdict is StuckModel's reviewer's judgement of its earlier finding.
+const StillVerdict = "```yaml\nverdicts:\n  F1: still\n```\n"
+
 // AskModel's implementer asks a person first, with dude's ask_person tool,
 // and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
@@ -296,6 +303,9 @@ func For(phase, model, runID string, fixed bool) Step {
 		return Step{Commit: map[string]string{"SIMPLE.md": "simplified by " + runID},
 			Message: "Simplify " + runID, Reply: "Simplified."}
 	case "review":
+		if fixed && model == StuckModel {
+			return Step{Reply: "The finding is still there.\n\n" + StillVerdict}
+		}
 		if fixed {
 			// Shown the finding it raised, it judges the fix.
 			return Step{Reply: "Reviewed the fix; no further problems.\n\n" + Verdict}
@@ -339,7 +349,11 @@ func Script(phase, model, runID string) string {
 			b.WriteString("append /tmp/review.yaml " + line + "\n")
 		}
 		b.WriteString("unless-exists " + FixedFile + " read /tmp/review.yaml\n")
-		for _, line := range strings.Split(strings.TrimSuffix(Verdict, "\n"), "\n") {
+		verdict := Verdict
+		if model == StuckModel {
+			verdict = StillVerdict
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(verdict, "\n"), "\n") {
 			b.WriteString("append /tmp/verdict.yaml " + line + "\n")
 		}
 		b.WriteString("if-exists " + FixedFile + " read /tmp/verdict.yaml\n")
