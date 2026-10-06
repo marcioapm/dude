@@ -38,15 +38,36 @@ func (w *world) waiters(n int) {
 	w.t.Fatalf("timed out waiting for %d lock waiters", n)
 }
 
-// second is another owner-role connection to the world's database.
-func (w *world) second() *pgx.Conn {
+// begin opens a transaction on another owner-role connection to the world's
+// database, rolled back at the test's end unless committed first.
+func (w *world) begin() pgx.Tx {
 	w.t.Helper()
-	c, err := pgx.Connect(context.Background(), w.owner.Config().ConnString())
+	ctx := context.Background()
+	c, err := pgx.Connect(ctx, w.owner.Config().ConnString())
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	w.t.Cleanup(func() { c.Close(context.Background()) })
-	return c
+	w.t.Cleanup(func() { c.Close(ctx) })
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	return tx
+}
+
+// passTo makes person the task's only one, in tx, as the control plane
+// changes a task's people.
+func (w *world) passTo(tx pgx.Tx, task, person string) {
+	w.t.Helper()
+	ctx := context.Background()
+	if _, err := tx.Exec(ctx, `DELETE FROM task_people WHERE task_id = $1`, task); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		SELECT $1, person_id, organization_id, 0 FROM api_keys WHERE id = $2`, task, person); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 // handedOver is a stuck delivery whose conductor asked about the escalation
@@ -134,11 +155,7 @@ func TestAnAnswerAndTheBannerAtOnceDecideOnce(t *testing.T) {
 	w.must(task, "ask_person", escalationQuestion)
 	q := w.conductorQuestion(task)
 	ctx := context.Background()
-	holder := w.second()
-	tx, err := holder.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tx := w.begin()
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM workflow_runs WHERE task_id = $1 FOR UPDATE`, task); err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +199,7 @@ func TestTheOwnerChangingDuringTheConductorsDecisionRefusesIt(t *testing.T) {
 	bo := w.person("Bo")
 	ctx := context.Background()
 	// As the control plane changes a task's people: its row locked first.
-	holder := w.second()
-	tx, err := holder.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tx := w.begin()
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, task); err != nil {
 		t.Fatal(err)
 	}
@@ -198,21 +211,11 @@ func TestTheOwnerChangingDuringTheConductorsDecisionRefusesIt(t *testing.T) {
 		})
 	}()
 	w.waiters(1)
-	for _, sql := range []string{`DELETE FROM task_people WHERE task_id = $1`,
-		`INSERT INTO task_people (task_id, person_id, organization_id, position)
-			SELECT $1, person_id, organization_id, 0 FROM api_keys WHERE id = $2`} {
-		args := []any{task}
-		if strings.Contains(sql, "$2") {
-			args = append(args, bo)
-		}
-		if _, err := tx.Exec(ctx, sql, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	w.passTo(tx, task, bo)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	err = <-decided
+	err := <-decided
 	if err == nil || !strings.Contains(err.Error(), "not the task's owner") {
 		t.Errorf("the conductor's decision after the owner changed: %v, want refused as not the owner's answer", err)
 	}
@@ -268,11 +271,7 @@ func deadlocked(err error) bool {
 func TestChatWhileTheTaskEndsWaitsForIt(t *testing.T) {
 	w, task := stuck(t)
 	ctx := context.Background()
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	if _, err := delivery.LoadDelivery(ctx, tx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -306,11 +305,7 @@ func TestTheBannerWhileTheConductorAsksWaitsForIt(t *testing.T) {
 	run, _, _ := w.conductor(task)
 	ref := delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: run}
 	ctx := context.Background()
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	// ConductDecide's prelude (parked): the Chat lock, then the delivery.
 	if err := delivery.LockChat(ctx, tx, task); err != nil {
 		t.Fatal(err)
@@ -349,11 +344,7 @@ func TestTheOwnerChangingDuringAnAnswerRefusesIt(t *testing.T) {
 	q := w.conductorQuestion(task)
 	ctx := context.Background()
 	// As the control plane changes a task's people: its row locked first.
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, task); err != nil {
 		t.Fatal(err)
 	}
@@ -363,13 +354,7 @@ func TestTheOwnerChangingDuringAnAnswerRefusesIt(t *testing.T) {
 		answered <- status
 	}()
 	w.waiters(1)
-	if _, err := tx.Exec(ctx, `DELETE FROM task_people WHERE task_id = $1`, task); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
-		SELECT $1, person_id, organization_id, 0 FROM api_keys WHERE id = $2`, task, bo); err != nil {
-		t.Fatal(err)
-	}
+	w.passTo(tx, task, bo)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -461,11 +446,7 @@ func TestRemovingTheOwnerDuringTheConductorsDecisionWaitsForIt(t *testing.T) {
 		return err
 	})
 	ctx := context.Background()
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	removed := make(chan error, 1)
 	go func() { removed <- w.removal(tx, ana) }()
 	w.waiters(1)
@@ -492,11 +473,7 @@ func TestRemovingTheOwnerDuringTheConductorsDecisionWaitsForIt(t *testing.T) {
 func TestTheConductorsDecisionAfterTheOwnersRemovalIsRefused(t *testing.T) {
 	w, task, ana, ref := handedOverWithBo(t)
 	ctx := context.Background()
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	if err := w.removal(tx, ana); err != nil {
 		t.Fatalf("the removal: %v", err)
 	}
@@ -531,11 +508,7 @@ func TestAnAnswerWhileTheConductorsPublishRechecksWaitsForIt(t *testing.T) {
 	q := w.conductorQuestion(task)
 	run, _, _ := w.conductor(task)
 	ctx := context.Background()
-	tx, err := w.second().Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin()
 	// publishEligibleTx's first locks: the Chat lock, then the Run.
 	if err := delivery.LockChat(ctx, tx, task); err != nil {
 		t.Fatal(err)
@@ -579,11 +552,7 @@ func TestDoneAndRecoveryLockTheDeliveryBeforeTheTask(t *testing.T) {
 				mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{stopped}', state->'escalation') WHERE task_id = $1`, task)
 			}
 			ctx := context.Background()
-			tx, err := w.second().Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback(ctx)
+			tx := w.begin()
 			if _, err := delivery.LoadDelivery(ctx, tx, task); err != nil {
 				t.Fatal(err)
 			}
