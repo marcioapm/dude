@@ -518,3 +518,44 @@ func TestTheConductorsDecisionAfterTheOwnersRemovalIsRefused(t *testing.T) {
 		t.Errorf("decided on a removed owner's answer: %v", d)
 	}
 }
+
+// The conductor's publish rechecks itself (Chat lock, the conductor's Run,
+// then the delivery) while the owner answers the conductor's question:
+// the answer waits on the Chat lock holding nothing, and goes on once the
+// publish's transaction ends. Neither is a deadlock victim.
+func TestAnAnswerWhileTheConductorsPublishRechecksWaitsForIt(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	run, _, _ := w.conductor(task)
+	ctx := context.Background()
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	// publishEligibleTx's first locks: the Chat lock, then the Run.
+	if err := delivery.LockChat(ctx, tx, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, run); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan int, 1)
+	go func() {
+		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Your call."})
+		answered <- status
+	}()
+	w.waiters(1)
+	if _, err := delivery.RecheckMovingTx(ctx, tx, delivery.PublishOf{TaskID: task, RunID: run}); err != nil {
+		t.Fatalf("the publish's recheck: %v (deadlock: %v)", err, deadlocked(err))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-answered; status != 200 {
+		t.Errorf("the owner's answer while the publish rechecked: %d, want 200", status)
+	}
+}
