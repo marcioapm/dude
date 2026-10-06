@@ -54,6 +54,17 @@ async function typeInto(el: HTMLInputElement | HTMLTextAreaElement, text: string
   });
 }
 
+/** An edit as the browser makes one: the selection, beforeinput naming it, then the field's new value. */
+async function edit(el: HTMLInputElement, inputType: string, [start, end]: [number, number], after: string) {
+  await act(async () => {
+    el.focus();
+    el.setSelectionRange(start, end);
+    el.dispatchEvent(new InputEvent("beforeinput", { inputType, bubbles: true, cancelable: true }));
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, after);
+    el.dispatchEvent(new InputEvent("input", { inputType, bubbles: true }));
+  });
+}
+
 /** A paste of text, as the browser sends one (the field's value is the handler's to change). */
 async function paste(el: HTMLElement, text: string) {
   await act(async () => {
@@ -126,15 +137,31 @@ describe("SecretField", () => {
     expect(seen.at(-1)).toBe("a\nX\nYb");
   });
 
-  test("typing while masked edits the whole value, its line breaks kept", async () => {
+  test("typing while masked edits the whole value where it was made, its line breaks kept", async () => {
     const { field } = await render("one\ntwo");
-    await typeInto(field(), "onetwo!");
+    const masked = field() as HTMLInputElement;
+    await edit(masked, "insertText", [6, 6], "onetwo!");
     expect(seen.at(-1)).toBe("one\ntwo!");
-    await typeInto(field(), "onEtwo!");
+    await edit(masked, "insertReplacementText", [2, 3], "onEtwo!");
     expect(seen.at(-1)).toBe("onE\ntwo!");
     // A deletion across a line break takes the break with it.
-    await typeInto(field(), "owo!");
+    await edit(masked, "deleteContentBackward", [1, 4], "owo!");
     expect(seen.at(-1)).toBe("owo!");
+  });
+
+  test("among repeated characters, the edit lands at the caret it was made at", async () => {
+    const { field } = await render("a\na");
+    const masked = field() as HTMLInputElement;
+    await edit(masked, "insertText", [0, 0], "aaa");
+    expect(seen.at(-1)).toBe("aa\na");
+  });
+
+  test("a change the browser announced nothing for, with no known caret, shows the value rather than guess", async () => {
+    const { field } = await render("a\na");
+    await typeInto(field(), "aaa");
+    expect(seen).toEqual([]);
+    expect(field().tagName).toBe("TEXTAREA");
+    expect(field().value).toBe("a\na");
   });
 
   // Shown, where a line break is typed.
