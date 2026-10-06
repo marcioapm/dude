@@ -3,8 +3,12 @@ package fakelux
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"os"
+	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,7 +48,10 @@ type server struct {
 	Epoch        int
 	// When a preview request last reached it (Request).
 	LastRequestAt *time.Time
-	log           []logLine
+	// The environment its process last started with, beyond the fake's own
+	// (processEnv).
+	StartEnv map[string]string
+	log      []logLine
 	// Bumped on every start or stop, so a pending "ready" of an earlier
 	// start does nothing.
 	gen int
@@ -187,6 +194,12 @@ func (s *Server) startServer(run *Run, sv *server) {
 		return // someone else serves the port: ready when it opens
 	}
 	sv.logf("stdout", "$ %s", strings.Join(sv.Command, " "))
+	// The environment its process gets, as lux's shim builds it: the Run's
+	// (its spec's env and env secrets), then the server's own over it.
+	sv.StartEnv = s.processEnv(run, sv)
+	if strings.Contains(strings.Join(sv.Command, " "), runMarker) {
+		s.runCommand(run, sv)
+	}
 	after := s.ServerReadyAfter
 	if after == 0 {
 		after = 30 * time.Millisecond
@@ -311,6 +324,95 @@ func (s *Server) ServerStates(id string) map[string]string {
 	if run := s.runs[id]; run != nil {
 		for _, sv := range run.servers {
 			out[sv.Name] = sv.State
+		}
+	}
+	return out
+}
+
+// ServerEnv is the environment a Run's server's process last started with,
+// beyond the fake's own: nil if it never started.
+func (s *Server) ServerEnv(id, name string) map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		if sv := run.server(name); sv != nil {
+			return maps.Clone(sv.StartEnv)
+		}
+	}
+	return nil
+}
+
+// runMarker in a server's command makes the fake run it, through sh, as
+// lux would (a server command is otherwise only played): a test's server
+// can write what it sees where the test reads it.
+const runMarker = "fakelux-run"
+
+// processEnv is what lux's shim gives a server's process: the spec's env,
+// each env secret's value lux holds for the placement (a credential or a
+// registry login is the runner's alone), then the server's own env.
+// Callers hold s.mu.
+func (s *Server) processEnv(run *Run, sv *server) map[string]string {
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	env := maps.Clone(spec.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	runnerOnly := map[string]bool{}
+	if spec.Git != nil {
+		for _, r := range spec.Git.Repositories {
+			runnerOnly[r.Credential] = true
+		}
+	}
+	for _, a := range spec.Image.RegistryAuth {
+		runnerOnly[a.Secret] = true
+	}
+	for _, sec := range spec.Secrets {
+		if (sec.As == "env" || sec.As == "" && !runnerOnly[sec.Name]) && !strings.HasPrefix(sec.Name, "LUX_") {
+			env[sec.Name] = run.secretValues[sec.Name]
+		}
+	}
+	maps.Copy(env, sv.Env)
+	return env
+}
+
+// runCommand runs a server's command through sh -c, once, in the Run's
+// checkout when it has one, with the environment processEnv gave it.
+// Callers hold s.mu.
+func (s *Server) runCommand(run *Run, sv *server) {
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	if _, err := s.checkout(run, spec); err != nil {
+		sv.logf("stderr", "could not check out: %v", err)
+	}
+	cmd := exec.Command(sv.Command[0], s.inWorkspace(run, sv.Command[1:])...)
+	cmd.Dir = run.workspace
+	cmd.Env = os.Environ()
+	for k, v := range sv.StartEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	go func() {
+		if out, err := cmd.CombinedOutput(); err != nil {
+			s.mu.Lock()
+			sv.logf("stderr", "%s: %v", out, err)
+			s.mu.Unlock()
+		}
+	}()
+}
+
+// secretValues are the values lux holds for a Run's next placement: each
+// secret its spec declares, from given when given has it, else from the
+// spec as submitted. lux keeps no value past a placement, so a resume
+// brings them again; a name the Run did not declare is ignored, as lux
+// v0.1.11 does.
+func secretValues(rawSpec json.RawMessage, given []lux.Secret) map[string]string {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	out := map[string]string{}
+	for _, sec := range spec.Secrets {
+		out[sec.Name] = sec.Value
+		if i := slices.IndexFunc(given, func(g lux.Secret) bool { return g.Name == sec.Name }); i >= 0 {
+			out[sec.Name] = given[i].Value
 		}
 	}
 	return out
