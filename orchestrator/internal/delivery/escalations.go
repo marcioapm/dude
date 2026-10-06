@@ -340,16 +340,22 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			"with a free answer; %s", banner)
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
-	var qID, prompt, answer, by string
-	err = tx.QueryRow(ctx, `SELECT q.id, q.prompt, COALESCE(q.answer, ''), COALESCE(q.answered_by_person, '') FROM questions q
-		WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered' ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`,
-		ref.TaskID, key).Scan(&qID, &prompt, &answer, &by)
+	var qID, prompt, answer, by, asker string
+	err = tx.QueryRow(ctx, `SELECT q.id, q.prompt, COALESCE(q.answer, ''), COALESCE(q.answered_by_person, ''), q.run_id
+		FROM questions q WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered'
+		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker)
 	if db.IsNotFound(err) {
 		return nil, refusef("the owner has not answered your question about this escalation: only a person decides it. "+
 			"Ask them, or end your turn; %s", banner)
 	}
 	if err != nil {
 		return nil, err
+	}
+	// The answer handed the escalation to the conductor that asked: one
+	// that took over since has not been heard by the owner.
+	if asker != ref.RunID {
+		return nil, refusef("the owner's answer (question %s) was to an earlier conductor's question, not yours: ask them "+
+			"again yourself (ask_person, the escalation's actions as choices); %s", qID, banner)
 	}
 	owner, err := TaskOwner(ctx, tx, ref.TaskID)
 	if err != nil {
