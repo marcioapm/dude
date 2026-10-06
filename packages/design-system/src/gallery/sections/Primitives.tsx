@@ -673,7 +673,7 @@ function SortableTableDemo() {
 
 const GALLERY_PEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nk3Lq9bF0rT2yVf8mWJxQ1s0ZpN4cD6eH5aR7uGvKtYwE9iL3oM\n-----END PRIVATE KEY-----";
 
-function SecretFieldDemo({ label, initial, revealed, error }: { readonly label: string; readonly initial: string; readonly revealed?: boolean; readonly error?: string }) {
+function SecretFieldDemo({ label, initial, revealed, error }: { readonly label: string; readonly initial: string; readonly revealed?: boolean | undefined; readonly error?: string | undefined }) {
   const [v, setV] = useState(initial);
   return <SecretField label={label} value={v} onChange={setV} defaultRevealed={revealed} error={error} hint="Saved once. dude shows only the last 4 characters after this." placeholder="Paste the value" />;
 }
