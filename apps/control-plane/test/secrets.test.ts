@@ -267,4 +267,24 @@ describe("migration 081", () => {
                          VALUES (${PROJECT}, ${ORG}, ${name}, 'v', 'v')`)()).rejects.toThrow();
     }
   });
+
+  test("a secret belongs to its project's organization: another's cannot attach one to it", async () => {
+    // As the other organization, under its own policy: its organization id,
+    // this organization's project.
+    const poisoned = app.begin(async (tx) => {
+      await tx`SELECT set_config('app.organization_id', ${OTHER}, true)`;
+      await tx`INSERT INTO project_secrets (project_id, organization_id, name, value, hint)
+               VALUES (${PROJECT}, ${OTHER}, 'TENANT_POISON', 'poison-value', 'alue')`;
+    });
+    await expect(poisoned).rejects.toMatchObject({ errno: "23503" });
+    const [{ n }] = await owner`SELECT count(*)::int AS n FROM project_secrets WHERE name = 'TENANT_POISON'`;
+    expect(n).toBe(0);
+    // The project's own organization can still add that name.
+    await app.begin(async (tx) => {
+      await tx`SELECT set_config('app.organization_id', ${ORG}, true)`;
+      await tx`INSERT INTO project_secrets (project_id, organization_id, name, value, hint)
+               VALUES (${PROJECT}, ${ORG}, 'TENANT_POISON', 'rightful-value', 'alue')`;
+      await tx`DELETE FROM project_secrets WHERE project_id = ${PROJECT} AND name = 'TENANT_POISON'`;
+    });
+  });
 });
