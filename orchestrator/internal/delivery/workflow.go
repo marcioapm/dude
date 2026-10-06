@@ -419,12 +419,14 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if d != nil && len(d.Categories) > 0 {
 		categories = d.Categories
 	}
-	// A re-review judges what the fixer was sent: the open findings of its
-	// category that a fix has attempted.
-	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
+	// A re-review judges what the fixer was sent: every open finding a fix
+	// has attempted, by the reviewer of its category, or by one of this
+	// round's when it has none (judgedBy).
+	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	toJudge := judgedBy(st.Policy, categories, attempted)
 	var runIDs []string
 	for _, c := range categories {
 		k := key(sc, st, ":review:", st.Iteration, ":", c)
@@ -446,6 +448,32 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	return park("awaitReview", st, runIDs), nil
+}
+
+// judgedBy assigns each category's attempted findings to a reviewer of the
+// round: its own, else the policy's first required reviewer the round has,
+// else the round's first. A finding no reviewer is shown can never be
+// resolved, and would count toward stuck for nothing.
+func judgedBy(p Policy, round []string, attempted map[string][]string) map[string][]string {
+	if len(round) == 0 {
+		return attempted
+	}
+	fallback := round[0]
+	for _, r := range p.RequiredReviewers {
+		if slices.Contains(round, r) {
+			fallback = r
+			break
+		}
+	}
+	out := map[string][]string{}
+	for _, c := range slices.Sorted(maps.Keys(attempted)) {
+		to := c
+		if !slices.Contains(round, c) {
+			to = fallback
+		}
+		out[to] = append(out[to], attempted[c]...)
+	}
+	return out
 }
 
 func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {

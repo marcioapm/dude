@@ -196,7 +196,8 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 func earlierFindings(findings []Finding) string {
 	var b strings.Builder
 	b.WriteString("## Findings from the last review\n\nA fix has been made since. For each finding below, " +
-		"check the code as it is now and say whether it is fixed. Report a problem that is still there " +
+		"check the code as it is now and say whether it is fixed — every one, whatever its category or the " +
+		"reviewer that raised it: you are the one judging it this round. Report a problem that is still there " +
 		"in your verdicts, not as a new finding; report anything new as a finding as usual.")
 	for i, f := range findings {
 		b.WriteString(fmt.Sprintf("\n\n**F%d** [%s] %s", i+1, f.Severity, f.Title))

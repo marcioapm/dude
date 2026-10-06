@@ -74,7 +74,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	full := len(ids) > 0
 	// The text only when asked for by id: a list of up to findingsMax reads
 	// none of it.
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, category || COALESCE(' · ' || topic, ''), COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
 			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
 			CASE WHEN $2 THEN suggested_fix ELSE '' END

@@ -644,7 +644,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <FindingGroup data-testid="findings" findings={mine.findings}
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
-                  category={f.category} title={f.title} file={f.file} line={f.line} description={f.description}
+                  category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}
                   suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} fixAttempts={f.fixAttempts}
                   fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />
               )} />

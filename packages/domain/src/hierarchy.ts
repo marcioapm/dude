@@ -649,6 +649,8 @@ export const findingSchema = z.object({
   taskId: z.string(),
   runId: z.string().nullable(),
   category: z.string(),
+  /** The reviewer's own word for it, when it differs from its flavour (category). */
+  topic: z.string().nullish(),
   severity: findingSeveritySchema,
   status: findingStatusSchema,
   file: z.string().nullable(),
