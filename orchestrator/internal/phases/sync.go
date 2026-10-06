@@ -2265,11 +2265,8 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 			// groups by; a word of the reviewer's own is its topic. A test
 			// Run has no flavour: its word is the category.
 			cat, topic := f.Category, ""
-			if category != "" {
-				cat = category
-				if f.Category != category {
-					topic = f.Category
-				}
+			if category != "" && f.Category != category {
+				cat, topic = category, f.Category
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix)
