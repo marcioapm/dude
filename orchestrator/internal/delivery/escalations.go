@@ -68,7 +68,7 @@ type EscalationDecision struct {
 // matter: a publish (Chat → conductor Run → delivery) is serialized with
 // answer and Chat by the Chat lock; it is not with the banner releasing a
 // failed, kept conductor, and a Run-ending trigger (Run → questions)
-// opposes answer's question → Run. Both pre-existing: dude issue #TBD.
+// opposes answer's question → Run. Both pre-existing: dude issue #65.
 //
 // The delivery's FOR UPDATE, granted after a wait, returns the row's newest
 // version, so a decision committed meanwhile is seen. The task's row is

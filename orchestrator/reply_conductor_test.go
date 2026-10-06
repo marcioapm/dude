@@ -237,8 +237,10 @@ func TestASupersededConductorRepliesNowhere(t *testing.T) {
 
 // The owner answers the conductor's question while the conductor's reply
 // waits on GitHub: the answer holds no lock the post does, so it is
-// answered at once (200, within 500 ms), and the reply, once GitHub
-// answers, is posted and recorded in Chat.
+// answered and committed while GitHub is still holding the post, and the
+// reply, once GitHub answers, is posted and recorded in Chat. The held post
+// is the ordering; the 5 s bound only ends the test, well inside GitHub's
+// 15 s client timeout, so a reply timing out cannot pass for the answer.
 func TestAnAnswerWhileTheConductorsReplyPostsDoesNotWaitForGitHub(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
@@ -268,17 +270,24 @@ func TestAnAnswerWhileTheConductorsReplyPostsDoesNotWaitForGitHub(t *testing.T) 
 		t.Fatal("the reply was never posted")
 	}
 	answered := make(chan int, 1)
-	start := time.Now()
 	go func() {
 		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Yes, say so."})
 		answered <- status
 	}()
 	select {
 	case status := <-answered:
-		if elapsed := time.Since(start); status != 200 || elapsed > 500*time.Millisecond {
-			t.Errorf("the owner's answer during the post: %d after %v, want 200 within 500ms", status, elapsed)
+		if status != 200 {
+			t.Errorf("the owner's answer during the post: %d, want 200", status)
 		}
-	case <-time.After(500 * time.Millisecond):
+		if n := w.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered' AND answer = 'Yes, say so.'`, q); n != 1 {
+			t.Errorf("%d committed answers while GitHub holds the post, want 1", n)
+		}
+		select {
+		case r := <-replied:
+			t.Fatalf("the reply finished while GitHub held the post: %d %s", r.status, r.body)
+		default:
+		}
+	case <-time.After(5 * time.Second):
 		t.Error("the owner's answer waited on the conductor's GitHub post")
 		release()
 		if status := <-answered; status != 200 {
