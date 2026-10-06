@@ -32,6 +32,8 @@ export { ScrollArea } from "./ScrollArea.tsx";
 export type { ScrollAreaProps } from "./ScrollArea.tsx";
 export { Textarea, textareaHeight, TEXTAREA_LINE_PX, TEXTAREA_PADDING_PX } from "./Textarea.tsx";
 export type { TextareaProps } from "./Textarea.tsx";
+export { SecretField, secretLength } from "./SecretField.tsx";
+export type { SecretFieldProps } from "./SecretField.tsx";
 export { RowMenu, RowMenuTrigger, rowMenuOpeners, isContextMenuKey, focusIsFree } from "./RowMenu.tsx";
 export type { RowMenuProps, RowMenuTriggerProps, RowMenuItem, RowMenuAction, RowMenuSeparator, RowMenuSubmenu, RowMenuOpeners } from "./RowMenu.tsx";
 export { Page, PageHeader, Section, Callout, KeyValueList, FormStack, FormRow, FormActions, Fieldset } from "./Layout.tsx";
