@@ -18,7 +18,7 @@ const DudeMention = "dude"
 const ReplyMarker = "<!-- dude:conductor -->"
 
 // Own says the feedback is a comment the conductor posted: its last
-// non-blank line is the marker itself, as ConductReply writes it, outside
+// non-blank line is the marker itself, as delivery.CheckReplyTx writes it, outside
 // any code fence and blockquote. A person quoting a reply carries the
 // marker inside a blockquote or a code fence, or above their own words,
 // and stays theirs.

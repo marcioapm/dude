@@ -354,15 +354,37 @@ func forgeFor(ctx context.Context, c Caller, _ json.RawMessage) any {
 	return gh
 }
 
-func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (delivery.Replied, error) {
-	var gh *forge.GitHub
+// githubOf is the client forgeFor resolved.
+func githubOf(c Caller) (*forge.GitHub, error) {
 	switch p := c.env.prepared.(type) {
 	case error:
-		return delivery.Replied{}, p
+		return nil, p
 	case *forge.GitHub:
-		gh = p
+		return p, nil
 	}
-	return conducted(delivery.ConductReply(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
+	return nil, nil
+}
+
+// reply_on_pull_request is checked under the task's Chat lock, posted with
+// no transaction open, then recorded (delivery.ReplyPost).
+func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (delivery.ReplyPost, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return delivery.ReplyPost{}, err
+	}
+	return conducted(delivery.CheckReplyTx(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
+}
+
+func postReply(ctx context.Context, c Caller, p delivery.ReplyPost) (forge.Posted, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return forge.Posted{}, err
+	}
+	return conducted(delivery.PostReply(ctx, gh, p))
+}
+
+func recordReply(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.ReplyPost, posted forge.Posted) (delivery.Replied, error) {
+	return delivery.RecordReplyTx(ctx, tx, p, posted)
 }
 
 type publishIn struct {
