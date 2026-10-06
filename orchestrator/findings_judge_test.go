@@ -154,3 +154,55 @@ func TestAScopedRoundJudgesEveryAttemptedFinding(t *testing.T) {
 		t.Errorf("the security reviewer was shown %v, want %s and fnd_fe_%s", shown, a, task)
 	}
 }
+
+// A finding of a reviewer the round lacks goes to the policy's required
+// reviewer the round has, not to the round's first: frontend's, in a round
+// of security then correctness (correctness required), is correctness's,
+// and its reviewer judges it.
+func TestARoundsRequiredReviewerJudgesAFindingWithoutItsOwn(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	// Re-reviews judge every finding they are shown fixed (the scripted
+	// reviewer names only F1).
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "review" && fmt.Sprint(labels["dude.run"]) != w.firstReview() {
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n  F2: fixed\n```\n"}
+		}
+		return scripted(spec)
+	}
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	var a string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1`, task).Scan(&a)
+	fe := "fnd_fe_" + task
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
+		SELECT $1, organization_id, task_id, run_id, 'frontend', 'high', 'Frontend one' FROM review_findings WHERE id = $2`, fe, a)
+	w.must(task, "start_phase", `{"phase":"fix"}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE id = $1 AND fix_attempts > 0`, fe); n != 1 {
+		t.Fatalf("the fix did not attempt the frontend finding:\n%s", w.describeFindings(task))
+	}
+	w.must(task, "start_phase", `{"phase":"review","categories":["security","correctness"]}`)
+	w.until("the round's reviews", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	shownTo := func(category string) []string {
+		var shown []string
+		_ = w.owner.QueryRow(context.Background(), `SELECT finding_ids FROM runs WHERE task_id = $1 AND phase = 'review'
+			AND category = $2 ORDER BY created_at DESC LIMIT 1`, task, category).Scan(&shown)
+		return shown
+	}
+	if got := shownTo("correctness"); !slices.Contains(got, fe) {
+		t.Errorf("the correctness reviewer was shown %v, want %s\n%s", got, fe, w.describeFindings(task))
+	}
+	if got := shownTo("security"); slices.Contains(got, fe) {
+		t.Errorf("the round's first reviewer, security, was shown %s", fe)
+	}
+	// Judged by correctness's Run: its verdict resolved the finding.
+	if n := w.count(`SELECT count(*) FROM review_findings f WHERE f.id = $1 AND f.status = 'resolved'`, fe); n != 1 {
+		t.Errorf("the frontend finding was not judged resolved:\n%s", w.describeFindings(task))
+	}
+}

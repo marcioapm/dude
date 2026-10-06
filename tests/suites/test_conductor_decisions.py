@@ -218,5 +218,8 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"]
     assert len(decided) == 1 and decided[0]["payload"]["by"] == "conductor", decided
     assert decided[0]["payload"]["questionId"] == question["id"] and decided[0]["actor"]["id"] == conductor, decided
+    # On the answer of the person who wrote "Your call": the client's own.
+    me = client.get("/v1/me").json()["person"]["id"]
+    assert me and decided[0]["payload"]["answeredBy"] == me, (me, decided)
     # The retry's fix goes back to the conductor, at its next decision.
     _waiting_on(client, task["id"], "after_fix", "the retry's fix never came back to the conductor")

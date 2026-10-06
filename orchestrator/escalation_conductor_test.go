@@ -182,18 +182,25 @@ func TestAYourCallAnswerHandsTheConductorTheDecision(t *testing.T) {
 func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 	t.Run("an earlier escalation's answer", func(t *testing.T) {
 		w, task := stuck(t)
+		ana := w.person("Ana")
+		w.assignOwner(task, ana)
 		w.must(task, "ask_person", escalationQuestion)
-		if status, out := w.chat(task, "Your call."); status != 200 {
+		if status, out := w.answerAs(ana, task, "Your call."); status != 200 {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
-		// The banner decides this one; the retry gets stuck again.
-		if status, out := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		// The owner decides this one on the banner; the retry gets stuck again.
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry"}); status != 200 {
 			t.Fatalf("the banner: %d %v", status, out)
 		}
 		w.until("after the retry's fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 		w.must(task, "decide", `{"action":"next"}`)
-		w.until("stuck again", func() bool { return w.escalationReason(task) == "stuck" && w.decided(task) == nil })
-		w.refused(task, "decide_escalation", `{"action":"retry"}`, "banner")
+		w.until("the second escalation waiting at decide", func() bool {
+			return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'decide'
+				AND (state->>'escalations')::int = 2 AND state->'escalation' IS NOT NULL
+				AND NOT state->'escalation' ? 'decided'`, task) == 1
+		})
+		// Ana's answer to the first escalation's question is no answer to this one.
+		w.refused(task, "decide_escalation", `{"action":"retry"}`, "the owner has not answered your question about this escalation")
 	})
 	t.Run("an answer by someone no longer the owner", func(t *testing.T) {
 		w, task := stuck(t)
@@ -207,10 +214,16 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 		w.refused(task, "decide_escalation", `{"action":"retry"}`, "banner")
 	})
 	t.Run("not at decide", func(t *testing.T) {
-		w := conducting(t)
-		task := w.task()
-		w.talk(task)
-		w.refused(task, "decide_escalation", `{"action":"retry"}`, "no escalation")
+		// Everything else holds: an undecided escalation, and the current
+		// owner's answer to this conductor's question about it.
+		w, task, _, _ := handedOver(t)
+		w.conductorSpecOf(task)
+		// Waiting, as at decide, but at another step; nothing signals it.
+		mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'review' WHERE task_id = $1`, task)
+		w.refused(task, "decide_escalation", `{"action":"retry"}`, "no escalation waits on a decision now")
+		if d := w.decided(task); d != nil {
+			t.Errorf("decided away from decide: %v", d)
+		}
 	})
 }
 
