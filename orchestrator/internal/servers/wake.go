@@ -62,7 +62,6 @@ const (
 type wakeRun struct {
 	previewRun
 	WakeWanted, SyncWanted *time.Time
-	Generation             int
 	Repos                  []string
 	// Servers lux has for it, not deleted; and how many have an unanswered
 	// idle.
@@ -543,8 +542,30 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 	return p.submitWoken(ctx, r)
 }
 
-// resumeWoken resumes a stopped preview Run, syncing its checkouts.
+// resumeWoken resumes a stopped preview Run, syncing its checkouts, with
+// the current value of each project secret it was submitted with. One the
+// project has removed since cannot be sent (lux requires every declared
+// secret): the Run is cancelled and a new one submitted, which is no failed
+// start.
 func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error {
+	projectSecrets, gone, err := p.resumeSecrets(ctx, r.previewRun)
+	if err != nil {
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
+	}
+	if len(gone) > 0 {
+		p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
+		if err := p.cancelForReplacement(ctx, r.previewRun); err != nil {
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+			return err
+		}
+		if err := p.retireRun(ctx, r); err != nil {
+			return err
+		}
+		r.LuxRunID, r.LuxState = "", ""
+		r.Generation++
+		return p.submitWoken(ctx, r)
+	}
 	phases.RecordMemoryLimit(ctx, p.DB, p.Log, r.Org, r.ID, lr)
 	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
 	if phases.IsLoginUnavailable(err) {
@@ -564,6 +585,7 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	if token != "" {
 		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
+	spec.Secrets = append(spec.Secrets, projectSecrets...)
 	login.Apply(&spec)
 	sync, err := p.syncRefs(ctx, r)
 	if err != nil {
@@ -747,7 +769,7 @@ func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 	p.unfollow(r.ID)
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = NULL, lux_state = NULL, lux_after_event = 0, lux_start_event = 0, lux_ran_event = 0, lux_stop_reason = NULL,
-			lux_generation = lux_generation + 1 WHERE id = $1 AND lux_run_id = $2`, r.ID, r.LuxRunID)
+			preview_secrets = '{}', lux_generation = lux_generation + 1 WHERE id = $1 AND lux_run_id = $2`, r.ID, r.LuxRunID)
 		return err
 	})
 }
@@ -804,8 +826,10 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		// is a failed start; StartBefore 0 makes every event of it newer
 		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got)
+			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1,
+			preview_secrets = $9
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got,
+			declaredSecrets(spec))
 		return err
 	}); err != nil {
 		return err

@@ -138,6 +138,10 @@ type Run struct {
 
 	// Its servers (servers.go).
 	servers []*server
+	// The values of its secrets lux holds for its next placement: the
+	// submit's, then each resume's for the names the Run declared, as lux
+	// keeps them in memory (secretValues).
+	secretValues map[string]string
 	// What GET /cost answers; nil is lux's answer before any plugin priced
 	// anything: pending, no amounts.
 	cost *lux.RunCost
@@ -996,7 +1000,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.next++
-	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1}
+	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1,
+		secretValues: secretValues(raw, nil)}
 	if len(promptImages) > 0 {
 		run.attachments = map[string][]attachmentMeta{"prompt": promptImages}
 	}
@@ -1974,6 +1979,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		run.Spec, _ = json.Marshal(spec)
 	}
 	run.Resumed++
+	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
 	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)
 	run.ResumeSyncs = append(run.ResumeSyncs, in.Sync)

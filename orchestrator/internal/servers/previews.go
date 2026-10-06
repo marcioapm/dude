@@ -78,6 +78,8 @@ type previewRun struct {
 	IdleMinutes float64
 	// The image job a pending preview waits on, "" for none.
 	ImageBuildID string
+	// Which of the preview's lux Runs is current: the submit's key past the first.
+	Generation int
 }
 
 // Sweep takes one pass over every preview with something to do.
@@ -88,7 +90,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''),
 				r.pending_starts, r.active_since,
 				(preview_settings(pr)->>'idleTimeoutMinutes')::float8,
-				t.status IN ('done', 'failed', 'aborted'), COALESCE(r.image_build_id, '')
+				t.status IN ('done', 'failed', 'aborted'), COALESCE(r.image_build_id, ''), r.lux_generation
 			FROM runs r JOIN projects pr ON pr.id = r.project_id JOIN tasks t ON t.id = r.task_id
 			WHERE r.kind = 'preview' AND NOT r.wakeable
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -110,7 +112,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (previewRun, error) {
 			var r previewRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState,
-				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded, &r.ImageBuildID)
+				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded, &r.ImageBuildID, &r.Generation)
 		})
 		return err
 	}); err != nil {
@@ -193,7 +195,7 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	// The dude Run id is the idempotency key: a retried submit gets the lux
 	// Run the first one made.
 	phases.NamePool(ctx, p.Lux, machine)
-	lr, err := p.Lux.Submit(ctx, spec, r.ID)
+	lr, err := p.Lux.Submit(ctx, spec, submitKey(r.ID, r.Generation))
 	if reason := phases.PoolGone(err, machine); reason != "" {
 		return p.fail(ctx, r, reason)
 	}
@@ -215,8 +217,9 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 		// machine is what it runs on, recorded once, with the lux Run.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb, image_waiting_since = NULL,
+			preview_secrets = $8,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got)
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got, declaredSecrets(spec))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -305,6 +308,7 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, *images.RunImage, error) {
 	var repos []previewRef
 	var recipes []Recipe
+	var secrets []lux.Secret
 	var settings PreviewSettings
 	var machine *delivery.Machine
 	var image string
@@ -348,7 +352,10 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		if repos, err = taskRefs(ctx, tx, r); err != nil {
 			return err
 		}
-		recipes, err = LoadRecipes(ctx, tx, r.ProjectID)
+		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
+			return err
+		}
+		secrets, err = loadSecrets(ctx, tx, r.ProjectID)
 		return err
 	}); err != nil {
 		return lux.Spec{}, "", nil, nil, err
@@ -394,6 +401,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 			spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 		}
 	}
+	spec.Secrets = append(spec.Secrets, secrets...)
 	for _, rc := range recipes {
 		if !rc.Autostart {
 			continue
@@ -720,8 +728,17 @@ func (p *Previews) minute() time.Duration {
 // resume takes a parked preview up again because a person started one of
 // its servers: its checkout is as it was; lux starts its spec's servers,
 // and the ones people asked for are started once it runs. lux keeps no
-// secret, so every one comes again, the registry login freshly minted.
+// secret, so every one comes again, the registry login freshly minted, and
+// each project secret the Run was submitted with at its current value. One
+// removed since cannot be sent: a new Run is submitted instead.
 func (p *Previews) resume(ctx context.Context, r previewRun) error {
+	projectSecrets, gone, err := p.resumeSecrets(ctx, r)
+	if err != nil {
+		return err
+	}
+	if len(gone) > 0 {
+		return p.replaceParked(ctx, r, gone)
+	}
 	// lux's stored spec says whether the submit logged in, and to where.
 	lr, err := p.Lux.Get(ctx, r.LuxRunID)
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
@@ -746,6 +763,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	if token != "" {
 		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
+	spec.Secrets = append(spec.Secrets, projectSecrets...)
 	login.Apply(&spec)
 	// lux answers a Run already resuming as it did the first time; a
 	// refusal (cancelled or finished meanwhile) is for good.
