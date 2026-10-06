@@ -360,7 +360,7 @@ func (s *Server) processEnv(run *Run, sv *server) map[string]string {
 	}
 	runnerOnly := runnerOnlySecrets(run.Spec)
 	for _, sec := range spec.Secrets {
-		if (sec.As == "env" || sec.As == "" && !runnerOnly[sec.Name]) && !strings.HasPrefix(sec.Name, "LUX_") {
+		if (sec.As == "env" || sec.As == "") && !runnerOnly[sec.Name] && !strings.HasPrefix(sec.Name, "LUX_") {
 			env[sec.Name] = run.secretValues[sec.Name]
 		}
 	}
@@ -388,8 +388,10 @@ func runnerOnlySecrets(rawSpec json.RawMessage) map[string]bool {
 }
 
 // runCommand runs a server's command through sh -c, once, in the Run's
-// checkout when it has one, with the environment processEnv gave it.
-// Callers hold s.mu.
+// checkout when it has one, with the environment processEnv gave it. What
+// it writes reaches the server's log on its own stream, and its exit's
+// error on stderr, each redacted against the placement's secret values,
+// as lux's shim writes them. Callers hold s.mu.
 func (s *Server) runCommand(run *Run, sv *server) {
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -402,11 +404,20 @@ func (s *Server) runCommand(run *Run, sv *server) {
 	for k, v := range sv.StartEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	values := maps.Clone(run.secretValues)
 	go func() {
-		if out, err := cmd.CombinedOutput(); err != nil {
-			s.mu.Lock()
-			sv.logf("stderr", "%s: %v", out, err)
-			s.mu.Unlock()
+		err := cmd.Run()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, out := range []struct{ stream, text string }{{"stdout", stdout.String()}, {"stderr", stderr.String()}} {
+			if out.text != "" {
+				sv.logf(out.stream, "%s", redact(values, out.text))
+			}
+		}
+		if err != nil {
+			sv.logf("stderr", "%s", redact(values, err.Error()))
 		}
 	}()
 }
