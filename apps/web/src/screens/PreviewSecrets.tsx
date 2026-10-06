@@ -117,8 +117,6 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
           <div className="previewSecretsNote" data-testid="secrets-note"><SettingsNote icon="info">{SECRETS_NOTE}</SettingsNote></div>
         </>
       )}
-      {problem && editing?.kind === "remove" ? <Callout tone="danger">{problem}</Callout> : null}
-
       {editing?.kind === "add" ? (
         <AddSecretDialog projectName={projectName} secrets={secrets} recipes={recipes} busy={busy} problem={problem} onClose={close}
           onSubmit={(name, value) => void save(() => client.addProjectSecret(projectId, name, value), `${name} added`)} />
@@ -146,7 +144,10 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
             </Button>
           </>
         }
-      />
+      >
+        {/* In the dialog, where the person who asked is looking: the row behind it is covered. */}
+        {problem && editing?.kind === "remove" ? <Callout tone="danger">{problem}</Callout> : null}
+      </Dialog>
     </SettingRow>
   );
 }

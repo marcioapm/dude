@@ -169,6 +169,9 @@ describe("Add a secret", () => {
       ["LUX_TOKEN", "Names starting with LUX_ are lux’s own."],
       ["lux_token", "Names starting with LUX_ are lux’s own."],
       ["GIT_TOKEN", "dude sets GIT_TOKEN itself, from the GitHub connection."],
+      ["DUDE_TOOLS_AUTH", "dude sets DUDE_TOOLS_AUTH itself."],
+      ["DUDE_REGISTRY_AUTH", "dude sets DUDE_REGISTRY_AUTH itself."],
+      ["A".repeat(64), "At most 63 characters."],
       ["SEED_LLM_KEY", "There is already a SEED_LLM_KEY. Replace its value instead."],
       ["PORT", "Server web sets PORT in its own environment, which would override this. Rename one of them."],
     ]) {
@@ -177,6 +180,24 @@ describe("Add a secret", () => {
       expect(name.getAttribute("aria-invalid")).toBe("true");
       expect(submit.disabled).toBe(true);
     }
+    // 63 is a name.
+    await typeInto(name, "A".repeat(63));
+    expect(name.getAttribute("aria-invalid")).toBeNull();
+    expect(submit.disabled).toBe(false);
+  });
+
+  test("a value is at most 32 KiB in UTF-8 bytes, not characters", async () => {
+    const { d, name, value, submit } = await open();
+    await typeInto(name, "BIG_KEY");
+    // 32 766 ASCII bytes and one 2-byte character: 32 768 bytes, the most.
+    await typeInto(value(), "x".repeat(32 * 1024 - 2) + "é");
+    expect(d.textContent).not.toContain("At most 32 KiB.");
+    expect(submit.disabled).toBe(false);
+    // One more ASCII character: 32 769 bytes, though only 32 768 characters.
+    await typeInto(value(), "x".repeat(32 * 1024 - 1) + "é");
+    expect(d.textContent).toContain("At most 32 KiB.");
+    expect(byLabel(d, "Value").getAttribute("aria-invalid")).toBe("true");
+    expect(submit.disabled).toBe(true);
   });
 
   test("a value with a NUL is refused; one made of spaces is a value", async () => {
@@ -379,5 +400,32 @@ describe("Replace and Remove", () => {
     await until(() => toasts().some((t) => t.includes("STRIPE_TEST_KEY removed")), "the toast");
     expect(client.asked).toEqual(["remove STRIPE_TEST_KEY"]);
     await settle();
+  });
+
+  test("a rejected replace stays open and says why in its dialog", async () => {
+    const { container, client, changed } = await render();
+    client.replaceProjectSecret = async () => { throw new Error("The value was refused."); };
+    await menuItem(container, "SEED_LLM_KEY", "Replace value");
+    const d = await dialog();
+    await typeInto(byLabel(d, "New value"), "sk-live-e2b8");
+    await click(byRole(d, "button", "Replace"));
+    await until(() => d.textContent?.includes("The value was refused."), "the replace's error in its dialog");
+    expect(allByRole(document.body, "dialog")).toHaveLength(1);
+    expect(byRole<HTMLButtonElement>(d, "button", "Replace").disabled).toBe(false);
+    expect(toasts().some((t) => t.includes("value replaced"))).toBe(false);
+    expect(changed()).toBe(0);
+  });
+
+  test("a rejected remove stays open and says why in its dialog", async () => {
+    const { container, client, changed } = await render();
+    client.removeProjectSecret = async () => { throw new Error("The secret could not be removed."); };
+    await menuItem(container, "STRIPE_TEST_KEY", "Remove");
+    const d = await dialog();
+    await click(byRole(d, "button", "Remove"));
+    await until(() => d.textContent?.includes("The secret could not be removed."), "the remove's error in its dialog");
+    expect(allByRole(document.body, "dialog")).toHaveLength(1);
+    expect(byRole<HTMLButtonElement>(d, "button", "Remove").disabled).toBe(false);
+    expect(toasts().some((t) => t.includes("removed"))).toBe(false);
+    expect(changed()).toBe(0);
   });
 });
