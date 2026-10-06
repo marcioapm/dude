@@ -109,10 +109,11 @@ export function applyMaskedEdit(value: string, next: string, edit: MaskedEdit): 
  * The whole value when no inputType was seen for a change. The selection
  * last known before it says where it was made, and the caret after it
  * (after what was inserted, or where the deletion was) which of a
- * collapsed caret's edits it was. Null when there is no known selection,
- * when no edit from that selection explains the change, or when the edits
- * that do disagree on the whole value: the caller then shows the value
- * rather than guess.
+ * collapsed caret's edits it was. With no known selection, or one that
+ * explains no edit, the change is taken only for a value with no line
+ * break, which is what the field showed. Null otherwise (a break lies
+ * somewhere the edit may have reached, and where decides whether it
+ * stays): the caller then shows the value rather than guess.
  */
 export function inferMaskedEdit(
   value: string,
@@ -120,14 +121,18 @@ export function inferMaskedEdit(
   before: { readonly start: number; readonly end: number } | null,
   caretAfter: number | null,
 ): string | null {
-  if (!before) return null;
   const shown = flatten(value);
-  const { start, end } = before;
-  const types = start === end ? ["insertText", "deleteContentBackward", "deleteContentForward"] : ["insertText", "deleteContent"];
-  const results = new Set<string>();
-  for (const inputType of types) {
-    const p = place(shown, next, { inputType, start, end });
-    if (p && (caretAfter === null || caretAfter === p.from + p.text.length)) results.add(spliceFlat(value, p.from, p.to, p.text));
+  if (next === shown) return value;
+  if (before) {
+    const { start, end } = before;
+    const types = start === end ? ["insertText", "deleteContentBackward", "deleteContentForward"] : ["insertText", "deleteContent"];
+    const results = new Set<string>();
+    for (const inputType of types) {
+      const p = place(shown, next, { inputType, start, end });
+      if (p && (caretAfter === null || caretAfter === p.from + p.text.length)) results.add(spliceFlat(value, p.from, p.to, p.text));
+    }
+    if (results.size > 1) return null;
+    if (results.size === 1) return [...results][0]!;
   }
-  return results.size === 1 ? [...results][0]! : null;
+  return shown === value ? next : null;
 }
