@@ -6,7 +6,10 @@ package fakelux_test
 
 import (
 	"context"
+	"encoding/json"
+	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -47,5 +50,102 @@ func TestASubmitAnswersWithTheFirstSubmitsStoredSecrets(t *testing.T) {
 	}
 	if !slices.Equal(got.Spec.Secrets, want) {
 		t.Errorf("GET answered secrets %+v; want %+v", got.Spec.Secrets, want)
+	}
+}
+
+// gitFixture is a repository the fake can check out, for a spec whose git
+// credential is a secret.
+func gitFixture(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", repo},
+		{"-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "fixture"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git fixture: %v: %s", err, out)
+		}
+	}
+	return repo
+}
+
+// A git or registry credential is the runner's alone (lux marks it
+// runnerOnly whatever its as): a server's process never has it, even
+// declared as: env.
+func TestARunnerCredentialNeverReachesAServerEvenAsEnv(t *testing.T) {
+	for _, via := range []string{"git", "registry"} {
+		t.Run(via, func(t *testing.T) {
+			spec := lux.Spec{
+				Image:    lux.Image{Ref: "node:22"},
+				Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}},
+				Secrets: []lux.Secret{{Name: "CREDENTIAL", Value: "credential-canary", As: "env"},
+					{Name: "SEED_LLM_KEY", Value: "seed-value", As: "env"}},
+			}
+			if via == "registry" {
+				spec.Image.RegistryAuth = []lux.RegistryAuth{{Registry: "ghcr.io", Secret: "CREDENTIAL"}}
+			} else {
+				spec.Git = &lux.Git{Repositories: []lux.Repository{{Name: "target", URL: "https://github.com/acme/target.git", Credential: "CREDENTIAL"}}}
+			}
+			fake, c, run := startedWith(t, fakelux.New(gitFixture(t), "k", nil), spec)
+			if _, err := c.AddServer(context.Background(), run, lux.ServerInput{
+				Name: "probe", Port: 4100, Command: []string{"sh", "-c", "npm run probe"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "probe ready", func() bool { return serverState(c, run, "probe").State == "ready" })
+			env := fake.ServerEnv(run, "probe")
+			if _, ok := env["CREDENTIAL"]; ok {
+				t.Errorf("the runner's credential reached the server: %v", env)
+			}
+			if env["SEED_LLM_KEY"] != "seed-value" {
+				t.Errorf("the server's environment = %v; want SEED_LLM_KEY", env)
+			}
+		})
+	}
+}
+
+// lux's shim writes a server's output and its exit's error only through
+// its redactor, keeping stdout and stderr apart: a command that prints its
+// env secrets on both streams and fails leaves none of them in its log.
+func TestAFailingServerCommandsLogHasNoSecretValue(t *testing.T) {
+	const seed, pem = "preview-secret-log-canary-8c29e37f", "-----BEGIN KEY-----\nPEMCANARYLINE1\nPEMCANARYLINE2\n-----END KEY-----"
+	_, c, run := started(t, lux.Spec{
+		Image:    lux.Image{Ref: "node:22"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}},
+		Secrets: []lux.Secret{{Name: "SEED_LLM_KEY", Value: seed, As: "env"},
+			{Name: "SIGNING_KEY_PEM", Value: pem, As: "env"}},
+	})
+	ctx := context.Background()
+	if _, err := c.AddServer(ctx, run, lux.ServerInput{
+		Name: "probe", Port: 4100,
+		Command: []string{"sh", "-c", `printf 'out %s\n' "$SEED_LLM_KEY"; printf 'err %s\n' "$SIGNING_KEY_PEM" >&2; exit 1 # fakelux-run`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type line struct{ Stream, Text string }
+	var lines []line
+	var raw json.RawMessage
+	waitFor(t, "the failed command's exit in its log", func() bool {
+		var err error
+		if raw, err = c.ServerLog(ctx, run, "probe", 100); err != nil {
+			t.Fatal(err)
+		}
+		var out struct{ Lines []line }
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		lines = out.Lines
+		return slices.ContainsFunc(lines, func(l line) bool { return strings.Contains(l.Text, "exit status 1") })
+	})
+	for _, v := range []string{seed, "PEMCANARYLINE1", "PEMCANARYLINE2"} {
+		if strings.Contains(string(raw), v) {
+			t.Errorf("the server's log carries a secret's value: %s", raw)
+		}
+	}
+	has := func(stream, text string) bool {
+		return slices.ContainsFunc(lines, func(l line) bool { return l.Stream == stream && strings.Contains(l.Text, text) })
+	}
+	if !has("stdout", "out [REDACTED:SEED_LLM_KEY]") || !has("stderr", "err [REDACTED:SIGNING_KEY_PEM]") {
+		t.Errorf("want each stream's line, redacted, on its own stream: %+v", lines)
 	}
 }
