@@ -252,3 +252,31 @@ func TestTheEscalationsQuestionNamesItsActions(t *testing.T) {
 		t.Errorf("the question belongs to escalation %q, want the first", escalation)
 	}
 }
+
+// A conductor that took over from the one the owner answered may not decide
+// on that answer: it must ask again itself.
+func TestAReplacementConductorDecidesOnlyOnItsOwnQuestion(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	if status, out := w.answerAs(ana, task, "Your call."); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	first, _, _ := w.conductor(task)
+	w.stopped(first)
+	w.until("the stopped conductor to be ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, first) == 1
+	})
+	// Its successor: started by this message, or already by a wake.
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/chat", map[string]any{"text": "Are you there?"}); status != 200 && status != 201 {
+		t.Fatalf("the next conductor: %d %v", status, out)
+	}
+	if next, _, _ := w.conductor(task); next == first {
+		t.Fatal("no conductor took over")
+	}
+	w.refused(task, "decide_escalation", `{"action":"stop"}`, "an earlier conductor's question, not yours: ask them again")
+	if d := w.decided(task); d != nil {
+		t.Errorf("decided on the earlier conductor's answer: %v", d)
+	}
+}
