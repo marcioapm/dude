@@ -131,3 +131,83 @@ def test_a_block_setting_row_lays_its_table_out_at_the_control_columns_width(gal
     add = layout.get_by_role("button", name="Add secret", exact=True)
     add_box = add.bounding_box()
     assert add_box and add_box["y"] >= box["y"] + box["height"] - 1, (add_box, box)
+
+
+def masked_demo(page: Page, value: str, revealed: bool = False):
+    """The gallery's first SecretField holding value, masked unless revealed:
+    its demo block and its field."""
+    block = secret_block(page)
+    demo = block.get_by_label("Value", exact=True).first.locator("xpath=../..")
+    demo.get_by_role("button", name="Show value", exact=True).click()
+    demo.get_by_label("Value", exact=True).fill(value)
+    if not revealed:
+        demo.get_by_role("button", name="Hide value", exact=True).click()
+    field = demo.get_by_label("Value", exact=True)
+    field.focus()
+    return demo, field
+
+
+def compose(page: Page, steps: list[str]) -> None:
+    """An IME composition through Chrome's own input pipeline: each step an
+    update of the composed text, the last one committed."""
+    session = page.context.new_cdp_session(page)
+    try:
+        for text in steps:
+            session.send("Input.imeSetComposition", {"text": text, "selectionStart": len(text), "selectionEnd": len(text)})
+        session.send("Input.insertText", {"text": steps[-1]})
+    finally:
+        session.detach()
+
+
+# The masked field shows the value without its line breaks; offsets are the
+# masked field's. Repeated characters make an edit's place ambiguous from the
+# field's value alone, so these pin that the place edited is the one used.
+@pytest.mark.parametrize(
+    "value,start,end,action,want",
+    [
+        pytest.param("ab\ncd", 1, 1, "type:x", "axb\ncd", id="typing-unique"),
+        pytest.param("a\na", 0, 0, "type:a", "aa\na", id="typing-repeated"),
+        pytest.param("a\nb", 0, 0, "type:a", "aa\nb", id="typing-repeated-first-line"),
+        pytest.param("one\ntwo", 6, 6, "type:!", "one\ntwo!", id="typing-at-the-end"),
+        pytest.param("ab\ncd", 1, 3, "Backspace", "ad", id="selected-delete-across-a-break"),
+        pytest.param("one\ntwo", 2, 4, "Backspace", "onwo", id="selected-delete-across-a-break-unique"),
+        pytest.param("one\ntwo!", 1, 4, "Backspace", "owo!", id="selected-delete-across-a-break-control"),
+        pytest.param("aa\naa", 1, 3, "Backspace", "aa", id="selected-delete-repeated"),
+        pytest.param("a\na", 0, 1, "Backspace", "\na", id="selected-delete-first-of-two"),
+        pytest.param("a\naa", 0, 2, "Backspace", "a", id="selected-delete-repeated-across-a-break"),
+        pytest.param("a\na", 1, 1, "Backspace", "\na", id="backspace-before-a-break-keeps-it"),
+        pytest.param("a\na", 1, 1, "Delete", "a\n", id="delete-after-a-break-keeps-it"),
+        pytest.param("ab\nb", 2, 2, "Backspace", "a\nb", id="backspace-repeated-keeps-the-break"),
+    ],
+)
+def test_a_masked_edit_applies_where_it_was_made(gallery_page: Page, console_errors: list, value, start, end, action, want):
+    demo, field = masked_demo(gallery_page, value)
+    field.evaluate("(el, range) => el.setSelectionRange(...range)", [start, end])
+    if action.startswith("type:"):
+        gallery_page.keyboard.type(action.removeprefix("type:"))
+    else:
+        field.press(action)
+    expect(field).to_have_value(want.replace("\n", ""))
+    demo.get_by_role("button", name="Show value", exact=True).click()
+    expect(demo.get_by_label("Value", exact=True)).to_have_value(want)
+    assert console_errors == [], console_errors
+
+
+@pytest.mark.parametrize("revealed", [False, True], ids=["masked", "revealed"])
+@pytest.mark.parametrize(
+    "value,steps,want",
+    [
+        pytest.param("ab\ncd", ["x", "xy"], "xyab\ncd", id="unique"),
+        pytest.param("a\na", ["a"], "aa\na", id="repeated"),
+        pytest.param("a\na", ["a", "ab"], "aba\na", id="repeated-updated"),
+    ],
+)
+def test_an_ime_composition_lands_at_the_caret(gallery_page: Page, console_errors: list, revealed: bool, value, steps, want):
+    demo, field = masked_demo(gallery_page, value, revealed=revealed)
+    field.evaluate("el => el.setSelectionRange(0, 0)")
+    compose(gallery_page, steps)
+    if not revealed:
+        expect(field).to_have_value(want.replace("\n", ""))
+        demo.get_by_role("button", name="Show value", exact=True).click()
+    expect(demo.get_by_label("Value", exact=True)).to_have_value(want)
+    assert console_errors == [], console_errors

@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useEffect,
   useId,
   useImperativeHandle,
   useLayoutEffect,
@@ -15,6 +16,7 @@ import { IconButton } from "./Button.tsx";
 import inputStyles from "./Input.module.css";
 import areaStyles from "./Textarea.module.css";
 import { TEXTAREA_LINE_PX, TEXTAREA_PADDING_PX, scrollPositions, textareaHeight } from "./Textarea.tsx";
+import { applyMaskedEdit, flatten, inferMaskedEdit, maskedOffset, wholeOffset, type MaskedEdit } from "./maskedEdit.ts";
 import styles from "./SecretField.module.css";
 
 type Field = HTMLInputElement | HTMLTextAreaElement;
@@ -44,38 +46,15 @@ export function secretLength(value: string): string {
 }
 
 // A password input cannot hold a line break: the browser drops CR and LF
-// from its value. Masked, the input shows the value without them, and its
-// offsets are mapped back onto the whole value, which keeps them.
-const BREAK = /[\r\n]/g;
-const isBreak = (c: string) => c === "\r" || c === "\n";
+// from its value. Masked, the input shows the value without them, and each
+// edit is applied to the whole value where it was made (maskedEdit.ts).
 
-/** Where the masked input's offset i falls in the whole value. */
-function wholeOffset(value: string, i: number): number {
-  for (let at = 0, seen = 0; at < value.length; at++) {
-    if (isBreak(value[at]!)) continue;
-    if (seen === i) return at;
-    seen++;
-  }
-  return value.length;
-}
-
-/** The masked input's offset for the whole value's offset at. */
-function maskedOffset(value: string, at: number): number {
-  return value.slice(0, at).replace(BREAK, "").length;
-}
-
-/** The whole value after the masked input changed from what it showed to next. */
-function edited(value: string, next: string): string {
-  const shown = value.replace(BREAK, "");
-  let start = 0;
-  while (start < shown.length && start < next.length && shown[start] === next[start]) start++;
-  let tail = 0;
-  while (tail < shown.length - start && tail < next.length - start && shown[shown.length - 1 - tail] === next[next.length - 1 - tail]) tail++;
-  if (start === 0 && tail === 0) return next;
-  const removedEnd = shown.length - tail;
-  const from = wholeOffset(value, start);
-  const to = removedEnd > start ? wholeOffset(value, removedEnd - 1) + 1 : from;
-  return value.slice(0, from) + next.slice(start, next.length - tail) + value.slice(to);
+/** The whole value a composition began on, the selection it replaces, and whether compositionend came. */
+interface Snapshot {
+  readonly value: string;
+  readonly start: number;
+  readonly end: number;
+  readonly ended: boolean;
 }
 
 /**
@@ -87,6 +66,14 @@ function edited(value: string, next: string): string {
  * says how much is there either way, lines included, so a pasted key can
  * be trusted whole. Password managers and spellcheck are told to leave it
  * alone.
+ *
+ * Masked, line breaks are invisible, and an edit keeps them by these rules:
+ * typing where a break is hidden starts the next line; deleting the
+ * character just before or after a break deletes that character, not the
+ * break; a break goes only when the characters on both sides of it are in
+ * the deleted range, or when everything is deleted. An edit whose place
+ * cannot be known (no beforeinput from the browser, and the field's change
+ * fits more than one place) shows the value instead of guessing.
  */
 export const SecretField = forwardRef<Field, SecretFieldProps>(function SecretField(
   { label, hint, error, value, onChange, defaultRevealed = false, maxRows = 8, id, className, disabled, ...rest },
@@ -101,6 +88,52 @@ export const SecretField = forwardRef<Field, SecretFieldProps>(function SecretFi
   // toggle or a paste replaced what the field shows.
   const restore = useRef<{ focus: boolean; caret: number } | null>(null);
   useImperativeHandle(ref, () => fieldRef.current as Field);
+  // Masked editing. The whole value the field last showed (ahead of a
+  // render that has not happened yet); the edit beforeinput announced; the
+  // selection a composition started from; the selection last seen.
+  const whole = useRef(value);
+  whole.current = value;
+  const announced = useRef<(MaskedEdit & { readonly shown: string }) | null>(null);
+  const composing = useRef<Snapshot | null>(null);
+  const lastSelection = useRef<{ start: number; end: number } | null>(null);
+
+  useEffect(() => {
+    const el = fieldRef.current;
+    if (!el || revealed) return;
+    const selection = () => ({ start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 });
+    const onBeforeInput = (e: Event) => {
+      const inputType = (e as InputEvent).inputType ?? "";
+      if (inputType.includes("Composition") || (composing.current && !composing.current.ended)) return;
+      composing.current = null;
+      announced.current = { inputType, ...selection(), shown: flatten(whole.current) };
+    };
+    const onCompositionStart = () => {
+      composing.current = { value: whole.current, ...selection(), ended: false };
+    };
+    // Browsers differ on whether the committing input comes before or after
+    // compositionend: the snapshot stays until a later edit replaces it.
+    const onCompositionEnd = () => {
+      if (composing.current) composing.current = { ...composing.current, ended: true };
+    };
+    const onSelection = () => {
+      if (document.activeElement === el) lastSelection.current = selection();
+    };
+    const events: [EventTarget, string, (e: Event) => void][] = [
+      [el, "beforeinput", onBeforeInput],
+      [el, "compositionstart", onCompositionStart],
+      [el, "compositionend", onCompositionEnd],
+      [el, "keydown", onSelection],
+      [el, "select", onSelection],
+      [el, "selectionchange", onSelection],
+      [el, "focus", onSelection],
+      [el, "pointerup", onSelection],
+      [document, "selectionchange", onSelection],
+    ];
+    for (const [target, type, fn] of events) target.addEventListener(type, fn);
+    return () => {
+      for (const [target, type, fn] of events) target.removeEventListener(type, fn);
+    };
+  }, [revealed]);
 
   useLayoutEffect(() => {
     const el = fieldRef.current;
@@ -139,7 +172,49 @@ export const SecretField = forwardRef<Field, SecretFieldProps>(function SecretFi
     const end = el.selectionEnd ?? 0;
     const to = end > (el.selectionStart ?? 0) ? wholeOffset(value, end - 1) + 1 : from;
     restore.current = { focus: true, caret: from + text.length };
-    onChange(value.slice(0, from) + text + value.slice(to));
+    emit(value.slice(0, from) + text + value.slice(to));
+  };
+
+  const emit = (next: string) => {
+    whole.current = next;
+    onChange(next);
+  };
+
+  /** The masked field now shows next: apply the edit that made it to the whole value. */
+  const onMaskedChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const el = e.target;
+    const next = el.value;
+    const before = whole.current;
+    const shown = flatten(before);
+    const edit = announced.current;
+    announced.current = null;
+    let after: string | null = null;
+    const comp = composing.current;
+    const native = e.nativeEvent as InputEvent;
+    const inputType = native.inputType ?? "";
+    const byComposition = comp !== null && (inputType.includes("Composition") || native.isComposing || (inputType === "" && !comp.ended));
+    if (comp && byComposition) {
+      // Every update of a composition replaces the same range of what the
+      // field showed when it began.
+      after = applyMaskedEdit(comp.value, next, { inputType: "insertCompositionText", start: comp.start, end: comp.end });
+      if (comp.ended) composing.current = null;
+    } else if (edit && edit.shown === shown) {
+      composing.current = null;
+      after = applyMaskedEdit(before, next, edit);
+    } else {
+      composing.current = null;
+      after = inferMaskedEdit(before, next, lastSelection.current, el.selectionEnd);
+    }
+    lastSelection.current = { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 };
+    if (after === null) {
+      // Where this edit was made cannot be known: show the value as it was,
+      // so the person makes the edit where its line breaks can be seen.
+      composing.current = null;
+      restore.current = { focus: document.activeElement === el, caret: wholeOffset(before, Math.min(el.selectionEnd ?? 0, shown.length)) };
+      setRevealed(true);
+      return;
+    }
+    emit(after);
   };
 
   const message = error ?? hint;
@@ -185,8 +260,8 @@ export const SecretField = forwardRef<Field, SecretFieldProps>(function SecretFi
             type="password"
             // Without its line breaks: what the browser would make of it, so
             // React never writes it back (which would move the caret).
-            value={value.replace(BREAK, "")}
-            onChange={(e) => onChange(edited(value, e.target.value))}
+            value={flatten(value)}
+            onChange={onMaskedChange}
             onPaste={onPaste}
             onKeyDown={(e) => {
               rest.onKeyDown?.(e);
