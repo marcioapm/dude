@@ -125,6 +125,7 @@ func TestAPublishMidRebaseIsRefused(t *testing.T) {
 func TestAConductorStoppedMidRebaseAndResumedFinishesItThenPublishes(t *testing.T) {
 	e := diverged(t)
 	e.conflictingRebase()
+	conflicted, unmerged := e.conflict()
 	e.syncer.ConductorWarm = 1
 	e.until("the conductor stopped", func() bool { _, status, _ := e.conductor(e.task); return status == "paused" })
 	e.syncer.ConductorWarm = 1 << 40
@@ -158,6 +159,9 @@ func TestAConductorStoppedMidRebaseAndResumedFinishesItThenPublishes(t *testing.
 	if !e.midRebase() {
 		t.Fatal("the resume ended the rebase")
 	}
+	if got, entries := e.conflict(); got != conflicted || entries != unmerged {
+		t.Fatalf("after the resume FIXED.md is %q (unmerged %q), want %q (%q)", got, entries, conflicted, unmerged)
+	}
 	e.refusedMidRebase()
 
 	e.finishRebase()
@@ -171,6 +175,24 @@ func TestAConductorStoppedMidRebaseAndResumedFinishesItThenPublishes(t *testing.
 	if got := e.gh.SHA(e.branch); got != sha {
 		t.Errorf("the task branch at %s, want the rebased %s", got, sha)
 	}
+	if got := e.git("show", sha+":FIXED.md"); got != "both" {
+		t.Errorf("published FIXED.md %q, want the resolution", got)
+	}
+}
+
+// conflict is FIXED.md's bytes and its unmerged index entries, which a
+// conflicted rebase leaves (both non-empty, the bytes with markers).
+func (e *editing) conflict() (bytes, unmerged string) {
+	e.t.Helper()
+	b, err := os.ReadFile(filepath.Join(e.work(), "FIXED.md"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	unmerged = e.git("ls-files", "-u", "--", "FIXED.md")
+	if unmerged == "" || !strings.Contains(string(b), "<<<<<<<") {
+		e.t.Fatalf("FIXED.md is not in conflict: %q (unmerged %q)", b, unmerged)
+	}
+	return string(b), unmerged
 }
 
 // inputsSaying is every input the lux Run's agent was given containing

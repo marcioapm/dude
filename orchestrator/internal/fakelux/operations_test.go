@@ -192,6 +192,42 @@ func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
 	}
 }
 
+// A live sequence in a checkout that is clean, on its target and behind
+// it (nothing else would keep it) is kept for the operation alone: the
+// target moving on does not fast-forward it.
+func TestALiveSequenceAloneKeepsACleanCheckout(t *testing.T) {
+	cl, runID, repo, work := conflictRepo(t)
+	gitIn(t, work, "branch", "two", "lux/work")
+	gitIn(t, work, "checkout", "-q", "two")
+	gitIn(t, work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "second")
+	gitIn(t, work, "checkout", "-q", "work")
+	gitFails(t, work, "cherry-pick", "two~1", "two")
+	commitFile(t, work, "resolved\n", "resolved")
+	if got := gitIn(t, work, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Fatalf("not clean: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(work, gitIn(t, work, "rev-parse", "--git-path", "sequencer/todo"))); err != nil {
+		t.Fatalf("no sequence in progress: %v", err)
+	}
+	before := gitIn(t, work, "rev-parse", "HEAD")
+	// The target moves on from exactly the checkout's HEAD: a plain
+	// fast-forward but for the sequence.
+	gitIn(t, repo, "fetch", "-q", work, "+HEAD:refs/heads/work")
+	gitIn(t, repo, "checkout", "-q", "work")
+	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "later")
+	gitIn(t, repo, "checkout", "-q", "main")
+	if err := cl.SyncRun(context.Background(), runID, "alone", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		t.Fatal(err)
+	}
+	ev := lastSync(t, cl, runID)
+	if ev["status"] != lux.SyncKept || ev["operation"] != lux.OperationSequencer {
+		t.Errorf("git.sync %v, want kept for the sequence", ev)
+	}
+	if got := gitIn(t, work, "rev-parse", "HEAD"); got != before {
+		t.Errorf("the checkout moved from %s to %s", before, got)
+	}
+}
+
 // An empty sequencer directory left behind is no operation git knows of:
 // the sync names none and the push goes through.
 func TestAStaleEmptySequencerIsNoOperation(t *testing.T) {
