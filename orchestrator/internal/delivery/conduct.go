@@ -80,16 +80,8 @@ func Ended(taskStatus string) bool {
 // and replacing a conductor take, serialises the check with them: a call
 // from a conductor superseded since it was authenticated is refused.
 func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
-	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+	if err := liveConductor(ctx, tx, ref); err != nil {
 		return nil, err
-	}
-	var live bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
-		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
-		return nil, err
-	}
-	if !live {
-		return nil, refusef("you are no longer this task's conductor: another took over from you. Decide nothing")
 	}
 	taskID := ref.TaskID
 	d, err := LoadDelivery(ctx, tx, taskID)
@@ -115,10 +107,34 @@ func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
 			"by writing in Chat; until then, answer and advise")
 	case d.Step == "conductorDecision" && d.State.Decision != nil && d.State.Decision.Taken != nil:
 		return nil, refusef("this decision was taken already (%s); you are woken at the next one", d.State.Decision.Taken.Action)
+	case d.Step == "decide" && d.State.Escalation != nil:
+		return nil, refusef("the delivery is stopped for a person at an escalation (%s), not waiting on your decision. "+
+			"The person decides it on the banner, or by answering your question about it (ask_person with the "+
+			"escalation's actions as choices); if the owner answers that question in their own words, decide it with "+
+			"decide_escalation", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "))
 	case d.Status != "waiting" || d.Step != "conductorDecision" || d.State.Decision == nil:
 		return nil, refusef("the delivery is not waiting on a decision now (it is at %s): you are woken when it is", d.Step)
 	}
 	return d, nil
+}
+
+// liveConductor refuses unless the caller is the task's live conductor. The
+// task's Chat lock, which ending and replacing a conductor take, serialises
+// the check with them: a call from a conductor superseded since it was
+// authenticated is refused.
+func liveConductor(ctx context.Context, tx pgx.Tx, ref RunRef) error {
+	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+		return err
+	}
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
+		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
+		return err
+	}
+	if !live {
+		return refusef("you are no longer this task's conductor: another took over from you. Decide nothing")
+	}
+	return nil
 }
 
 // take records the conductor's decision in the delivery's state and wakes

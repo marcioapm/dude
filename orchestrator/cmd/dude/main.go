@@ -6,7 +6,8 @@
 //	dude epic list                        the project's epics
 //	dude repo list | request NAME --reason R [--write]
 //	dude task create --title T --goal G [--epic E] [--criterion C]...
-//	dude ask "question" [--choice C]...   ask a person; end your turn after
+//	dude ask "question" [--choice C]... [--action A]...
+//	                                      ask a person; end your turn after
 //	dude memory search QUERY [--type T]... [--limit N]
 //	dude memory show ID                   one memory in full
 //	dude memory add --title T --content C [--kind K] [--about KEY]... [--org]
@@ -19,6 +20,8 @@
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
+//	dude escalation decide ACTION [--note N]
+//	                                      a conductor's: an escalation the owner handed it
 //	dude pr reply PR TEXT [--in-reply-to ID]
 //	                                      a conductor's: answer on its task's pull request
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
@@ -82,7 +85,7 @@ func run(args []string, out io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
-		cmd == "phase" || cmd == "finding" || cmd == "pr") {
+		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -194,16 +197,21 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("remember", body))
 	case "ask":
-		var choices many
+		var choices, actions many
 		fs.Var(&choices, "choice", "an answer to offer (repeatable)")
+		fs.Var(&actions, "action", "a conductor's, at an escalation: the action each choice stands for, in order (repeatable)")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		if len(args) != 1 {
-			return errors.New(`usage: dude ask "question" [--choice C]...`)
+			return errors.New(`usage: dude ask "question" [--choice C]... [--action A]...`)
 		}
-		return show(out, *asJSON, call("ask_person", map[string]any{"question": args[0], "choices": []string(choices)}))
+		body := map[string]any{"question": args[0], "choices": []string(choices)}
+		if len(actions) > 0 {
+			body["actions"] = []string(actions)
+		}
+		return show(out, *asJSON, call("ask_person", body))
 	case "event":
 		data := fs.String("data", "", "JSON to go with it")
 		args, err := parse(fs, rest)
@@ -308,6 +316,16 @@ func run(args []string, out io.Writer) error {
 			return errors.New("usage: dude decide next|ask_person|wait|open_pull_request [--note N]")
 		}
 		return show(out, *asJSON, call("decide", map[string]any{"action": args[0], "note": *note}))
+	case "escalation decide":
+		note := fs.String("note", "", "what you decided and why")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude escalation decide retry|accept|resume|done|wait|stop [--note N]")
+		}
+		return show(out, *asJSON, call("decide_escalation", map[string]any{"action": args[0], "note": *note}))
 	case "finding dismiss":
 		reason := fs.String("reason", "", "why it is left as it is")
 		args, err := parse(fs, rest)
@@ -575,6 +593,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
                                              open_pull_request (after the person answered Open)
   dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is
+  dude escalation decide ACTION [--note N]   a conductor's: decide the escalation the delivery is stopped
+                                             at, only after the owner answered your question about it in
+                                             their own words (ask with --choice C --action A for each)
   dude pr reply PR TEXT [--in-reply-to ID]   a conductor's: answer on its task's pull request (PR is 12
                                              or repo#12) as dude's GitHub login; a line-comment-… is
                                              answered in its thread, anything else quoted

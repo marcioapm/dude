@@ -619,6 +619,16 @@ describe("an agent that asks", () => {
     expect(turns[0]).toMatchObject({ kind: "message", text: "I need a decision." });
   });
 
+  test("a question closed because the escalation it asked about was decided on the banner waits no more", () => {
+    const events = [
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_e", prompt: "Retry?", options: ["Retry", "Stop"] }),
+      ev(EventTypes.QuestionClosed, { questionId: "qst_e", by: "decision", action: "retry" }),
+    ];
+    const conversation = project(events);
+    expect(conversation.openQuestion).toBeNull();
+    expect(conversation.turns).toEqual([expect.objectContaining({ kind: "question", answeredAt: null, closedAt: events[1]!.occurredAt })]);
+  });
+
   test("a workflow escalation is not a question this agent asked", () => {
     const conversation = project([ev(EventTypes.QuestionAsked, { kind: "escalation", reason: "review_loop_exhausted" })]);
     expect(conversation.turns).toEqual([]);
