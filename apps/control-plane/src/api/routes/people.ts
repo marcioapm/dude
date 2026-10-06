@@ -380,7 +380,7 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
     // that task waits for it; if that UPDATE came first, the decision waits
     // and reads the new owner. Removal vs. task-people replacement and vs.
     // an answer (answered_by_person's KEY SHARE on this row) can still
-    // deadlock: pre-existing, see dude issue #TBD.
+    // deadlock: pre-existing, see dude issue #65.
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
