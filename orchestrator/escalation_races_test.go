@@ -9,11 +9,13 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -250,5 +252,88 @@ func TestAQuestionRacingTheBannerIsRefused(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND escalation IS NOT NULL AND status = 'open'`, task); n != 0 {
 		t.Errorf("%d escalation questions left open after the banner decided", n)
+	}
+}
+
+// deadlocked says err is PostgreSQL's deadlock victim (SQLSTATE 40P01).
+func deadlocked(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "40P01"
+}
+
+// A task ending holds the delivery (SetTaskStatusTx locks it before its
+// UPDATE tasks) while a message arrives in Chat: Chat waits on the delivery
+// holding nothing the ending needs, the ending commits, and Chat then goes
+// on. Neither is a deadlock victim; Chat is no 500.
+func TestChatWhileTheTaskEndsWaitsForIt(t *testing.T) {
+	w, task := stuck(t)
+	ctx := context.Background()
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := delivery.LoadDelivery(ctx, tx, task); err != nil {
+		t.Fatal(err)
+	}
+	chat := make(chan int, 1)
+	go func() {
+		status, _ := w.chat(task, "Please explain the situation.")
+		chat <- status
+	}()
+	w.waiters(1)
+	if _, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, task, "", "failed", "a person failed it"); err != nil {
+		t.Fatalf("the task ending: %v (deadlock: %v)", err, deadlocked(err))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-chat; status != 200 && status != 409 {
+		t.Errorf("Chat while the task ended: %d, want 200 or 409", status)
+	}
+}
+
+// The conductor's ask_person at a decision point holds the Chat lock and
+// the delivery (parked) and then moves the task (AskTx), while a banner
+// request arrives: the banner waits on the delivery holding nothing the ask
+// needs, the question is asked, and the banner, finding no escalation, is
+// refused with 409. Neither is a deadlock victim.
+func TestTheBannerWhileTheConductorAsksWaitsForIt(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	w.until("the first decision", func() bool { return w.decisionAt(task) == delivery.PointStart })
+	run, _, _ := w.conductor(task)
+	ref := delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: run}
+	ctx := context.Background()
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	// ConductDecide's prelude (parked): the Chat lock, then the delivery.
+	if err := delivery.LockChat(ctx, tx, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := delivery.LoadDelivery(ctx, tx, task); err != nil {
+		t.Fatal(err)
+	}
+	banner := make(chan int, 1)
+	go func() {
+		status, _ := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"})
+		banner <- status
+	}()
+	w.waiters(1)
+	if _, err := delivery.ConductDecide(ctx, tx, ref, "ask_person", "What should we implement?"); err != nil {
+		t.Fatalf("the conductor's ask: %v (deadlock: %v)", err, deadlocked(err))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-banner; status != 409 {
+		t.Errorf("the banner while the conductor asked: %d, want 409", status)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND run_id = $2 AND status = 'open'`, task, run); n != 1 {
+		t.Errorf("%d open questions of the conductor, want 1", n)
 	}
 }
