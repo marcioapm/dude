@@ -62,6 +62,27 @@ func gitFails(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// stopBetweenPicks starts two picks in work, the first conflicting and
+// then committed by hand: the sequencer waits for --continue with no
+// pick in progress.
+func stopBetweenPicks(t *testing.T, work string) {
+	t.Helper()
+	gitIn(t, work, "branch", "two", "lux/work")
+	gitIn(t, work, "checkout", "-q", "two")
+	gitIn(t, work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "second")
+	gitIn(t, work, "checkout", "-q", "work")
+	gitFails(t, work, "cherry-pick", "two~1", "two")
+	commitFile(t, work, "resolved\n", "resolved")
+}
+
+// moveOn commits on the repository's "work", leaving it checked out on main.
+func moveOn(t *testing.T, repo string) {
+	t.Helper()
+	gitIn(t, repo, "checkout", "-q", "work")
+	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "later")
+	gitIn(t, repo, "checkout", "-q", "main")
+}
+
 // lastPush is the Run's latest git.push event's data.
 func lastPush(t *testing.T, c *lux.HTTPClient, runID string) lux.PushResult {
 	t.Helper()
@@ -102,24 +123,13 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 			commitFile(t, work, "mine again\n", "again")
 			gitFails(t, work, "revert", "--no-edit", "HEAD~1")
 		}},
-		{"sequencer", lux.OperationSequencer, func(t *testing.T, work string) {
-			// Two picks, the first conflicting and then committed by hand:
-			// the sequencer waits for --continue with no pick in progress.
-			gitIn(t, work, "branch", "two", "lux/work")
-			gitIn(t, work, "checkout", "-q", "two")
-			gitIn(t, work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "second")
-			gitIn(t, work, "checkout", "-q", "work")
-			gitFails(t, work, "cherry-pick", "two~1", "two")
-			commitFile(t, work, "resolved\n", "resolved")
-		}},
+		{"sequencer", lux.OperationSequencer, stopBetweenPicks},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cl, runID, repo, work := conflictRepo(t)
 			c.start(t, work)
 			// The task branch moves on meanwhile: the checkout is behind it.
-			gitIn(t, repo, "checkout", "-q", "work")
-			gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "later")
-			gitIn(t, repo, "checkout", "-q", "main")
+			moveOn(t, repo)
 			before := gitIn(t, work, "rev-parse", "HEAD")
 			for _, mode := range []string{lux.SyncFastForward, lux.SyncFetch} {
 				if err := cl.SyncRun(ctx, runID, "s-"+mode, []lux.SyncRef{{Repo: "app", Ref: "work", Mode: mode}}); err != nil {
@@ -197,12 +207,7 @@ func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
 // target moving on does not fast-forward it.
 func TestALiveSequenceAloneKeepsACleanCheckout(t *testing.T) {
 	cl, runID, repo, work := conflictRepo(t)
-	gitIn(t, work, "branch", "two", "lux/work")
-	gitIn(t, work, "checkout", "-q", "two")
-	gitIn(t, work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "second")
-	gitIn(t, work, "checkout", "-q", "work")
-	gitFails(t, work, "cherry-pick", "two~1", "two")
-	commitFile(t, work, "resolved\n", "resolved")
+	stopBetweenPicks(t, work)
 	if got := gitIn(t, work, "status", "--porcelain", "--untracked-files=no"); got != "" {
 		t.Fatalf("not clean: %s", got)
 	}
@@ -213,9 +218,7 @@ func TestALiveSequenceAloneKeepsACleanCheckout(t *testing.T) {
 	// The target moves on from exactly the checkout's HEAD: a plain
 	// fast-forward but for the sequence.
 	gitIn(t, repo, "fetch", "-q", work, "+HEAD:refs/heads/work")
-	gitIn(t, repo, "checkout", "-q", "work")
-	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "later")
-	gitIn(t, repo, "checkout", "-q", "main")
+	moveOn(t, repo)
 	if err := cl.SyncRun(context.Background(), runID, "alone", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
 		t.Fatal(err)
 	}
