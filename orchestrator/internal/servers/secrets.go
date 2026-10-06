@@ -3,7 +3,6 @@ package servers
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/jackc/pgx/v5"
 
@@ -60,17 +59,27 @@ func (p *Previews) resumeSecrets(ctx context.Context, r previewRun) (secrets []l
 		if len(recorded) == 0 {
 			return nil
 		}
-		current, err := loadSecrets(ctx, tx, r.ProjectID)
+		// Only the declared names' values: one added since is not sent.
+		rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2)`,
+			r.ProjectID, recorded)
 		if err != nil {
 			return err
 		}
+		current := map[string]string{}
+		var name, value string
+		if _, err := pgx.ForEachRow(rows, []any{&name, &value}, func() error {
+			current[name] = value
+			return nil
+		}); err != nil {
+			return err
+		}
 		for _, name := range recorded {
-			i := slices.IndexFunc(current, func(s lux.Secret) bool { return s.Name == name })
-			if i < 0 {
+			value, ok := current[name]
+			if !ok {
 				gone = append(gone, name)
 				continue
 			}
-			secrets = append(secrets, current[i])
+			secrets = append(secrets, lux.Secret{Name: name, Value: value, As: previewSecretAs})
 		}
 		return nil
 	})
