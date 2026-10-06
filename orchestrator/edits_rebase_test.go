@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -199,22 +198,17 @@ func (e *editing) conflict() (bytes, unmerged string) {
 // want, in order.
 func (e *editing) inputsSaying(luxRunID, want string) []string {
 	var out []string
-	for _, in := range runOf(e, luxRunID).Inputs {
-		if strings.Contains(in, want) {
-			out = append(out, in)
+	for _, r := range e.lux.Runs() {
+		if r.ID != luxRunID {
+			continue
+		}
+		for _, in := range r.Inputs {
+			if strings.Contains(in, want) {
+				out = append(out, in)
+			}
 		}
 	}
 	return out
-}
-
-func runOf(e *editing, luxRunID string) *fakelux.Run {
-	for _, r := range e.lux.Runs() {
-		if r.ID == luxRunID {
-			return r
-		}
-	}
-	e.t.Fatalf("no lux Run %s", luxRunID)
-	return nil
 }
 
 type syncSeen struct {
