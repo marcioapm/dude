@@ -113,16 +113,22 @@ func (p *Previews) cancelForReplacement(ctx context.Context, r previewRun) error
 // replaceParked puts a parked preview of the eager path back to pending
 // with a new lux Run to come, its pending starts kept: its own lux Run
 // declared a secret the project no longer has, so it cannot be resumed.
+// The row is held from the check through the cancel and the update, as a
+// resume holds it (parkedOn): a sweep that read the preview before another
+// moved it on (resumed, replaced) cancels nothing.
 func (p *Previews) replaceParked(ctx context.Context, r previewRun, gone []string) error {
-	p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
-	if err := p.cancelForReplacement(ctx, r); err != nil {
-		return err
-	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if parked, err := parkedOn(ctx, tx, r); err != nil || !parked {
+			return err
+		}
+		p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
+		if err := p.cancelForReplacement(ctx, r); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL, lux_after_event = 0,
 			lux_start_event = 0, lux_ran_event = 0, lux_stop_reason = NULL, dude_pause = NULL, preview_secrets = '{}',
 			lux_generation = lux_generation + 1, next_attempt_at = NULL
-			WHERE id = $1 AND lux_run_id = $2 AND status = 'paused'`, r.ID, r.LuxRunID)
+			WHERE id = $1`, r.ID)
 		return err
 	})
 }
