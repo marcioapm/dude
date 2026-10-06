@@ -6,10 +6,12 @@ package orchestrator_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -230,5 +232,129 @@ func TestASupersededConductorRepliesNowhere(t *testing.T) {
 	}
 	if n := len(w.gh.Pull(1).Comments); n != before {
 		t.Errorf("the replaced conductor posted")
+	}
+}
+
+// The owner answers the conductor's question while the conductor's reply
+// waits on GitHub: the answer holds no lock the post does, so it is
+// answered at once (200, within 500 ms), and the reply, once GitHub
+// answers, is posted and recorded in Chat.
+func TestAnAnswerWhileTheConductorsReplyPostsDoesNotWaitForGitHub(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	w.gh.Comment(1, "alice", "@dude why greet()?")
+	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", `{"question":"Alice asks why greet(): may I say the task asks for it?"}`)
+	q := w.conductorQuestion(task)
+	if q == "" {
+		t.Fatal("the conductor's question was not recorded")
+	}
+	spec := w.conductorSpecOf(task)
+	held, release := w.heldPost()
+	type result struct {
+		status int
+		body   string
+	}
+	replied := make(chan result, 1)
+	go func() {
+		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "reply_on_pull_request", `{"pr":"1","text":"The task asks for it."}`)
+		replied <- result{status, body}
+	}()
+	select {
+	case <-held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the reply was never posted")
+	}
+	answered := make(chan int, 1)
+	start := time.Now()
+	go func() {
+		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Yes, say so."})
+		answered <- status
+	}()
+	select {
+	case status := <-answered:
+		if elapsed := time.Since(start); status != 200 || elapsed > 500*time.Millisecond {
+			t.Errorf("the owner's answer during the post: %d after %v, want 200 within 500ms", status, elapsed)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("the owner's answer waited on the conductor's GitHub post")
+		release()
+		if status := <-answered; status != 200 {
+			t.Errorf("the owner's answer after the post: %d, want 200", status)
+		}
+	}
+	release()
+	if r := <-replied; r.status != 200 {
+		t.Fatalf("the reply: %d %s", r.status, r.body)
+	}
+	if n := w.replies(task); n != 1 {
+		t.Errorf("%d replies recorded in Chat, want 1", n)
+	}
+	posted := w.gh.Pull(1).Comments
+	if last := posted[len(posted)-1]; !strings.HasPrefix(last.Body, "The task asks for it.") {
+		t.Errorf("the comment posted: %q", last.Body)
+	}
+}
+
+// heldPost holds the fake GitHub's next comment post until the returned
+// release; held is closed once it arrives.
+func (w *world) heldPost() (held <-chan struct{}, release func()) {
+	g := newGate()
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/comments") {
+				g.wait()
+			}
+			return 0
+		}
+	})
+	w.t.Cleanup(g.release)
+	return g.held, g.release
+}
+
+// A conductor replaced while its reply waits on GitHub did post it: the
+// call answers with the comment, and Chat records it on the Run that
+// posted it, not on its successor.
+func TestAConductorReplacedWhileItsReplyPostsStillRecordsIt(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	w.gh.Comment(1, "alice", "@dude hello")
+	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
+	spec := w.conductorSpecOf(task)
+	first, _, _ := w.conductor(task)
+	held, release := w.heldPost()
+	type result struct {
+		status int
+		body   string
+	}
+	replied := make(chan result, 1)
+	go func() {
+		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "reply_on_pull_request", `{"pr":"1","text":"Hi."}`)
+		replied <- result{status, body}
+	}()
+	select {
+	case <-held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the reply was never posted")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
+	if status, out := w.chat(task, "are you there?"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	if next, _, _ := w.conductor(task); next == first {
+		t.Fatal("the conductor was not replaced")
+	}
+	release()
+	r := <-replied
+	var out map[string]any
+	_ = json.Unmarshal([]byte(r.body), &out)
+	if r.status != 200 || out["commentId"] == "" {
+		t.Fatalf("the replaced conductor's reply: %d %s, want 200 with the comment", r.status, r.body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message' AND payload->>'by' = 'conductor'
+		AND run_id = $2 AND payload->'github'->>'feedbackId' = $3`, task, first, out["commentId"]); n != 1 {
+		t.Errorf("%d replies recorded on the conductor that posted it, want 1", n)
 	}
 }
