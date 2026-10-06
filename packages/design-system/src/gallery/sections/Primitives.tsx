@@ -4,6 +4,7 @@ import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
+import { SecretField } from "../../primitives/SecretField.tsx";
 import { MarkdownEditor, type MarkdownEditorProps } from "../../primitives/MarkdownEditor.tsx";
 import { Markdown } from "../../components/Markdown.tsx";
 import { HelpList, KeyHint, MarkdownCheatsheet } from "../../primitives/Kbd.tsx";
@@ -155,6 +156,21 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Textarea label="Reason" defaultValue="" error="Say why, in a sentence or two" rows={2} />
             <Textarea label="Locked" defaultValue="Kind and repository are fixed once a run exists." disabled rows={2} />
             <ControlledTextarea />
+          </div>
+        </Panes>
+      </Block>
+
+      <Block
+        id="p-secret-field"
+        title="SecretField"
+        note="A value written once and never read back: an API key, a PEM block. Multi-line, kept as typed, masked as one row of dots until the eye shows it; the length line says how much is there, so a pasted key can be trusted whole. Password managers and spellcheck are told to leave it alone."
+      >
+        <Panes mode={mode}>
+          <div className={styles["grid2"]}>
+            <SecretFieldDemo label="Value" initial="" />
+            <SecretFieldDemo label="Value" initial={GALLERY_PEM} />
+            <SecretFieldDemo label="Value, shown" initial={GALLERY_PEM} revealed />
+            <SecretFieldDemo label="New value" initial="sk-test-4b1d" error="A value cannot contain a NUL character." />
           </div>
         </Panes>
       </Block>
@@ -653,6 +669,13 @@ function SortableTableDemo() {
       </TBody>
     </Table>
   );
+}
+
+const GALLERY_PEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nk3Lq9bF0rT2yVf8mWJxQ1s0ZpN4cD6eH5aR7uGvKtYwE9iL3oM\n-----END PRIVATE KEY-----";
+
+function SecretFieldDemo({ label, initial, revealed, error }: { readonly label: string; readonly initial: string; readonly revealed?: boolean; readonly error?: string }) {
+  const [v, setV] = useState(initial);
+  return <SecretField label={label} value={v} onChange={setV} defaultRevealed={revealed} error={error} hint="Saved once. dude shows only the last 4 characters after this." placeholder="Paste the value" />;
 }
 
 function ControlledTextarea() {
