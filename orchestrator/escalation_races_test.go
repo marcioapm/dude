@@ -593,7 +593,7 @@ func TestDoneAndRecoveryLockTheDeliveryBeforeTheTask(t *testing.T) {
 				finished <- status
 			}()
 			w.waiters(1)
-			if err := delivery.LockTaskTx(ctx, tx, task, nil); err != nil {
+			if err := delivery.LockTaskTx(ctx, tx, task); err != nil {
 				t.Fatalf("the delivery's holder locking the task: %v (deadlock: %v)", err, deadlocked(err))
 			}
 			if err := tx.Commit(ctx); err != nil {

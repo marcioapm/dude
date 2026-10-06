@@ -81,8 +81,8 @@ func LockEscalationTx(ctx context.Context, tx pgx.Tx, taskID string) (projectID 
 	if d, err = LoadDelivery(ctx, tx, taskID); err != nil {
 		return "", nil, err
 	}
-	var status string
-	if err := lockTask(ctx, tx, taskID, &projectID, &status); err != nil {
+	projectID, status, err := lockTask(ctx, tx, taskID)
+	if err != nil {
 		return "", nil, err
 	}
 	if d != nil {
@@ -94,25 +94,19 @@ func LockEscalationTx(ctx context.Context, tx pgx.Tx, taskID string) (projectID 
 // LockTaskTx locks the task's row for the rest of tx, after its delivery
 // (LockEscalationTx). NO KEY UPDATE: it excludes every other writer of the
 // row (status, ownership's FOR UPDATE) but not the KEY SHARE an insert of a
-// child row takes, which the syncer takes holding a Run's row. projectID,
-// if given, is set.
-func LockTaskTx(ctx context.Context, tx pgx.Tx, taskID string, projectID *string) error {
-	return lockTask(ctx, tx, taskID, projectID, nil)
+// child row takes, which the syncer takes holding a Run's row.
+func LockTaskTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	_, _, err := lockTask(ctx, tx, taskID)
+	return err
 }
 
-func lockTask(ctx context.Context, tx pgx.Tx, taskID string, projectID, status *string) error {
-	var p, s string
-	err := tx.QueryRow(ctx, `SELECT project_id, status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).Scan(&p, &s)
+func lockTask(ctx context.Context, tx pgx.Tx, taskID string) (projectID, status string, err error) {
+	err = tx.QueryRow(ctx, `SELECT project_id, status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).
+		Scan(&projectID, &status)
 	if db.IsNotFound(err) {
-		return escalationErr("not_found", "task %s not found", taskID)
+		return "", "", escalationErr("not_found", "task %s not found", taskID)
 	}
-	if projectID != nil {
-		*projectID = p
-	}
-	if status != nil {
-		*status = s
-	}
-	return err
+	return projectID, status, err
 }
 
 // DecideEscalationTx takes a decision on the task's escalation, in tx, and
