@@ -37,11 +37,13 @@ func loadSecrets(ctx context.Context, tx pgx.Tx, projectID string) ([]lux.Secret
 	})
 }
 
-// declaredSecrets are the names of a preview spec's project secrets.
-func declaredSecrets(spec lux.Spec) []string {
+// acceptedSecrets are the names of the project secrets of the Run lux
+// accepted, from its stored spec: on a retried submit lux answers with the
+// first submit's Run, whatever the retry's spec declared.
+func acceptedSecrets(lr lux.Run) []string {
 	names := []string{}
-	for _, s := range spec.Secrets {
-		if s.As == previewSecretAs {
+	for _, s := range lr.Spec.Secrets {
+		if s.As == previewSecretAs && !s.RunnerOnly {
 			names = append(names, s.Name)
 		}
 	}

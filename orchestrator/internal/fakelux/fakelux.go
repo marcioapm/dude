@@ -1457,13 +1457,25 @@ func (s *Server) view(run *Run) map[string]any {
 			host = p.HostName
 		}
 	}
-	// The stored spec, as lux returns it: every secret's value dropped.
+	// The stored spec, as lux returns it: every secret's value dropped, its
+	// as normalized and a credential marked runnerOnly (lux's Normalize).
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	runnerOnly := runnerOnlySecrets(run.Spec)
 	if secrets, ok := spec["secrets"].([]any); ok {
 		for _, sec := range secrets {
 			if m, ok := sec.(map[string]any); ok {
 				delete(m, "value")
+				name, _ := m["name"].(string)
+				if as, _ := m["as"].(string); as == "" {
+					m["as"] = "env"
+					if runnerOnly[name] {
+						m["as"] = "none"
+					}
+				}
+				if runnerOnly[name] {
+					m["runnerOnly"] = true
+				}
 			}
 		}
 	}
