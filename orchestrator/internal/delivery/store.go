@@ -556,7 +556,9 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 // the task on, is never undone. Blockers (waitBlocked) keep it waiting; the
 // candidate stays in the ledger for the next settlement to reconsider.
 func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID string) error {
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+	// NO KEY UPDATE, as LockTaskTx: a stronger lock taken after it would
+	// wait on a child row's insert whose transaction then updates the task.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID); err != nil {
 		return err
 	}
 	var before string
@@ -576,7 +578,7 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 // conductor's question (EndConductorWait's candidate), blocked or not: such
 // a wait is ended only by EndConductorWait, which restores its saved status.
 func ConductorOwnsWait(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID); err != nil {
 		return false, err
 	}
 	var owned bool
