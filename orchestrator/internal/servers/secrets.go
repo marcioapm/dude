@@ -3,9 +3,11 @@ package servers
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -110,6 +112,75 @@ func (p *Previews) cancelForReplacement(ctx context.Context, r previewRun) error
 	return nil
 }
 
+// carryServers records, before a preview's lux Run is replaced, the servers
+// a person added to it: neither its spec's (the new spec has the project's
+// autostart servers) nor a wakeable preview's own (attached to every Run).
+// restoreServers adds them to the new Run. A Run lux no longer has carries
+// nothing.
+func (p *Previews) carryServers(ctx context.Context, tx pgx.Tx, r previewRun) error {
+	list, err := p.Lux.Servers(ctx, r.LuxRunID)
+	if lux.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT name FROM preview_servers WHERE run_id = $1`, r.ID)
+	if err != nil {
+		return err
+	}
+	own, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	var carried []lux.ServerInput
+	if err := tx.QueryRow(ctx, `SELECT carried_servers FROM runs WHERE id = $1`, r.ID).Scan(&carried); err != nil {
+		return err
+	}
+	no := false
+	for _, sv := range list {
+		if sv.FromSpec || slices.Contains(own, sv.Name) ||
+			slices.ContainsFunc(carried, func(c lux.ServerInput) bool { return c.Name == sv.Name }) {
+			continue
+		}
+		// Not started on the new Run by itself, as a resumed Run does not
+		// start an added server: a pending start (startPending), or a
+		// person, starts it.
+		carried = append(carried, lux.ServerInput{Name: sv.Name, Port: sv.Port, Command: sv.Command, Workdir: sv.Workdir,
+			Env: sv.Env, Start: &no})
+	}
+	_, err = tx.Exec(ctx, `UPDATE runs SET carried_servers = $2 WHERE id = $1`, r.ID, db.NonNil(carried))
+	return err
+}
+
+// restoreServers adds the servers carryServers recorded to the preview's
+// new lux Run, before the submit is recorded: a retry of the same submit
+// (same key, same Run) adds them again, one there already being as good.
+// One lux refuses for good (the Run ended meanwhile, a server it will not
+// take) is left out; the recording clears them.
+func (p *Previews) restoreServers(ctx context.Context, r previewRun, luxRunID string) error {
+	var carried []lux.ServerInput
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT carried_servers FROM runs WHERE id = $1`, r.ID).Scan(&carried)
+	}); err != nil {
+		return err
+	}
+	for _, in := range carried {
+		_, err := p.Lux.AddServer(ctx, luxRunID, in)
+		if le, ok := lux.AsError(err); ok && !le.Retryable() {
+			if le.Code != "name_taken" {
+				p.Log.Warn("a server added to the preview's replaced Run was not added to the new one", "run", r.ID,
+					"server", in.Name, "error", le.Message)
+			}
+			err = nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // replaceParked puts a parked preview of the eager path back to pending
 // with a new lux Run to come, its pending starts kept: its own lux Run
 // declared a secret the project no longer has, so it cannot be resumed.
@@ -122,6 +193,9 @@ func (p *Previews) replaceParked(ctx context.Context, r previewRun, gone []strin
 			return err
 		}
 		p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
+		if err := p.carryServers(ctx, tx, r); err != nil {
+			return err
+		}
 		if err := p.cancelForReplacement(ctx, r); err != nil {
 			return err
 		}

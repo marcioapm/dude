@@ -580,6 +580,9 @@ func (p *Previews) replaceRun(ctx context.Context, r *wakeRun, cancel bool) (boo
 		if err != nil || !owned {
 			return err
 		}
+		if err := p.carryServers(ctx, tx, r.previewRun); err != nil {
+			return err
+		}
 		if cancel {
 			if err := p.cancelForReplacement(ctx, r.previewRun); err != nil {
 				return err
@@ -863,6 +866,10 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
+	if err := p.restoreServers(ctx, r.previewRun, lr.ID); err != nil {
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
+	}
 	var repos []string
 	if spec.Git != nil {
 		for _, repo := range spec.Git.Repositories {
@@ -877,7 +884,7 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
 			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1,
-			preview_secrets = $9
+			preview_secrets = $9, carried_servers = '[]'
 			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got,
 			acceptedSecrets(lr))
 		return err

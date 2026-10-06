@@ -38,3 +38,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON project_secrets TO dude_app;
 -- from the project since means the Run cannot resume and a new one is
 -- submitted. Empty for an agent Run, and for a preview from before this.
 ALTER TABLE runs ADD COLUMN preview_secrets text[] NOT NULL DEFAULT '{}';
+
+-- The servers a person added to a preview's lux Run that was replaced
+-- (a removed secret, a failed start), as lux's server input: added to the
+-- new Run once it is recorded, then cleared. The spec's and a wakeable
+-- preview's own servers come with the new Run anyway.
+ALTER TABLE runs ADD COLUMN carried_servers jsonb NOT NULL DEFAULT '[]';
