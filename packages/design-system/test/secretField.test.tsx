@@ -137,7 +137,7 @@ describe("SecretField", () => {
     expect(seen.at(-1)).toBe("a\nX\nYb");
   });
 
-  test("typing while masked edits the whole value where it was made, its line breaks kept", async () => {
+  test("typing while masked edits the whole value, its line breaks kept", async () => {
     const { field } = await render("one\ntwo");
     const masked = field() as HTMLInputElement;
     await edit(masked, "insertText", [6, 6], "onetwo!");
