@@ -49,35 +49,55 @@ type EscalationDecision struct {
 	Authorize func() error
 }
 
-// LockEscalationTx takes the locks every path that reads or changes an
-// escalation's decision or its question takes, in this order: the task's
-// row, alone, then its latest delivery, read in a statement of its own
-// after the task lock was granted, so a decision committed while this one
-// waited is seen. Questions are locked only after both. Ownership changes
-// take the same task row (control-plane setTaskPeople, passOnTasks), so an
-// owner read under this lock is the current one. The delivery is nil when
-// the task has none.
+// LockEscalationTx takes the locks a path that reads or changes an
+// escalation's decision takes, in dude's lock order:
+//
+//	LockChat (where the path takes it) → the latest delivery (LoadDelivery)
+//	→ the task's row (LockTaskTx) → questions → Runs.
+//
+// It is the order of the delivery's other writers: parked → AskTx →
+// SetTaskStatusTx, and an ending SetTaskStatusTx (lockAndRefuseWhileMovingTx
+// before its UPDATE tasks). The delivery's FOR UPDATE, granted after a wait,
+// returns the row's newest version, so a decision committed meanwhile is
+// seen. The task's row is locked in a statement of its own after it, and
+// its status re-read there: the delivery statement's join reads the task as
+// of its snapshot. Ownership changes take the task's row (setTaskPeople,
+// passOnTasks), so an owner read after this is the current one. The
+// delivery is nil when the task has none; the task's row is locked anyway.
 func LockEscalationTx(ctx context.Context, tx pgx.Tx, taskID string) (projectID string, d *Delivery, err error) {
-	if err := LockTaskTx(ctx, tx, taskID, &projectID); err != nil {
+	if d, err = LoadDelivery(ctx, tx, taskID); err != nil {
 		return "", nil, err
 	}
-	d, err = LoadDelivery(ctx, tx, taskID)
-	return projectID, d, err
+	var status string
+	if err := lockTask(ctx, tx, taskID, &projectID, &status); err != nil {
+		return "", nil, err
+	}
+	if d != nil {
+		d.TaskStatus = status
+	}
+	return projectID, d, nil
 }
 
-// LockTaskTx locks the task's row for the rest of tx: the first lock of an
-// escalation path (LockEscalationTx). NO KEY UPDATE: it excludes every other
-// writer of the row (status, ownership's FOR UPDATE) but not the KEY SHARE an
-// insert of a child row takes, which the syncer takes holding a Run's row.
-// projectID, if given, is set.
+// LockTaskTx locks the task's row for the rest of tx, after its delivery
+// (LockEscalationTx). NO KEY UPDATE: it excludes every other writer of the
+// row (status, ownership's FOR UPDATE) but not the KEY SHARE an insert of a
+// child row takes, which the syncer takes holding a Run's row. projectID,
+// if given, is set.
 func LockTaskTx(ctx context.Context, tx pgx.Tx, taskID string, projectID *string) error {
-	var p string
-	err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).Scan(&p)
+	return lockTask(ctx, tx, taskID, projectID, nil)
+}
+
+func lockTask(ctx context.Context, tx pgx.Tx, taskID string, projectID, status *string) error {
+	var p, s string
+	err := tx.QueryRow(ctx, `SELECT project_id, status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).Scan(&p, &s)
 	if db.IsNotFound(err) {
 		return escalationErr("not_found", "task %s not found", taskID)
 	}
 	if projectID != nil {
 		*projectID = p
+	}
+	if status != nil {
+		*status = s
 	}
 	return err
 }
@@ -227,15 +247,16 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 // note. A free answer, or one to an escalation no longer waiting, decides
 // nothing: it reaches the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
-	// The answer routes took the task's row before the question
-	// (LockEscalationTx's order); taken again here, it is held already.
-	if err := LockTaskTx(ctx, tx, taskID, nil); err != nil {
+	// The answer routes took the delivery and the task's row before the
+	// question (LockEscalationTx); taken again here, they are held already.
+	_, d, err := LockEscalationTx(ctx, tx, taskID)
+	if err != nil {
 		return err
 	}
 	var key, prompt, answer string
 	var options, actions []string
 	var rawOpts, rawActions []byte
-	err := tx.QueryRow(ctx, `SELECT COALESCE(escalation, ''), prompt, COALESCE(answer, ''), options, COALESCE(actions, '[]')
+	err = tx.QueryRow(ctx, `SELECT COALESCE(escalation, ''), prompt, COALESCE(answer, ''), options, COALESCE(actions, '[]')
 		FROM questions WHERE id = $1`, questionID).Scan(&key, &prompt, &answer, &rawOpts, &rawActions)
 	if err != nil || key == "" {
 		return err
@@ -246,9 +267,8 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	if i < 0 || i >= len(actions) {
 		return nil
 	}
-	d, err := LoadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil || !waitingOn(d, key) {
-		return err
+	if d == nil || !waitingOn(d, key) {
+		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
 		Note:      escalationNote(prompt, answer, ""),
