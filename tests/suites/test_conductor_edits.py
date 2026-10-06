@@ -43,8 +43,12 @@ def _events(client: ApiClient, task_id: str, kind: str) -> list[dict]:
     return [e for e in client.events(taskId=task_id, limit=1000) if e["eventType"] == kind]
 
 
+def _woken_texts(client: ApiClient, task_id: str, words: str) -> list[str]:
+    return [t for e in _events(client, task_id, "conductor.woken") if words in (t := e["payload"].get("text", ""))]
+
+
 def _woken_with(client: ApiClient, task_id: str, words: str) -> bool:
-    return any(words in e["payload"].get("text", "") for e in _events(client, task_id, "conductor.woken"))
+    return bool(_woken_texts(client, task_id, words))
 
 
 def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str,
@@ -123,10 +127,6 @@ def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str,
     expect(line).to_contain_text("Conductor", timeout=30_000)
     expect(line).to_contain_text("README.md")
     assert console_errors == []
-
-
-def _woken_texts(client: ApiClient, task_id: str, words: str) -> list[str]:
-    return [t for e in _events(client, task_id, "conductor.woken") if words in (t := e["payload"].get("text", ""))]
 
 
 def test_a_conductor_stopped_mid_rebase_is_resumed_into_it_and_publishes_once_it_is_finished(
