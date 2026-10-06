@@ -254,21 +254,7 @@ func TestAnAnswerWhileTheConductorsReplyPostsDoesNotWaitForGitHub(t *testing.T) 
 		t.Fatal("the conductor's question was not recorded")
 	}
 	spec := w.conductorSpecOf(task)
-	held, release := w.heldPost()
-	type result struct {
-		status int
-		body   string
-	}
-	replied := make(chan result, 1)
-	go func() {
-		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "reply_on_pull_request", `{"pr":"1","text":"The task asks for it."}`)
-		replied <- result{status, body}
-	}()
-	select {
-	case <-held:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the reply was never posted")
-	}
+	replied, release := w.replyHeldOnGitHub(spec, `{"pr":"1","text":"The task asks for it."}`)
 	answered := make(chan int, 1)
 	go func() {
 		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Yes, say so."})
@@ -323,6 +309,31 @@ func (w *world) heldPost() (held <-chan struct{}, release func()) {
 	return g.held, g.release
 }
 
+// toolResult is a tool call's HTTP status and body.
+type toolResult struct {
+	status int
+	body   string
+}
+
+// replyHeldOnGitHub calls reply_on_pull_request as the conductor whose spec
+// is given and returns once its comment post has reached the fake GitHub,
+// which holds it until release.
+func (w *world) replyHeldOnGitHub(spec, args string) (replied <-chan toolResult, release func()) {
+	w.t.Helper()
+	held, release := w.heldPost()
+	out := make(chan toolResult, 1)
+	go func() {
+		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "reply_on_pull_request", args)
+		out <- toolResult{status, body}
+	}()
+	select {
+	case <-held:
+	case <-time.After(20 * time.Second):
+		w.t.Fatal("the reply was never posted")
+	}
+	return out, release
+}
+
 // A conductor replaced while its reply waits on GitHub did post it: the
 // call answers with the comment, and Chat records it on the Run that
 // posted it, not on its successor.
@@ -333,21 +344,7 @@ func TestAConductorReplacedWhileItsReplyPostsStillRecordsIt(t *testing.T) {
 	w.until("the message", func() bool { w.sync(); return w.mentions(task) == 1 })
 	spec := w.conductorSpecOf(task)
 	first, _, _ := w.conductor(task)
-	held, release := w.heldPost()
-	type result struct {
-		status int
-		body   string
-	}
-	replied := make(chan result, 1)
-	go func() {
-		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "reply_on_pull_request", `{"pr":"1","text":"Hi."}`)
-		replied <- result{status, body}
-	}()
-	select {
-	case <-held:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the reply was never posted")
-	}
+	replied, release := w.replyHeldOnGitHub(spec, `{"pr":"1","text":"Hi."}`)
 	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
 	if status, out := w.chat(task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)

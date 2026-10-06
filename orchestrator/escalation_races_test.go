@@ -234,14 +234,10 @@ func TestAQuestionRacingTheBannerIsRefused(t *testing.T) {
 		return delivery.DecideEscalationTx(context.Background(), tx, w.org, task,
 			delivery.EscalationDecision{Action: "accept", ActorType: "human", ActorID: "banner"})
 	})
-	type result struct {
-		status int
-		body   string
-	}
-	asked := make(chan result, 1)
+	asked := make(chan toolResult, 1)
 	go func() {
 		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "ask_person", escalationQuestion)
-		asked <- result{status, body}
+		asked <- toolResult{status, body}
 	}()
 	w.waiters(1)
 	if err := release(); err != nil {
