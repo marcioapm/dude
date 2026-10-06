@@ -274,7 +274,7 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	if i < 0 || i >= len(actions) {
 		return nil
 	}
-	if d == nil || !waitingOn(d, key) {
+	if !waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != key {
 		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
@@ -289,11 +289,14 @@ func choiceOf(choices []string, answer string) int {
 	return slices.IndexFunc(choices, func(o string) bool { return strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(answer)) })
 }
 
-// waitingOn says the delivery waits at decide on the escalation key names,
-// undecided.
-func waitingOn(d *Delivery, key string) bool {
+// waitsAtDecide says the delivery waits at decide on an escalation not yet
+// decided.
+func waitsAtDecide(d *Delivery) bool {
+	if d == nil {
+		return false
+	}
 	e := d.State.Escalation
-	return d.Live() && d.Step == "decide" && e != nil && e.Decided == nil && EscalationKey(d.WorkflowID, d.State.Escalations) == key
+	return d.Live() && d.Step == "decide" && e != nil && e.Decided == nil
 }
 
 // escalationNote is the note a decision on the conductor's question
@@ -324,8 +327,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, act
 			"out, and you are woken at the next decision", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
 			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
 	}
-	waiting := d != nil && d.State.conducted() && d.Live() && d.Step == "decide" && d.State.Escalation != nil
-	if !waiting {
+	if !waitsAtDecide(d) || !d.State.conducted() {
 		if len(actions) > 0 {
 			return "", refusef("actions are for a question about an escalation waiting on a person; there is none")
 		}
@@ -378,7 +380,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	const banner = "a person decides it on the banner, or by answering your question about it (ask_person, the " +
 		"escalation's actions as choices)"
-	if d == nil || !d.State.conducted() || d.Step != "decide" || d.State.Escalation == nil || d.State.Escalation.Decided != nil || !d.Live() {
+	if !waitsAtDecide(d) || !d.State.conducted() {
 		return nil, refusef("no escalation waits on a decision now: decide_escalation is only for one the owner handed you "+
 			"with a free answer; %s", banner)
 	}
