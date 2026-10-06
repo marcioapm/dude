@@ -380,3 +380,141 @@ func TestTheOwnerChangingDuringAnAnswerRefusesIt(t *testing.T) {
 		t.Errorf("decided on a former owner's answer: %v", d)
 	}
 }
+
+// removal is the control plane removing a person (people.ts removePerson
+// and passOnTasks), its statements one by one in tx, uncommitted: the
+// person's row, their keys and memberships, then each task they owned
+// passed to its next person.
+func (w *world) removal(tx pgx.Tx, person string) error {
+	ctx := context.Background()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT role FROM people WHERE id = $1 AND removed_at IS NULL FOR UPDATE`, person); err != nil {
+		return err
+	}
+	for _, sql := range []string{`UPDATE people SET removed_at = now() WHERE id = $1`,
+		`UPDATE api_keys SET revoked_at = now() WHERE person_id = $1 AND revoked_at IS NULL`,
+		`DELETE FROM push_subscriptions WHERE person_id = $1`} {
+		if _, err := tx.Exec(ctx, sql, person); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.Query(ctx, `SELECT tp.task_id FROM task_people tp WHERE tp.person_id = $1 AND NOT EXISTS (
+			SELECT 1 FROM task_people earlier JOIN people p ON p.id = earlier.person_id
+			WHERE earlier.task_id = tp.task_id AND p.removed_at IS NULL
+			  AND (earlier.position, earlier.person_id) < (tp.position, tp.person_id))`, person)
+	if err != nil {
+		return err
+	}
+	owned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM task_people WHERE person_id = $1`, person); err != nil {
+		return err
+	}
+	for _, task := range owned {
+		var next, key *string
+		err := tx.QueryRow(ctx, `SELECT tp.person_id FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = $1 AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1`, task).Scan(&next)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if next != nil {
+			err := tx.QueryRow(ctx, `SELECT k.id FROM api_keys k JOIN people p ON p.id = k.person_id
+				WHERE k.person_id = $1 AND k.revoked_at IS NULL AND p.removed_at IS NULL
+				ORDER BY k.last_used_at DESC NULLS LAST, k.created_at DESC LIMIT 1`, *next).Scan(&key)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, task, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handedOverWithBo is handedOver with Bo following the task, its owner once
+// Ana is removed. Returns Ana's person id.
+func handedOverWithBo(t *testing.T) (*world, string, string, delivery.RunRef) {
+	w, task, ana, ref := handedOver(t)
+	bo := w.person("Bo")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		SELECT $1, person_id, organization_id, 1 FROM api_keys WHERE id = $2`, task, bo)
+	var person string
+	if err := w.owner.QueryRow(context.Background(), `SELECT person_id FROM api_keys WHERE id = $1`, ana).Scan(&person); err != nil {
+		t.Fatal(err)
+	}
+	return w, task, person, ref
+}
+
+// Ana, the owner whose answer the conductor decides on, is removed while
+// it decides. Its decision holding the task's row, the removal goes on up to
+// passing the task on, waits there, and completes once the decision commits
+// on the owner it read: the decision, then the removal.
+func TestRemovingTheOwnerDuringTheConductorsDecisionWaitsForIt(t *testing.T) {
+	w, task, ana, ref := handedOverWithBo(t)
+	release := w.held(func(tx pgx.Tx) error {
+		_, err := delivery.ConductDecideEscalation(context.Background(), tx, ref, "retry", "")
+		return err
+	})
+	ctx := context.Background()
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	removed := make(chan error, 1)
+	go func() { removed <- w.removal(tx, ana) }()
+	w.waiters(1)
+	if err := release(); err != nil {
+		t.Fatalf("the conductor's decision: %v", err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatalf("the removal: %v (deadlock: %v)", err, deadlocked(err))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := w.decided(task); d["action"] != "retry" || d["conductor"] != ref.RunID {
+		t.Errorf("the decision is %v, want the conductor's retry", d)
+	}
+	if n := w.count(`SELECT count(*) FROM people WHERE id = $1 AND removed_at IS NOT NULL`, ana); n != 1 {
+		t.Error("Ana was not removed")
+	}
+}
+
+// Ana is removed, uncommitted, before the conductor decides on her answer:
+// the decision waits for the task's row the removal changed, then finds Bo
+// its owner, who never answered: refused, nothing decided.
+func TestTheConductorsDecisionAfterTheOwnersRemovalIsRefused(t *testing.T) {
+	w, task, ana, ref := handedOverWithBo(t)
+	ctx := context.Background()
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := w.removal(tx, ana); err != nil {
+		t.Fatalf("the removal: %v", err)
+	}
+	decided := make(chan error, 1)
+	go func() {
+		decided <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			_, err := delivery.ConductDecideEscalation(ctx, tx, ref, "retry", "")
+			return err
+		})
+	}()
+	w.waiters(1)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-decided; err == nil || !strings.Contains(err.Error(), "not the task's owner") {
+		t.Errorf("the conductor's decision after the owner was removed: %v, want refused as not the owner's answer", err)
+	}
+	if d := w.decided(task); d != nil {
+		t.Errorf("decided on a removed owner's answer: %v", d)
+	}
+}
