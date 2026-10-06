@@ -40,6 +40,12 @@ describe("a secret's name", () => {
     expect(secretNameProblem("DUDE_REGISTRY_AUTH", project)).toEqual({ kind: "invalid", message: "dude sets DUDE_REGISTRY_AUTH itself." });
   });
 
+  test("at most 63 characters, as lux takes a secret's name", () => {
+    expect(secretNameProblem("A".repeat(63), project)).toBeNull();
+    expect(secretNameProblem("A".repeat(64), project)).toEqual({ kind: "invalid", message: "At most 63 characters." });
+    expect(addSecretSchema.safeParse({ name: "A".repeat(64), value: "v" }).success).toBe(false);
+  });
+
   test("a name the project has is a conflict", () => {
     expect(secretNameProblem("SEED_LLM_KEY", project)).toEqual({ kind: "conflict", message: "There is already a SEED_LLM_KEY. Replace its value instead." });
   });

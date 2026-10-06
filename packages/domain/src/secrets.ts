@@ -18,12 +18,16 @@ export const DUDE_SECRET_NAMES = ["GIT_TOKEN", "DUDE_TOOLS_AUTH", "DUDE_REGISTRY
 /** A value's most UTF-8 bytes: well under lux's 8 MiB request and Linux's 128 KiB per variable. */
 export const SECRET_VALUE_MAX_BYTES = 32 * 1024;
 
+export const SECRET_NAME_MAX = 63;
+
 export const SECRET_NAME_HELP = "Letters, digits and _, starting with a letter or _. Upper case by convention.";
 export const SECRET_VALUE_HELP = "Saved once. dude shows only the last 4 characters after this.";
 
 /** Why a name cannot be a secret at all, whatever the project has; null if it can. */
 export function secretNameShapeProblem(name: string): string | null {
   if (!ENV_NAME.test(name)) return "Use letters, digits and _ only, starting with a letter or _.";
+  // lux v0.1.11 refuses a secret name past 63 characters (internal/spec nameRe), and with it the whole preview.
+  if (name.length > SECRET_NAME_MAX) return `At most ${SECRET_NAME_MAX} characters.`;
   if (/^lux_/i.test(name)) return "Names starting with LUX_ are lux’s own.";
   if (name === "GIT_TOKEN") return "dude sets GIT_TOKEN itself, from the GitHub connection.";
   if ((DUDE_SECRET_NAMES as readonly string[]).includes(name)) return `dude sets ${name} itself.`;
@@ -102,7 +106,7 @@ export function secretHint(value: string): string {
   return Array.from(v).slice(-4).join("");
 }
 
-export const secretNameSchema = z.string().max(200).superRefine((n, ctx) => {
+export const secretNameSchema = z.string().superRefine((n, ctx) => {
   const p = secretNameShapeProblem(n);
   if (p) ctx.addIssue({ code: z.ZodIssueCode.custom, message: p });
 });
