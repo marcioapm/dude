@@ -36,6 +36,8 @@ describe("a secret's name", () => {
   test("the names dude sets itself are refused", () => {
     expect(secretNameProblem("GIT_TOKEN", project)).toEqual({ kind: "invalid", message: "dude sets GIT_TOKEN itself, from the GitHub connection." });
     expect(secretNameProblem("DUDE_TOOLS_AUTH", project)?.kind).toBe("invalid");
+    // A preview's registry login, beside its own secrets.
+    expect(secretNameProblem("DUDE_REGISTRY_AUTH", project)).toEqual({ kind: "invalid", message: "dude sets DUDE_REGISTRY_AUTH itself." });
   });
 
   test("a name the project has is a conflict", () => {
