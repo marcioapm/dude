@@ -8,10 +8,10 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { formatTimestamp } from "@dude/design-system";
 import { SettingRow, SettingsNote } from "@dude/design-system/components";
-import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, SecretField, Table, TBody, Td, Th, THead, Tooltip, Tr } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, SecretField, Table, TBody, Td, Th, THead, Tooltip, Tr, useToast } from "@dude/design-system/primitives";
 import { SECRET_NAME_HELP, SECRET_VALUE_HELP, secretNameProblem, secretValueProblem, type PreviewSecret, type RecipeEnvNames } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
-import { FormDialog, useSave } from "../hooks/useSave.tsx";
+import { FormDialog, errorText } from "../hooks/useSave.tsx";
 
 export const SECRETS_HELP = "Environment variables every preview gets, in its servers and their setup scripts. Agents never see them.";
 export const SECRETS_NOTE = "A new value reaches running previews when they next wake. A secret added or removed reaches previews started after the change; restart a preview to give it the change now.";
@@ -29,19 +29,50 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState<Editing | null>(null);
-  const { busy, problem, save, clear } = useSave();
+  const { toast } = useToast();
+  // Each dialog opened is a generation of its own; closing one moves it on.
+  // A request belongs to the dialog that made it: once that has closed, its
+  // answer may still refresh the list and toast, but it closes, focuses
+  // and says nothing in a newer dialog. Busy and problem are the current
+  // dialog's alone, so a newer dialog is never held by an older request.
+  const generation = useRef(0);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
-  const close = () => {
-    setEditing(null);
-    clear();
+  const open = (next: Editing) => {
+    generation.current++;
+    setBusy(false);
+    setProblem(null);
+    setEditing(next);
   };
-  const done = () => {
-    close();
+  const close = () => {
+    generation.current++;
+    setBusy(false);
+    setProblem(null);
+    setEditing(null);
+  };
+  const save = async (action: () => Promise<unknown>, done: string) => {
+    const mine = generation.current;
+    const current = () => generation.current === mine;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await action();
+    } catch (err) {
+      if (current()) {
+        setBusy(false);
+        setProblem(errorText(err));
+      }
+      return;
+    }
+    toast({ title: done, tone: "success" });
     onChanged();
+    if (!current()) return;
+    close();
     addButton.current?.focus();
   };
   const addAction = canEdit ? (
-    <Button ref={addButton} variant="secondary" leadingIcon="plus" onClick={() => setEditing({ kind: "add" })} data-testid="add-secret">Add secret</Button>
+    <Button ref={addButton} variant="secondary" leadingIcon="plus" onClick={() => open({ kind: "add" })} data-testid="add-secret">Add secret</Button>
   ) : undefined;
 
   return (
@@ -71,9 +102,9 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
                     {canEdit ? (
                       <Td align="right">
                         <RowMenu size="sm" label={`Actions for ${s.name}`} items={[
-                          { id: "replace", label: "Replace value", icon: "edit", onSelect: () => setEditing({ kind: "replace", secret: s }) },
+                          { id: "replace", label: "Replace value", icon: "edit", onSelect: () => open({ kind: "replace", secret: s }) },
                           { kind: "separator" },
-                          { id: "remove", label: "Remove", tone: "danger", onSelect: () => setEditing({ kind: "remove", secret: s }) },
+                          { id: "remove", label: "Remove", tone: "danger", onSelect: () => open({ kind: "remove", secret: s }) },
                         ]} />
                       </Td>
                     ) : null}
@@ -90,11 +121,11 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
 
       {editing?.kind === "add" ? (
         <AddSecretDialog projectName={projectName} secrets={secrets} recipes={recipes} busy={busy} problem={problem} onClose={close}
-          onSubmit={(name, value) => void save(() => client.addProjectSecret(projectId, name, value), done, `${name} added`)} />
+          onSubmit={(name, value) => void save(() => client.addProjectSecret(projectId, name, value), `${name} added`)} />
       ) : null}
       {editing?.kind === "replace" ? (
         <ReplaceSecretDialog secret={editing.secret} busy={busy} problem={problem} onClose={close}
-          onSubmit={(value) => void save(() => client.replaceProjectSecret(projectId, editing.secret.name, value), done, `${editing.secret.name} value replaced`)} />
+          onSubmit={(value) => void save(() => client.replaceProjectSecret(projectId, editing.secret.name, value), `${editing.secret.name} value replaced`)} />
       ) : null}
       <Dialog
         open={editing?.kind === "remove"}
@@ -109,7 +140,7 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
             <Button variant="danger" solid disabled={busy} data-testid="secret-remove" onClick={() => {
               if (editing?.kind !== "remove") return;
               const name = editing.secret.name;
-              void save(() => client.removeProjectSecret(projectId, name), done, `${name} removed`);
+              void save(() => client.removeProjectSecret(projectId, name), `${name} removed`);
             }}>
               Remove
             </Button>

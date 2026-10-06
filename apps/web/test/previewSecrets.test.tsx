@@ -235,6 +235,116 @@ describe("Add a secret", () => {
   });
 });
 
+describe("a request outlives the dialog that made it", () => {
+  /** A request held until the test settles it. */
+  function held() {
+    let settle!: { resolve: () => void; reject: (e: Error) => void };
+    const promise = new Promise<void>((resolve, reject) => { settle = { resolve, reject }; });
+    return { promise, ...settle! };
+  }
+  class Held extends Recording {
+    pending = held();
+    override async addProjectSecret(projectId: string, name: string, value: string) {
+      this.asked.push(`add ${name}`);
+      await this.pending.promise;
+      return { name, hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
+    }
+    override async replaceProjectSecret(projectId: string, name: string, value: string) {
+      this.asked.push(`replace ${name}`);
+      await this.pending.promise;
+      return { name, hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
+    }
+    override async removeProjectSecret(projectId: string, name: string) {
+      this.asked.push(`remove ${name}`);
+      await this.pending.promise;
+    }
+  }
+
+  async function renderHeld() {
+    const client = new Held("a");
+    let changed = 0;
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider>
+        <PreviewSecretsRow client={client} projectId="prj" projectName="Jervasion" secrets={SECRETS} recipes={RECIPES} canEdit onChanged={() => changed++} />
+      </ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    return { container, client, changed: () => changed };
+  }
+
+  /** Adds FIRST_KEY, cancels while it is pending, and opens Add again with NEXT_KEY typed. */
+  async function cancelledAddThenAnother() {
+    const r = await renderHeld();
+    await click(byRole(r.container, "button", "Add secret"));
+    let d = await dialog();
+    await typeInto(byLabel(d, "Name"), "FIRST_KEY");
+    await typeInto(byLabel(d, "Value"), "first-value");
+    await click(byRole(d, "button", "Add secret"));
+    expect(r.client.asked).toEqual(["add FIRST_KEY"]);
+    // Cancel stays available while it is pending: the request is the old dialog's.
+    const cancel = byRole<HTMLButtonElement>(d, "button", "Cancel");
+    expect(cancel.disabled).toBe(false);
+    await click(cancel);
+    expect(allByRole(document.body, "dialog")).toHaveLength(0);
+    await click(byRole(r.container, "button", "Add secret"));
+    d = await dialog();
+    await typeInto(byLabel(d, "Name"), "NEXT_KEY");
+    await typeInto(byLabel(d, "Value"), "next-unsaved-value");
+    return { ...r, d };
+  }
+
+  test("its success refreshes the list and says so, and leaves a newer dialog open as it is", async () => {
+    const { client, changed } = await cancelledAddThenAnother();
+    await act(async () => client.pending.resolve());
+    await settle();
+    expect(toasts().some((t) => t.includes("FIRST_KEY added"))).toBe(true);
+    expect(changed()).toBe(1);
+    const d = allByRole(document.body, "dialog");
+    expect(d).toHaveLength(1);
+    expect(byLabel<HTMLInputElement>(d[0]!, "Name").value).toBe("NEXT_KEY");
+    expect(byLabel<HTMLInputElement>(d[0]!, "Value").value).toBe("next-unsaved-value");
+    expect(document.activeElement).not.toBe(byRole(document.body, "button", "Add secret"));
+    // The newer dialog's own submit is its own, not held busy by the old request.
+    expect(byRole<HTMLButtonElement>(d[0]!, "button", "Add secret").disabled).toBe(false);
+  });
+
+  test("its failure is not put into a newer dialog", async () => {
+    const { client, d, changed } = await cancelledAddThenAnother();
+    // Busy is the old dialog's: the newer one can submit.
+    expect(byRole<HTMLButtonElement>(d, "button", "Add secret").disabled).toBe(false);
+    await act(async () => client.pending.reject(new Error("FIRST_KEY was refused")));
+    await settle();
+    expect(changed()).toBe(0);
+    const open = allByRole(document.body, "dialog");
+    expect(open).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("FIRST_KEY was refused");
+    expect(byLabel<HTMLInputElement>(open[0]!, "Value").value).toBe("next-unsaved-value");
+  });
+
+  test("a replace or a remove whose dialog was closed leaves the next one alone", async () => {
+    for (const [item, submit, title] of [["Replace value", "Replace", "Replace SEED_LLM_KEY"], ["Remove", "Remove", "Remove SEED_LLM_KEY?"]] as const) {
+      const r = await renderHeld();
+      await menuItem(r.container, "SEED_LLM_KEY", item);
+      let d = await dialog();
+      if (item === "Replace value") await typeInto(byLabel(d, "New value"), "old-dialog-value");
+      await click(byRole(d, "button", submit));
+      await click(byRole(d, "button", "Cancel"));
+      await menuItem(r.container, "STRIPE_TEST_KEY", "Replace value");
+      d = await dialog();
+      await typeInto(byLabel(d, "New value"), "newer-dialog-value");
+      await act(async () => r.client.pending.reject(new Error(`${title} was refused`)));
+      await settle();
+      expect(`${item}: ${document.body.textContent?.includes(`${title} was refused`)}`).toBe(`${item}: false`);
+      const open = allByRole(document.body, "dialog");
+      expect(open).toHaveLength(1);
+      expect(open[0]!.textContent).toContain("Replace STRIPE_TEST_KEY");
+      expect(byLabel<HTMLInputElement>(open[0]!, "New value").value).toBe("newer-dialog-value");
+      for (const unmount of mounted.splice(0)) await unmount();
+      document.body.innerHTML = "";
+    }
+  });
+});
+
 describe("Replace and Remove", () => {
   test("Replace says what it ends in now and when previews get the new one; the toast names it", async () => {
     const { container, client } = await render();
