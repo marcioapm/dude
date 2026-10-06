@@ -72,9 +72,20 @@ describe("inferMaskedEdit, when the browser said nothing before the change", () 
     expect(inferMaskedEdit("a\naa", "a", { start: 0, end: 2 }, 0)).toBe("a");
   });
 
-  test("with no known selection, or one that does not explain the change, it refuses", () => {
+  test("with no known selection, or one that does not explain the change, it refuses where a break makes the place matter", () => {
     expect(inferMaskedEdit("a\na", "aaa", null, 1)).toBeNull();
     expect(inferMaskedEdit("a\na", "aaa", { start: 2, end: 2 }, 1)).toBeNull();
+  });
+
+  test("with no known selection, a value without line breaks takes the change as it is", () => {
+    expect(inferMaskedEdit("abc", "abXc", null, null)).toBe("abXc");
+    expect(inferMaskedEdit("", "sk-test", null, null)).toBe("sk-test");
+  });
+
+  test("with no known selection, a value with a line break refuses: the edit may have reached it", () => {
+    expect(inferMaskedEdit("ab\ncd", "abcXd", null, null)).toBeNull();
+    // "b" selected whole and replaced by "baa" would empty the line breaks too.
+    expect(inferMaskedEdit("\r\nb\n", "baa", null, null)).toBeNull();
   });
 
   test("a collapsed selection whose backward and forward deletes differ, and no caret after, refuses", () => {
@@ -161,6 +172,11 @@ describe("applyMaskedEdit against the reference, on random values with repeated 
       const got = applyMaskedEdit(value, next, { inputType: op, start, end });
       if (got !== want) throw new Error(`seed ${seed}: ${JSON.stringify({ value, op, start, end, text, got, want })}`);
       expect(flatten(got!)).toBe(next);
+      // Not told the edit, nor where: the value made, or none, never another.
+      const guessed = inferMaskedEdit(value, next, null, null);
+      if (guessed !== null && guessed !== want) {
+        throw new Error(`seed ${seed}, no selection: ${JSON.stringify({ value, op, start, end, text, guessed, want })}`);
+      }
     }
   });
 
