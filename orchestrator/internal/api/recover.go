@@ -297,7 +297,7 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	if action == "resume" {
 		rc.At = t.resumeAt()
 		st.PendingRunIDs = append(slices.Clone(t.Kept), t.Unstarted...)
-		if err := resumeKept(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, note); err != nil {
+		if err := escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, note)); err != nil {
 			return err
 		}
 		// Those lux never had start now, as they would have.
@@ -318,11 +318,6 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 			locked_by = NULL, locked_until = NULL
 		WHERE id = $1`, *t.WorkflowID, next)
 	return err
-}
-
-// resumeKept is delivery.ResumeKeptTx, its refusal answered as the API's.
-func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, runIDs []string, note string) error {
-	return escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, projectID, taskID, runIDs, note))
 }
 
 // startOver starts the task's next attempt: a delivery of its own, on a
