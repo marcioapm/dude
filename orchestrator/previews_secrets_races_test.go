@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
 
@@ -158,4 +159,80 @@ func TestAStaleSweepDoesNotReplaceAParkedPreviewAnotherResumed(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_run_id = $2`, runID, old.ID); n != 1 {
 		t.Errorf("the preview no longer runs on its resumed Run:\n%s", w.preview(runID))
 	}
+}
+
+// A wake that decided to replace its Run (a declared secret removed)
+// stalls; meanwhile a person stops the preview. The stale wake neither
+// submits a new Run onto the stopped preview nor leaves one running: the
+// preview stays completed, and every lux Run it had ends cancelled.
+func TestAStaleReplacementDoesNotSubmitAfterStopPreview(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.secret("OLD_KEY", seedKey)
+	runID, _ := w.asleepPreview()
+	old := w.luxRuns()[0]
+	w.removeSecret("OLD_KEY")
+	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = clock_timestamp() WHERE id = $1`, runID)
+	gate, sweep := w.staleSweeper()
+	swept := sweep()
+	wait(t, gate.reached, "the stale wake to read the secrets")
+	task := w.str(`SELECT task_id FROM runs WHERE id = $1`, runID)
+	if _, err := w.previews.StopPreview(context.Background(), w.org, task, w.actor); err != nil {
+		t.Fatal(err)
+	}
+	close(gate.release)
+	if err := <-swept; err != nil {
+		t.Fatal(err)
+	}
+	w.until("every lux Run of the stopped preview cancelled", func() bool {
+		for _, r := range w.luxRuns() {
+			if r != nil && !r.Cancelled {
+				return false
+			}
+		}
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND op_token IS NULL`, runID) == 1
+	})
+	if n := len(w.luxRuns()); n != 1 {
+		t.Errorf("a stale wake submitted %d new Run(s) for a stopped preview: old calls %v\n%s", n-1, w.lux.CallsOf(old.ID), w.preview(runID))
+	}
+}
+
+// The wake's replacement got as far as submitting a new Run when the
+// preview was stopped: the Run it made is cancelled, not left orphaned.
+func TestAPreviewStoppedWhileItsReplacementSubmitsCancelsTheNewRun(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.secret("OLD_KEY", seedKey)
+	runID, _ := w.asleepPreview()
+	w.removeSecret("OLD_KEY")
+	task := w.str(`SELECT task_id FROM runs WHERE id = $1`, runID)
+	w.previews.Lux = &stopOnSubmit{Client: w.previews.Lux, stop: func() {
+		if _, err := w.previews.StopPreview(context.Background(), w.org, task, w.actor); err != nil {
+			w.t.Error(err)
+		}
+	}}
+	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = clock_timestamp() WHERE id = $1`, runID)
+	w.until("the stopped preview's Runs cancelled", func() bool {
+		runs := w.luxRuns()
+		return len(runs) == 2 && runs[0].Cancelled && runs[1].Cancelled &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, runID); n != 0 {
+		t.Errorf("the stopped preview recorded the Run submitted after its stop:\n%s", w.preview(runID))
+	}
+}
+
+// stopOnSubmit stops the preview (stop) once lux has accepted a submit.
+type stopOnSubmit struct {
+	lux.Client
+	once sync.Once
+	stop func()
+}
+
+func (c *stopOnSubmit) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	r, err := c.Client.Submit(ctx, spec, key)
+	if err == nil {
+		c.once.Do(c.stop)
+	}
+	return r, err
 }

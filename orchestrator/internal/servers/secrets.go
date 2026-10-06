@@ -112,19 +112,47 @@ func (p *Previews) cancelForReplacement(ctx context.Context, r previewRun) error
 	return nil
 }
 
-// carryServers records, before a preview's lux Run is replaced, the servers
-// a person added to it: neither its spec's (the new spec has the project's
-// autostart servers) nor a wakeable preview's own (attached to every Run).
-// restoreServers adds them to the new Run. A Run lux no longer has carries
-// nothing.
-func (p *Previews) carryServers(ctx context.Context, tx pgx.Tx, r previewRun) error {
-	list, err := p.Lux.Servers(ctx, r.LuxRunID)
-	if lux.IsNotFound(err) {
-		return nil
+// replaceReserved replaces the preview's lux Run under the reservation op:
+// its servers read (to carry), the Run cancelled when cancel, each lux call
+// within the reservation's time; then record, with the carried servers, in
+// one transaction that holds only while op is still the row's. false: the
+// replacement was not recorded (record's condition, or the reservation,
+// no longer held).
+func (p *Previews) replaceReserved(ctx context.Context, op *operation, r previewRun, cancel bool, record func(pgx.Tx) (bool, error)) (bool, error) {
+	octx, stop := op.context(ctx)
+	defer stop()
+	var list []lux.Server
+	err := op.call(octx, func(c context.Context) (err error) {
+		list, err = p.Lux.Servers(c, r.LuxRunID)
+		if lux.IsNotFound(err) {
+			// A Run lux no longer has carries nothing.
+			list, err = nil, nil
+		}
+		return err
+	})
+	if err == nil && cancel {
+		err = op.call(octx, func(c context.Context) error { return p.cancelForReplacement(c, r) })
+	} else if err == nil {
+		p.unfollow(r.ID)
 	}
 	if err != nil {
-		return err
+		p.release(ctx, op)
+		return false, err
 	}
+	return p.finish(ctx, op, func(tx pgx.Tx) (bool, error) {
+		won, err := record(tx)
+		if err != nil || !won {
+			return false, err
+		}
+		return true, recordCarried(ctx, tx, r, list)
+	})
+}
+
+// recordCarried records, as a preview's lux Run is replaced, the servers a
+// person added to it (list, as lux had them): neither its spec's (the new
+// spec has the project's autostart servers) nor a wakeable preview's own
+// (attached to every Run). restoreServers adds them to the new Run.
+func recordCarried(ctx context.Context, tx pgx.Tx, r previewRun, list []lux.Server) error {
 	rows, err := tx.Query(ctx, `SELECT name FROM preview_servers WHERE run_id = $1`, r.ID)
 	if err != nil {
 		return err
@@ -184,25 +212,21 @@ func (p *Previews) restoreServers(ctx context.Context, r previewRun, luxRunID st
 // replaceParked puts a parked preview of the eager path back to pending
 // with a new lux Run to come, its pending starts kept: its own lux Run
 // declared a secret the project no longer has, so it cannot be resumed.
-// The row is held from the check through the cancel and the update, as a
-// resume holds it (parkedOn): a sweep that read the preview before another
-// moved it on (resumed, replaced) cancels nothing.
+// The row is reserved from the check through the cancel and the update,
+// as a resume reserves it (parkedOnSQL): a sweep that read the preview
+// before another moved it on (resumed, replaced) cancels nothing.
 func (p *Previews) replaceParked(ctx context.Context, r previewRun, gone []string) error {
-	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if parked, err := parkedOn(ctx, tx, r); err != nil || !parked {
-			return err
-		}
-		p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
-		if err := p.carryServers(ctx, tx, r); err != nil {
-			return err
-		}
-		if err := p.cancelForReplacement(ctx, r); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL, lux_after_event = 0,
+	op, _, err := p.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
+	if err != nil || op == nil {
+		return err
+	}
+	p.Log.Info("a secret the preview's Run was submitted with was removed; submitting a new run", "run", r.ID, "secrets", gone)
+	_, err = p.replaceReserved(ctx, op, r, true, func(tx pgx.Tx) (bool, error) {
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'pending', lux_run_id = NULL, lux_state = NULL, lux_after_event = 0,
 			lux_start_event = 0, lux_ran_event = 0, lux_stop_reason = NULL, dude_pause = NULL, preview_secrets = '{}',
 			lux_generation = lux_generation + 1, next_attempt_at = NULL
-			WHERE id = $1`, r.ID)
-		return err
+			WHERE id = $1 AND `+parkedOnSQL, r.ID, r.LuxRunID, r.Generation)
+		return err == nil && tag.RowsAffected() == 1, err
 	})
+	return err
 }
