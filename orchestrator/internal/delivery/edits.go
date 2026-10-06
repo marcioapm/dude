@@ -699,11 +699,12 @@ func CheckoutLine(s lux.SyncResult) string {
 // abort it. Switching branches or merging is refused by git until then,
 // so neither is advised before it.
 func operationLine(repo, ref, op string, behind int) string {
-	finish := fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
+	var finish string
 	switch op {
+	case lux.OperationRebase, lux.OperationAm, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
+		finish = fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
 	case lux.OperationSequencer:
 		finish = "resolve and `git cherry-pick --continue` (or `git revert --continue`), or `git cherry-pick --abort` (or `git revert --abort`)"
-	case lux.OperationRebase, lux.OperationAm, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
 	default:
 		finish = "finish or abort it"
 	}
