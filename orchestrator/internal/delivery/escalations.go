@@ -242,7 +242,7 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	}
 	_ = json.Unmarshal(rawOpts, &options)
 	_ = json.Unmarshal(rawActions, &actions)
-	i := slices.IndexFunc(options, func(o string) bool { return strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(answer)) })
+	i := choiceOf(options, answer)
 	if i < 0 || i >= len(actions) {
 		return nil
 	}
@@ -253,6 +253,13 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
 		Note:      escalationNote(prompt, answer, ""),
 		ActorType: actorType, ActorID: actorID, QuestionID: questionID, AnsweredBy: person})
+}
+
+// choiceOf is the index of the choice an answer picks: equal to it once
+// both are trimmed, whatever the case; -1 for none. EscalationQuestion
+// refuses choices that collide so, so at most one matches.
+func choiceOf(choices []string, answer string) int {
+	return slices.IndexFunc(choices, func(o string) bool { return strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(answer)) })
 }
 
 // waitingOn says the delivery waits at decide on the escalation key names,
@@ -306,6 +313,15 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, act
 	for _, a := range actions {
 		if !slices.Contains(offered, a) {
 			return "", refusef("%q is not one of this escalation's actions: %s", a, listOr(offered))
+		}
+	}
+	// An answer picks the choice it equals trimmed and case-folded
+	// (choiceOf): two choices equal so would make the second unpickable,
+	// and a click on it would take the first's action.
+	for i, c := range choices {
+		if j := choiceOf(choices[:i], c); j >= 0 {
+			return "", refusef("choices %q and %q read as the same answer (case and spaces aside): make each one distinct",
+				choices[j], c)
 		}
 	}
 	return EscalationKey(d.WorkflowID, d.State.Escalations), nil

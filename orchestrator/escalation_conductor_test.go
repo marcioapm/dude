@@ -253,6 +253,18 @@ func TestTheEscalationsQuestionNamesItsActions(t *testing.T) {
 	}
 }
 
+// Choices that read as the same answer, case and spaces aside, are refused:
+// an answer picks the choice it equals so, and the second would take the
+// first's action.
+func TestTheEscalationsChoicesAreDistinct(t *testing.T) {
+	w, task := stuck(t)
+	w.refused(task, "ask_person", `{"question":"Q","choices":["Continue"," continue "],"actions":["retry","stop"]}`,
+		"read as the same answer")
+	if q := w.conductorQuestion(task); q != "" {
+		t.Errorf("question %s recorded with colliding choices", q)
+	}
+}
+
 // A conductor that took over from the one the owner answered may not decide
 // on that answer: it must ask again itself.
 func TestAReplacementConductorDecidesOnlyOnItsOwnQuestion(t *testing.T) {
