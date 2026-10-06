@@ -10,6 +10,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -266,6 +267,92 @@ func TestAWakeAfterASecretWasRemovedSubmitsANewRunNotCountedAsAFailure(t *testin
 	w.open(web)
 	if env := w.lux.ServerEnv(runs[1].ID, "web"); env["SEED_LLM_KEY"] != seedKey || env["STRIPE_TEST_KEY"] != "" {
 		t.Errorf("web's environment on the new Run = %v", env)
+	}
+}
+
+// lostSubmitAnswer passes a submit to lux, then, once, loses lux's answer
+// after running after: what changed before dude's retry.
+type lostSubmitAnswer struct {
+	lux.Client
+	after func()
+}
+
+func (c *lostSubmitAnswer) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	r, err := c.Client.Submit(ctx, spec, key)
+	if err == nil && c.after != nil {
+		after := c.after
+		c.after = nil
+		after()
+		return lux.Run{}, errors.New("the submit's answer was lost after lux accepted it")
+	}
+	return r, err
+}
+
+// lux accepts a preview's submit and its answer is lost; a secret is
+// removed and another added before dude retries. The retry's key gets the
+// Run lux accepted, which declares the removed one: that is what is
+// recorded, so the next resume replaces the Run rather than failing it.
+func TestARetriedSubmitRecordsTheSecretsOfTheRunLuxAccepted(t *testing.T) {
+	for _, wakeable := range []bool{false, true} {
+		name := "eager"
+		if wakeable {
+			name = "wakeable"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.previews.Minute = time.Hour
+			if wakeable {
+				w.wakeable()
+			}
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			w.secret("ORIGINAL_KEY", seedKey)
+			w.previews.Lux = &lostSubmitAnswer{Client: w.previews.Lux, after: func() {
+				w.removeSecret("ORIGINAL_KEY")
+				w.secret("ADDED_KEY", stripeKey)
+			}}
+			_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
+			runID := out["run"].(map[string]any)["id"].(string)
+			if wakeable {
+				w.until("server declared", func() bool { return w.serverID(runID, "web") != "" })
+				w.lux.RequestServer(w.serverID(runID, "web"), "/")
+			}
+			w.until("the submit accepted, its answer lost", func() bool { return len(w.luxRuns()) == 1 })
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL, wake_claimed_at = NULL WHERE id = $1`, runID)
+			w.until("the retry recorded", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, runID) == 1
+			})
+			if got := w.recorded(runID); !slices.Equal(got, []string{"ORIGINAL_KEY"}) {
+				t.Errorf("recorded %v; the Run lux accepted declares ORIGINAL_KEY", got)
+			}
+			first := w.luxRuns()[0]
+			w.until("web ready", func() bool { return w.lux.ServerStates(first.ID)["web"] == "ready" })
+			if wakeable {
+				w.lux.Idle(w.serverID(runID, "web"))
+			} else {
+				mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+				w.previews.Minute = time.Millisecond
+			}
+			w.until("parked", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+			})
+			w.previews.Minute = time.Hour
+			if wakeable {
+				w.open(w.serverID(runID, "web"))
+			} else if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code >= 300 {
+				t.Fatalf("start = %d %v", code, out)
+			}
+			w.untilPreview(runID, "a new Run serving", func() bool {
+				runs := w.luxRuns()
+				return len(runs) == 2 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_run_id = $2`,
+					runID, runs[1].ID) == 1
+			})
+			if first.Resumed != 0 || !slices.Contains(w.lux.CallsOf(first.ID), "cancel") {
+				t.Errorf("first Run resumed %d, calls %v; want it cancelled and replaced", first.Resumed, w.lux.CallsOf(first.ID))
+			}
+			if got := w.recorded(runID); !slices.Equal(got, []string{"ADDED_KEY"}) {
+				t.Errorf("recorded for the new Run %v", got)
+			}
+		})
 	}
 }
 

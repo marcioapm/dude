@@ -829,7 +829,7 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1,
 			preview_secrets = $9
 			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got,
-			declaredSecrets(spec))
+			acceptedSecrets(lr))
 		return err
 	}); err != nil {
 		return err

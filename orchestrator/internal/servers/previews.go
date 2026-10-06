@@ -219,7 +219,7 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb, image_waiting_since = NULL,
 			preview_secrets = $8,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got, declaredSecrets(spec))
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got, acceptedSecrets(lr))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

@@ -358,15 +358,7 @@ func (s *Server) processEnv(run *Run, sv *server) map[string]string {
 	if env == nil {
 		env = map[string]string{}
 	}
-	runnerOnly := map[string]bool{}
-	if spec.Git != nil {
-		for _, r := range spec.Git.Repositories {
-			runnerOnly[r.Credential] = true
-		}
-	}
-	for _, a := range spec.Image.RegistryAuth {
-		runnerOnly[a.Secret] = true
-	}
+	runnerOnly := runnerOnlySecrets(run.Spec)
 	for _, sec := range spec.Secrets {
 		if (sec.As == "env" || sec.As == "" && !runnerOnly[sec.Name]) && !strings.HasPrefix(sec.Name, "LUX_") {
 			env[sec.Name] = run.secretValues[sec.Name]
@@ -374,6 +366,25 @@ func (s *Server) processEnv(run *Run, sv *server) map[string]string {
 	}
 	maps.Copy(env, sv.Env)
 	return env
+}
+
+// runnerOnlySecrets are a spec's git and registry credentials: lux marks
+// them runnerOnly, whatever their as, and never puts them in the container.
+func runnerOnlySecrets(rawSpec json.RawMessage) map[string]bool {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	out := map[string]bool{}
+	if spec.Git != nil {
+		for _, r := range spec.Git.Repositories {
+			if r.Credential != "" {
+				out[r.Credential] = true
+			}
+		}
+	}
+	for _, a := range spec.Image.RegistryAuth {
+		out[a.Secret] = true
+	}
+	return out
 }
 
 // runCommand runs a server's command through sh -c, once, in the Run's
