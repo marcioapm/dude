@@ -49,43 +49,62 @@ type EscalationDecision struct {
 	Authorize func() error
 }
 
+// LockEscalationTx takes the locks every path that reads or changes an
+// escalation's decision or its question takes, in this order: the task's
+// row, alone, then its latest delivery, read in a statement of its own
+// after the task lock was granted, so a decision committed while this one
+// waited is seen. Questions are locked only after both. Ownership changes
+// take the same task row (control-plane setTaskPeople, passOnTasks), so an
+// owner read under this lock is the current one. The delivery is nil when
+// the task has none.
+func LockEscalationTx(ctx context.Context, tx pgx.Tx, taskID string) (projectID string, d *Delivery, err error) {
+	if err := LockTaskTx(ctx, tx, taskID, &projectID); err != nil {
+		return "", nil, err
+	}
+	d, err = LoadDelivery(ctx, tx, taskID)
+	return projectID, d, err
+}
+
+// LockTaskTx locks the task's row for the rest of tx: the first lock of an
+// escalation path (LockEscalationTx). NO KEY UPDATE: it excludes every other
+// writer of the row (status, ownership's FOR UPDATE) but not the KEY SHARE an
+// insert of a child row takes, which the syncer takes holding a Run's row.
+// projectID, if given, is set.
+func LockTaskTx(ctx context.Context, tx pgx.Tx, taskID string, projectID *string) error {
+	var p string
+	err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).Scan(&p)
+	if db.IsNotFound(err) {
+		return escalationErr("not_found", "task %s not found", taskID)
+	}
+	if projectID != nil {
+		*projectID = p
+	}
+	return err
+}
+
 // DecideEscalationTx takes a decision on the task's escalation, in tx, and
 // signals the workflow to carry it out: the action checked against what the
 // escalation offers, a resume taking the failed Run back up, the decision
 // kept on the escalation (a second is refused), its note one of the task's
 // decisions, the conductor's open question about it closed. Who may decide
-// is the caller's to check (Authorize).
+// is the caller's to check (Authorize), under the locks taken here.
 func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in EscalationDecision) error {
-	var projectID, status string
-	var wf struct {
-		ID, Status, Step *string
-		State            []byte
-	}
-	err := tx.QueryRow(ctx, `SELECT t.project_id, t.status::text, d.id, d.status::text, d.step, d.state
-		FROM tasks t LEFT JOIN LATERAL (SELECT * FROM workflow_runs d WHERE d.task_id = t.id
-		  ORDER BY d.created_at DESC LIMIT 1) d ON true
-		WHERE t.id = $1 FOR UPDATE OF t`, taskID).Scan(&projectID, &status, &wf.ID, &wf.Status, &wf.Step, &wf.State)
-	if db.IsNotFound(err) {
-		return escalationErr("not_found", "task %s not found", taskID)
-	}
+	projectID, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
-	var st State
-	if wf.State != nil {
-		_ = json.Unmarshal(wf.State, &st)
-	}
-	e := st.Escalation
-	if status != "awaiting_input" || wf.ID == nil || e == nil || e.Decided != nil {
+	if d == nil || d.TaskStatus != "awaiting_input" || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
 		return escalationErr("conflict", "delivery of task %s is not waiting for a decision", taskID)
 	}
-	wfID := *wf.ID
-	if *wf.Status == "completed" && e.Step == "" {
+	st := d.State
+	e := st.Escalation
+	wfID := d.WorkflowID
+	if d.Status == "completed" && e.Step == "" {
 		// Stopped before a stop waited for a decision: it ended there,
 		// and never said which step to go back to. Its step says, where
 		// trying again from it can work: a pull request fix from then
 		// kept none of the feedback it was fixing.
-		if step := RetryStep[*wf.Step]; step != "prFix" {
+		if step := RetryStep[d.Step]; step != "prFix" {
 			e.Step = step
 		}
 	}
@@ -208,6 +227,11 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 // note. A free answer, or one to an escalation no longer waiting, decides
 // nothing: it reaches the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
+	// The answer routes took the task's row before the question
+	// (LockEscalationTx's order); taken again here, it is held already.
+	if err := LockTaskTx(ctx, tx, taskID, nil); err != nil {
+		return err
+	}
 	var key, prompt, answer string
 	var options, actions []string
 	var rawOpts, rawActions []byte
@@ -287,7 +311,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err := liveConductor(ctx, tx, ref); err != nil {
 		return nil, err
 	}
-	d, err := LoadDelivery(ctx, tx, ref.TaskID)
+	_, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return nil, err
 	}
