@@ -337,3 +337,46 @@ func TestTheBannerWhileTheConductorAsksWaitsForIt(t *testing.T) {
 		t.Errorf("%d open questions of the conductor, want 1", n)
 	}
 }
+
+// The owner changes while the owner's choice waits for the task: Ana's
+// answer, started while an ownership change holds the task's row, waits
+// before checking who owns it, then finds Bo: 403, and nothing decided.
+func TestTheOwnerChangingDuringAnAnswerRefusesIt(t *testing.T) {
+	w, task := stuck(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	ctx := context.Background()
+	// As the control plane changes a task's people: its row locked first.
+	tx, err := w.second().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, task); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan int, 1)
+	go func() {
+		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Retry as proposed"})
+		answered <- status
+	}()
+	w.waiters(1)
+	if _, err := tx.Exec(ctx, `DELETE FROM task_people WHERE task_id = $1`, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		SELECT $1, person_id, organization_id, 0 FROM api_keys WHERE id = $2`, task, bo); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-answered; status != 403 {
+		t.Errorf("the former owner's answer: %d, want 403", status)
+	}
+	if d := w.decided(task); d != nil {
+		t.Errorf("decided on a former owner's answer: %v", d)
+	}
+}
