@@ -7,8 +7,14 @@
 -- route that answers a client; encrypted at rest is a later concern. The
 -- sweepers get no grant (051): the preview loop reads them inside the
 -- preview's organization.
+--
+-- A secret's project is its organization's: the composite key makes a row
+-- naming another organization's project impossible, whatever the policy
+-- lets a transaction write.
+ALTER TABLE projects ADD UNIQUE (id, organization_id);
+
 CREATE TABLE project_secrets (
-  project_id      text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id      text NOT NULL,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   -- An environment variable's name, as lux takes one (at most 63
   -- characters); never LUX_ (any case). The API refuses dude's own names
@@ -22,7 +28,8 @@ CREATE TABLE project_secrets (
   hint            text NOT NULL,
   updated_at      timestamptz NOT NULL DEFAULT now(),
   updated_by      text REFERENCES people(id) ON DELETE SET NULL,
-  PRIMARY KEY (project_id, name)
+  PRIMARY KEY (project_id, name),
+  FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id) ON DELETE CASCADE
 );
 
 ALTER TABLE project_secrets ENABLE ROW LEVEL SECURITY;
