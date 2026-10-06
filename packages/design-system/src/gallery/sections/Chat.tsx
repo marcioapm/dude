@@ -549,6 +549,8 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatNotice kind="parked" text="Parked while it waits for you — nothing is held; answering resumes it." at={Date.now() - 14 * 60 * 60_000 + 10 * 60_000} />
             <Label>no longer needed — its run ended first; settled, never rings</Label>
             <QuestionCard role="qa_browser" text="The save button has no stable selector. Should I add a `data-testid`, or is that out of scope?" options={["Add data-testid", "Out of scope — skip the check"]} askedAt={at(100_000)} dismissed />
+            <Label>settled elsewhere — the conductor's question about an escalation, decided on the task's banner instead</Label>
+            <QuestionCard role="conductor" text="The review is stuck on one finding. I propose one more narrow fix round." options={["Retry as proposed", "Accept as it is", "Stop"]} askedAt={at(110_000)} settledBy="Decided on the banner" />
             <Label>grayscale check — waiting still separates from answered by wash, bar and clock</Label>
             <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column" }}>
               <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={Date.now() - 90_000} />

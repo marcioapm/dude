@@ -221,6 +221,12 @@ type HumanDecision struct {
 	Action string `json:"action"`
 	// What they said, for the agents from here on.
 	Note string `json:"note,omitempty"`
+	// Taken on the owner's answer to the conductor's question about the
+	// escalation: the question, and the person who answered.
+	QuestionID string `json:"questionId,omitempty"`
+	AnsweredBy string `json:"answeredBy,omitempty"`
+	// Taken by the conductor (decide_escalation) on that answer: its Run.
+	Conductor string `json:"conductor,omitempty"`
 }
 
 // BranchFor is the task's branch — the one its pull requests are opened
@@ -1138,7 +1144,9 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides; explain and propose.",
+		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
+			"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
+			"you decide_escalation.",
 			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",

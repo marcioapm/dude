@@ -300,6 +300,19 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 	return conducted(map[string]any{"dismissed": in.ID}, err)
 }
 
+type decideEscalationIn struct {
+	Action string `json:"action" jsonschema:"one of the escalation's actions: retry, accept, resume, done, wait or stop"`
+	Note   string `json:"note,omitempty" jsonschema:"what you decided and why, kept with the task for every agent from here on"`
+}
+
+func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalationIn) (map[string]any, error) {
+	out, err := delivery.ConductDecideEscalation(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note)
+	if err == nil && c.env.kick != nil {
+		c.env.kick()
+	}
+	return conducted(out, err)
+}
+
 type steerIn struct {
 	Run       string `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
 	Text      string `json:"text" jsonschema:"what to tell it: read at its next step, in the turn it is in"`

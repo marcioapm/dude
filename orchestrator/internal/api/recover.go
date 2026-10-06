@@ -241,7 +241,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			}
 		}
 		if body.Action != "resume" {
-			if err := release(r.Context(), tx, taskID); err != nil {
+			if err := delivery.ReleaseKeptTx(r.Context(), tx, taskID); err != nil {
 				return err
 			}
 		}
@@ -316,70 +316,9 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	return err
 }
 
-// resumeKept takes kept Runs back up: paused, for the syncer to resume as
-// it resumes any (phases.Syncer.whilePaused), the agent's conversation and
-// workspace as they stopped. Their next message is the note, if any, and —
-// what it asks for having changed since they stopped — the task as it is
-// now: an agent that goes on works to the task it has in mind.
+// resumeKept is delivery.ResumeKeptTx, its refusal answered as the API's.
 func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, runIDs []string, note string) error {
-	var title, goal string
-	var criteria []byte
-	var edited bool
-	if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria, EXISTS (SELECT 1 FROM events e
-			WHERE e.task_id = t.id AND e.event_type = 'task.updated'
-			  AND (e.payload ? 'title' OR e.payload ? 'goal' OR e.payload ? 'acceptanceCriteria')
-			  AND e.occurred_at > (SELECT min(ended_at) FROM runs WHERE id = ANY($2)))
-		FROM tasks t WHERE t.id = $1`, taskID, runIDs).Scan(&title, &goal, &criteria, &edited); err != nil {
-		return err
-	}
-	if edited {
-		note = strings.TrimSpace(changedTask(title, goal, criteria) + "\n\n" + note)
-	}
-	// Its push, if it had asked for one, is asked for again when its turn
-	// ends: what it pushed then is not what it will have done by then.
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'resume', control_requested_at = now(),
-			control_reason = 'picked back up', lux_stop_reason = 'pause', keep = false, kept_until = NULL,
-			ended_at = NULL, error = NULL, phase_notified_at = NULL, dude_pause = NULL, finishes = finishes + 1,
-			push_request_id = NULL, push_result = NULL, turn_done_at = NULL, next_attempt_at = NULL
-		WHERE id = ANY($1) AND `+delivery.KeptRun, runIDs)
-	if err != nil {
-		return err
-	}
-	if int(tag.RowsAffected()) != len(runIDs) {
-		return fail(http.StatusConflict, "not_kept", "what stopped is no longer kept to resume; try again or start over")
-	}
-	if note == "" {
-		return nil
-	}
-	for _, id := range runIDs {
-		if _, _, err := insertDirective(ctx, tx, org, id, runInfo{ProjectID: projectID, TaskID: taskID}, note, "run", "", false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// changedTask tells a resumed agent what its task asks for now.
-func changedTask(title, goal string, rawCriteria []byte) string {
-	var criteria []string
-	_ = json.Unmarshal(rawCriteria, &criteria)
-	// A resume carries no images, so the changed text names them only.
-	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title,
-		strings.TrimSpace(delivery.ImagesAsText(goal)))
-	if len(criteria) > 0 {
-		text += "\n\nAcceptance criteria:\n" + delivery.CriteriaList(delivery.CriteriaImagesAsText(criteria))
-	}
-	return text
-}
-
-// release lets a task's stopped Runs go — a retry or a start over took
-// their work up afresh, and nothing will resume them — so the syncer
-// cancels them now, kept already or not yet, rather than when their time
-// is up.
-func release(ctx context.Context, tx pgx.Tx, taskID string) error {
-	_, err := tx.Exec(ctx, `UPDATE runs SET keep = false, kept_until = now()
-		WHERE task_id = $1 AND status IN ('aborted', 'failed') AND keep`, taskID)
-	return err
+	return escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, projectID, taskID, runIDs, note))
 }
 
 // startOver starts the task's next attempt: a delivery of its own, on a

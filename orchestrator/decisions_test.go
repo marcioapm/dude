@@ -749,10 +749,10 @@ func TestAnEscalationGoesToAPersonAndWakesTheConductor(t *testing.T) {
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("the escalation", func() bool { return w.escalationReason(task) == "implement_failed" })
 	n := w.wokenWith(task, "Escalated to a person: implement failed")
-	if !strings.Contains(n, "Only the person decides") {
+	if !strings.Contains(n, "Only the person decides") || !strings.Contains(n, "decide_escalation") {
 		t.Errorf("note: %q", n)
 	}
-	w.refused(task, "decide", `{"action":"next"}`, "not waiting on a decision")
+	w.refused(task, "decide", `{"action":"next"}`, "decide it with decide_escalation")
 	if status, out := w.callAs(w.person("owner"), "/internal/tasks/"+task+"/decide", map[string]string{"action": "stop"}); status != 200 {
 		t.Fatalf("the person's decision: %d %v", status, out)
 	}

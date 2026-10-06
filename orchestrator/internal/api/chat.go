@@ -127,7 +127,7 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, actor(r))
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, p)
 			if err != nil {
 				return err
 			}

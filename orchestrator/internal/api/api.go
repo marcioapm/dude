@@ -604,7 +604,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, body.Text, actor(r))
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, body.Text, principalOf(r))
 		if err != nil {
 			return err
 		}
@@ -639,9 +639,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // the wait; for that wait, back to the status before it, once nothing else
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
-func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt, text, by string) (string, error) {
+func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt, text string, p principal) (string, error) {
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
-		answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1`, questionID, text, by); err != nil {
+		answered_by = (SELECT id FROM users WHERE id = $3), answered_by_person = NULLIF($4, '') WHERE id = $1`,
+		questionID, text, p.Actor, p.Person); err != nil {
 		return "", err
 	}
 	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
@@ -664,6 +665,10 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 		}
 	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
 		return "", err
+	} else if err := delivery.EscalationAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.ActorType, p.Actor, p.Person); err != nil {
+		// The owner picked a choice of the conductor's question about the
+		// escalation: decided, as from the banner.
+		return "", escalationFailure(err)
 	}
 	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }
@@ -871,95 +876,29 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	var wfID string
+	p := principalOf(r)
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		var projectID, status string
-		var wf struct {
-			ID, Status, Step *string
-			State            []byte
-		}
-		err := tx.QueryRow(r.Context(), `SELECT t.project_id, t.status::text, d.id, d.status::text, d.step, d.state
-			FROM tasks t LEFT JOIN LATERAL (SELECT * FROM workflow_runs d WHERE d.task_id = t.id
-			  ORDER BY d.created_at DESC LIMIT 1) d ON true
-			WHERE t.id = $1 FOR UPDATE OF t`, taskID).Scan(&projectID, &status, &wf.ID, &wf.Status, &wf.Step, &wf.State)
-		if db.IsNotFound(err) {
-			return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
-		}
-		if err != nil {
-			return err
-		}
-		var st delivery.State
-		if wf.State != nil {
-			_ = json.Unmarshal(wf.State, &st)
-		}
-		e := st.Escalation
-		if status != "awaiting_input" || wf.ID == nil || e == nil || e.Decided != nil {
-			return fail(http.StatusConflict, "conflict", "delivery of task %s is not waiting for a decision", taskID)
-		}
-		wfID = *wf.ID
-		if *wf.Status == "completed" && e.Step == "" {
-			// Stopped before a stop waited for a decision: it ended there,
-			// and never said which step to go back to. Its step says, where
-			// trying again from it can work: a pull request fix from then
-			// kept none of the feedback it was fixing.
-			if step := delivery.RetryStep[*wf.Step]; step != "prFix" {
-				e.Step = step
-			}
-		}
-		if !slices.Contains(e.Actions(), body.Action) {
-			return fail(http.StatusBadRequest, "bad_request", "%q is not a way to go on after %s; one of %s",
-				body.Action, e.Reason, strings.Join(e.Actions(), ", "))
-		}
-		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "decide"); err != nil {
-			return err
-		}
-		if body.Action == "resume" {
-			// The Run that failed, taken back up now; the workflow waits on it.
-			if err := resumeKept(r.Context(), tx, org, projectID, taskID, []string{e.RunID()}, strings.TrimSpace(body.Note)); err != nil {
-				return err
-			}
-		} else if body.Action != "stop" {
-			// Gone on past it: nothing will resume the Run that failed. (Stop
-			// keeps it: the task can still be picked back up.)
-			if err := release(r.Context(), tx, taskID); err != nil {
-				return err
-			}
-		}
-		// Taken now, in the workflow's own state: a second decision is
-		// refused from here on, before the workflow has acted on this one.
-		// One that ended (from before decisions) is reopened to wait for it.
-		e.Decided = &delivery.HumanDecision{Action: body.Action, Note: strings.TrimSpace(body.Note)}
-		next, _ := json.Marshal(st)
-		if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'
-				THEN 'waiting'::workflow_run_status ELSE status END, step = 'decide',
-				awaiting_signals = '["human.decision"]'::jsonb, wake_at = NULL, last_error = NULL
-			WHERE id = $1`, wfID, next); err != nil {
-			return err
-		}
-		if n := e.Decided.Note; n != "" {
-			if err := delivery.RecordDecisionTx(r.Context(), tx, org, taskID,
-				"Delivery stopped ("+strings.ReplaceAll(e.Reason, "_", " ")+"). How should it go on?", n); err != nil {
-				return err
-			}
-		}
-		// A decided escalation waits on no one; the workflow then moves the
-		// task as the decision says.
-		if err := delivery.EndConductorWait(r.Context(), tx, org, projectID, taskID); err != nil {
-			return err
-		}
-		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", principalOf(r),
-			map[string]any{"reason": e.Reason, "action": body.Action, "note": e.Decided.Note})
+		return escalationFailure(delivery.DecideEscalationTx(r.Context(), tx, org, taskID, delivery.EscalationDecision{
+			Action: body.Action, Note: body.Note, ActorType: p.ActorType, ActorID: p.Actor,
+			Authorize: func() error { return ownerOnly(r.Context(), tx, taskID, p.Person, "decide") }}))
 	})
 	if err != nil {
-		return err
-	}
-	// Wakes the workflow to carry it out; the decision is in its state.
-	if err := s.Workflow.Signal(r.Context(), org, wfID, delivery.SignalHumanDecision, nil, ""); err != nil {
 		return err
 	}
 	s.kick()
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "action": body.Action})
 	return nil
+}
+
+// escalationFailure answers a refused escalation decision as the API always did.
+func escalationFailure(err error) error {
+	var e delivery.EscalationError
+	if !errors.As(err, &e) {
+		return err
+	}
+	status := map[string]int{"not_found": http.StatusNotFound, "conflict": http.StatusConflict,
+		"bad_request": http.StatusBadRequest, "not_kept": http.StatusConflict}[e.Kind]
+	return fail(status, e.Kind, "%s", e.Msg)
 }
 
 // decideRepositoryRequest: a person approves or denies an agent's request

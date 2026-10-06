@@ -1003,6 +1003,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           askedAt={turn.at}
           answeredAt={turn.answeredAt}
           dismissed={ended && turn.answeredAt === null}
+          settledBy={turn.closedAt !== null ? "Decided on the banner" : undefined}
           waitingOn={waitingOn}
         />
       );
