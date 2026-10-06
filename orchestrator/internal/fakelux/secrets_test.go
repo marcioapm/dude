@@ -5,6 +5,7 @@ package fakelux_test
 // server's process and its log.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os/exec"
@@ -147,5 +148,64 @@ func TestAFailingServerCommandsLogHasNoSecretValue(t *testing.T) {
 	}
 	if !has("stdout", "out [REDACTED:SEED_LLM_KEY]") || !has("stderr", "err [REDACTED:SIGNING_KEY_PEM]") {
 		t.Errorf("want each stream's line, redacted, on its own stream: %+v", lines)
+	}
+}
+
+// A secret printed as a JSON string, by an encoder that escapes HTML and by
+// one that does not (lux's shim redacts both forms): neither is in the
+// server's log.
+func TestAServersLogHasNoSecretInEitherJSONForm(t *testing.T) {
+	const secret = "json<canary>&\"7d1e\"\nline two"
+	var forms []string
+	for _, escapeHTML := range []bool{true, false} {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(escapeHTML)
+		if err := enc.Encode(secret); err != nil {
+			t.Fatal(err)
+		}
+		forms = append(forms, strings.TrimSuffix(b.String(), "\n"))
+	}
+	if forms[0] == forms[1] {
+		t.Fatalf("the secret's two JSON forms are the same: %s", forms[0])
+	}
+	_, c, run := started(t, lux.Spec{
+		Image:    lux.Image{Ref: "node:22"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}},
+		Secrets:  []lux.Secret{{Name: "JSON_KEY", Value: secret, As: "env"}},
+	})
+	ctx := context.Background()
+	if _, err := c.AddServer(ctx, run, lux.ServerInput{
+		Name: "probe", Port: 4100, Env: map[string]string{"ESCAPED": forms[0], "PLAIN": forms[1]},
+		Command: []string{"sh", "-c", `printf 'escaped %s\n' "$ESCAPED"; printf 'plain %s\n' "$PLAIN"; exit 1 # fakelux-run`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type line struct{ Stream, Text string }
+	var lines []line
+	var raw json.RawMessage
+	waitFor(t, "the command's exit in its log", func() bool {
+		var err error
+		if raw, err = c.ServerLog(ctx, run, "probe", 100); err != nil {
+			t.Fatal(err)
+		}
+		var out struct{ Lines []line }
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		lines = out.Lines
+		return slices.ContainsFunc(lines, func(l line) bool { return strings.Contains(l.Text, "exit status 1") })
+	})
+	text := ""
+	for _, l := range lines {
+		text += l.Text
+	}
+	for _, canary := range []string{"canary", "7d1e", "line two"} {
+		if strings.Contains(text, canary) {
+			t.Errorf("the server's log carries the secret in a JSON form: %+v", lines)
+		}
+	}
+	if !strings.Contains(text, `escaped "[REDACTED:JSON_KEY]"`) || !strings.Contains(text, `plain "[REDACTED:JSON_KEY]"`) {
+		t.Errorf("want both forms redacted: %+v", lines)
 	}
 }
