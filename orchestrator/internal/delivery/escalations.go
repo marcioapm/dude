@@ -276,14 +276,21 @@ func escalationNote(proposal, answer, conductorNote string) string {
 // EscalationQuestion is what ask_person records for a conductor while its
 // task's escalation waits on a person: the escalation it asks about and the
 // action each choice stands for. "" (no escalation) for any other question;
-// refused when choices do not each name one of the escalation's actions.
+// refused when choices do not each name one of the escalation's actions, and
+// while an escalation is decided but not yet carried out. Checked under the
+// escalation's locks (LockEscalationTx), held until the question is
+// inserted in the same tx, so no decision lands between the check and it.
 func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, actions []string) (string, error) {
-	d, err := ReadDelivery(ctx, tx, ref.TaskID)
+	_, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return "", err
 	}
-	waiting := d != nil && d.State.conducted() && d.Live() && d.Step == "decide" && d.State.Escalation != nil &&
-		d.State.Escalation.Decided == nil
+	if d != nil && d.State.conducted() && d.Live() && d.State.Escalation != nil && d.State.Escalation.Decided != nil {
+		return "", refusef("the escalation (%s) was just decided %s: %s. Ask nothing about it; the delivery carries it "+
+			"out, and you are woken at the next decision", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
+			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
+	}
+	waiting := d != nil && d.State.conducted() && d.Live() && d.Step == "decide" && d.State.Escalation != nil
 	if !waiting {
 		if len(actions) > 0 {
 			return "", refusef("actions are for a question about an escalation waiting on a person; there is none")
@@ -302,6 +309,17 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, act
 		}
 	}
 	return EscalationKey(d.WorkflowID, d.State.Escalations), nil
+}
+
+// decidedBy says who took a decision, for a refusal.
+func decidedBy(h *HumanDecision) string {
+	switch {
+	case h.Conductor != "":
+		return "by the conductor " + h.Conductor + " (decide_escalation)"
+	case h.QuestionID != "":
+		return "by the owner's answer to question " + h.QuestionID
+	}
+	return "by a person on the banner"
 }
 
 // ConductDecideEscalation is decide_escalation: the conductor decides the
