@@ -662,10 +662,10 @@ func (w *steps) reviewUntested(ctx context.Context, sc workflow.StepContext, st 
 // is told whatever the status, with only the commands git accepts in it.
 func CheckoutLine(s lux.SyncResult) string {
 	repo, ref, ahead, behind := s.Repo, s.Ref, s.Ahead, s.Behind
-	merge := fmt.Sprintf("`git merge lux/%s`", ref)
 	if s.Operation != "" {
 		return operationLine(repo, ref, s.Operation, behind)
 	}
+	merge := fmt.Sprintf("`git merge lux/%s`", ref)
 	switch s.Status {
 	case "", "up-to-date", "fast-forward":
 		return ""
