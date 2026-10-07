@@ -21,6 +21,7 @@ import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
 import { AGENT_CHATTER, useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -189,12 +190,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       // The list is a nicety beside the tree: kept as it was.
     }
   }, [client]);
-  useEffect(() => {
-    void loadSessions();
-    // An invitation is not on your stream until you accept it: read again each minute.
-    const t = setInterval(() => void loadSessions(), 60_000);
-    return () => clearInterval(t);
-  }, [loadSessions]);
+  // An invitation is not on your stream until you accept it: read again
+  // each minute while the page is shown, and once on showing it again.
+  useVisibleInterval(() => void loadSessions(), 60_000);
   const reloadSessions = useRef(loadSessions);
   reloadSessions.current = loadSessions;
 
