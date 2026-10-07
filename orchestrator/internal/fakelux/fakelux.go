@@ -582,7 +582,7 @@ type Server struct {
 	closeOnce sync.Once
 	// What exec and GET say of a Run's processes and usage (execPlay).
 	execPlay
-	// fakeagent.StallModel's reviewers so far, by task.
+	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
 	stallReviews map[string]int
 }
 
@@ -650,15 +650,18 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		tools = []string{"bash"}
 	}
 	var open [][3]string
-	if str("dude.model") == fakeagent.StallModel && str("dude.phase") == "review" {
-		// The task's first reviewer hangs in its open call; later ones
-		// review. Decide is called with s.mu held.
+	if m := str("dude.model"); (m == fakeagent.StallModel || m == fakeagent.SilentModel) && str("dude.phase") == "review" {
+		// The task's first reviewer hangs, in its open call or silent;
+		// later ones review. Decide is called with s.mu held.
 		if s.stallReviews == nil {
 			s.stallReviews = map[string]int{}
 		}
 		s.stallReviews[str("dude.task")]++
 		if s.stallReviews[str("dude.task")] == 1 {
-			step.Hang, open = true, [][3]string{fakeagent.StallCall}
+			step.Hang = true
+			if m == fakeagent.StallModel {
+				open = [][3]string{fakeagent.StallCall}
+			}
 		}
 	}
 	// Every phase plans and looks around first, as an agent does.

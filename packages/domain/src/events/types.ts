@@ -145,7 +145,8 @@ export const EventTypes = {
   RunAborted: "run.aborted",
   /**
    * A live phase Run made no progress for its window: a tool call open the
-   * whole of it, or (a Run that changes code) no change to its files.
+   * whole of it, its agent silent the whole of it (no output, no tool
+   * call), or (a Run that changes code) no change to its files.
    * Payload: `{ stall: RunStall, conducted, text? }`; `text`, the report
    * in words, on a plain delivery, where it is its owner's (notified, and
    * the task's banner). The Run reads as stalled until what it was

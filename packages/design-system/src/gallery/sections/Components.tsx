@@ -241,7 +241,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="c-sessions" title="SessionList · a stalled Run" note="A task's sessions. A Run dude reported as making no progress — a tool call open for its window, or a Run that changes code whose files did not change — carries a 'stalled' Badge before its status, dude's facts as its title, until it makes progress or ends. Its owner's banner on a plain delivery is a Callout with the facts and three choices: Restart it (a fresh agent in its place, an optional note), Leave it, Stop the task.">
+      <Block id="c-sessions" title="SessionList · a stalled Run" note="A task's sessions. A Run dude reported as making no progress — a tool call open for its window, its agent silent for it, or a Run that changes code whose files did not change — carries a 'stalled' Badge before its status, dude's facts as its title, until it makes progress or ends. Its owner's banner on a plain delivery is a Callout with the facts and three choices: Restart it (a fresh agent in its place, an optional note), Leave it, Stop the task.">
         <Panes mode={mode} surface>
           <Col>
             <SessionList style={{ maxWidth: 360 }}>

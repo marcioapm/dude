@@ -6,12 +6,14 @@ hours long, so the test back-dates when the call opened; the orchestrator's
 own sweep then finds it. Under a conductor: the conductor is woken once
 with the facts and restarts the reviewer with restart_run; the round goes
 on with the new Run. A plain delivery: its owner sees the banner, restarts
-it, and the delivery goes on.
+it, and the delivery goes on. fake/silent's first reviewer hangs with no
+call open, saying nothing: its owner is told it is silent, and leaves it.
 """
 
 from __future__ import annotations
 
 import json
+import time
 
 from playwright.sync_api import Page, expect
 
@@ -142,3 +144,34 @@ def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_ur
     wait_until(lambda: any(r["phase"] == "simplify" for r in client.task_runs(task["id"])), timeout=120,
                message="the delivery never went on past the restarted review")
     assert console_errors == []
+
+
+def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
+    """fake/silent's first reviewer starts its turn and then says and does
+    nothing, no call open, as a model call that never answers. Its last
+    activity is back-dated past the role's window; the sweep reports it as
+    silent to the owner, once; Leave it keeps it from being asked again."""
+    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/silent"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet, past a silent review")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review" and r["status"] == "running"), None),
+                     timeout=90, message="the reviewer never ran")
+    wait_until(lambda: query(owner_dsn, """SELECT 1 FROM runs WHERE id = %s AND agent_active_at IS NOT NULL
+                                           AND open_tool_calls_at = '{}'::jsonb""", (run["id"],)),
+               timeout=60, message="the reviewer never started its turn")
+    execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, run["id"]))
+
+    stalled = wait_until(lambda: (client.get_run(run["id"])["stalled"] or {}).get("owner") and client.get_run(run["id"])["stalled"],
+                         timeout=60, message="the silent reviewer was never reported to its owner")
+    assert "Its agent has done nothing for 3.0 h: no output, no tool call." in stalled["text"], stalled["text"]
+    reports = _stalled(client, run["id"])
+    assert len(reports) == 1 and reports[0]["payload"]["stall"]["reasons"] == ["silent"], reports
+
+    assert client.post(f"/v1/runs/{run['id']}/leave").status_code == 200
+    assert client.get_run(run["id"])["stalled"]["left"] is True
+    # Left as it is: not reported again, though still silent, over several
+    # of the orchestrator's one-second sweeps.
+    execute(owner_dsn, "UPDATE runs SET stall_reported_at = NULL WHERE id = %s", (run["id"],))
+    time.sleep(5)
+    assert len(_stalled(client, run["id"])) == 1
