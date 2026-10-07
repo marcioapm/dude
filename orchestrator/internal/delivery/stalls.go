@@ -45,9 +45,12 @@ type Stall struct {
 	RunningSecs int64 `json:"runningSecs"`
 	WindowSecs  int64 `json:"windowSecs"`
 	// "call": a tool call open the whole window; "files": a Run that
-	// changes code whose files did not change in it.
-	Reasons []string   `json:"reasons"`
-	Calls   []OpenCall `json:"calls"`
+	// changes code whose files did not change in it; "silent": no call
+	// open, and its agent said and did nothing in it.
+	Reasons []string `json:"reasons"`
+	// How long its agent has said and done nothing, for "silent".
+	SilentSecs int64      `json:"silentSecs,omitempty"`
+	Calls      []OpenCall `json:"calls"`
 	// The container's processes as `ps` listed them, trimmed; or why they
 	// could not be read.
 	Processes []Process `json:"processes"`
@@ -105,6 +108,9 @@ func (s Stall) Text(options string) string {
 	}
 	detail = append(detail, "running "+duration(s.RunningSecs))
 	fmt.Fprintf(&b, "Your %s Run %s (%s) has made no progress for %s.", who, s.RunID, strings.Join(detail, ", "), duration(s.WindowSecs))
+	if slices.Contains(s.Reasons, "silent") {
+		fmt.Fprintf(&b, " Its agent has done nothing for %s: no output, no tool call.", duration(s.SilentSecs))
+	}
 	if len(s.Calls) > 0 {
 		fmt.Fprintf(&b, " It has %s open:", plural(len(s.Calls), "tool call"))
 		for i, c := range s.Calls {
