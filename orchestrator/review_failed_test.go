@@ -6,6 +6,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -117,6 +118,122 @@ func TestF6UpgradeFailedReviewProbe(t *testing.T) {
 			slices.Sort(want)
 			if !slices.Equal(ids, want) {
 				t.Errorf("the escalation's runIds %v, want %v", ids, want)
+			}
+		})
+	}
+}
+
+// A round recovered without reviewRunIds is the current round's reviewers
+// as they stand: a restarted reviewer counts as its replacement, not the
+// aborted original, and an earlier round's reviewers, failed or clear,
+// count for nothing.
+func TestARecoveredRoundCountsOnlyItsCurrentReviewers(t *testing.T) {
+	cases := []struct {
+		name string
+		// How the other category's reviewer ends, and whether it settled
+		// before the deploy; then how the replacement ends.
+		other        string
+		otherSettled bool
+		replacement  string
+		// The escalation's runIds by name: "replacement", "other"; none is
+		// a clear round reaching its pull request.
+		failed []string
+	}{
+		{"the replacement fails", "completed", false, "failed", []string{"replacement"}},
+		{"every current reviewer completes", "completed", false, "completed", nil},
+		{"the other failed before the deploy, the replacement completes", "failed", true, "completed", []string{"other"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			ana := w.person("Ana")
+			w.hangingReviews(taskCall)
+			// Every reviewer hangs, the replacement too: each ends as the case says.
+			hang := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+					return fakelux.Behaviour{Hang: true, OpenCalls: [][3]string{taskCall}}
+				}
+				return hang(spec)
+			}
+			wi := w.task()
+			w.deliver(wi)
+			w.assignOwner(wi, ana)
+			runs := w.reviewersOpen(wi, 2)
+			restarted, other := runs[0], runs[1]
+			ctx := context.Background()
+			var wf string
+			_ = w.owner.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1`, wi).Scan(&wf)
+
+			// The current round is the second: the first had one reviewer
+			// fail and the other clear.
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND creation_key LIKE '%:review:0:' || category`, runs); n != 2 {
+				t.Fatalf("%d of the round's reviewers are keyed as round 0", n)
+			}
+			mustExec(t, w.owner, `UPDATE runs SET creation_key = replace(creation_key, ':review:0:', ':review:1:') WHERE id = ANY($1)`, runs)
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{iteration}', '1') WHERE id = $1`, wf)
+			for i, earlier := range []struct{ of, status string }{{restarted, "failed"}, {other, "completed"}} {
+				mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
+						category, creation_key, error, created_at, ended_at)
+					SELECT $1, organization_id, project_id, task_id, attempt, $2::run_status, phase, role, category,
+						replace(creation_key, ':review:1:', ':review:0:'), CASE WHEN $2 = 'failed' THEN 'lux lost it' END,
+						now() - interval '2 hours', now() - interval '1 hour'
+					FROM runs WHERE id = $3`, fmt.Sprintf("run_earlier_%d_%s", i, wi), earlier.status, earlier.of)
+			}
+
+			if status, body := w.callAs(ana, "/internal/runs/"+restarted+"/restart", map[string]any{"note": "again"}); status != 200 {
+				t.Fatalf("restart: %d %v", status, body)
+			}
+			var fresh string
+			_ = w.owner.QueryRow(ctx, `SELECT COALESCE(replaced_by, '') FROM runs WHERE id = $1`, restarted).Scan(&fresh)
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND creation_key IS NULL`, fresh); n != 1 {
+				t.Fatalf("the replacement %q is not a keyless Run", fresh)
+			}
+			w.until("the replacement on lux", func() bool { return w.luxRunOf(fresh) != "" })
+
+			pending := func() int {
+				return w.count(`SELECT COALESCE(jsonb_array_length(state->'pendingRunIds'), 0) FROM workflow_runs WHERE id = $1`, wf)
+			}
+			end := func(id, status string) {
+				mustExec(t, w.owner, `UPDATE runs SET status = $2::run_status, error = CASE WHEN $2 = 'failed' THEN 'lux lost it' END,
+					ended_at = now() WHERE id = $1`, id, status)
+			}
+			if c.otherSettled {
+				end(other, c.other)
+				w.until("the other reviewer settled", func() bool { return pending() == 1 })
+			}
+			// The deploy: the round's state no longer lists its reviewers.
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'reviewRunIds' WHERE id = $1`, wf)
+			if !c.otherSettled {
+				end(other, c.other)
+			}
+			end(fresh, c.replacement)
+			w.until("the round to end", func() bool {
+				return w.taskStatus(wi) == "awaiting_input" || len(w.gh.Pulls()) > 0
+			})
+
+			reason, prs := w.escalationReason(wi), len(w.gh.Pulls())
+			if len(c.failed) == 0 {
+				if reason != "" || prs != 1 {
+					t.Fatalf("escalation=%q, PRs=%d; want none and a pull request", reason, prs)
+				}
+				return
+			}
+			if reason != "review_failed" || prs != 0 {
+				t.Fatalf("escalation=%q, PRs=%d; want review_failed and none", reason, prs)
+			}
+			var ids []string
+			_ = w.owner.QueryRow(ctx, `SELECT ARRAY(SELECT jsonb_array_elements_text(payload->'detail'->'runIds'))
+				FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&ids)
+			named := map[string]string{"replacement": fresh, "other": other}
+			var want []string
+			for _, n := range c.failed {
+				want = append(want, named[n])
+			}
+			slices.Sort(ids)
+			slices.Sort(want)
+			if !slices.Equal(ids, want) {
+				t.Errorf("the escalation's runIds %v, want %v (aborted original %s)", ids, want, restarted)
 			}
 		})
 	}
