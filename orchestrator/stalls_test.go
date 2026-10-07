@@ -368,10 +368,12 @@ func TestF6StallRechecksPersonWaitProbe(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
+			w.quickDiffs()
 			w.hangingReviews(taskCall)
 			wi := w.task()
 			w.deliver(wi)
 			runs := w.reviewersOpen(wi, 2)
+			w.diffsSettled(runs)
 			mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
 			w.openSince(runs[0], 3*time.Hour)
 			var changed atomic.Bool
@@ -419,6 +421,41 @@ func (l *luxFactsDown) Get(ctx context.Context, runID string) (lux.Run, error) {
 	return l.Client.Get(ctx, runID)
 }
 
+// quickDiffs has each Run's live diff read within moments of its start, so
+// a test can wait for it (diffsSettled) instead of it landing mid-sweep.
+// Before any Run starts: a follower takes the timings it starts with.
+func (w *world) quickDiffs() {
+	w.syncer.DiffDelay, w.syncer.DiffEvery = 20*time.Millisecond, 20*time.Millisecond
+}
+
+// diffsSettled waits for each Run's initial live diff to be recorded and
+// to stay as it is across several reads: a checksum arriving later would
+// change the facts a sweep fingerprints, and its recheck would rightly
+// drop the report.
+func (w *world) diffsSettled(runs []string) {
+	w.t.Helper()
+	sums := func() string {
+		var s string
+		_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(run_id || '=' || checksum, ',' ORDER BY run_id)
+			FROM run_diffs WHERE run_id = ANY($1)`, runs).Scan(&s)
+		return s
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		before := sums()
+		if n := w.count(`SELECT count(*) FROM run_diffs WHERE run_id = ANY($1)`, runs); n == len(runs) {
+			time.Sleep(300 * time.Millisecond)
+			if sums() == before {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("the live diffs never settled: %s", sums())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // A lux host that never answers the facts' calls, with six stalled Runs
 // (a conducted task's two reviewers and two plain deliveries' two each):
 // the sweep returns within the facts' budget, still submits a pending Run
@@ -438,6 +475,7 @@ func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
 	t.Cleanup(func() { close(stop) })
 	facts := &luxFactsDown{Client: w.syncer.Lux, hung: lux.New(never.URL, "lux-key")}
 	w.syncer.Lux = facts
+	w.quickDiffs()
 
 	w.hangingReviews(taskCall)
 	conducted := w.task()
@@ -450,6 +488,7 @@ func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
 		w.deliver(wi)
 		stalled = append(stalled, w.reviewersOpen(wi, 2)...)
 	}
+	w.diffsSettled(stalled)
 	for _, id := range stalled {
 		w.openSince(id, 3*time.Hour)
 	}
@@ -516,6 +555,70 @@ func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
 	}
 }
 
+// luxSlowPS is the syncer's lux whose ps execs (a report's processes) each
+// take delay, counting how many are in flight at once; every other call,
+// the live diff's reads among them, reaches the fake lux as it is.
+type luxSlowPS struct {
+	lux.Client
+	delay          time.Duration
+	inFlight, peak atomic.Int32
+	calls          atomic.Int32
+}
+
+func (l *luxSlowPS) Exec(ctx context.Context, runID string, cmd []string) (lux.ExecResult, error) {
+	if len(cmd) == 0 || cmd[0] != "ps" {
+		return l.Client.Exec(ctx, runID, cmd)
+	}
+	l.calls.Add(1)
+	n := l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
+	for p := l.peak.Load(); n > p && !l.peak.CompareAndSwap(p, n); p = l.peak.Load() {
+	}
+	select {
+	case <-time.After(l.delay):
+	case <-ctx.Done():
+		return lux.ExecResult{}, ctx.Err()
+	}
+	return l.Client.Exec(ctx, runID, cmd)
+}
+
+// A lux that answers, slowly, with four stalled Runs due: their facts are
+// asked for several at a time, and every report carries them.
+func TestStallFactsFromASlowLuxAreGatheredSeveralAtATime(t *testing.T) {
+	w := newWorld(t)
+	slow := &luxSlowPS{Client: w.syncer.Lux, delay: 200 * time.Millisecond}
+	w.syncer.Lux = slow
+	w.quickDiffs()
+	var stalled []string
+	for range 2 {
+		w.hangingReviews(taskCall)
+		wi := w.task()
+		w.deliver(wi)
+		stalled = append(stalled, w.reviewersOpen(wi, 2)...)
+	}
+	w.diffsSettled(stalled)
+	for _, id := range stalled {
+		w.openSince(id, 3*time.Hour)
+	}
+	w.sweep()
+	if n := slow.calls.Load(); n != int32(len(stalled)) {
+		t.Errorf("%d process reads for %d stalled Runs", n, len(stalled))
+	}
+	if p := slow.peak.Load(); p < 2 {
+		t.Errorf("peak simultaneous process reads %d; want at least 2", p)
+	}
+	for _, id := range stalled {
+		if n := w.stalls(id); n != 1 {
+			t.Errorf("run %s: %d reports, want 1", id, n)
+			continue
+		}
+		if _, text := w.stallOf(id); strings.Contains(text, "lux did not answer in time") ||
+			!strings.Contains(text, "Processes: opencode acp") {
+			t.Errorf("run %s's report lacks lux's facts:\n%s", id, text)
+		}
+	}
+}
+
 // A Run not held up by itself is not reported, however old its open call
 // or its files: one waiting on a person, one whose turn is over, one
 // paused or with a pause asked for; and a reviewer, which changes no code,
@@ -534,10 +637,12 @@ func TestARunNotHeldUpByItselfIsNotReported(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
+			w.quickDiffs()
 			w.hangingReviews(taskCall)
 			wi := w.task()
 			w.deliver(wi)
 			runs := w.reviewersOpen(wi, 2)
+			w.diffsSettled(runs)
 			held, stalled := runs[0], runs[1]
 			w.openSince(held, 3*time.Hour)
 			w.openSince(stalled, 3*time.Hour)
@@ -557,10 +662,12 @@ func TestARunNotHeldUpByItselfIsNotReported(t *testing.T) {
 // the window has passed since its last report.
 func TestChangedFactsAreNotToldAgainBeforeTheWindow(t *testing.T) {
 	w := conducting(t)
+	w.quickDiffs()
 	w.hangingReviews(taskCall)
 	task := w.task()
 	w.conductedReview(task)
 	runs := w.reviewersOpen(task, 2)
+	w.diffsSettled(runs)
 	id := runs[0]
 	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
 	w.openSince(id, 31*time.Minute)
@@ -586,10 +693,14 @@ func TestChangedFactsAreNotToldAgainBeforeTheWindow(t *testing.T) {
 // same: told again at 30 minutes, not 60.
 func TestAChangedDiffIsChangedFacts(t *testing.T) {
 	w := conducting(t)
+	w.quickDiffs()
 	w.hangingReviews(taskCall)
 	task := w.task()
 	w.conductedReview(task)
 	runs := w.reviewersOpen(task, 2)
+	// The live reader has recorded its checksum and skips an unchanged
+	// read, so the checksums written below stay until the next.
+	w.diffsSettled(runs)
 	id := runs[0]
 	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
 	diff := func(checksum string) {
@@ -648,10 +759,12 @@ func (w *world) migrate085() {
 // reported; the one started 3 hours ago whose call opened just now is not.
 func TestF6UpgradeHungCallProbe(t *testing.T) {
 	w := newWorld(t)
+	w.quickDiffs()
 	w.hangingReviews(taskCall)
 	wi := w.task()
 	w.deliver(wi)
 	runs := w.reviewersOpen(wi, 2)
+	w.diffsSettled(runs)
 	mustExec(t, w.owner, `UPDATE runs SET started_at = now() - interval '3 hours' WHERE id = ANY($1)`, runs)
 	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '3 hours' WHERE run_id = $1
 		AND event_type = 'agent.tool.called'`, runs[0])
