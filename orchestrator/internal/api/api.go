@@ -355,7 +355,7 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
 	var kind string
 	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL, kind, COALESCE(role::text, '')
-		FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		FROM runs WHERE id = $1 AND session_id IS NULL FOR UPDATE`, runID).
 		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused, &kind, &ri.Role)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
@@ -590,7 +590,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		// before the delivery. A question's task and Run never change, so
 		// reading them unlocked is safe.
 		var taskID, role string
-		if err := tx.QueryRow(r.Context(), `SELECT q.task_id, COALESCE(r.role::text, '') FROM questions q
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(q.task_id, ''), COALESCE(r.role::text, '') FROM questions q
 			JOIN runs r ON r.id = q.run_id WHERE q.id = $1`, questionID).Scan(&taskID, &role); err != nil && !db.IsNotFound(err) {
 			return err
 		}
