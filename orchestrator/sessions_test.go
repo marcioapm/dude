@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // sessionWorld is a world whose organisation's Thinker requests the
@@ -725,21 +727,87 @@ func TestLinkingARepositoryAddsItByResume(t *testing.T) {
 
 // A session's Run is no task's: the workflow, the syncer's sweeps and the
 // phase notifier leave it be while a delivery beside it reaches its pull
-// request.
+// request. The cost sweeper reads it from lux as any Run, and a task's
+// cost in the same sweep is read too; the task's and its epic's metrics
+// never count the session's spend.
 func TestASessionRunBreaksNoLoop(t *testing.T) {
 	s := newSessionWorld(t)
 	id := s.session()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
 	run := s.started(id)
+	// An earlier session Run that ended (failed) still has its cost read, and
+	// is no task's to finish or notify.
+	ended := "run_ended_" + s.org
+	mustExec(t, s.owner, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, ended_at, lux_run_id)
+		VALUES ($1, $2, $3, 1, 'failed', 'agent', 'brainstorm', now() - interval '1 hour', 'lrun_ended')`, ended, s.org, id)
 	// Ended in lux with its artifacts and cost due, as any Run's are.
-	mustExec(t, s.owner, `UPDATE runs SET artifacts_due_at = now(), artifacts_next_at = now(), lux_cost_next_at = now() WHERE id = $1`, run)
+	mustExec(t, s.owner, `UPDATE runs SET artifacts_due_at = now(), artifacts_next_at = now(), lux_cost_next_at = now() WHERE id = ANY($1)`,
+		[]string{run, ended})
+	epic := "epc_" + s.org
+	mustExec(t, s.owner, `INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Metering')`, epic, s.org, s.project)
 	wi := s.task()
+	mustExec(t, s.owner, `UPDATE tasks SET epic_id = $2 WHERE id = $1`, wi, epic)
 	s.deliver(wi)
 	s.until("a pull request beside the session", func() bool { return len(s.gh.Pulls()) == 1 })
 	if n := s.count(`SELECT count(*) FROM workflow_runs WHERE task_id IS NULL`); n != 0 {
 		t.Errorf("%d workflows with no task", n)
 	}
-	if _, st := s.brainstorm(id); st == "failed" {
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, run); n != 0 {
 		t.Errorf("the session's Run failed")
+	}
+
+	// The cost sweep: both session Runs and a task Run due together, each
+	// priced by lux; one session Run's lux has nothing to say yet.
+	var taskRun, taskLux, sessionLux string
+	_ = s.owner.QueryRow(t0(), `SELECT id, lux_run_id FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL ORDER BY created_at LIMIT 1`, wi).
+		Scan(&taskRun, &taskLux)
+	_ = s.owner.QueryRow(t0(), `SELECT lux_run_id FROM runs WHERE id = $1`, run).Scan(&sessionLux)
+	price := func(luxID, ai string) {
+		s.lux.SetCost(luxID, lux.RunCost{Status: lux.CostFinal, Final: true,
+			ByFamily: []lux.FamilyCost{{Family: lux.FamilyAI, Currency: "USD", Amount: lux.Decimal(ai)}}})
+	}
+	price(sessionLux, "7.5")
+	price(taskLux, "0.25")
+	mustExec(t, s.owner, `UPDATE runs SET lux_cost_next_at = now() - interval '1 second' WHERE id = ANY($1)`, []string{run, ended, taskRun})
+	costs := &phases.Costs{DB: s.app, Lux: s.syncer.Lux, Log: quiet}
+	if _, err := costs.Sweep(t0()); err != nil {
+		t.Fatalf("the cost sweep failed with session Runs due: %v", err)
+	}
+	usd := func(runID string) float64 {
+		var v *float64
+		_ = s.owner.QueryRow(t0(), `SELECT lux_ai_usd::float8 FROM runs WHERE id = $1`, runID).Scan(&v)
+		if v == nil {
+			return -1
+		}
+		return *v
+	}
+	if got := usd(run); got != 7.5 {
+		t.Errorf("the session Run's cost: %v, want 7.5", got)
+	}
+	if got := usd(taskRun); got != 0.25 {
+		t.Errorf("the task Run's cost beside it: %v, want 0.25", got)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.cost.reported' AND task_id IS NULL AND session_id = $2`,
+		run, id); n != 1 {
+		t.Errorf("the session Run's cost event: %d, want 1 on the session, no task", n)
+	}
+	// The ended one, unknown to lux, is put off, not left due at once.
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_cost_next_at > now()`, ended); n != 1 {
+		t.Errorf("the ended session Run is still due at once")
+	}
+
+	// Metrics: the task's and its epic's count the task's Runs, not the session's spend.
+	var taskCost, epicCost, own float64
+	_ = s.owner.QueryRow(t0(), `SELECT cost_usd FROM task_metrics($1)`, wi).Scan(&taskCost)
+	_ = s.owner.QueryRow(t0(), `SELECT cost_usd FROM epic_metrics($1)`, epic).Scan(&epicCost)
+	_ = s.owner.QueryRow(t0(), `SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.task_id = $1 AND r.kind = 'agent'`, wi).Scan(&own)
+	if taskCost >= 7.5 || epicCost >= 7.5 {
+		t.Errorf("the session's 7.5 USD is in the task's (%v) or epic's (%v) metrics", taskCost, epicCost)
+	}
+	if math.Abs(taskCost-own) > 1e-9 || math.Abs(epicCost-own) > 1e-9 {
+		t.Errorf("task metrics %v, epic %v, want both the task's Runs' own %v", taskCost, epicCost, own)
+	}
+	if n := s.count(`SELECT count(*) FROM workflow_runs WHERE task_id IS NULL`); n != 0 {
+		t.Errorf("%d workflows with no task after the sweeps", n)
 	}
 }
