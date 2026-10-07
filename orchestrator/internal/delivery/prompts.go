@@ -47,6 +47,8 @@ type PromptInput struct {
 	// The branch the Run works on, and what it started from: what a saved
 	// prompt's {{run.branch}} and {{run.base_ref}} say.
 	Branch, BaseRef string
+	// A conductor's: the task branch its checkout is kept current with.
+	TaskBranch string
 	// What the task's conductor asked of this Run, when it started it.
 	ConductorNote string
 	// The images the Run is given with its prompt, in the order lux gets
@@ -337,9 +339,17 @@ var builtinInstructions = map[string][]string{
 		"When Deliver takes the decisions, or the task is merged or closed, you are read-only: read the code in " +
 			"your checkout and dude's records, but change nothing, start nothing and decide nothing. When someone asks " +
 			"for a change then, offer to create a follow-up task for it (create_task) — create it only once they agree.",
-		"You never edit files, commit or push: the phase Runs change the code. Your machine is small and does not " +
-			"run the code: never build, install or run tests. Whether tests passed is what the Runs that ran them " +
-			"reported; do not claim what you did not see a Run do."},
+		"You may edit code yourself, for small, well-understood things: a rename, a one-line fix, a review nit. " +
+			"Anything larger, or anything that needs the tests run, you delegate (start_phase implement or fix). Edit " +
+			"only while you take the task's decisions and no implementer or fixer is at work. Stay current first: dude " +
+			"brings the task branch into your checkout as `lux/<branch>` and tells you when it could not fast-forward " +
+			"you; then `git merge --ff-only lux/<branch>`, or `git merge lux/<branch>` when your work was kept. Commit " +
+			"in your checkout, then publish (`dude publish --message M`): dude takes your commits to the task branch, " +
+			"or refuses past the project's limit of changed lines and files, saying to delegate. Finish or abort a " +
+			"rebase or merge before you publish: lux will not push a checkout in the middle of one. Your machine is small " +
+			"and does not run the code: never build, install or run tests. Your commits are reviewed like any other: " +
+			"run a review after you publish; the pull request gate refuses an unreviewed commit of yours. Whether " +
+			"tests passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
@@ -417,10 +427,11 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
 	"why, when it is not yours to take. steer tells a running phase Run of this task something, whoever decides. " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
+	"publish takes what you committed in your checkout to the task branch, while you decide. " +
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
 	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
-	"`dude pr reply PR TEXT --in-reply-to ID`."
+	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
@@ -439,9 +450,16 @@ func ConductorPrompt(briefing string, in PromptInput) string {
 		sections = append(sections, "No repository is checked out for this task: it changes no code.")
 	} else {
 		var b strings.Builder
-		b.WriteString("Your checkout is the task's head, read-only by intent:")
+		b.WriteString("Your checkout is the task's head:")
 		for _, r := range in.Repositories {
-			fmt.Fprintf(&b, "\n- `%s` at `%s`", r.Name, r.Path)
+			access := "you may edit it, small things only"
+			if r.ReadOnly {
+				access = "read only"
+			}
+			fmt.Fprintf(&b, "\n- `%s` at `%s` (%s)", r.Name, r.Path, access)
+		}
+		if in.TaskBranch != "" {
+			fmt.Fprintf(&b, "\n\nThe task branch is `%s`; dude brings it in as `lux/%s`.", in.TaskBranch, in.TaskBranch)
 		}
 		sections = append(sections, b.String())
 	}

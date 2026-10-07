@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -521,6 +522,16 @@ type Server struct {
 	// production lux is today, that is everything queued, failed with a
 	// phase-less lux.input {requestId, error}.
 	FailUnreadOnInterrupt bool
+	// NoSyncModes is a lux from before sync modes: a sync or resume naming
+	// fast-forward or fetch is refused with a 409.
+	NoSyncModes bool
+	// HoldPushes is a lux that accepts a push and never reports it: no
+	// git.push follows, until ReleasePushes.
+	HoldPushes bool
+	heldPushes []func()
+	// HoldSyncs is a lux that accepts a running Run's sync and never
+	// reports it: no git.sync or sync.done follows.
+	HoldSyncs bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -1248,6 +1259,10 @@ func conductorAsked(input string, first bool) string {
 // agenttools.) Callers hold s.mu; the call is made without it, since dude
 // may be slow. A failure is said in the agent's reply.
 func (s *Server) callTool(run *Run, tool, args string) {
+	if fakeagent.Local(tool) {
+		s.localCall(run, tool, args)
+		return
+	}
 	var spec struct {
 		Secrets  []lux.Secret `json:"secrets"`
 		Workload struct {
@@ -1596,6 +1611,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		run.taken = map[string]bool{}
 	}
 	run.taken[in.RequestID] = true
+	run.Calls = append(run.Calls, "input")
 	if len(images) > 0 {
 		if run.attachments == nil {
 			run.attachments = map[string][]attachmentMeta{}
@@ -1685,48 +1701,106 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		// Each repository, in the spec's order, as lux pushes them: its own
-		// result, "skipped" for one that is never pushed.
-		repos := specRepos(spec)
-		first := ""
-		for _, repo := range repos {
-			if repo.Push && first == "" {
-				first = repo.Name
+		if s.HoldPushes {
+			s.heldPushes = append(s.heldPushes, func() { s.pushNow(run, spec, branch, in.RequestID) })
+			return
+		}
+		s.pushNow(run, spec, branch, in.RequestID)
+	}()
+}
+
+// ReleasePushes makes the pushes HoldPushes held, now, each reported with
+// its git.push as lux would have.
+func (s *Server) ReleasePushes() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held := s.heldPushes
+	s.heldPushes = nil
+	for _, push := range held {
+		push()
+	}
+}
+
+// AddEvents records n lifecycle events of typ on a Run, as a long-lived
+// Run's history.
+func (s *Server) AddEvents(id, typ string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		for range n {
+			s.luxEvent(run, typ, map[string]any{})
+		}
+	}
+}
+
+// pushNow pushes the Run's checkouts to branch and reports it. Callers
+// hold s.mu.
+func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string) {
+	// Each repository, in the spec's order, as lux pushes them: its own
+	// result, "skipped" for one that is never pushed.
+	repos := specRepos(spec)
+	first := ""
+	for _, repo := range repos {
+		if repo.Push && first == "" {
+			first = repo.Name
+		}
+	}
+	var results []any
+	for _, repo := range repos {
+		result := map[string]any{"repo": repo.Name}
+		if !repo.Push {
+			result["status"] = "skipped"
+			results = append(results, result)
+			continue
+		}
+		result["branch"] = branch
+		files := map[string]string{}
+		for path, content := range run.behavior.Commit {
+			if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
+				files[rest] = content
+			} else if !ok && repo.Name == first {
+				files[path] = content
 			}
 		}
-		var results []any
-		for _, repo := range repos {
-			result := map[string]any{"repo": repo.Name}
-			if !repo.Push {
-				result["status"] = "skipped"
+		path := s.repoPath(repo.URL)
+		base := head(path, repo.Ref)
+		var sha string
+		var err error
+		work, op := "", ""
+		if run.workspace != "" {
+			work = filepath.Join(run.workspace, "repos", repo.Name)
+			if op, err = operation(work); err != nil {
+				result["status"], result["error"] = "failed", operationUnknown(err)
 				results = append(results, result)
 				continue
 			}
-			result["branch"] = branch
-			files := map[string]string{}
-			for path, content := range run.behavior.Commit {
-				if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
-					files[rest] = content
-				} else if !ok && repo.Name == first {
-					files[path] = content
-				}
-			}
-			path := s.repoPath(repo.URL)
-			base := head(path, repo.Ref)
-			sha, err := commit(path, base, branch, files, run.behavior.Message)
-			switch {
-			case err != nil:
-				result["status"], result["error"] = "failed", err.Error()
-			case sha == base:
-				result["status"], result["commit"] = "up-to-date", sha
-			default:
-				result["status"], result["commit"] = "pushed", sha
-				run.Pushed = true
-			}
-			results = append(results, result)
 		}
-		s.luxEvent(run, "git.push", map[string]any{"requestId": in.RequestID, "results": results})
-	}()
+		if op != "" {
+			// As lux: nothing of a checkout mid-operation is bundled.
+			result["status"], result["operation"] = lux.PushRefused, op
+			result["error"] = fmt.Sprintf("a %s is in progress in the checkout: finish or abort it, then push", op)
+			results = append(results, result)
+			continue
+		}
+		if len(files) == 0 && work != "" {
+			// What the agent committed in its checkout itself, as lux
+			// pushes a checkout's HEAD.
+			sha, err = pushWorkspace(work, path, branch, base)
+		} else {
+			sha, err = commit(path, base, branch, files, run.behavior.Message)
+		}
+		switch {
+		case err != nil:
+			result["status"], result["error"] = "failed", err.Error()
+		case sha == base:
+			result["status"], result["commit"] = "up-to-date", sha
+		default:
+			result["status"], result["commit"] = "pushed", sha
+			run.Pushed = true
+		}
+		results = append(results, result)
+	}
+	s.luxEvent(run, "git.push", map[string]any{"requestId": requestID, "results": results})
 }
 
 type specRepo struct {
@@ -1949,9 +2023,14 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
 	// secret the Run has must come again, non-empty.
-	if missing := missingSecrets(run.Spec, in.Secrets); len(missing) > 0 {
+	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 {
 		s.mu.Unlock()
-		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(missing, ", "))
+		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
+		return
+	}
+	if msg := s.syncModeProblem(in.Sync); msg != "" {
+		s.mu.Unlock()
+		writeErr(w, 409, "sync_mode_unsupported", msg)
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {

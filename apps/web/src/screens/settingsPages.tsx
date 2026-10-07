@@ -530,7 +530,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const valid =
     form.requiredReviewers.length > 0 &&
     form.blockingSeverities.length > 0 &&
-    [form.maxReviewIterations, form.maxAttemptsPerFinding, form.parkAfterMinutes, form.conductorWarmMinutes].every((n) => Number.isInteger(n) && n >= 1) &&
+    [form.maxReviewIterations, form.maxAttemptsPerFinding, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
+      form.conductorEditFiles].every((n) => Number.isInteger(n) && n >= 1) &&
     [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0);
 
   return (
@@ -590,6 +591,10 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         {number("parkAfterMinutes", 1, 1440, "An agent waiting on a person gives up its machine after this many minutes.", "Park an agent after")}
         {number("idleNudgeMinutes", 0, 1440, "Mid-turn, silent, running nothing: it is asked to carry on or ask. 0 never.", "Nudge a quiet agent after")}
         {number("conductorWarmMinutes", 1, 1440, "After it answers in Chat, the conductor stays running this long; then the next message resumes it.", "Keep the conductor warm for")}
+      </SettingsSection>
+      <SettingsSection title="Conductor’s edits">
+        {number("conductorEditLines", 1, 10_000, "Changed lines (added and removed) the conductor may publish at once; past it, it delegates to an implementer.", "Lines the conductor may change")}
+        {number("conductorEditFiles", 1, 1000, "Files the conductor may change in one publish; past it, it delegates.", "Files the conductor may change")}
       </SettingsSection>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {!valid ? <Callout tone="danger">Choose at least one reviewer and one blocking severity, and whole numbers in range.</Callout> : null}

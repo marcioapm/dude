@@ -240,6 +240,10 @@ func (s *Server) auth(h handler) http.Handler {
 				write(w, he.status, errBody(he.code, he.message))
 				return
 			}
+			if errors.Is(err, delivery.ErrPublishMoving) {
+				write(w, http.StatusConflict, errBody("publish_moving", delivery.ErrPublishMoving.Why))
+				return
+			}
 			if db.IsNotFound(err) {
 				write(w, http.StatusNotFound, errBody("not_found", "not found"))
 				return
@@ -691,6 +695,15 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			// stopping it: the next message in Chat starts another, so
 			// nothing is kept to resume.
 			conductor = true
+			// Its publishes that moved nothing are refused; one moving the
+			// task branch finishes first (409).
+			if err := tx.QueryRow(r.Context(), `SELECT id FROM runs WHERE id = $1 FOR NO KEY UPDATE`, runID).Scan(&runID); err != nil {
+				return err
+			}
+			if err := delivery.RefuseUnmovedTx(r.Context(), tx, delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID,
+				RunID: runID}, "your conductor was stopped before it was published"); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 				control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 				return err

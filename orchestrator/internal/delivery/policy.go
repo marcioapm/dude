@@ -56,6 +56,11 @@ type Policy struct {
 	// person still at their desk gets a live reply; past it, it is parked
 	// and their next message resumes it.
 	ConductorWarmMinutes int `json:"conductorWarmMinutes"`
+	// The most a conductor may publish at once, against the task branch's
+	// head: changed lines (additions and deletions) and files. Past
+	// either, the publish is refused and the work delegated.
+	ConductorEditLines int `json:"conductorEditLines"`
+	ConductorEditFiles int `json:"conductorEditFiles"`
 }
 
 func DefaultPolicy() Policy {
@@ -76,6 +81,8 @@ func DefaultPolicy() Policy {
 		ParkAfterMinutes:      10,
 		IdleNudgeMinutes:      0, // off
 		ConductorWarmMinutes:  5,
+		ConductorEditLines:    60,
+		ConductorEditFiles:    3,
 	}
 }
 

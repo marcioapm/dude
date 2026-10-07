@@ -98,6 +98,10 @@ type Server struct {
 	ReceiveToken              string
 	ReceiveRequests           []string
 	ReceiveDisconnect         bool
+	// Intercept, when set, sees each API request before the fake answers
+	// it, without the fake's lock: it may block (a slow GitHub), or return
+	// a status to fail the request with (0 answers it as usual).
+	Intercept func(r *http.Request) int
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -337,6 +341,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec}", s.compare)
 	mux.HandleFunc("PATCH "+prefix+"/git/refs/heads/{branch...}", s.updateRef)
+	mux.HandleFunc("GET "+prefix+"/git/ref/heads/{branch...}", func(w http.ResponseWriter, r *http.Request) {
+		sha := s.SHA(r.PathValue("branch"))
+		if sha == "" {
+			fail(w, 404, "Not Found")
+			return
+		}
+		write(w, 200, map[string]any{"ref": "refs/heads/" + r.PathValue("branch"), "object": map[string]string{"sha": sha}})
+	})
 	mux.HandleFunc("POST "+prefix+"/git/refs", s.createRef)
 	mux.HandleFunc("DELETE "+prefix+"/git/refs/heads/{branch...}", s.deleteRef)
 	mux.HandleFunc("GET "+prefix+"/collaborators/{login}/permission", func(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +474,18 @@ func (s *Server) Handler() http.Handler {
 		s.Hooks = append(s.Hooks, h)
 		write(w, 201, h)
 	})
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		intercept := s.Intercept
+		s.mu.Unlock()
+		if intercept != nil {
+			if status := intercept(r); status != 0 {
+				fail(w, status, http.StatusText(status))
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
@@ -732,21 +755,29 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	out, err := s.git("diff", "--name-only", base, head)
+	out, err := s.git("diff", "--numstat", base, head)
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
 	files := []any{}
-	for _, f := range strings.Split(out, "\n") {
-		if f != "" {
-			files = append(files, map[string]string{"filename": f})
+	for _, line := range strings.Split(out, "\n") {
+		// "<added>\t<deleted>\t<path>"; "-" for a binary file's counts.
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
 		}
+		added, _ := strconv.Atoi(parts[0])
+		deleted, _ := strconv.Atoi(parts[1])
+		files = append(files, map[string]any{"filename": parts[2], "additions": added, "deletions": deleted})
 	}
-	// Commits on base that head lacks: how far behind head is.
+	// Commits on base that head lacks: how far behind head is; and the
+	// reverse.
 	behind, _ := s.git("rev-list", "--count", head+".."+base)
+	ahead, _ := s.git("rev-list", "--count", base+".."+head)
 	n, _ := strconv.Atoi(behind)
-	write(w, 200, map[string]any{"files": files, "behind_by": n})
+	a, _ := strconv.Atoi(ahead)
+	write(w, 200, map[string]any{"files": files, "behind_by": n, "ahead_by": a})
 }
 
 func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {

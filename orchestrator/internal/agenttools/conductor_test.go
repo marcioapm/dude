@@ -84,7 +84,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,dismiss_finding,emit_event,findings,get_memory,"+
-		"list_epics,list_repositories,list_tasks,pull_requests,remember,reply_on_pull_request,request_repository,run_diff,"+
+		"list_epics,list_repositories,list_tasks,publish,pull_requests,remember,reply_on_pull_request,request_repository,run_diff,"+
 		"search_memory,start_phase,steer,update_task" {
 		t.Errorf("a conductor sees %s", got)
 	}
@@ -92,7 +92,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
 	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "dismiss_finding", "update_task", "steer",
-		"reply_on_pull_request"} {
+		"reply_on_pull_request", "publish"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}
@@ -178,6 +178,21 @@ func TestTheConductorsDecisionsFromTheShell(t *testing.T) {
 	}
 	if out, err := dude("pr", "reply", "7"); err == nil || !strings.Contains(out, "usage") {
 		t.Errorf("dude pr reply without words: %v\n%s", err, out)
+	}
+	// dude publish, with no file, reaches the publish tool with its message;
+	// with a live implementer it is refused, saying so.
+	mustExec(t, f.owner, `UPDATE runs SET status = 'completed' WHERE id = 'run_0abcdefgh0123456789abcdef'`)
+	mustExec(t, f.owner, `UPDATE runs SET push_branch = 'dude/x/run-cond' WHERE id = 'run_cond'`)
+	if out, err := dude("publish", "--message", "rename the helper"); err != nil || !strings.Contains(out, `"publishing"`) {
+		t.Fatalf("dude publish: %v\n%s", err, out)
+	}
+	var message string
+	_ = f.owner.QueryRow(context.Background(), `SELECT message FROM conductor_publishes WHERE run_id = 'run_cond'`).Scan(&message)
+	if message != "rename the helper" {
+		t.Errorf("the publish's message: %q", message)
+	}
+	if out, err := dude("publish"); err == nil || !strings.Contains(out, "under way") {
+		t.Errorf("a second publish in flight: %v\n%s", err, out)
 	}
 }
 

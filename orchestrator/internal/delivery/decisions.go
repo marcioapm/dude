@@ -231,6 +231,14 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		// A gate the conductor entered stays one handed back: Deliver goes
 		// on only with the person's Open or Draft, or their confirmation.
 		if d.Point == PointBeforePR && st.GateRequired && !st.gateHeld() {
+			// Its head the conductor's untested commit: reviewed first.
+			if res, diverted, err := w.reviewUntested(ctx, sc, st); diverted || err != nil {
+				if diverted {
+					st.Decision = nil
+					st.Decisions++
+				}
+				return res, err
+			}
 			ok, err := w.gateAuthorized(ctx, sc, st)
 			if err != nil {
 				return workflow.Result{}, err
@@ -268,10 +276,12 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 
 // gateAuthorized says whether a gate the conductor entered may open under
 // Deliver: an authorization at the heads now (gateHeld), or the person's
-// Open or Draft at them. The answer is only read here; the step's result
-// asks for it to be recorded (authorizeGate), which the transition does
-// under the row lock and the step's lease (authorizeAtCommitTx). Until
-// then gateHeld is false: the opening waits for the recorded one.
+// Open or Draft at them. Both callers first send a head that is the
+// conductor's untested commit to a review (reviewUntested). The answer is
+// only read here; the step's result asks for it to be recorded
+// (authorizeGate), which the transition does under the row lock and the
+// step's lease (authorizeAtCommitTx). Until then gateHeld is false: the
+// opening waits for the recorded one.
 func (w *steps) gateAuthorized(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
 	if st.gateHeld() {
 		return true, nil
@@ -436,6 +446,11 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	}
 	if from == to {
 		return false, nil
+	}
+	// Not while the conductor's publish moves the task branch: the caller
+	// holds the delivery's row (LoadDelivery), which the reservation takes.
+	if err := RefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+		return false, err
 	}
 	st.Decider = to
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text)) WHERE id = $1`,

@@ -250,10 +250,12 @@ func signalTx(ctx context.Context, tx pgx.Tx, organizationID, runID, name string
 		ids.New(ids.WorkflowSignal), organizationID, runID, name, body, db.Nullable(idempotencyKey)); err != nil {
 		return err
 	}
-	// Wake a run parked on this signal. One parked on a timer keeps it.
+	// Wake a run parked on this signal. One parked on a timer keeps it, and
+	// so does one held by a Wait.
 	_, err := tx.Exec(ctx, `
 		UPDATE workflow_runs SET status = 'running', wake_at = NULL
-		WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? $2`, runID, name)
+		WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? $2
+		  AND (wait_until IS NULL OR wait_until <= now())`, runID, name)
 	return err
 }
 
@@ -356,6 +358,7 @@ func (r *Runtime) claim(ctx context.Context, limit int) ([]claimed, error) {
 				SELECT id FROM workflow_runs
 				WHERE status IN ('running', 'waiting')
 				  AND (locked_until IS NULL OR locked_until < now())
+				  AND (wait_until IS NULL OR wait_until <= now())
 				  AND (
 				    status = 'running'
 				    -- A timer that elapsed: a backoff retry or a sleep. Such
@@ -454,6 +457,11 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 		Signals:        run.signals,
 		Attempt:        run.Attempt,
 	})
+	var wait Wait
+	if errors.As(err, &wait) {
+		r.wait(ctx, &run.Run, wait)
+		return
+	}
 	if err != nil {
 		r.log.Warn("workflow step failed", "workflow", run.ID, "step", run.Step, "attempt", run.Attempt, "error", err)
 		r.fail(ctx, &run.Run, err.Error(), false, def)
@@ -501,7 +509,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 			qerr = tx.QueryRow(ctx, `
 				UPDATE workflow_runs
 				SET status = 'completed', wake_at = NULL, awaiting_signals = '[]'::jsonb, attempt = 0,
-				    locked_by = NULL, locked_until = NULL, state = `+keepOwned+`
+				    locked_by = NULL, locked_until = NULL, wait_until = NULL, state = `+keepOwned+`
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
 				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched).Scan(&tag)
 		} else {
@@ -517,7 +525,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 				UPDATE workflow_runs
 				SET step = $6, state = `+keepOwned+`, status = $7::workflow_run_status,
 				    wake_at = $8, awaiting_signals = $9::jsonb, attempt = 0, last_error = NULL,
-				    locked_by = NULL, locked_until = NULL
+				    locked_by = NULL, locked_until = NULL, wait_until = NULL
 				WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $2 AND locked_until > now()
 				RETURNING id`, run.ID, r.pollerID, nullableJSON(state), owned, latched, result.Next, status, wake, awaiting).Scan(&tag)
 		}
@@ -601,6 +609,34 @@ func (r *Runtime) fail(ctx context.Context, run *Run, message string, fatal bool
 	})
 	if err != nil {
 		r.log.Error("recording workflow failure failed", "workflow", run.ID, "error", err)
+	}
+}
+
+// Wait is a step that cannot go on yet for a reason that passes on its
+// own (another operation holds the task briefly): the step runs again
+// after After, its signals unconsumed and its attempt not counted.
+type Wait struct {
+	After time.Duration
+	Why   string
+}
+
+func (w Wait) Error() string { return w.Why }
+
+// wait reschedules the step a Wait stopped, not before its After: the
+// signals that woke it stay unconsumed but do not make it runnable sooner.
+func (r *Runtime) wait(ctx context.Context, run *Run, w Wait) {
+	awaiting, _ := json.Marshal(db.NonNil(run.AwaitingSignals))
+	err := r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE workflow_runs SET status = 'waiting', last_error = $2, wake_at = now() + $3::interval,
+			       wait_until = now() + $3::interval,
+			       awaiting_signals = $4::jsonb, locked_by = NULL, locked_until = NULL
+			WHERE id = $1 AND status IN ('running', 'waiting') AND locked_by = $5`,
+			run.ID, w.Why, max(w.After, 100*time.Millisecond).String(), awaiting, r.pollerID)
+		return err
+	})
+	if err != nil {
+		r.log.Error("recording a workflow wait failed", "workflow", run.ID, "error", err)
 	}
 }
 

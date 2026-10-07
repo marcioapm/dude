@@ -29,6 +29,28 @@ func TestTheConductorIsToldToAnswerOnThePullRequest(t *testing.T) {
 	}
 }
 
+// A conductor is told when it edits and when it delegates, how to stay
+// current with the task branch, to commit then publish, and that it runs
+// no tests and its commits are reviewed; its checkout says which
+// repositories it may change and the branch it is kept current with.
+func TestTheConductorIsToldWhenToEditAndWhenToDelegate(t *testing.T) {
+	got := ConductorPrompt("briefing", PromptInput{Tools: true, TaskBranch: "dude/t1/attempt-1",
+		Repositories: []PromptRepo{{Name: "app", Path: "/workspace/repos/app"}, {Name: "docs", Path: "/workspace/repos/docs", ReadOnly: true}}})
+	for _, want := range []string{"a rename, a one-line fix, a review nit", "Anything larger, or anything that needs the tests run, you delegate",
+		"`git merge --ff-only lux/<branch>`", "`git merge lux/<branch>` when your work was kept",
+		"Commit in your checkout, then publish (`dude publish --message M`)", "never build, install or run tests",
+		"the pull request gate refuses an unreviewed commit of yours",
+		"`app` at `/workspace/repos/app` (you may edit it, small things only)", "`docs` at `/workspace/repos/docs` (read only)",
+		"dude brings it in as `lux/dude/t1/attempt-1`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the conductor's prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "You never edit files") {
+		t.Error("the conductor is still told it never edits")
+	}
+}
+
 // A person's answer is part of the task from then on: a reviewer judging
 // the change, or a fixer after it, is told what was decided rather than
 // flagging it again (a real run's reviewers reported "chosen with no

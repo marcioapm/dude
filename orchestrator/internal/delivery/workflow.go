@@ -567,18 +567,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = slices.DeleteFunc(slices.Clone(d.FindingIDs), func(id string) bool { return !slices.Contains(open, id) })
 		}
 	}
-	// Counted once per fix step, however often the step is replayed: the
-	// Run's creation key doubles as the marker that it was counted.
-	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	if existing == "" {
-		if err := w.s.MarkAttempted(ctx, sc.OrganizationID, open); err != nil {
-			return workflow.Result{}, err
-		}
-	}
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs = open; d.apply(p) })
+	// Counted once per fix step, however often the step is replayed: with
+	// the Run's creation, which a replay finds by its key.
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs, p.CountAttempts = open, true; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -695,6 +686,13 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// Never untested at the pull request: a head that is the conductor's
+	// commit is reviewed first, whoever decides.
+	if len(st.PullRequestIDs) == 0 {
+		if res, diverted, err := w.reviewUntested(ctx, sc, st); diverted || err != nil {
+			return res, err
+		}
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
 	// policy chose to open waits for the person's answer like any other, and
