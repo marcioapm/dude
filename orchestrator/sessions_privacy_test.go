@@ -161,6 +161,68 @@ func TestASessionsMemoriesAreItsMembersAlone(t *testing.T) {
 	}
 }
 
+// A question put to one member who is then removed, or can no longer chat,
+// is withdrawn: closed unanswered, the agent told, and what others said
+// meanwhile reaches it. Nobody's message is taken as the answer.
+func TestAQuestionToSomeoneWhoLeavesIsWithdrawn(t *testing.T) {
+	for _, how := range []string{"removed", "demoted", "handed over"} {
+		t.Run(how, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.withTools()
+			id := s.session()
+			s.join(id, s.ana, "chat")
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "plan"})
+			run := s.started(id)
+			// Handing over, Márcio keeps read: his question is withdrawn, Ana's message held for it goes.
+			asked, writer, name := s.ana, s.marcio, "Ana Nunes"
+			if how == "handed over" {
+				asked, writer, name = s.marcio, s.ana, "Márcio Martins"
+			}
+			status, out := s.tool(run, "ask_person", `{"question":"Private decision?","to":"`+name+`"}`)
+			if status != 200 {
+				t.Fatalf("ask_person: %d %v", status, out)
+			}
+			qid := out["questionId"].(string)
+			s.ok(writer, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "held note"})
+			switch how {
+			case "removed":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people/"+asked+"/remove", nil)
+			case "demoted":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people/"+asked+"/role", map[string]any{"role": "read"})
+			default:
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.ana, "keep": "read"})
+			}
+			writerName := "Márcio Martins"
+			if writer == s.ana {
+				writerName = "Ana Nunes"
+			}
+
+			var qstatus, answer string
+			_ = s.owner.QueryRow(t0(), `SELECT status::text, coalesce(answer, '') FROM questions WHERE id = $1`, qid).Scan(&qstatus, &answer)
+			if qstatus != "cancelled" || answer != "" {
+				t.Errorf("the question is %s with answer %q; want cancelled, unanswered", qstatus, answer)
+			}
+			if n := s.count(`SELECT count(*) FROM events WHERE event_type = 'question.closed' AND payload->>'questionId' = $1
+				AND payload->>'by' = 'withdrawn'`, qid); n != 1 {
+				t.Errorf("question.closed (withdrawn): %d", n)
+			}
+			s.until("the agent to hear the withdrawal and the held message", func() bool {
+				s.pump()
+				v := s.luxRun(run)
+				all := strings.Join(append(v.inputs, v.resumes...), "\n")
+				return strings.Contains(all, "Your question to "+name+" is withdrawn") && strings.Contains(all, writerName+": held note")
+			})
+			if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL`, run); n != 0 {
+				t.Errorf("%d directives still unsent", n)
+			}
+			// A message now goes as a message, not as an answer.
+			if out := s.ok(writer, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "next"}); out["questionId"] != nil {
+				t.Errorf("a later message answered a withdrawn question: %v", out)
+			}
+		})
+	}
+}
+
 // ownerOf is the session's owner, and whether person is still in it.
 func (s *sessionWorld) ownerOf(session, person string) (string, bool) {
 	var owner string

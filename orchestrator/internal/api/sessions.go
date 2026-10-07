@@ -853,6 +853,12 @@ func (s *Server) changeSessionRole(w http.ResponseWriter, r *http.Request, org s
 		if tag.RowsAffected() == 0 {
 			return fail(http.StatusNotFound, "not_found", "%s is not a member you can change", person)
 		}
+		// A reader answers nothing: what was put to them is withdrawn.
+		if body.Role == delivery.SessionRead {
+			if err := delivery.WithdrawQuestionsTo(r.Context(), tx, org, id, person); err != nil {
+				return err
+			}
+		}
 		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionRoleChanged, p.ActorType, p.Actor,
 			map[string]any{"person": person, "role": body.Role})
 	})
@@ -882,6 +888,9 @@ func (s *Server) removeFromSession(w http.ResponseWriter, r *http.Request, org s
 		}
 		if tag.RowsAffected() == 0 {
 			return fail(http.StatusNotFound, "not_found", "%s is not a member you can remove", person)
+		}
+		if err := delivery.WithdrawQuestionsTo(r.Context(), tx, org, id, person); err != nil {
+			return err
 		}
 		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionRemoved, p.ActorType, p.Actor,
 			map[string]any{"person": person})
@@ -985,6 +994,12 @@ func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep st
 	if _, err := tx.Exec(ctx, `UPDATE session_people SET role = 'owner', accepted_at = COALESCE(accepted_at, now()),
 		becomes_owner = false, handover_keep = NULL WHERE session_id = $1 AND person_id = $2`, sessionID, to); err != nil {
 		return err
+	}
+	// The owner before, reading now or gone, answers nothing.
+	if keep != delivery.SessionChat {
+		if err := delivery.WithdrawQuestionsTo(ctx, tx, org, sessionID, from); err != nil {
+			return err
+		}
 	}
 	toName, err := delivery.PersonName(ctx, tx, to)
 	if err != nil {

@@ -222,6 +222,19 @@ describe("a brainstorm session's page", () => {
     expect(client.filed).toEqual([[1]]);
   });
 
+  test("a question withdrawn when its one recipient left says so, and asks for nothing", async () => {
+    const client = new SessionClient(detail("owner"), [
+      ev("question.asked", { kind: "agent", questionId: "q_w", prompt: "Grow the window?", options: ["Yes", "No"], to: ANA.id, toName: ANA.name },
+        { type: "agent", id: RUN }),
+      ev("question.closed", { questionId: "q_w", by: "withdrawn" }),
+    ]);
+    const page = await sessionPage(client);
+    const settled = await until(() => page.querySelector("[data-testid=settled-by]"), "the closed card");
+    expect(settled.textContent).toBe("Withdrawn");
+    expect(page.querySelector("[data-testid=session-screen] form[data-mode=answer]")).toBeNull();
+    expect(page.querySelector("[data-testid=waiting-on]")).toBeNull();
+  });
+
   test("a session you are not in is not there", async () => {
     const { ApiError } = await import("../src/api/client.ts");
     class Gone extends SessionClient {
