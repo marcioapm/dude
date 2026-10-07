@@ -789,6 +789,15 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	}
 	octx, stop := op.context(ctx)
 	defer stop()
+	// An event of this start (a resuming moves lux_start_event past this)
+	// applied before the answer is newer than it, as for woken.
+	var startBefore int64
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&startBefore)
+	}); err != nil {
+		p.release(ctx, op)
+		return err
+	}
 	// lux answers a Run already resuming as it did the first time; a
 	// refusal (cancelled or finished meanwhile) is for good.
 	var refused *lux.Error
@@ -822,9 +831,24 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		return err
 	}
 	_, err = p.finish(ctx, op, func(tx pgx.Tx) (bool, error) {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $4, lux_stop_reason = NULL, dude_pause = NULL,
-			active_since = now() WHERE id = $1 AND `+parkedOnSQL, r.ID, r.LuxRunID, r.Generation, lr.State)
-		if err != nil || tag.RowsAffected() == 0 {
+		// woken's precedence, on the eager path's statuses: once an event
+		// of this start was applied (kept), the applied lux_state stands
+		// over the answer; an end applied leaves the preview parked.
+		const kept = `lux_start_event > $5`
+		const ended = `(` + kept + ` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
+		var resumed bool
+		err := tx.QueryRow(ctx, `UPDATE runs SET
+			lux_state = CASE WHEN `+kept+` THEN lux_state ELSE $4 END,
+			status = CASE WHEN `+ended+` THEN status ELSE 'running'::run_status END,
+			lux_stop_reason = CASE WHEN `+ended+` THEN lux_stop_reason END,
+			dude_pause = CASE WHEN `+ended+` THEN dude_pause END,
+			active_since = CASE WHEN `+ended+` THEN active_since ELSE now() END
+			WHERE id = $1 AND `+parkedOnSQL+` RETURNING status = 'running'`,
+			r.ID, r.LuxRunID, r.Generation, lr.State, startBefore).Scan(&resumed)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && !resumed {
+			return false, nil
+		}
+		if err != nil {
 			return false, err
 		}
 		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.unparked", OrganizationID: r.Org, ProjectID: r.ProjectID,

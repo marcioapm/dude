@@ -420,6 +420,56 @@ func TestALapsedResumesRefusalDoesNotFailTheNextGeneration(t *testing.T) {
 	}
 }
 
+// A parked preview's resume whose answer comes after lux's events of that
+// start were applied keeps what the events said: the last state applied
+// stands, and a start that ended leaves the preview parked.
+func TestAResumeAnsweredAfterItsEventsKeepsTheAppliedState(t *testing.T) {
+	for _, tc := range []struct {
+		events []string
+		status string
+	}{
+		{[]string{"resuming", "running", "failed"}, "paused"},
+		{[]string{"resuming", "running"}, "running"},
+	} {
+		t.Run(strings.Join(tc.events, ","), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			app, owner := dbtest.Open(t)
+			_, rows := previewRows(t, owner, 1, false)
+			r := rows[0].previewRun
+			g := newGatedLux(t, func(req *http.Request) bool { return strings.HasSuffix(req.URL.Path, "/resume") })
+			p := &Previews{Service: &Service{DB: app, Lux: lux.New(g.URL, "test"), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+			done := make(chan error, 1)
+			go func() { done <- p.resume(ctx, r) }()
+			select {
+			case <-g.entered:
+			case <-ctx.Done():
+				t.Fatal("resume did not reach lux")
+			}
+			for i, state := range tc.events {
+				if err := p.applyEvent(ctx, r, lux.Frame{Kind: "lux", EventID: int64(i + 1), EventType: "state",
+					EventData: []byte(`{"state":"` + state + `"}`)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			g.open()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			last := tc.events[len(tc.events)-1]
+			var state, status string
+			var reserved bool
+			if err := owner.QueryRow(ctx, `SELECT lux_state, status::text, op_token IS NOT NULL FROM runs WHERE id = $1`, r.ID).
+				Scan(&state, &status, &reserved); err != nil {
+				t.Fatal(err)
+			}
+			if state != last || status != tc.status || reserved {
+				t.Errorf("after the answer: lux_state %s status %s reserved %v; want %s, %s, released", state, status, reserved, last, tc.status)
+			}
+		})
+	}
+}
+
 // A reservation in force keeps every other wake claim, replacement and
 // sweep off the row; once it has lapsed (its holder gone without letting
 // go), the row is taken over.
