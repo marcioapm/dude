@@ -896,8 +896,25 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	switch {
 	case !live && holds != lr.ID:
 		// Stopped while this submit was in flight: the Run it made is no
-		// preview's, and nothing else would cancel it.
+		// preview's. Recorded on the stopped row when it holds none, its
+		// lux_stop_reason cleared, so the sweep's endInLux cancels it until
+		// lux takes the cancel; otherwise cancelled here once.
 		p.Log.Info("a preview was stopped while its new Run was submitted; cancelling that Run", "run", r.ID, "luxRun", lr.ID)
+		var recorded bool
+		if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_stop_reason = NULL
+				WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $4 AND status IN ('completed', 'failed', 'aborted')`,
+				r.ID, lr.ID, lr.State, r.Generation)
+			recorded = err == nil && tag.RowsAffected() == 1
+			return err
+		}); err != nil {
+			return err
+		}
+		if recorded {
+			stopped := r.previewRun
+			stopped.LuxRunID, stopped.LuxState = lr.ID, lr.State
+			return p.cancel(ctx, stopped)
+		}
 		if err := p.Lux.Cancel(ctx, lr.ID); err != nil {
 			if le, ok := lux.AsError(err); !ok || le.Retryable() {
 				return err
