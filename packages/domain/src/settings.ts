@@ -24,9 +24,11 @@ import {
  * settings of its own only where it is given them. The investigator reads
  * before anything is written; like the others it has a tier, effort, time
  * limit and machine, and it follows no other role. Nor does the conductor,
- * which people talk to in a task's Chat, on a small machine of its own.
+ * which people talk to in a task's Chat, on a small machine of its own; nor
+ * the brainstorm, which a session's members talk to, on the same small
+ * machine (the organisation's only: a session has no project).
  */
-export const SETTINGS_ROLES = ["conductor", "investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const;
+export const SETTINGS_ROLES = ["conductor", "brainstorm", "investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const;
 export type SettingsRole = (typeof SETTINGS_ROLES)[number];
 
 /** Roles with a prompt: every configured one. */
@@ -35,6 +37,7 @@ export type PromptRole = z.infer<typeof promptRoleSchema>;
 
 export const SETTINGS_ROLE_LABEL: Record<PromptRole, string> = {
   conductor: "Conductor",
+  brainstorm: "Brainstorm",
   implementer: "Implementer",
   reviewer: "Reviewer",
   fixer: "Fixer",
@@ -46,6 +49,7 @@ export const SETTINGS_ROLE_LABEL: Record<PromptRole, string> = {
 /** What each role is for, in a line. */
 export const SETTINGS_ROLE_DESCRIPTION: Record<PromptRole, string> = {
   conductor: "Answers questions about a task in its Chat, from the code and dude's records.",
+  brainstorm: "Thinks with a session's members across linked projects; reads, proposes, never changes code.",
   implementer: "Writes the change and its tests.",
   reviewer: "Reviews the change by category; reports findings, never pushes.",
   fixer: "Fixes exactly the findings or comments it is given.",

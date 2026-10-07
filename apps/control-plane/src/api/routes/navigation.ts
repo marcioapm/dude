@@ -163,8 +163,9 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
                r.role, r.category, r.created_at,
                dense_rank() OVER (PARTITION BY r.task_id ORDER BY r.attempt DESC) AS rank
         FROM runs r
-        -- The agents: a branch preview is a task's servers, not one of them.
-        WHERE r.kind = 'agent'
+        -- The agents: a branch preview is a task's servers, not one of them;
+        -- a session's agent is no task's.
+        WHERE r.kind = 'agent' AND r.task_id IS NOT NULL
       ) ranked
       WHERE rank <= ${ATTEMPTS_PER_TASK}
       -- The task's conductor first in its attempt, as in its Sessions.
@@ -176,7 +177,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const costs = (await sql`
       SELECT r.task_id AS "taskId", COALESCE(sum(run_model_usd(r)), 0)::float8 AS "costUsd"
       FROM runs r
-      WHERE r.kind = 'agent'
+      WHERE r.kind = 'agent' AND r.task_id IS NOT NULL
       GROUP BY r.task_id`) as Array<{ taskId: string; costUsd: number }>;
 
     // -- assemble ----------------------------------------------------------

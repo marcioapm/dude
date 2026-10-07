@@ -93,10 +93,12 @@ async function listArtifacts(ctx: RequestContext): Promise<Response> {
   return json({ artifacts: await artifactsOf(ctx.principal.organizationId, taskId) });
 }
 
-/** An artifact's row, in the caller's organization. */
-async function artifactNamed(organizationId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
+/** An artifact's row, in the caller's organization; a session's Run's, for its members only. */
+async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
   return withOrg(organizationId, async ({ sql }) => {
-    const [row] = (await sql`SELECT name, content_type AS "contentType" FROM artifacts WHERE id = ${id}`) as Array<{
+    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType" FROM artifacts a
+      LEFT JOIN runs r ON r.id = a.run_id
+      WHERE a.id = ${id} AND (r.session_id IS NULL OR session_role(r.session_id, ${personId}) IS NOT NULL)`) as Array<{
       name: string; contentType: string }>;
     return row;
   });
@@ -116,9 +118,9 @@ function fetchContent(organizationId: string, id: string): Promise<Response> {
 async function artifactContent(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
   const id = ctx.params.id!;
-  // Its name is needed only once the bytes come; asked for meanwhile.
-  const named = artifactNamed(organizationId, id);
-  named.catch(() => undefined);
+  // Asked for first: one the caller may not see is never fetched.
+  const artifact = await artifactNamed(organizationId, ctx.principal.personId, id);
+  if (!artifact) throw notFound(`artifact ${id} not found`);
   const res = await fetchContent(organizationId, id);
   const headers = new Headers({
     "x-content-type-options": "nosniff",
@@ -132,8 +134,7 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
     headers.set("content-type", res.headers.get("content-type") ?? "application/json");
     return new Response(res.body, { status: res.status, headers });
   }
-  const artifact = await named;
-  const name = artifact?.name ?? "file";
+  const name = artifact.name || "file";
   let type = artifactType(res.headers.get("content-type"), name);
   let body: ReadableStream<Uint8Array> = res.body;
   if (GENERIC.has(bare(type))) {

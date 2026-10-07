@@ -35,7 +35,9 @@ export type IconName =
   | "reviewer"
   | "simplifier"
   | "qa_browser"
+  | "brainstorm"
   // ui
+  | "shared"
   | "chevron-down"
   | "chevron-right"
   | "chevron-up"
@@ -147,6 +149,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   reviewer: { d: "M4.5 2.5h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM5.75 8l1.5 1.5 3-3" },
   simplifier: { d: "M4.5 5.5a1.75 1.75 0 1 0 0-3.5a1.75 1.75 0 0 0 0 3.5ZM4.5 14a1.75 1.75 0 1 0 0-3.5a1.75 1.75 0 0 0 0 3.5ZM5.9 4.9l7.6 5.1M5.9 11.1l7.6-5.1" },
   qa_browser: { d: "M2.5 4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V4ZM2.5 6h11M4.5 4.5h.01M6.25 4.5h.01M7.5 8l3.5 1.4-1.5.6-.6 1.5Z" },
+  /* A light bulb: thinking out loud. */
+  brainstorm: { d: "M6 12.5h4M6.5 14h3M8 2.25a4 4 0 0 0-2.4 7.2c.55.42.9.98.9 1.55v.5h3v-.5c0-.57.35-1.13.9-1.55A4 4 0 0 0 8 2.25Z" },
+  /* Two people: a session someone else is in too. */
+  shared: { d: "M6 7.25a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM2.5 13c0-1.93 1.57-3.5 3.5-3.5s3.5 1.57 3.5 3.5M10.5 7a1.75 1.75 0 1 0 0-3.5M11.5 9.6c1.2.4 2 1.6 2 3.4" },
 
   "chevron-down": { d: "M4 6l4 4 4-4" },
   "chevron-right": { d: "M6 4l4 4-4 4" },

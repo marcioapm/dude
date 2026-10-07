@@ -50,6 +50,39 @@ export const EventTypes = {
   TaskOwnerChanged: "task.owner_changed",
   /** Who is on it changed. Payload: `{ people }`, person ids, the owner first. */
   TaskPeopleChanged: "task.people_changed",
+  /** A person's comment on a task, shown in its Activity. Payload: `{ text }`. */
+  TaskComment: "task.comment",
+
+  // Brainstorm sessions: on the session (events.session_id), its members' alone.
+  /** Payload: `{ title }`. */
+  BrainstormCreated: "session.created",
+  /** The owner invited people. Payload: `{ people, role }`; role `owner` for a handover waiting on its acceptance. */
+  BrainstormShared: "session.shared",
+  /** Payload: `{ person }`. */
+  BrainstormJoined: "session.joined",
+  /** Payload: `{ person }`. */
+  BrainstormDeclined: "session.declined",
+  /** Payload: `{ person, role }`. */
+  BrainstormRoleChanged: "session.role_changed",
+  /** Payload: `{ person }`. */
+  BrainstormMemberRemoved: "session.member_removed",
+  /** Payload: `{ from, to, keep, fromName, toName }`. */
+  BrainstormOwnerChanged: "session.owner_changed",
+  /** Payload: `{ projects }`. */
+  BrainstormLinked: "session.linked",
+  /** The agent filled the proposal card. Payload: `{ proposalId, items }`. */
+  BrainstormProposed: "session.proposed",
+  /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
+  BrainstormFiled: "session.filed",
+  /** dude briefed the session's agent. Payload: `{ text }`. */
+  BrainstormBriefed: "session.briefed",
+  /** dude told the session's agent something (who owns it now). Payload: `{ text, directiveId }`. */
+  BrainstormTold: "session.told",
+  /**
+   * A member has the session open, or no longer. Live only, never in the
+   * ledger, and only to the session's members. Payload: `{ personId, open }`.
+   */
+  BrainstormOpen: "session.open",
 
   // People
   /** An admin added someone. Payload: `{ personId, role }`. */

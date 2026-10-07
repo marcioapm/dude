@@ -136,13 +136,13 @@ async function removeSizes(...names: string[]) {
 }
 
 describe("sizes", () => {
-  test("an organization starts with Standard, its default, and Small, the conductor's; everyone reads, only admins change", async () => {
+  test("an organization starts with Standard, its default, and Small, the conductor's and the brainstorm's; everyone reads, only admins change", async () => {
     const res = await body(await call(memberKey, "GET", "/v1/machines/sizes"));
     expect(res.canEdit).toBe(false);
     expect(res.sizes).toHaveLength(2);
     expect(res.sizes.find((s: Json) => s.name === "Standard")).toMatchObject({ name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, poolName: null, isDefault: true, usedBy: [] });
     expect(res.sizes.find((s: Json) => s.name === "Small")).toMatchObject({ cpus: 0.5, memoryMiB: 1024, diskGiB: 10, isDefault: false,
-      usedBy: [{ kind: "organization", role: "conductor", project: null }] });
+      usedBy: [{ kind: "organization", role: "conductor", project: null }, { kind: "organization", role: "brainstorm", project: null }] });
     expect((await call(memberKey, "POST", "/v1/machines/sizes", LARGE)).status).toBe(403);
     expect((await body(await call(adminKey, "GET", "/v1/machines/sizes"))).canEdit).toBe(true);
   });
@@ -452,9 +452,12 @@ describe("removing a size in use", () => {
     expect(res.status).toBe(200);
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
     // Every role keeps the tier the organization was seeded with (migration
-    // 069); the only size still named is the conductor's Small (072).
+    // 069); the only sizes still named are the conductor's and the
+    // brainstorm's Small (072, 086).
     const sizesNamed = Object.entries(org.default_agent_models as Record<string, Json>).filter(([, r]) => "machineSize" in r);
-    expect(sizesNamed).toEqual([["conductor", { tier: expect.any(String), machineSize: (await byName("Small")).id }]]);
+    const small = (await byName("Small")).id;
+    expect(Object.fromEntries(sizesNamed)).toEqual({ conductor: { tier: expect.any(String), machineSize: small },
+      brainstorm: { tier: expect.any(String), machineSize: small } });
     expect(org.default_agent_models.simplifier).toEqual({ effort: "low", tier: expect.any(String) });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models).toEqual({});

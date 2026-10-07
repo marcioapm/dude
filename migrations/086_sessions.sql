@@ -141,6 +141,14 @@ CREATE FUNCTION session_role(p_session text, p_person text) RETURNS text LANGUAG
   WHERE session_id = p_session AND person_id = p_person AND accepted_at IS NOT NULL
 $$;
 
+-- Whether a person may read what is on events.session_id: anything that is
+-- not a brainstorm session (an agent's session inside a Run, or none), or
+-- a session they are an accepted member of.
+CREATE FUNCTION session_visible(p_session text, p_person text) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT p_session IS NULL OR NOT EXISTS (SELECT 1 FROM sessions WHERE id = p_session)
+    OR session_role(p_session, p_person) IS NOT NULL
+$$;
+
 -- ---------------------------------------------------------------------------
 -- A session's Run: no task, no project.
 -- ---------------------------------------------------------------------------
