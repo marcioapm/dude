@@ -528,6 +528,64 @@ body {
   display: flex;
   margin-top: var(--ds-space-panel-gap);
 }
+/* A brainstorm session: its header, then its Chat and rail filling the rest. */
+.sessionScreen {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.sessionScreen > .runScreen {
+  flex: 1;
+  min-height: 0;
+}
+/* A rail block's label with its owner's action at the right (Share, Link). */
+.sessionRailHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+.sessionList,
+.sessionLinkList,
+.sessionLinkRepos,
+.sessionShareNew,
+.sessionShareMembers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sessionLinkList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-12);
+}
+.sessionLinkRepos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding-left: var(--ds-space-24);
+  margin-top: var(--ds-space-4);
+}
+.sessionShareAdd {
+  display: flex;
+  gap: var(--ds-space-8);
+  margin-bottom: var(--ds-space-12);
+}
+.sessionShareNew li,
+.sessionShareMembers li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: 36px;
+}
+.sessionShareMembers li > span:nth-child(2) {
+  flex: 1;
+}
+.sessionShareMembers {
+  margin-top: var(--ds-space-12);
+}
 .taskSessionList {
   overflow: auto;
 }
