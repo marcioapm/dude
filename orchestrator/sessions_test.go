@@ -401,20 +401,56 @@ func TestFiledWorkCarriesNoTraceOfTheSession(t *testing.T) {
 	if epicBy != nil {
 		t.Errorf("the epic names a Run")
 	}
-	traces := []string{id, run, "Usage-based billing", "ssn_", "brainstorm", "proposal"}
+	traces := []string{id, run, "Usage-based billing", "ssn_", "brainstorm", "proposal", "prp_"}
+	// The stored rows of every filed kind: the new task, its epic, the
+	// edited task, both tasks' people, and anything else that refers to them.
 	var rowText string
-	_ = s.owner.QueryRow(context.Background(), `SELECT row_to_json(t)::text || (SELECT row_to_json(e)::text FROM epics e WHERE e.id = $2)
-		FROM tasks t WHERE t.id = $1`, task, epic).Scan(&rowText)
+	if err := s.owner.QueryRow(context.Background(), `SELECT concat_ws(E'\n',
+			(SELECT row_to_json(t)::text FROM tasks t WHERE t.id = $1),
+			(SELECT row_to_json(t)::text FROM tasks t WHERE t.id = $3),
+			(SELECT row_to_json(e)::text FROM epics e WHERE e.id = $2),
+			(SELECT json_agg(tp)::text FROM task_people tp WHERE tp.task_id = ANY(ARRAY[$1, $3])),
+			(SELECT json_agg(r)::text FROM task_repositories r WHERE r.task_id = ANY(ARRAY[$1, $3])),
+			(SELECT json_agg(d)::text FROM search_documents d WHERE d.source_id = ANY(ARRAY[$1, $2, $3])))`,
+		task, epic, mine).Scan(&rowText); err != nil {
+		t.Fatal(err)
+	}
+	// The edit was applied, to the row checked.
+	if !strings.Contains(rowText, "dedupes") {
+		t.Fatalf("the edited task's row does not have the edit: %s", rowText)
+	}
 	rows, err := s.owner.Query(context.Background(), `SELECT row_to_json(e)::text FROM events e
-		WHERE e.task_id = ANY($1) OR e.payload->>'epicId' = $2`, []string{task, mine}, epic)
+		WHERE e.task_id = ANY($1) OR e.payload->>'epicId' = $2 OR e.payload->>'taskId' = ANY($1)`, []string{task, mine}, epic)
 	if err != nil {
 		t.Fatal(err)
 	}
 	events, _ := pgx.CollectRows(rows, pgx.RowTo[string])
-	if len(events) < 4 {
-		t.Fatalf("%d events on the filed work, want created, epic, updated, comment", len(events))
+	kinds := map[string]bool{}
+	for _, e := range events {
+		var ev struct {
+			Type string `json:"event_type"`
+		}
+		_ = json.Unmarshal([]byte(e), &ev)
+		kinds[ev.Type] = true
 	}
-	for _, text := range append(events, rowText) {
+	for _, want := range []string{"task.created", "epic.created", "task.updated", "task.comment"} {
+		if !kinds[want] {
+			t.Errorf("no %s among the filed work's events: %v", want, kinds)
+		}
+	}
+	// What the orchestrator's task routes answer about both tasks.
+	var answers []string
+	for _, tk := range []string{task, mine} {
+		for _, path := range []string{"/internal/tasks/" + tk + "/recover", "/internal/tasks/" + tk + "/servers"} {
+			status, out := s.as(s.marcio, "GET", path, nil)
+			if status != 200 {
+				t.Errorf("GET %s: %d %v", path, status, out)
+			}
+			b, _ := json.Marshal(out)
+			answers = append(answers, string(b))
+		}
+	}
+	for _, text := range append(append(events, rowText), answers...) {
 		for _, trace := range traces {
 			if strings.Contains(strings.ToLower(text), strings.ToLower(trace)) {
 				t.Errorf("%q in %s", trace, text)
