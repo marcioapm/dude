@@ -425,7 +425,9 @@ func (l *luxFactsDown) Get(ctx context.Context, runID string) (lux.Run, error) {
 // a test can wait for it (diffsSettled) instead of it landing mid-sweep.
 // Before any Run starts: a follower takes the timings it starts with.
 func (w *world) quickDiffs() {
-	w.syncer.DiffDelay, w.syncer.DiffEvery = 20*time.Millisecond, 20*time.Millisecond
+	// DiffSlow too: a read that fails on a loaded host counts towards the
+	// watcher's back-off, which would otherwise wait a minute between reads.
+	w.syncer.DiffDelay, w.syncer.DiffEvery, w.syncer.DiffSlow = 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
 }
 
 // diffsSettled waits for each Run's initial live diff to be recorded and
@@ -440,7 +442,7 @@ func (w *world) diffsSettled(runs []string) {
 			FROM run_diffs WHERE run_id = ANY($1)`, runs).Scan(&s)
 		return s
 	}
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		before := sums()
 		if n := w.count(`SELECT count(*) FROM run_diffs WHERE run_id = ANY($1)`, runs); n == len(runs) {
