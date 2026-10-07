@@ -67,7 +67,7 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt",
-  -- While it makes no progress (run_stalled, migration 084): the latest
+  -- While it makes no progress (run_stalled, migration 085): the latest
   -- report, in the words its reader was given.
   CASE WHEN run_stalled(runs) THEN (SELECT json_build_object('at', e.occurred_at,
       'text', COALESCE(e.payload->>'text', ''), 'owner', NOT COALESCE((e.payload->>'conducted')::boolean, false),
