@@ -44,6 +44,11 @@ func embedQuery(ctx context.Context, c Caller, args json.RawMessage) any {
 }
 
 func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) ([]searchHit, error) {
+	return searchScoped(ctx, tx, c, in, memory.Query{Project: c.ProjectID})
+}
+
+// searchScoped searches within scope (its Project, OrgOnly and Session).
+func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, scope memory.Query) ([]searchHit, error) {
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, refuse("a query is required")
 	}
@@ -57,7 +62,8 @@ func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) (
 	if limit <= 0 {
 		limit = 8
 	}
-	out, err := memory.Ranked(ctx, tx, emb, memory.Query{Text: in.Query, Project: c.ProjectID, Types: in.Types, Limit: min(limit, 20)})
+	scope.Text, scope.Types, scope.Limit = in.Query, in.Types, min(limit, 20)
+	out, err := memory.Ranked(ctx, tx, emb, scope)
 	if err != nil {
 		return nil, err
 	}
