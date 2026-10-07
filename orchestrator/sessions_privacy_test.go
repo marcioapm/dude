@@ -496,6 +496,79 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 	if got := fmtJSON(lastCard[0]); !strings.Contains(got, `"canFile":true`) {
 		t.Errorf("an unfiled card's epic: %s", got)
 	}
+
+	// Filing reads and locks what it decides on once, for all the items
+	// pressed, not once each: beyond what each item writes (its comment's
+	// event and its filing record), 50 comments cost what 1 does.
+	file := func(n int) int64 {
+		items := make([]delivery.ProposalItem, n)
+		picked := make([]int, n)
+		for i := range items {
+			items[i], picked[i] = delivery.ProposalItem{Kind: "comment", Task: s.keyOf(anas), Text: fmt.Sprintf("note %d", i)}, i
+		}
+		prop := s.proposal(small, items)
+		req, _ := http.NewRequest("POST", srv.URL+"/internal/sessions/"+small+"/file",
+			strings.NewReader(fmtJSON(map[string]any{"proposalId": prop, "items": picked})))
+		for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": s.org, "Content-Type": "application/json",
+			"X-Dude-Credential-Kind": "person", "X-Dude-Person": s.ana, "X-Dude-Actor": s.ana} {
+			req.Header.Set(k, v)
+		}
+		before := counter.n.Load()
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		res.Body.Close()
+		if res.StatusCode != 200 || strings.Count(fmtJSON(out), `"filed"`) != n {
+			t.Fatalf("filing %d comments: %d %v", n, res.StatusCode, out)
+		}
+		return counter.n.Load() - before
+	}
+	one, fifty := file(1), file(50)
+	const writesPerComment = 2 // its task.comment event, its session_filings row
+	t.Logf("filing: %d queries for 1 comment, %d for 50", one, fifty)
+	if fifty-one > 49*writesPerComment {
+		t.Errorf("filing 50 comments ran %d queries, 1 ran %d: %d more than each comment's %d writes", fifty, one,
+			fifty-one-49*writesPerComment, writesPerComment)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE event_type = 'task.comment' AND task_id = $1`, anas); n != 51 {
+		t.Errorf("%d comments filed, want 51", n)
+	}
+}
+
+// The task facts a filing decides on are read by their key's parts, so a
+// project with many tasks is not scanned for them: at 20,000 tasks the
+// detail and a filing of the last task's comment find it and say so.
+func TestFilingFindsATaskByKeyAmongMany(t *testing.T) {
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT 'wi_many_'||g, $1, $2, 1000 + g, 'Many '||g, 'A goal long enough to keep' FROM generate_series(1, 20000) g`, s.org, s.project)
+	mustExec(t, s.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('wi_many_20000', $1, $2, 0)`, s.ana, s.org)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	prop := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "comment", Task: "bl-21000", Text: "the last of them"},
+		{Kind: "edit", Task: "BL-021000", After: &delivery.TaskText{Goal: ptr("A goal long enough to keep, edited")}},
+		{Kind: "comment", Task: "BL-99999", Text: "no such task"},
+	})
+	detail := s.ok(s.ana, "GET", "/internal/sessions/"+id, nil)
+	status := detail["proposals"].([]any)[0].(map[string]any)["status"].([]any)
+	for i, want := range []string{`"canFile":true`, `"canFile":true`, `"canFile":false`} {
+		if got := fmtJSON(status[i]); !strings.Contains(got, want) {
+			t.Errorf("item %d: %s, want %s", i, got, want)
+		}
+	}
+	out := s.ok(s.ana, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": prop, "items": []int{0, 1, 2}})
+	if got := fmtJSON(out); strings.Count(got, `"status":"filed"`) != 2 || !strings.Contains(got, "is not a task of a linked project") {
+		t.Errorf("filing: %s", got)
+	}
+	var goal string
+	_ = s.owner.QueryRow(t0(), `SELECT goal FROM tasks WHERE id = 'wi_many_20000'`).Scan(&goal)
+	if goal != "A goal long enough to keep, edited" {
+		t.Errorf("the edit did not reach BL-21000: %q", goal)
+	}
 }
 
 // ownerOf is the session's owner, and whether person is still in it.

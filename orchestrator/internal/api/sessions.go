@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -451,8 +452,8 @@ type fileFacts struct {
 }
 
 type taskFacts struct {
-	ID, OwnerID, OwnerName, Status string
-	Started                        bool
+	ID, ProjectID, OwnerID, OwnerName, Status string
+	Started                                   bool
 }
 
 // readFileFacts reads the facts for items in three queries. lock takes the
@@ -471,40 +472,59 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	for _, k := range keys {
 		f.projects[k] = true
 	}
-	var named []string
+	var prefixes []string
+	var numbers []int32
 	for _, it := range items {
 		if it.Kind == "edit" || it.Kind == "comment" {
-			if k, ok := delivery.TaskKey(it.Task); ok {
-				named = append(named, k)
+			if prefix, n, ok := keyParts(it.Task); ok {
+				prefixes, numbers = append(prefixes, prefix), append(numbers, n)
 			}
 		}
 	}
-	if len(named) == 0 {
+	if len(prefixes) == 0 {
 		return f, nil
 	}
 	lockClause := ""
 	if lock {
 		lockClause = " FOR UPDATE OF t"
 	}
-	// The owner as TaskOwnerNamed reads it; started as TaskStarted does.
-	rows, err = tx.Query(ctx, `SELECT upper(p.key_prefix) || '-' || t.number, t.id,
+	// Matched on the key's parts, so each is an index probe on
+	// tasks (project_id, number) rather than a scan of the projects' tasks.
+	rows, err = tx.Query(ctx, `SELECT upper(p.key_prefix) || '-' || t.number, t.id, t.project_id,
 			COALESCE(o.id, ''), COALESCE(o.name, ''), t.status::text,
 			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
-		FROM tasks t JOIN projects p ON p.id = t.project_id
+		FROM unnest($2::text[], $3::int[]) AS k(prefix, number)
+		JOIN projects p ON upper(p.key_prefix) = k.prefix
 		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1
+		JOIN tasks t ON t.project_id = p.id AND t.number = k.number
 		LEFT JOIN LATERAL (SELECT pe.id, pe.name FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true
-		WHERE upper(p.key_prefix) || '-' || t.number = ANY($2)`+lockClause, sessionID, named)
+		ORDER BY t.id`+lockClause, sessionID, prefixes, numbers)
 	if err != nil {
 		return f, err
 	}
 	var k string
 	var t taskFacts
-	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.OwnerID, &t.OwnerName, &t.Status, &t.Started}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.ProjectID, &t.OwnerID, &t.OwnerName, &t.Status, &t.Started}, func() error {
 		f.tasks[k] = t
 		return nil
 	})
 	return f, err
+}
+
+// keyParts splits a task key into its upper-cased prefix and number; not
+// ok for a malformed key or a number no task can have (beyond int4).
+func keyParts(key string) (string, int32, bool) {
+	k, ok := delivery.TaskKey(key)
+	if !ok {
+		return "", 0, false
+	}
+	dash := strings.LastIndexByte(k, '-')
+	n, err := strconv.ParseInt(k[dash+1:], 10, 32)
+	if err != nil {
+		return "", 0, false
+	}
+	return k[:dash], int32(n), true
 }
 
 // cannotFile says why person may not file item, "" when they may: a
@@ -539,15 +559,6 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) s
 		return ""
 	}
 	return "unknown item"
-}
-
-// cannotFile is fileFacts.cannotFile for one item, its task locked.
-func cannotFile(ctx context.Context, tx pgx.Tx, sessionID string, item delivery.ProposalItem, person, role string) (string, error) {
-	f, err := readFileFacts(ctx, tx, sessionID, []delivery.ProposalItem{item}, true)
-	if err != nil {
-		return "", err
-	}
-	return f.cannotFile(item, person, role), nil
 }
 
 // fileProposal files the items a member kept, as that member. Items they
@@ -607,30 +618,41 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			return 0
 		})
 		var filed []map[string]any
+		var picked []delivery.ProposalItem
+		for _, n := range order {
+			if n >= 0 && n < len(items) {
+				picked = append(picked, items[n])
+			}
+		}
+		// The facts every item is decided on, their tasks locked, read once.
+		facts, err := readFileFacts(r.Context(), tx, id, picked, true)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(r.Context(), `SELECT item FROM session_filings WHERE proposal_id = $1`, body.ProposalID)
+		if err != nil {
+			return err
+		}
+		done := map[int]bool{}
+		var n int
+		if _, err := pgx.ForEachRow(rows, []any{&n}, func() error { done[n] = true; return nil }); err != nil {
+			return err
+		}
 		for _, n := range order {
 			if n < 0 || n >= len(items) {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "no such item"})
 				continue
 			}
 			item := items[n]
-			var done int
-			if err := tx.QueryRow(r.Context(), `SELECT count(*) FROM session_filings WHERE proposal_id = $1 AND item = $2`,
-				body.ProposalID, n).Scan(&done); err != nil {
-				return err
-			}
-			if done > 0 {
+			if done[n] {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			why, err := cannotFile(r.Context(), tx, id, item, p.Person, role)
-			if err != nil {
-				return err
-			}
-			if why != "" {
+			if why := facts.cannotFile(item, p.Person, role); why != "" {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
 				continue
 			}
-			key, taskID, epicID, err := fileItem(r.Context(), tx, org, id, body.ProposalID, linked, items, item, f)
+			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, linked, facts, item, f)
 			if err != nil {
 				return err
 			}
@@ -639,6 +661,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				body.ProposalID, n, org, id, p.Person, key, taskID, epicID); err != nil {
 				return err
 			}
+			done[n] = true
 			entry := map[string]any{"item": n, "status": "filed", "key": key, "kind": item.Kind}
 			results = append(results, entry)
 			filed = append(filed, entry)
@@ -662,7 +685,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 
 // fileItem files one item as f; returns what it made: a task's key (or an
 // epic's title), and the task or epic.
-func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID string, linked []string, items []delivery.ProposalItem,
+func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID string, linked []string, facts fileFacts,
 	item delivery.ProposalItem, f delivery.Filer) (key, taskID, epicID string, err error) {
 	projectOf := func(k string) (string, error) {
 		var id string
@@ -698,21 +721,17 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID string,
 		id, key, err := delivery.CreateTaskTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal), item.AcceptanceCriteria)
 		return key, id, "", err
 	case "edit":
-		id, _, err := delivery.TaskByKey(ctx, tx, linked, item.Task)
-		if err != nil {
-			return "", "", "", err
-		}
+		k, _ := delivery.TaskKey(item.Task)
+		t := facts.tasks[k]
 		var after delivery.TaskText
 		if item.After != nil {
 			after = *item.After
 		}
-		return strings.ToUpper(item.Task), id, "", delivery.EditTaskTx(ctx, tx, org, id, f, after)
+		return strings.ToUpper(item.Task), t.ID, "", delivery.EditTaskTx(ctx, tx, org, t.ID, f, after)
 	case "comment":
-		id, _, err := delivery.TaskByKey(ctx, tx, linked, item.Task)
-		if err != nil {
-			return "", "", "", err
-		}
-		return strings.ToUpper(item.Task), id, "", delivery.CommentTx(ctx, tx, org, id, f, item.Text)
+		k, _ := delivery.TaskKey(item.Task)
+		t := facts.tasks[k]
+		return strings.ToUpper(item.Task), t.ID, "", delivery.CommentTx(ctx, tx, org, t.ProjectID, t.ID, f, item.Text)
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
 }
