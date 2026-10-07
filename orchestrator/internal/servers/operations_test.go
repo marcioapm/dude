@@ -330,7 +330,7 @@ func TestAReservationAnsweredAfterItsTimeMakesNoLuxCall(t *testing.T) {
 	defer pool.Close()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	late := &Previews{Service: &Service{DB: &db.DB{Pool: pool}, Log: log}, OperationFor: 900 * time.Millisecond}
-	op, _, err := late.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
+	op, err := late.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
 	if op != nil || !errors.Is(err, errLapsed) {
 		left := time.Duration(0)
 		if op != nil {
@@ -346,7 +346,7 @@ func TestAReservationAnsweredAfterItsTimeMakesNoLuxCall(t *testing.T) {
 		t.Error("the lapsed reservation was not let go")
 	}
 	other := &Previews{Service: &Service{DB: app, Log: log}, OperationFor: 900 * time.Millisecond}
-	next, _, err := other.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
+	next, err := other.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
 	if err != nil || next == nil {
 		t.Fatalf("another reserve after the lapse = %v, %v; want the row", next, err)
 	}
