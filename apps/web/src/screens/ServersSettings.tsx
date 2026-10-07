@@ -1,19 +1,20 @@
 /**
  * Project settings → Servers: the project's server definitions (a table,
  * with a dialog to add or edit one), and how its branch previews run —
- * the image (from the library), the egress allowlist, the idle timeout,
- * who may open one.
+ * the image (from the library), the egress allowlist, the secrets they
+ * get, the idle timeout, who may open one.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, type MachineSizeWithUse, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, type MachineSizeWithUse, type PreviewSecret, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
+import { PreviewSecretsRow } from "./PreviewSecrets.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 
@@ -31,6 +32,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
 }) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
+  const [secrets, setSecrets] = useState<PreviewSecret[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [editing, setEditing] = useState<Recipe | "new" | null>(null);
   const [removing, setRemoving] = useState<Recipe | null>(null);
@@ -46,10 +48,11 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
   const load = useCallback(async () => {
     const mine = ++latest.current;
     try {
-      const fresh = await client.projectServers(project.id);
+      const [fresh, kept] = await Promise.all([client.projectServers(project.id), client.projectSecrets(project.id)]);
       if (mine !== latest.current) return;
       setRecipes(fresh.servers);
       setPreviews(fresh.previews);
+      setSecrets(kept.secrets);
       setProblem(null);
       onCount?.(fresh.servers.length);
     } catch (err) {
@@ -60,7 +63,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
     void load();
   }, [load]);
 
-  if (!recipes || !previews) return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
+  if (!recipes || !previews || !secrets) return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
 
   const repository = project.repositories[0]?.name ?? null;
   const last = [...recipes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
@@ -142,6 +145,8 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
           <HostChips hosts={previews.egress} validate={egressProblem} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>
+        <PreviewSecretsRow client={client} projectId={project.id} projectName={project.name} secrets={secrets} recipes={recipes}
+          canEdit={canEdit} onChanged={() => void load()} />
         <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it."
           source={previews.idleTimeoutMinutes !== PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES
             ? <SettingSource source="project" from={orgName} inherited={`${PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes`} onReset={canEdit ? () => savePreviews({ idleTimeoutMinutes: PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES }, "Idle timeout reset") : undefined} />

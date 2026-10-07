@@ -194,17 +194,19 @@ export interface SettingRowProps extends Omit<HTMLAttributes<HTMLDivElement>, "t
   readonly htmlFor?: string | undefined;
   /** Beside the control: its source, on a project's page. */
   readonly source?: ReactNode;
+  /** The control is a block of its own (a table and its actions), its column's full width. */
+  readonly block?: boolean | undefined;
   readonly children: ReactNode;
 }
 
-export function SettingRow({ label, help, htmlFor, source, className, children, ...rest }: SettingRowProps) {
+export function SettingRow({ label, help, htmlFor, source, block, className, children, ...rest }: SettingRowProps) {
   return (
     <div className={cx(styles["row"], className)} {...rest}>
       <div className={styles["rowLabel"]}>
         {htmlFor ? <label htmlFor={htmlFor}>{label}</label> : <span>{label}</span>}
         {help ? <small className={styles["rowHelp"]}>{help}</small> : null}
       </div>
-      <div className={styles["rowControl"]}>
+      <div className={cx(styles["rowControl"], block && styles["rowControlBlock"])} data-block={block ? "true" : undefined}>
         {children}
         {source}
       </div>

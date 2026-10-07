@@ -1,4 +1,4 @@
--- 082_finding_topic.sql — a finding's category is its reviewer's flavour.
+-- 083_finding_topic.sql — a finding's category is its reviewer's flavour.
 
 -- review_findings.category is which reviewer flavour found it (012), what
 -- re-review routing groups by. Reviewers wrote their own words there too
