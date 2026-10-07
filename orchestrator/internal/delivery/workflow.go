@@ -50,7 +50,8 @@ type State struct {
 	// Phase Runs being waited for.
 	PendingRunIDs []string `json:"pendingRunIds,omitempty"`
 	// The review round's Runs, every one, while it is waited for: each
-	// must have finished for the round to be complete.
+	// must have finished for the round to be complete. Empty in a round
+	// started before it was kept: ReviewRound finds them.
 	ReviewRunIDs []string `json:"reviewRunIds,omitempty"`
 	// The categories the next review round is limited to: a retry of a
 	// round whose reviewers in them failed.
@@ -540,7 +541,14 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	}
 	// A reviewer that failed or was aborted read nothing: the round is not
 	// complete, and its silence is not a clear review.
-	failed, err := w.s.EndedUnfinished(ctx, sc.OrganizationID, st.ReviewRunIDs)
+	round := st.ReviewRunIDs
+	if len(round) == 0 {
+		if round, err = w.s.ReviewRound(ctx, sc.OrganizationID, st); err != nil {
+			return workflow.Result{}, err
+		}
+		st.ReviewRunIDs = round
+	}
+	failed, err := w.s.EndedUnfinished(ctx, sc.OrganizationID, round)
 	if err != nil {
 		return workflow.Result{}, err
 	}

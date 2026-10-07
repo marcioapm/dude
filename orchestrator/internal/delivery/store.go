@@ -276,6 +276,68 @@ func (s *Store) EndedUnfinished(ctx context.Context, org string, runIDs []string
 	return out, err
 }
 
+// ReviewRound is the review round's Runs for a delivery whose state does
+// not list them (a round started before State.ReviewRunIDs was kept): its
+// reviewers share one creation key but for the category, so the key of a
+// Run it waited on (st.PendingRunIDs, or the Run a restart replaced) names
+// the rest, settled or not; each is then followed to the Run that replaced
+// it. With no such key, the Runs it waited on.
+func (s *Store) ReviewRound(ctx context.Context, org string, st *State) ([]string, error) {
+	round := slices.Clone(st.PendingRunIDs)
+	if len(round) == 0 {
+		return nil, nil
+	}
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var key, category string
+		err := tx.QueryRow(ctx, `WITH RECURSIVE back AS (
+				SELECT id, creation_key, category FROM runs WHERE id = ANY($1) AND task_id = $2 AND phase = 'review'
+				UNION ALL SELECT r.id, r.creation_key, r.category FROM runs r JOIN back b ON r.replaced_by = b.id)
+			SELECT creation_key, category FROM back WHERE creation_key IS NOT NULL AND category IS NOT NULL LIMIT 1`,
+			round, st.TaskID).Scan(&key, &category)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		prefix, suffix, ok := splitReviewKey(key, category)
+		if !ok {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `WITH RECURSIVE fwd AS (
+				SELECT id, replaced_by FROM runs WHERE task_id = $1 AND phase = 'review' AND creation_key = $2 || category || $3
+				UNION ALL SELECT r.id, r.replaced_by FROM runs r JOIN fwd f ON r.id = f.replaced_by)
+			SELECT id FROM fwd WHERE replaced_by IS NULL`, st.TaskID, prefix, suffix)
+		if err != nil {
+			return err
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		for _, id := range ids {
+			if !slices.Contains(round, id) {
+				round = append(round, id)
+			}
+		}
+		return err
+	})
+	return round, err
+}
+
+// splitReviewKey splits a reviewer's creation key (key: "<…>:review:<n>:"
+// then its category, then any retry suffix) around its category.
+func splitReviewKey(key, category string) (prefix, suffix string, ok bool) {
+	i := strings.LastIndex(key, ":review:")
+	if i < 0 {
+		return "", "", false
+	}
+	rest := key[i+len(":review:"):]
+	j := strings.Index(rest, ":")
+	if j < 0 || !strings.HasPrefix(rest[j+1:], category) {
+		return "", "", false
+	}
+	prefix = key[:i+len(":review:")+j+1]
+	return prefix, key[len(prefix)+len(category):], true
+}
+
 func failedIDs(u []Unfinished) []string {
 	out := make([]string, len(u))
 	for i, f := range u {
