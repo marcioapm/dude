@@ -39,18 +39,15 @@ export function PreviewSecretsRow({ client, projectId, projectName, secrets, rec
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
-  const open = (next: Editing) => {
+  function open(next: Editing | null): void {
     generation.current++;
     setBusy(false);
     setProblem(null);
     setEditing(next);
-  };
-  const close = () => {
-    generation.current++;
-    setBusy(false);
-    setProblem(null);
-    setEditing(null);
-  };
+  }
+  function close(): void {
+    open(null);
+  }
   const save = async (action: () => Promise<unknown>, done: string) => {
     const mine = generation.current;
     const current = () => generation.current === mine;
