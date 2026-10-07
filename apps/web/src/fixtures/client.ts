@@ -14,8 +14,8 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
-import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
-import { egressProblem } from "@dude/domain";
+import type { AddServer, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
+import { egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
@@ -85,6 +85,8 @@ export class FixtureClient extends ApiClient {
   #logs: Record<string, ServerLogLine[]>;
   #recipes: Recipe[];
   #previews: PreviewSettings;
+  /** Names and hints only: the fixture forgets a value once it has its hint, as the API never returns one. */
+  #secrets: PreviewSecret[];
   #task: TaskDetail;
   #events: PersistedEvent[];
   #nav: NavProject[];
@@ -97,6 +99,10 @@ export class FixtureClient extends ApiClient {
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
     this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
+    this.#secrets = [
+      { name: "DATABASE_SEED_URL", hint: "8a1c", updatedAt: new Date(Date.now() - 14 * 864e5).toISOString(), updatedBy: { id: PEOPLE[1]?.id ?? YOU, name: PEOPLE[1]?.name ?? PEOPLE[0]!.name } },
+      { name: "SEED_LLM_KEY", hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } },
+    ];
     const base = taskFor(scenario);
     this.#task = base;
     this.#events = eventsFor(scenario);
@@ -359,6 +365,29 @@ export class FixtureClient extends ApiClient {
     if (refused) throw new ApiError(400, "invalid_request", `egress: ${refused}`);
     this.#previews = { ...this.#previews, ...settings };
     return this.#previews;
+  }
+  override projectSecrets(): Promise<{ secrets: PreviewSecret[] }> {
+    return Promise.resolve({ secrets: [...this.#secrets] });
+  }
+  override async addProjectSecret(_projectId: string, name: string, value: string): Promise<PreviewSecret> {
+    await wait(120);
+    const problem = secretNameProblem(name, { secrets: this.#secrets.map((s) => s.name), recipes: this.#recipes });
+    if (problem) throw new ApiError(problem.kind === "conflict" ? 409 : 400, problem.kind, problem.message);
+    const saved: PreviewSecret = { name, hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    this.#secrets = [...this.#secrets, saved].sort((a, b) => a.name.localeCompare(b.name));
+    return saved;
+  }
+  override async replaceProjectSecret(_projectId: string, name: string, value: string): Promise<PreviewSecret> {
+    await wait(120);
+    const at = this.#secrets.findIndex((s) => s.name === name);
+    if (at < 0) throw new ApiError(404, "not_found", `no secret ${name}`);
+    const saved: PreviewSecret = { name, hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    this.#secrets[at] = saved;
+    return saved;
+  }
+  override async removeProjectSecret(_projectId: string, name: string): Promise<void> {
+    await wait(100);
+    this.#secrets = this.#secrets.filter((s) => s.name !== name);
   }
   override taskServers(): Promise<TaskServers> {
     return Promise.resolve(this.#snapshot());

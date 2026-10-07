@@ -43,6 +43,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["p-button", "Button"],
       ["p-input", "Input"],
       ["p-textarea", "Textarea"],
+      ["p-secret-field", "SecretField"],
       ["p-markdown-editor", "MarkdownEditor"],
       ["p-rowmenu", "RowMenu"],
       ["p-select", "Select"],

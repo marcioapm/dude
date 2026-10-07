@@ -1,4 +1,4 @@
--- 084_stalled_runs.sql — dude notices a phase Run that makes no progress,
+-- 085_stalled_runs.sql — dude notices a phase Run that makes no progress,
 -- and tells its conductor or its owner the facts; either may restart it.
 
 -- open_tool_calls_at: each open tool call's id → when it opened (the

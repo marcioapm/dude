@@ -136,6 +136,13 @@ func TestARunCancelledBeforeTheMigrationIsReplaced(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'cancelled', lux_after_event = $2 WHERE id = $1`, runID, w.lastEventID(r.ID))
 	w.migrate066()
 	w.open(web)
+	// lux serves the new Run before dude has applied its running: what
+	// dude recorded is waited for, not assumed.
+	w.untilPreview(runID, "the new Run recorded running", func() bool {
+		runs := w.luxRuns()
+		return len(runs) == 2 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND status = 'running'
+			AND lux_state = 'running'`, runID, runs[1].ID) == 1
+	})
 	if n := len(w.luxRuns()); n != 2 || r.Resumed != 0 ||
 		w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND status = 'running' AND start_failures = 0`,
 			runID, w.luxRuns()[1].ID) != 1 {

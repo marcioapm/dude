@@ -65,6 +65,7 @@ import type {
   MemoryInput,
   SearchOutcome,
   AttachmentInfo,
+  PreviewSecret,
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
@@ -1032,6 +1033,23 @@ export class ApiClient {
 
   updatePreviewSettings(projectId: string, settings: PreviewSettings): Promise<PreviewSettings> {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/preview-settings`, settings);
+  }
+
+  /** The project's preview secrets: names and hints, never a value. */
+  projectSecrets(projectId: string): Promise<{ secrets: PreviewSecret[] }> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
+  }
+
+  addProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
+    return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, { name, value });
+  }
+
+  replaceProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`, { value });
+  }
+
+  removeProjectSecret(projectId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`);
   }
 
   /** The run serving a task — its agent's, else its branch preview — and that run's servers. */
