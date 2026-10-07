@@ -54,7 +54,8 @@ func member(ctx context.Context, tx pgx.Tx, sessionID, person string) (string, e
 	return role, err
 }
 
-// owner refuses anyone but the session's owner.
+// owner refuses anyone but the session's owner. Membership routes take the
+// session's lock first (lockedOwner), so the role checked is the one acted on.
 func owner(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) error {
 	role, err := member(ctx, tx, sessionID, person)
 	if err != nil {
@@ -64,6 +65,23 @@ func owner(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) error
 		return fail(http.StatusForbidden, "not_owner", "only the session's owner can %s", verb)
 	}
 	return nil
+}
+
+// lockedOwner takes the session's lock, then refuses anyone but its owner:
+// a concurrent handover or removal is settled before the check, not after.
+func lockedOwner(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) error {
+	if err := delivery.LockSession(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	return owner(ctx, tx, sessionID, person, verb)
+}
+
+// lockedWriter is writer under the session's lock.
+func lockedWriter(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) (string, error) {
+	if err := delivery.LockSession(ctx, tx, sessionID); err != nil {
+		return "", err
+	}
+	return writer(ctx, tx, sessionID, person, verb)
 }
 
 // writer refuses a reader: only the owner and members who can chat write
@@ -204,10 +222,7 @@ func (s *Server) linkSession(w http.ResponseWriter, r *http.Request, org string)
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := owner(r.Context(), tx, id, p.Person, "link projects"); err != nil {
-			return err
-		}
-		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
+		if err := lockedOwner(r.Context(), tx, id, p.Person, "link projects"); err != nil {
 			return err
 		}
 		if err := setLinks(r.Context(), tx, org, id, body.Projects); err != nil {
@@ -481,11 +496,8 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 	}
 	var results []map[string]any
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		role, err := writer(r.Context(), tx, id, p.Person, "file work")
+		role, err := lockedWriter(r.Context(), tx, id, p.Person, "file work")
 		if err != nil {
-			return err
-		}
-		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
 			return err
 		}
 		var raw json.RawMessage
@@ -654,10 +666,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	var out map[string]any
 	created := false
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := writer(r.Context(), tx, id, p.Person, "write to the agent"); err != nil {
-			return err
-		}
-		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
+		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "write to the agent"); err != nil {
 			return err
 		}
 		name, err := delivery.PersonName(r.Context(), tx, p.Person)
@@ -781,7 +790,7 @@ func (s *Server) inviteToSession(w http.ResponseWriter, r *http.Request, org str
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := owner(r.Context(), tx, id, p.Person, "share it"); err != nil {
+		if err := lockedOwner(r.Context(), tx, id, p.Person, "share it"); err != nil {
 			return err
 		}
 		var invited []string
@@ -833,7 +842,7 @@ func (s *Server) changeSessionRole(w http.ResponseWriter, r *http.Request, org s
 	}
 	id, person := r.PathValue("id"), r.PathValue("person")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := owner(r.Context(), tx, id, p.Person, "change roles"); err != nil {
+		if err := lockedOwner(r.Context(), tx, id, p.Person, "change roles"); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(r.Context(), `UPDATE session_people SET role = $3 WHERE session_id = $1 AND person_id = $2 AND role <> 'owner'`,
@@ -864,7 +873,7 @@ func (s *Server) removeFromSession(w http.ResponseWriter, r *http.Request, org s
 	}
 	id, person := r.PathValue("id"), r.PathValue("person")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := owner(r.Context(), tx, id, p.Person, "remove people"); err != nil {
+		if err := lockedOwner(r.Context(), tx, id, p.Person, "remove people"); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(r.Context(), `DELETE FROM session_people WHERE session_id = $1 AND person_id = $2 AND role <> 'owner'`, id, person)
@@ -910,14 +919,11 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 	id := r.PathValue("id")
 	pending := false
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := owner(r.Context(), tx, id, p.Person, "hand it over"); err != nil {
+		if err := lockedOwner(r.Context(), tx, id, p.Person, "hand it over"); err != nil {
 			return err
 		}
 		if body.Person == p.Person {
 			return fail(http.StatusBadRequest, "bad_request", "you already own it")
-		}
-		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
-			return err
 		}
 		var ok bool
 		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND removed_at IS NULL)`,
@@ -961,8 +967,13 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 }
 
 // makeOwner swaps the owner within tx (the one-owner check runs at commit)
-// and tells the agent.
+// and tells the agent. A handover offered by the owner before is void: its
+// invitee, if they accept, joins as an ordinary member.
 func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep string, by principal) error {
+	if _, err := tx.Exec(ctx, `UPDATE session_people SET becomes_owner = false, handover_keep = NULL
+		WHERE session_id = $1 AND becomes_owner AND person_id <> $2`, sessionID, to); err != nil {
+		return err
+	}
 	if keep == "leave" {
 		if _, err := tx.Exec(ctx, `DELETE FROM session_people WHERE session_id = $1 AND person_id = $2`, sessionID, from); err != nil {
 			return err
@@ -1008,18 +1019,25 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
+			return err
+		}
 		var becomesOwner bool
 		var keep *string
-		if err := tx.QueryRow(r.Context(), `SELECT becomes_owner, handover_keep FROM session_people
-			WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NULL FOR UPDATE`, id, p.Person).Scan(&becomesOwner, &keep); err != nil {
+		var offeredBy, current string
+		if err := tx.QueryRow(r.Context(), `SELECT me.becomes_owner, me.handover_keep, coalesce(me.invited_by, ''),
+				coalesce((SELECT o.person_id FROM session_people o WHERE o.session_id = me.session_id AND o.role = 'owner'), '')
+			FROM session_people me
+			WHERE me.session_id = $1 AND me.person_id = $2 AND me.accepted_at IS NULL`, id, p.Person).
+			Scan(&becomesOwner, &keep, &offeredBy, &current); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "no invitation to session %s", id)
 			}
 			return err
 		}
-		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
-			return err
-		}
+		// A handover is the offer of the owner who made it: by now another's,
+		// it hands over nothing and its keep is not applied.
+		handover := becomesOwner && keep != nil && offeredBy != "" && offeredBy == current
 		if _, err := tx.Exec(r.Context(), `UPDATE session_people SET accepted_at = now(), becomes_owner = false, handover_keep = NULL
 			WHERE session_id = $1 AND person_id = $2`, id, p.Person); err != nil {
 			return err
@@ -1028,15 +1046,10 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 			map[string]any{"person": p.Person}); err != nil {
 			return err
 		}
-		if !becomesOwner {
+		if !handover {
 			return nil
 		}
-		var from string
-		if err := tx.QueryRow(r.Context(), `SELECT person_id FROM session_people WHERE session_id = $1 AND role = 'owner'`, id).
-			Scan(&from); err != nil {
-			return err
-		}
-		return makeOwner(r.Context(), tx, org, id, from, p.Person, *keep, p)
+		return makeOwner(r.Context(), tx, org, id, current, p.Person, *keep, p)
 	})
 	if err != nil {
 		return err
@@ -1054,6 +1067,9 @@ func (s *Server) declineSession(w http.ResponseWriter, r *http.Request, org stri
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(r.Context(), `DELETE FROM session_people WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NULL`,
 			id, p.Person)
 		if err != nil {
