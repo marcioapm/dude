@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -54,22 +53,6 @@ func TestASubmitAnswersWithTheFirstSubmitsStoredSecrets(t *testing.T) {
 	}
 }
 
-// gitFixture is a repository the fake can check out, for a spec whose git
-// credential is a secret.
-func gitFixture(t *testing.T) string {
-	t.Helper()
-	repo := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main", repo},
-		{"-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "fixture"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git fixture: %v: %s", err, out)
-		}
-	}
-	return repo
-}
-
 // A git or registry credential is the runner's alone (lux marks it
 // runnerOnly whatever its as): a server's process never has it, even
 // declared as: env.
@@ -87,7 +70,9 @@ func TestARunnerCredentialNeverReachesAServerEvenAsEnv(t *testing.T) {
 			} else {
 				spec.Git = &lux.Git{Repositories: []lux.Repository{{Name: "target", URL: "https://github.com/acme/target.git", Credential: "CREDENTIAL"}}}
 			}
-			fake, c, run := startedWith(t, fakelux.New(gitFixture(t), "k", nil), spec)
+			repo := t.TempDir()
+			gitInit(t, repo)
+			fake, c, run := startedWith(t, fakelux.New(repo, "k", nil), spec)
 			if _, err := c.AddServer(context.Background(), run, lux.ServerInput{
 				Name: "probe", Port: 4100, Command: []string{"sh", "-c", "npm run probe"},
 			}); err != nil {
