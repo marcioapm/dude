@@ -9,8 +9,11 @@
 --
 -- stall_reported_at: when it was last reported as making no progress;
 -- stall_reasons why ('call': a tool call open the whole window; 'files': a
--- Run that changes code whose files did not change), stall_fingerprint its
--- facts then (the open calls and the diff's checksum: unchanged facts wait
+-- Run that changes code whose files did not change; 'silent': no tool call
+-- open, and its agent said, thought and did nothing — counted from
+-- agent_active_at, or before the agent did anything from when the Run went
+-- running), stall_fingerprint its facts then (the open calls, the diff's
+-- checksum and, while silent, when the silence began: unchanged facts wait
 -- longer to be reported again), stall_usage lux's CPU and network counters
 -- then (what the next report's window is measured from). stall_left_at: its
 -- owner chose Leave it on the banner.
@@ -52,13 +55,16 @@ WHERE r.phase IS NOT NULL AND r.status IN ('scheduled', 'starting', 'running', '
   AND r.open_tool_calls_at = '{}' AND r.files_changed_at IS NULL;
 
 -- A Run reported stalled still is, until what it was reported for changes:
--- the call open then has closed, or its files changed (or it was resumed).
+-- the call open then has closed, its files changed (or it was resumed), or
+-- its silent agent said or did something (phases.silentSince).
 -- The one definition, for the Sessions badge and the task's banner.
 CREATE FUNCTION run_stalled(r runs) RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT r.status = 'running' AND r.stall_reported_at IS NOT NULL AND (
     ('call' = ANY (r.stall_reasons) AND EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) c
       WHERE c.value::timestamptz <= r.stall_reported_at))
-    OR ('files' = ANY (r.stall_reasons) AND r.files_changed_at <= r.stall_reported_at))
+    OR ('files' = ANY (r.stall_reasons) AND r.files_changed_at <= r.stall_reported_at)
+    OR ('silent' = ANY (r.stall_reasons)
+      AND COALESCE(r.agent_active_at, r.files_changed_at, r.started_at) <= r.stall_reported_at))
 $$;
 
 -- stalled: a phase Run of the task makes no progress. Its line carries the

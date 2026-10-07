@@ -265,34 +265,48 @@ var stallWindow = fmt.Sprintf(`(CASE WHEN lc.conducted THEN $1::float8 ELSE 60 *
 	`CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
 		WHEN 'simplify' THEN 'simplifier' WHEN 'test' THEN 'qa_browser' ELSE 'investigator' END`)
 
-// stalledCall and stalledFiles (SQL, over stallFrom) are the two ways a Run
-// makes no progress: a tool call open for the whole window; or, for a Run
-// that changes code, no change to its files (no new diff, no commit) in it.
+// stalledCall, stalledFiles and stalledSilent (SQL, over stallFrom) are the
+// three ways a Run makes no progress: a tool call open for the whole
+// window; for a Run that changes code, no change to its files (no new diff,
+// no commit) in it; or, with no tool call open, its agent silent for the
+// whole window (silentSince). An open call is stalledCall's, measured from
+// the call, however long the agent has been silent.
 var (
 	stalledCall = `EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
 		WHERE oc.value::timestamptz <= now() - make_interval(secs => ` + stallWindow + `))`
-	stalledFiles = `(` + changesCode + ` AND r.files_changed_at <= now() - make_interval(secs => ` + stallWindow + `))`
+	stalledFiles  = `(` + changesCode + ` AND r.files_changed_at <= now() - make_interval(secs => ` + stallWindow + `))`
+	stalledSilent = `(r.open_tool_calls_at = '{}' AND ` + silentSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 )
+
+// silentSince (SQL, over runs r): when the agent last said, thought or did
+// anything (agent_active_at); before it has, since the Run went running —
+// files_changed_at, which its start and every resume set, and which is
+// read only while agent_active_at is NULL. run_stalled (migration 085)
+// repeats it.
+const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
 // for its window. One waiting on a person, or whose turn is over, is not
 // held up by itself.
 var noProgress = `(r.status = 'running' AND r.phase IS NOT NULL AND r.lux_state = 'running' AND r.control = 'none'
-	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND (` + stalledCall + ` OR ` + stalledFiles + `))`
+	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND (` + stalledCall + ` OR ` + stalledFiles + ` OR ` + stalledSilent + `))`
 
 // changesCode (SQL, over runs r): a phase whose commits are published
 // (delivery.Publishes): implement, fix, simplify.
 const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
 
-// stallFacts (SQL, over runs r) identifies what a report said: the calls
-// open and the diff's checksum.
-const stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
-	|| '|' || COALESCE((SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id), ''))`
+// stallFacts (SQL, over stallFrom) identifies what a report said: the calls
+// open, the diff's checksum and, while it is silent, when its silence began.
+// A Run reported only for its files is busy, and its activity is not a
+// change of facts.
+var stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
+	|| '|' || COALESCE((SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id), '')
+	|| '|' || CASE WHEN ` + stalledSilent + ` THEN COALESCE(extract(epoch FROM ` + silentSince + `)::text, '') ELSE '' END)`
 
 // stallDue (SQL, over stallFrom): a Run with no progress is reported now if
 // it never was; under a conductor, again once its facts changed and the
 // window passed, or $2 passed; to an owner who left it, never.
-const stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.conducted AND (
+var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.conducted AND (
 	r.stall_reported_at <= now() - make_interval(secs => $2::float8)
 	OR r.stall_reported_at <= now() - make_interval(secs => $1::float8) AND r.stall_fingerprint IS DISTINCT FROM ` + stallFacts + `)))`
 

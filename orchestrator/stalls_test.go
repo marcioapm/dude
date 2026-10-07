@@ -785,3 +785,323 @@ func TestF6UpgradeHungCallProbe(t *testing.T) {
 		t.Errorf("the call is not open since its ledger event, 3 hours: %s", calls)
 	}
 }
+
+// silentReviews delivers a change two reviewers read; the round's two
+// reviewers start their turn and then say and do nothing, with no call
+// open, as run 3's reviewer hung inside its first model call. Any later
+// reviewer finds nothing.
+func (w *world) silentReviews() {
+	w.t.Helper()
+	scripted := w.lux.Decide
+	var reviews atomic.Int32
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "implement":
+			return fakelux.Behaviour{Commit: map[string]string{"auth/session.go": "package auth\n"}, Message: "work"}
+		case "review":
+			if reviews.Add(1) <= 2 {
+				return fakelux.Behaviour{Hang: true}
+			}
+			return fakelux.Behaviour{Reply: "Looks good."}
+		}
+		return scripted(spec)
+	}
+	w.lux.SetPS(agentPS, "")
+}
+
+// reviewersSilent waits for n reviewers whose turn has started, with no
+// call open, and returns them.
+func (w *world) reviewersSilent(task string, n int) []string {
+	w.t.Helper()
+	var ids []string
+	w.until("reviewers silent in their turn", func() bool {
+		ids = w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'
+			AND lux_state = 'running' AND agent_active_at IS NOT NULL AND open_tool_calls_at = '{}' ORDER BY created_at`, task)
+		return len(ids) == n
+	})
+	return ids
+}
+
+// silentFor back-dates when a Run's agent last did anything: ago.
+func (w *world) silentFor(runID string, ago time.Duration) {
+	mustExec(w.t, w.owner, `UPDATE runs SET agent_active_at = now() - make_interval(secs => $2) WHERE id = $1`, runID, ago.Seconds())
+}
+
+func (w *world) reasonsOf(runID string) string {
+	stall, _ := w.stallOf(runID)
+	reasons, _ := json.Marshal(stall["reasons"])
+	return string(reasons)
+}
+
+// A conducted task's reviewer whose agent has done nothing for 34 minutes,
+// no call open: the conductor is woken once, the reason silent, with the
+// processes and CPU and network that tell a hang from a long think. The
+// other reviewer, active, is not reported.
+func TestASilentReviewerIsReported(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.lux.SetUsage(w.luxRunOf(id), lux.Usage{CPUSeconds: 2})
+	w.silentFor(id, 29*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports of a reviewer silent for 29 minutes", n)
+	}
+	w.silentFor(id, 34*time.Minute)
+	note := w.wokenWith(task, "made no progress")
+	if n := w.stalls(id); n != 1 || !strings.Contains(note, id) {
+		t.Fatalf("%d reports; the note names it: %v", n, strings.Contains(note, id))
+	}
+	if n := w.stalls(runs[1]); n != 0 {
+		t.Errorf("the active reviewer was reported (%d)", n)
+	}
+	if r := w.reasonsOf(id); r != `["silent"]` {
+		t.Errorf("reasons %s", r)
+	}
+	for _, want := range []string{"review Run", "has made no progress for 30 min", "Its agent has done nothing for 34 min: no output, no tool call.",
+		"Processes: opencode acp (1.2 % CPU", "CPU over", "2 s; network: 0 B", "restart_run"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note lacks %q:\n%s", want, note)
+		}
+	}
+	if strings.Contains(note, "tool call open") {
+		t.Errorf("the note names an open call:\n%s", note)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'stalled'`, task); n != 1 {
+		t.Errorf("%d stalled wake reasons, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND run_stalled(runs)`, task); n != 1 {
+		t.Errorf("%d runs read as stalled, want 1", n)
+	}
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("reported again in the next sweep (%d)", n)
+	}
+}
+
+// A plain delivery's reviewer silent past its role's 2 hours: its owner is
+// told once, the Run reads as stalled, and after Leave it is not told again.
+func TestASilentPlainDeliveryRunIsToldToItsOwnerOnce(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	ana := w.person("Ana")
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	w.assignOwner(wi, ana)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("a plain delivery's owner told at 30 minutes")
+	}
+	w.silentFor(id, 121*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports at 120 minutes, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["silent"]` {
+		t.Errorf("reasons %s", r)
+	}
+	if _, text := w.stallOf(id); !strings.Contains(text, "no progress for 2.0 h") ||
+		!strings.Contains(text, "Its agent has done nothing for 2.0 h: no output, no tool call.") || strings.Contains(text, "restart_run") {
+		t.Errorf("the owner's report: %s", text)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND run_stalled(runs)`, id); n != 1 {
+		t.Errorf("the silent Run does not read as stalled")
+	}
+	w.reportedAgo(id, 5*time.Hour)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("the owner was told %d times", n)
+	}
+	if status, body := w.callAs(ana, "/internal/runs/"+id+"/leave", map[string]any{}); status != 200 {
+		t.Fatalf("leave: %d %v", status, body)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET stall_reported_at = NULL WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("a Run left as it is was reported again (%d)", n)
+	}
+}
+
+// A Run not silent, or not held up by itself, is not reported as silent:
+// one active inside the window, waiting on a person, whose turn is done,
+// paused, or with a pause asked for. Each beside a reviewer silent as
+// long, which is reported in the same sweep.
+func TestARunNotSilentIsNotReportedAsSilent(t *testing.T) {
+	cases := []struct{ name, set string }{
+		{"active inside the window", `agent_active_at = now() - interval '10 minutes'`},
+		{"waiting on a person", `waiting_since = now() - interval '3 hours'`},
+		{"its turn done", `turn_done_at = now() - interval '3 hours'`},
+		{"paused", `status = 'paused'`},
+		{"a pause asked for", `control = 'pause_graceful', control_requested_at = now()`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.quickDiffs()
+			w.silentReviews()
+			wi := w.task()
+			w.deliver(wi)
+			runs := w.reviewersSilent(wi, 2)
+			w.diffsSettled(runs)
+			held, silent := runs[0], runs[1]
+			w.silentFor(held, 3*time.Hour)
+			w.silentFor(silent, 3*time.Hour)
+			mustExec(t, w.owner, `UPDATE runs SET `+c.set+` WHERE id = $1`, held)
+			w.sweep()
+			if n := w.stalls(silent); n != 1 {
+				t.Fatalf("the reviewer beside it, silent: %d reports, want 1", n)
+			}
+			if n := w.stalls(held); n != 0 {
+				t.Errorf("a reviewer %s was reported (%d)", c.name, n)
+			}
+		})
+	}
+}
+
+// A reviewer with a call open, however long it has been silent, is the
+// call's: reported for the call alone, once its call has been open for the
+// window, and not before.
+func TestARunWithAnOpenCallIsNeverSilent(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.hangingReviews(taskCall)
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersOpen(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 5*time.Hour)
+	w.openSince(id, 10*time.Minute)
+	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
+	w.silentFor(runs[1], 10*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("a reviewer whose call opened 10 minutes ago was reported (%d)", n)
+	}
+	w.openSince(id, 3*time.Hour)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["call"]` {
+		t.Errorf("reasons %s, want only the call", r)
+	}
+	if _, text := w.stallOf(id); strings.Contains(text, "done nothing") {
+		t.Errorf("the report calls it silent:\n%s", text)
+	}
+}
+
+// A silent reviewer that becomes active after its report no longer reads
+// as stalled, and is not told again; silent for a window again, it is told
+// again at 30 minutes, its facts changed.
+func TestASilentRunThatComesBackIsNotToldAgainUntilSilentAgain(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports, want 1", n)
+	}
+	stalled := func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND run_stalled(runs)`, id) == 1 }
+	if !stalled() {
+		t.Fatal("the silent Run does not read as stalled")
+	}
+	// Active 5 minutes ago, after its report 40 minutes ago.
+	w.reportedAgo(id, 40*time.Minute)
+	w.silentFor(id, 5*time.Minute)
+	if stalled() {
+		t.Error("a Run active since its report still reads as stalled")
+	}
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("a Run active 5 minutes ago was told again (%d reports)", n)
+	}
+	// Silent again for the window since that activity, still after the
+	// report: changed facts, told again before the 60 minutes.
+	w.silentFor(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 2 {
+		t.Errorf("a Run silent again for the window was not told again (%d reports)", n)
+	}
+	if !stalled() {
+		t.Error("the Run silent again does not read as stalled")
+	}
+}
+
+// The facts are gathered outside any transaction. A silent Run whose
+// agent says something while they are is not reported, nor at the next
+// sweep.
+func TestF6SilentStallRechecksActivityProbe(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 3*time.Hour)
+	var changed atomic.Bool
+	w.lux.SetPS(func(string) string {
+		if changed.CompareAndSwap(false, true) {
+			mustExec(t, w.owner, `UPDATE runs SET agent_active_at = now() WHERE id = $1`, id)
+		}
+		return agentPS("")
+	}, "")
+	w.sweep()
+	if !changed.Load() {
+		t.Fatal("the report read no processes")
+	}
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports of a Run active while its facts were gathered", n)
+	}
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Errorf("%d reports after the next sweep, want 0", n)
+	}
+}
+
+// An agent that never said or did anything, its Run running for 3 hours:
+// silent since the Run went running, and reported.
+func TestARunWhoseAgentNeverDidAnythingIsReported(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = NULL, started_at = now() - interval '3 hours',
+		files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["silent"]` {
+		t.Errorf("reasons %s", r)
+	}
+	if _, text := w.stallOf(id); !strings.Contains(text, "Its agent has done nothing for 3.0 h") {
+		t.Errorf("the report: %s", text)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND run_stalled(runs)`, id); n != 1 {
+		t.Errorf("the Run does not read as stalled")
+	}
+}

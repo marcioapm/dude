@@ -55,12 +55,12 @@ var commandTools = map[string]bool{"bash": true, "shell": true, "execute": true,
 // stallRow is what a report reads of a Run due one.
 type stallRow struct {
 	ID, Org, ProjectID, TaskID, Phase, Role, Category, Tier, LuxRunID string
-	RunningSecs, WindowSecs                                           int64
+	RunningSecs, WindowSecs, SilentSecs                               int64
 	OpenCalls                                                         map[string]time.Time
 	FilesChangedAt, ReportedAt                                        *time.Time
 	Fingerprint                                                       string
 	Usage                                                             []byte
-	Call, Files, Conducted                                            bool
+	Call, Files, Silent, Conducted                                    bool
 	Iteration                                                         int
 	Now                                                               time.Time
 }
@@ -72,8 +72,9 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.phase::text,
 				COALESCE(r.role::text, ''), COALESCE(r.category, ''), COALESCE(r.model_tier, ''), COALESCE(r.lux_run_id, ''),
 				extract(epoch FROM now() - COALESCE(r.started_at, r.created_at))::bigint, `+stallWindow+`::bigint,
+				COALESCE(extract(epoch FROM now() - `+silentSince+`)::bigint, 0),
 				r.open_tool_calls_at, r.files_changed_at, r.stall_reported_at, `+stallFacts+`, r.stall_usage,
-				`+stalledCall+`, `+stalledFiles+`, lc.conducted,
+				`+stalledCall+`, `+stalledFiles+`, `+stalledSilent+`, lc.conducted,
 				COALESCE((SELECT (w.state->>'iteration')::int FROM workflow_runs w WHERE w.task_id = r.task_id
 					ORDER BY w.created_at DESC LIMIT 1), 0),
 				now()
@@ -123,6 +124,10 @@ func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
 	if r.Files {
 		stall.Reasons = append(stall.Reasons, "files")
 	}
+	if r.Silent {
+		stall.Reasons = append(stall.Reasons, "silent")
+		stall.SilentSecs = r.SilentSecs
+	}
 	switch r.Phase {
 	case delivery.PhaseReview:
 		// A round's reviewers run before it is counted.
@@ -157,8 +162,8 @@ func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
 // its facts were gathered for: no progress and due (noProgress, stallDue,
 // as the sweep read them), with the same facts. Gathering them takes up to
 // psTimeout and more outside any transaction; in that time its call may
-// have closed, its files changed, a person been asked, its turn ended, or
-// a pause or abort been asked for.
+// have closed, its files changed, its agent said or done something, a
+// person been asked, its turn ended, or a pause or abort been asked for.
 func stillStalled(ctx context.Context, tx pgx.Tx, r stallRow) (bool, error) {
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
 		return false, err
