@@ -95,7 +95,7 @@ export function EnvVarRows({ vars, onChange, disabled }: EnvVarRowsProps) {
           </div>
         ))}
       </div>
-      <FormActions className={styles["envActions"]} note="Not for secrets: values are visible to anyone who can read the project.">
+      <FormActions className={styles["envActions"]} note="Not for secrets: values are visible to anyone who can read the project. Put a secret under Branch previews › Secrets.">
         <Button size="sm" variant="quiet" leadingIcon="plus" disabled={disabled} onClick={() => onChange([...rows, { name: "", value: "" }])}>
           Add variable
         </Button>

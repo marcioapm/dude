@@ -244,6 +244,10 @@
   gap: var(--ds-space-8) var(--ds-space-12);
   min-width: 0;
 }
+/* A table and what follows it, stacked at the column's width. */
+.rowControlBlock {
+  display: block;
+}
 
 .inherited,
 .overridden {
