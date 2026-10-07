@@ -31,6 +31,26 @@ ALTER TABLE runs
   ADD COLUMN tier_override text REFERENCES model_tiers(id) ON DELETE SET NULL,
   ADD COLUMN replaced_by text REFERENCES runs(id) ON DELETE SET NULL;
 
+-- Live phase Runs from before: a Run already hung in a call writes nothing
+-- more, so nothing would ever stamp its call, and it would never be
+-- reported. Each call open now is open since the ledger's event opening it
+-- (the earliest, as the translator keeps the first sighting), else since
+-- the Run started; its files changed last at its latest diff or commit,
+-- else at its start. Only rows still at the defaults above, so a second
+-- application changes nothing.
+UPDATE runs r SET
+  open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, to_jsonb(COALESCE(
+      (SELECT min(e.occurred_at) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.tool.called'
+         AND e.payload->>'callId' = c),
+      r.active_since, r.started_at, r.created_at)))
+    FROM unnest(r.open_tool_calls) c), '{}'),
+  files_changed_at = COALESCE(
+    (SELECT max(e.occurred_at) FROM events e WHERE e.run_id = r.id
+       AND e.event_type IN ('run.diff.updated', 'git.commit_created')),
+    r.active_since, r.started_at, r.created_at)
+WHERE r.phase IS NOT NULL AND r.status IN ('scheduled', 'starting', 'running', 'paused')
+  AND r.open_tool_calls_at = '{}' AND r.files_changed_at IS NULL;
+
 -- A Run reported stalled still is, until what it was reported for changes:
 -- the call open then has closed, or its files changed (or it was resumed).
 -- The one definition, for the Sessions badge and the task's banner.
