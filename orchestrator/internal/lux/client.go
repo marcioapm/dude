@@ -40,13 +40,24 @@ type Run struct {
 	Host string `json:"host,omitempty"`
 	// Where it ran, one per start; only filled in by Get.
 	Placements []Placement `json:"placements,omitempty"`
-	// The spec lux stored, without secret values; only filled in by Get.
+	// The spec lux stored, without secret values; filled in by Get and by
+	// Submit's answer, which for a key lux has seen is the first submit's.
 	Spec StoredSpec `json:"spec"`
 }
 
 // StoredSpec is the part of a Run's stored spec dude reads back.
 type StoredSpec struct {
-	Image Image `json:"image"`
+	Image   Image          `json:"image"`
+	Secrets []StoredSecret `json:"secrets"`
+}
+
+// StoredSecret is a secret the Run declared, as lux stores it: no value,
+// as normalized (an unset one is env, or none for a credential only), and
+// runnerOnly for a git or registry credential, never in the container.
+type StoredSecret struct {
+	Name       string `json:"name"`
+	As         string `json:"as"`
+	RunnerOnly bool   `json:"runnerOnly"`
 }
 
 // Placement is one start of a Run on a host.
@@ -453,7 +464,9 @@ type Server struct {
 	Name string `json:"name"`
 	Port int    `json:"port"`
 	// nil for a server that is only a port someone else serves on.
-	Command []string `json:"command"`
+	Command []string          `json:"command"`
+	Workdir string            `json:"workdir"`
+	Env     map[string]string `json:"env"`
 	// Declared in the Run's spec: lux starts it on every start of the Run.
 	FromSpec bool `json:"fromSpec"`
 	// stopped, starting, ready, unreachable or exited.

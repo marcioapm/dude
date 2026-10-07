@@ -1,4 +1,4 @@
--- 081_conductor_edits.sql — the conductor edits code, for small things.
+-- 082_conductor_edits.sql — the conductor edits code, for small things.
 
 -- Its checkout, kept current: each wake of a running conductor, and each
 -- resume, syncs its writable repositories to the task branch in lux's

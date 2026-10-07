@@ -682,6 +682,10 @@ body {
 .previewAccess > svg {
   color: var(--ds-color-text-muted);
 }
+/* Project settings → Servers → Secrets: the note a step below Add secret. */
+.previewSecretsNote {
+  margin-top: var(--ds-space-12);
+}
 
 /* Memory's settings pages: layout only. The rows, lines, leads, lists and
    picker are the design system's. */
