@@ -1145,6 +1145,40 @@ func (w *world) runningAgain(runID string, release func()) {
 	})
 }
 
+// A reviewer started 3 hours ago whose current placement entered running
+// 10 minutes ago, its agent not yet active there: silent for 10 minutes,
+// not 3 hours, and not reported.
+func TestASilentRunCountsFromItsPlacementNotItsFirstStart(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	release := w.movedAndHeld(id)
+	// As a resume lux accepted leaves the row (whilePaused).
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = NULL, agent_busy_at = NULL WHERE id = $1`, id)
+	w.runningAgain(id, release)
+	mustExec(t, w.owner, `UPDATE runs SET started_at = now() - interval '3 hours',
+		files_changed_at = now() - interval '10 minutes' WHERE id = $1`, id)
+	w.silentFor(runs[1], 3*time.Hour)
+	w.sweep()
+	if n := w.stalls(runs[1]); n != 1 {
+		t.Fatalf("the reviewer beside it, silent 3 hours: %d reports, want 1", n)
+	}
+	if n := w.stalls(id); n != 0 {
+		t.Errorf("running again 10 minutes ago, but %d reports", n)
+	}
+	// The same Run, its placement entered running 3 hours ago: reported.
+	mustExec(t, w.owner, `UPDATE runs SET files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("running again 3 hours ago, silent since: %d reports, want 1", n)
+	}
+}
+
 // A reviewer resumed after a 3-hour wait for a host, started 3 hours ago,
 // its agent not yet active on the new placement: its silence counts from
 // when it ran again, not from the resume's acceptance nor its first start.
@@ -1234,5 +1268,77 @@ func TestAResumedImplementerIsNotReportedForItsWaitToRun(t *testing.T) {
 	}
 	if r := w.reasonsOf(id); r != `["files"]` {
 		t.Errorf("reasons %s", r)
+	}
+}
+
+// The facts are gathered outside any transaction. A writer reported only
+// for its files, whose agent is busy while they are, is still reported:
+// its activity is not a change in what it was reported for.
+func TestABusyWriterReportedForItsFilesIsStillReported(t *testing.T) {
+	w := newWorld(t)
+	id := w.hangingImplementer()
+	mustExec(t, w.owner, `UPDATE runs SET files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.silentFor(id, 10*time.Minute)
+	var changed atomic.Bool
+	w.lux.SetPS(func(string) string {
+		if changed.CompareAndSwap(false, true) {
+			mustExec(t, w.owner, `UPDATE runs SET agent_active_at = now() WHERE id = $1`, id)
+		}
+		return agentPS("")
+	}, "")
+	w.sweep()
+	if !changed.Load() {
+		t.Fatal("the report read no processes")
+	}
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("busy files-only writer: %d reports, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["files"]` {
+		t.Errorf("reasons %s", r)
+	}
+}
+
+// Silence is any phase's: a test Run and an investigator, silent for 3
+// hours with no call open, are each reported as silent.
+func TestASilentRunOfAnyPhaseIsReported(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	phases := map[string]string{runs[0]: "test", runs[1]: "investigate"}
+	for id, phase := range phases {
+		mustExec(t, w.owner, `UPDATE runs SET phase = $2 WHERE id = $1`, id, phase)
+		w.silentFor(id, 3*time.Hour)
+	}
+	w.sweep()
+	for id, phase := range phases {
+		if n := w.stalls(id); n != 1 {
+			t.Errorf("silent %s-phase Run: %d reports, want 1", phase, n)
+			continue
+		}
+		if r := w.reasonsOf(id); r != `["silent"]` {
+			t.Errorf("%s-phase Run: reasons %s", phase, r)
+		}
+	}
+}
+
+// A conducted reviewer silent for 10 seconds past its 30-minute window is
+// reported.
+func TestASilentConductedRunIsReportedJustPastItsWindow(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 30*time.Minute+10*time.Second)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("silent for 30 min 10 s: %d reports, want 1", n)
 	}
 }
