@@ -12,15 +12,19 @@ import { useMemo, useState } from "react";
 import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
 import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, WaitingGroup, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
+import type { SessionsList } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
 
-export function InboxScreen({ client, projects, onSelect, onChanged }: {
+export function InboxScreen({ client, projects, sessions, onSelect, onOpenSession, onChanged }: {
   client: ApiClient;
   projects: ReadonlyArray<NavProject>;
+  /** Session invitations and questions put to you; null until read. */
+  sessions?: SessionsList | null | undefined;
   onSelect: (ref: NavRef) => void;
+  onOpenSession?: ((id: string) => void) | undefined;
   /** Something was taken over: the tree re-reads. */
   onChanged: () => void;
 }) {
@@ -29,6 +33,80 @@ export function InboxScreen({ client, projects, onSelect, onChanged }: {
   const now = useNow(true, 60_000);
   const { toast } = useToast();
   const [taking, setTaking] = useState<string | null>(null);
+  const invitations = sessions?.invitations ?? [];
+  const questions = sessions?.questions ?? [];
+  const openSession = (id: string) => onOpenSession?.(id);
+
+  const decline = async (id: string) => {
+    setTaking(id);
+    try {
+      await client.declineSession(id);
+      onChanged();
+    } catch (err) {
+      toast({ title: `Could not decline it: ${errorText(err)}`, tone: "danger" });
+    } finally {
+      setTaking(null);
+    }
+  };
+  // Open is accepting: the session then shows in your sidebar.
+  const accept = async (id: string) => {
+    setTaking(id);
+    try {
+      await client.acceptSession(id);
+      onChanged();
+      openSession(id);
+    } catch (err) {
+      toast({ title: `Could not open it: ${errorText(err)}`, tone: "danger" });
+    } finally {
+      setTaking(null);
+    }
+  };
+  const sessionRows = [
+    ...invitations.map((inv) => {
+      const by = inv.invitedBy ?? inv.people[0] ?? null;
+      const with_ = inv.people.filter((p) => p.id !== by?.id).map((p) => p.name);
+      const facts = [
+        inv.becomesOwner ? "as its owner" : inv.role === "read" ? "Can read" : "Can chat",
+        with_.length > 0 ? `with ${with_.join(", ")}` : null,
+        inv.projects.map((p) => p.name).join(", ") || null,
+        `${inv.messages} message${inv.messages === 1 ? "" : "s"}`,
+      ].filter(Boolean).join(" · ");
+      const since = toMs(inv.invitedAt);
+      return (
+        <WaitingRow key={`inv-${inv.id}`} mine data-testid="session-invitation" data-session={inv.id}
+          onOpen={() => void accept(inv.id)}
+          face={by ? <PersonAvatar person={people.byId.get(by.id) ?? by} size={40} /> : null}
+          ask={<>{by ? firstName(by.name) : "Someone"} {inv.becomesOwner ? "handed you a session" : "shared a session with you"}: <b>{inv.title}</b></>}
+          where={facts}
+          age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
+          action={<>
+            <Button size="sm" variant="quiet" disabled={taking === inv.id} onClick={(e) => {
+              e.stopPropagation();
+              void decline(inv.id);
+            }} data-testid="invitation-decline">Decline</Button>
+            <Button size="sm" variant="primary" disabled={taking === inv.id} onClick={(e) => {
+              e.stopPropagation();
+              void accept(inv.id);
+            }} data-testid="invitation-open">Open</Button>
+          </>}
+        />
+      );
+    }),
+    ...questions.map((q) => {
+      const since = toMs(q.askedAt);
+      return (
+        <WaitingRow key={`q-${q.id}`} mine data-testid="session-question" data-session={q.sessionId}
+          onOpen={() => openSession(q.sessionId)}
+          face={null}
+          ask={<>The brainstorm asked you in <b>{q.title}</b>: “{q.prompt}”</>}
+          where="A session"
+          age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
+          action={<Button size="sm" variant="primary" onClick={() => openSession(q.sessionId)}>Answer</Button>}
+        />
+      );
+    }),
+  ];
+  const mineCount = yours.length + sessionRows.length;
 
   const open = (it: AttentionItem) => onSelect(it.session ? { kind: "session", id: it.session.id } : { kind: "task", id: it.task.id });
   const takeOver = async (it: AttentionItem) => {
@@ -78,11 +156,12 @@ export function InboxScreen({ client, projects, onSelect, onChanged }: {
     <div className="screen" data-testid="inbox">
       <ScreenHeader title="Waiting on you" />
       <div className="screenBody narrow">
-        {yours.length + others.length === 0 ? (
+        {mineCount + others.length === 0 ? (
           <EmptyState title="Nothing is waiting on you" description="When an agent asks something, or a delivery needs a decision, it shows here." />
         ) : (
           <>
-            <WaitingGroup title="Yours" count={yours.length} empty="Nothing of yours. Others' are below.">
+            <WaitingGroup title="Yours" count={mineCount} empty="Nothing of yours. Others' are below.">
+              {sessionRows}
               {yours.map((it) => row(it, true))}
             </WaitingGroup>
             {others.length > 0 ? (

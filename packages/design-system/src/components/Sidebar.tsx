@@ -54,6 +54,8 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
   /** The inbox is what is open: its row is current. */
   readonly waitingSelected?: boolean | undefined;
+  /** Waiting on you beyond the tree's tasks: session invitations and questions put to you. */
+  readonly waitingExtra?: number | undefined;
   /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
   readonly mine?: boolean | undefined;
   readonly onMineChange?: ((mine: boolean) => void) | undefined;
@@ -118,6 +120,7 @@ export function Sidebar({
   online,
   onWaitingSelect,
   waitingSelected,
+  waitingExtra = 0,
   mine,
   onMineChange,
   treeActions,
@@ -258,7 +261,7 @@ export function Sidebar({
           <SidebarLink
             current={waitingSelected}
             onClick={() => openWaiting("you")}
-            leading={waiting.yours.length > 0 ? <NeedsYouCount count={waiting.yours.length} /> : undefined}
+            leading={waiting.yours.length + waitingExtra > 0 ? <NeedsYouCount count={waiting.yours.length + waitingExtra} /> : undefined}
             data-testid="waiting-on-you"
           >
             Waiting on you
