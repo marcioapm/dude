@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,6 +31,16 @@ const stallBatch = 50
 
 // psTimeout bounds the one exec a report makes.
 const psTimeout = 10 * time.Second
+
+// stallLuxBudget bounds asking lux for every report of one sweep, and
+// stallLuxConcurrency how many Runs it is asked about at once.
+const (
+	stallLuxBudget      = 15 * time.Second
+	stallLuxConcurrency = 4
+)
+
+// luxLate is what a report says of lux when it did not answer in the budget.
+const luxLate = "lux did not answer in time"
 
 // inputChars bounds an open call's input, as the agent sent it, in a report.
 const inputChars = 300
@@ -76,16 +87,34 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// lux is asked a few Runs at a time, all within one budget: the sweep's
+	// other work waits on this, and an unreachable lux host must not hold
+	// it up for each Run in turn.
+	luxCtx, cancel := context.WithTimeout(ctx, stallLuxBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, stallLuxConcurrency)
 	for _, r := range due {
-		if err := s.reportStall(ctx, r); err != nil {
-			s.Log.Warn("reporting a stalled run failed", "run", r.ID, "error", err)
-		}
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			if err := s.reportStall(ctx, luxCtx, r); err != nil {
+				s.Log.Warn("reporting a stalled run failed", "run", r.ID, "error", err)
+			}
+		}()
 	}
+	wg.Wait()
 	return nil
 }
 
 // reportStall gathers one Run's facts and records them (RecordStallTx).
-func (s *Syncer) reportStall(ctx context.Context, r stallRow) error {
+// lux is asked under luxCtx, the database under ctx. A Run whose lux facts
+// are not back within luxCtx is still reported, with what dude knows and
+// that lux did not answer: a lux that never answers is when the report
+// matters most, and leaving it to the next sweep would never report it.
+// Its report is recorded once per window all the same (stallDue).
+func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
 	window := time.Duration(r.WindowSecs) * time.Second
 	stall := delivery.Stall{RunID: r.ID, Role: r.Role, Phase: r.Phase, Category: r.Category, Tier: r.Tier,
 		RunningSecs: r.RunningSecs, WindowSecs: r.WindowSecs, Calls: []delivery.OpenCall{}, Processes: []delivery.Process{}}
@@ -114,8 +143,8 @@ func (s *Syncer) reportStall(ctx context.Context, r stallRow) error {
 	}); err != nil {
 		return err
 	}
-	s.processes(ctx, r.LuxRunID, &stall)
-	usage := s.usage(ctx, r, &stall)
+	s.processes(luxCtx, r.LuxRunID, &stall)
+	usage := s.usage(luxCtx, r, &stall)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if ok, err := stillStalled(ctx, tx, r); err != nil || !ok {
 			return err
@@ -230,6 +259,9 @@ func (s *Syncer) processes(ctx context.Context, luxRunID string, st *delivery.St
 	defer cancel()
 	res, err := s.Lux.Exec(ctx, luxRunID, psCommand)
 	switch {
+	case err != nil && ctx.Err() != nil:
+		st.PSError = luxLate
+		return
 	case err != nil:
 		st.PSError = cut(oneLine(err.Error()), 200)
 		return

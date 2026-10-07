@@ -8,6 +8,8 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -391,6 +393,126 @@ func TestF6StallRechecksPersonWaitProbe(t *testing.T) {
 				t.Errorf("%d reports after the next sweep, want %d", n, c.then)
 			}
 		})
+	}
+}
+
+// luxFactsDown is the syncer's lux whose Exec and Get, once down, go to
+// a lux client (lux.New) whose host accepts requests and never answers;
+// every other call reaches the fake lux.
+type luxFactsDown struct {
+	lux.Client
+	hung lux.Client
+	down atomic.Bool
+}
+
+func (l *luxFactsDown) Exec(ctx context.Context, runID string, cmd []string) (lux.ExecResult, error) {
+	if l.down.Load() {
+		return l.hung.Exec(ctx, runID, cmd)
+	}
+	return l.Client.Exec(ctx, runID, cmd)
+}
+
+func (l *luxFactsDown) Get(ctx context.Context, runID string) (lux.Run, error) {
+	if l.down.Load() {
+		return l.hung.Get(ctx, runID)
+	}
+	return l.Client.Get(ctx, runID)
+}
+
+// A lux host that never answers the facts' calls, with six stalled Runs
+// (a conducted task's two reviewers and two plain deliveries' two each):
+// the sweep returns within the facts' budget, still submits a pending Run
+// and wakes the conductor once, and each stalled Run is reported once,
+// saying lux did not answer.
+func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
+	const budget, margin = 15 * time.Second, 5 * time.Second
+	w := conducting(t)
+	stop := make(chan struct{})
+	never := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(never.Close)
+	t.Cleanup(func() { close(stop) })
+	facts := &luxFactsDown{Client: w.syncer.Lux, hung: lux.New(never.URL, "lux-key")}
+	w.syncer.Lux = facts
+
+	w.hangingReviews(taskCall)
+	conducted := w.task()
+	w.conductedReview(conducted)
+	stalled := w.reviewersOpen(conducted, 2)
+	for range 2 {
+		// hangingReviews counts reviewers per world: two hang, then reply.
+		w.hangingReviews(taskCall)
+		wi := w.task()
+		w.deliver(wi)
+		stalled = append(stalled, w.reviewersOpen(wi, 2)...)
+	}
+	for _, id := range stalled {
+		w.openSince(id, 3*time.Hour)
+	}
+	// A delivery whose implementer is pending, not yet submitted.
+	pendingTask := w.task()
+	w.deliver(pendingTask)
+	for range 5 {
+		if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'pending'
+		AND lux_run_id IS NULL`, pendingTask); n != 1 {
+		t.Fatalf("%d pending implementers", n)
+	}
+
+	facts.down.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { _, err := w.syncer.Sweep(ctx); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(budget + margin):
+		t.Fatalf("the sweep still runs after %s, past the facts' budget of %s", time.Since(start).Round(time.Second), budget)
+	}
+	took := time.Since(start)
+	facts.down.Store(false)
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND lux_run_id IS NOT NULL`,
+		pendingTask); n != 1 {
+		t.Errorf("the pending implementer was not submitted in the sweep (took %s)", took)
+	}
+	for _, id := range stalled {
+		if n := w.stalls(id); n != 1 {
+			t.Errorf("run %s: %d reports, want 1", id, n)
+			continue
+		}
+		if _, text := w.stallOf(id); text != "" && !strings.Contains(text, "lux did not answer in time") {
+			t.Errorf("run %s's report does not say lux did not answer:\n%s", id, text)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'stalled'
+		AND line LIKE '%lux did not answer in time%'`, conducted); n != 2 {
+		t.Errorf("%d stalled wake reasons for the conducted task's two reviewers, want 2", n)
+	}
+	note := w.wokenWith(conducted, "made no progress")
+	if !strings.Contains(note, stalled[0]) || !strings.Contains(note, stalled[1]) {
+		t.Errorf("the conductor's note does not carry both reviewers:\n%s", note)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND payload->>'text' LIKE '%made no progress%'`, conducted); n != 1 {
+		t.Errorf("%d wakes for the conducted task's two stalled reviewers, want one", n)
+	}
+	// Once per window: the next sweeps say nothing more.
+	w.sweep()
+	for _, id := range stalled {
+		if n := w.stalls(id); n != 1 {
+			t.Errorf("run %s: reported again (%d)", id, n)
+		}
 	}
 }
 
