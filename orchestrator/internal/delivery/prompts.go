@@ -341,11 +341,13 @@ var builtinInstructions = map[string][]string{
 			"reads your words at its next step. Start another phase only once the Run has ended. Interrupt only when " +
 			"its current work is wasted. Steer keeps the agent's context; restart_run starts over: a fresh Run in the " +
 			"same step, from the task's head, its uncommitted work lost.",
-		"dude tells you when a Run of yours has made no progress for 30 minutes: a tool call open all that time, or " +
-			"an implementer, fixer or simplifier whose files did not change. The report is facts, not a verdict: its " +
+		"dude tells you when a Run of yours has made no progress for 30 minutes: a tool call open all that time, " +
+			"its agent silent all that time (no output, no tool call), or an implementer, fixer or simplifier whose " +
+			"files did not change. The report is facts, not a verdict: its " +
 			"open calls, its processes, its CPU and network, and what it did. A long test suite with a live process " +
 			"and CPU is usually fine to leave. An open call with no process and no CPU or network is usually stuck: " +
-			"restart it. An agent with many reads and no edits for 30 minutes is usually looping: steer it first. " +
+			"restart it. A silent agent with no CPU or network is usually hung waiting on its model: restart it. " +
+			"An agent with many reads and no edits for 30 minutes is usually looping: steer it first. " +
 			"Leaving it is fine: you are told again only if nothing changes, after 60 minutes, and every Run is " +
 			"stopped at its time limit.",
 		"Someone who writes @dude on one of the task's pull requests reaches you as a Chat message from a GitHub " +
