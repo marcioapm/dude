@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -160,6 +161,67 @@ func TestASessionsMemoriesAreItsMembersAlone(t *testing.T) {
 	}
 }
 
+// ownerOf is the session's owner, and whether person is still in it.
+func (s *sessionWorld) ownerOf(session, person string) (string, bool) {
+	var owner string
+	_ = s.owner.QueryRow(t0(), `SELECT person_id FROM session_people WHERE session_id = $1 AND role = 'owner'`, session).Scan(&owner)
+	return owner, s.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND person_id = $2`, session, person) == 1
+}
+
+// A handover invitation is the owner's who made it: once the session has
+// another owner, it hands over nothing. Accepting it then makes its
+// invitee an ordinary member, and the owner and their place stay as they are.
+func TestAHandoverInvitationOutlivesNoChangeOfOwner(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	// Márcio offers it to João (leaving), then hands it to Ana at once.
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.joao, "keep": "leave"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.ana, "keep": "read"})
+	if n := s.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND becomes_owner`, id); n != 0 {
+		t.Errorf("a handover invitation outlived the change of owner: %d", n)
+	}
+	s.ok(s.joao, "POST", "/internal/sessions/"+id+"/accept", nil)
+	if owner, anaIn := s.ownerOf(id, s.ana); owner != s.ana || !anaIn {
+		t.Errorf("after João accepts the old offer: owner %s, Ana in it %v; want Ana, still in it", owner, anaIn)
+	}
+	var marcio, joao string
+	_ = s.owner.QueryRow(t0(), `SELECT role FROM session_people WHERE session_id = $1 AND person_id = $2`, id, s.marcio).Scan(&marcio)
+	_ = s.owner.QueryRow(t0(), `SELECT role FROM session_people WHERE session_id = $1 AND person_id = $2`, id, s.joao).Scan(&joao)
+	if marcio != "read" || joao != "chat" {
+		t.Errorf("Márcio is %q (want read, as he chose), João %q (want chat, an ordinary member)", marcio, joao)
+	}
+
+	// The same through an accepted handover: Ana offers it to João, then
+	// to Otto, who accepts first; João's offer is gone with Ana's ownership.
+	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/people/"+s.joao+"/remove", nil)
+	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.joao, "keep": "leave"})
+	if n := s.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND becomes_owner`, id); n != 1 {
+		t.Fatalf("João's offer: %d", n)
+	}
+	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/people", map[string]any{"people": []string{s.outsider}, "role": "chat"})
+	s.ok(s.outsider, "POST", "/internal/sessions/"+id+"/accept", nil)
+	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.outsider, "keep": "chat"})
+	s.ok(s.joao, "POST", "/internal/sessions/"+id+"/accept", nil)
+	if owner, ottoIn := s.ownerOf(id, s.outsider); owner != s.outsider || !ottoIn {
+		t.Errorf("João's stale offer took the session from Otto: owner %s, Otto in it %v", owner, ottoIn)
+	}
+	if _, anaIn := s.ownerOf(id, s.ana); !anaIn {
+		t.Errorf("Ana was removed by João's stale offer (its keep was leave)")
+	}
+
+	// An offer that outlived its owner some other way (written before
+	// offers were voided with a change of owner): accepting it checks, under
+	// the lock, that its maker still owns the session.
+	s.ok(s.outsider, "POST", "/internal/sessions/"+id+"/people/"+s.joao+"/remove", nil)
+	mustExec(t, s.owner, `INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by, becomes_owner, handover_keep)
+		VALUES ($1, $2, $3, 'chat', $4, true, 'leave')`, id, s.joao, s.org, s.ana)
+	s.ok(s.joao, "POST", "/internal/sessions/"+id+"/accept", nil)
+	if owner, ottoIn := s.ownerOf(id, s.outsider); owner != s.outsider || !ottoIn {
+		t.Errorf("an offer by Ana, no longer the owner, took the session from Otto: owner %s, Otto in it %v", owner, ottoIn)
+	}
+}
+
 // toolRaw calls one of the session agent's tools, its body as the agent reads it.
 func (s *sessionWorld) toolRaw(runID, name, args string) (int, string) {
 	s.t.Helper()
@@ -188,3 +250,5 @@ func fmtJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func t0() context.Context { return context.Background() }
