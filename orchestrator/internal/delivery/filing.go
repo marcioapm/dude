@@ -122,12 +122,8 @@ func EditTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, f Filer, tex
 	return err
 }
 
-// CommentTx posts a comment on a task as the filer.
-func CommentTx(ctx context.Context, tx pgx.Tx, org, taskID string, f Filer, text string) error {
-	var projectID string
-	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
-		return err
-	}
+// CommentTx posts a comment on a task of projectID as the filer.
+func CommentTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, f Filer, text string) error {
 	_, err := ledger.Append(ctx, tx, f.event(org, EvTaskComment, projectID, taskID, map[string]any{"text": text}))
 	return err
 }
