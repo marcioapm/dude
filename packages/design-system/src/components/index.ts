@@ -58,8 +58,8 @@ export { AttachDropZone, AttachmentChip, ImageViewer, MessageImages, attachmentW
 export type { AttachDropZoneProps, AttachmentChipProps, ComposerAttachment, ImageFacts, ImageViewerProps, MessageImagesProps, SentImage } from "./ImageAttachments.tsx";
 export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
-export { Sidebar, SidebarLink, SidebarProfile, SidebarToggle, SIDEBAR_DRAWER_QUERY } from "./Sidebar.tsx";
-export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarToggleProps } from "./Sidebar.tsx";
+export { Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY } from "./Sidebar.tsx";
+export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarSession, SidebarSessionsProps, SidebarToggleProps } from "./Sidebar.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps } from "./Board.tsx";
 export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES, FINDING_STATUS_SPECS } from "./FindingRow.tsx";
@@ -138,3 +138,5 @@ export { ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
+export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SharedMark, proposalSummary } from "./Brainstorm.tsx";
+export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, SessionMember, SessionRole, SessionRowProps } from "./Brainstorm.tsx";
