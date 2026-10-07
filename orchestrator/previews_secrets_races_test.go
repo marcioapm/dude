@@ -217,8 +217,10 @@ func TestAPreviewStoppedWhileItsReplacementSubmitsCancelsTheNewRun(t *testing.T)
 		return len(runs) == 2 && runs[0].Cancelled && runs[1].Cancelled &&
 			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, runID); n != 0 {
-		t.Errorf("the stopped preview recorded the Run submitted after its stop:\n%s", w.preview(runID))
+	// Recorded on the stopped row only for the sweep to cancel it.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'
+		AND (lux_run_id IS NULL OR (lux_state = 'cancelled' AND lux_stop_reason = 'cancel'))`, runID); n != 1 {
+		t.Errorf("the stopped preview holds the Run submitted after its stop as other than cancelled:\n%s", w.preview(runID))
 	}
 }
 
@@ -235,4 +237,79 @@ func (c *stopOnSubmit) Submit(ctx context.Context, spec lux.Spec, key string) (l
 		c.once.Do(c.stop)
 	}
 	return r, err
+}
+
+// failFirstCancel fails the first cancel of the Run the submit made (made,
+// set by the test) as lux unavailable.
+type failFirstCancel struct {
+	lux.Client
+	mu     sync.Mutex
+	made   string
+	calls  int
+	failed bool
+}
+
+func (c *failFirstCancel) Cancel(ctx context.Context, id string) error {
+	c.mu.Lock()
+	fail := id == c.made && !c.failed
+	if id == c.made {
+		c.calls++
+		c.failed = true
+	}
+	c.mu.Unlock()
+	if fail {
+		return &lux.Error{Status: 503, Code: "unavailable", Message: "lux unavailable"}
+	}
+	return c.Client.Cancel(ctx, id)
+}
+
+// The Run a replacement submitted as the preview was stopped is cancelled
+// by later sweeps when lux could not cancel it the first time.
+func TestAStoppedPreviewsNewRunIsCancelledWhenItsFirstCancelFails(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.secret("OLD_KEY", seedKey)
+	runID, _ := w.asleepPreview()
+	w.removeSecret("OLD_KEY")
+	task := w.str(`SELECT task_id FROM runs WHERE id = $1`, runID)
+	c := &failFirstCancel{Client: w.previews.Lux}
+	w.previews.Lux = &stopOnSubmit{Client: c, stop: func() {
+		runs := w.luxRuns()
+		c.mu.Lock()
+		c.made = runs[len(runs)-1].ID
+		c.mu.Unlock()
+		if _, err := w.previews.StopPreview(context.Background(), w.org, task, w.actor); err != nil {
+			t.Error(err)
+		}
+	}}
+	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = clock_timestamp() WHERE id = $1`, runID)
+	if _, err := w.previews.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	failed := c.failed
+	c.mu.Unlock()
+	if !failed {
+		t.Fatal("the new Run's cancel was not attempted")
+	}
+	for range 3 {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		if _, err := w.previews.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := w.luxRuns()
+	if len(runs) != 2 {
+		t.Fatalf("%d lux Runs; want the old one and the replacement", len(runs))
+	}
+	c.mu.Lock()
+	calls := c.calls
+	c.mu.Unlock()
+	if !runs[0].Cancelled || !runs[1].Cancelled {
+		t.Errorf("after 3 sweeps: old cancelled %v, new %s cancelled %v after %d cancel(s)\n%s",
+			runs[0].Cancelled, runs[1].ID, runs[1].Cancelled, calls, w.preview(runID))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND lux_stop_reason = 'cancel'`, runID); n != 1 {
+		t.Errorf("the stopped preview is not done with lux:\n%s", w.preview(runID))
+	}
 }
