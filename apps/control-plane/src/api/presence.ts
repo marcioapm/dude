@@ -25,21 +25,28 @@ export function due(seen: Map<string, number>, personId: string, now: number, ev
 
 /**
  * What the person had open, as their browser names it (`x-dude-where`,
- * "TEXT-14" or "Settings"): shown beside their face. Plain text, short.
+ * "TEXT-14" or "Settings"): shown beside their face, to everyone in the
+ * organisation. Plain text, short. A brainstorm session is private, so
+ * whatever a request about one says, its where is the fixed SESSION_WHERE:
+ * never a title or anything that identifies it.
  */
-function whereFrom(header: string | null): string | null {
+export function whereFrom(header: string | null, path = ""): string | null {
+  if (path.startsWith("/v1/brainstorms") || /^a session\b/i.test(header?.trim() ?? "")) return SESSION_WHERE;
   const where = header?.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 80);
   return where ? where : null;
 }
+
+/** Where someone is when they have a brainstorm session open. */
+export const SESSION_WHERE = "A session";
 
 /**
  * Note that `principal`'s person is here, before their request is
  * answered, so what it reads counts them. Once a minute it costs one small
  * write; the rest of the time nothing. Best-effort: never fails a request.
  */
-export async function touch(principal: Principal, whereHeader: string | null): Promise<void> {
+export async function touch(principal: Principal, whereHeader: string | null, path = ""): Promise<void> {
   if (!due(touched, principal.personId, Date.now())) return;
-  const where = whereFrom(whereHeader);
+  const where = whereFrom(whereHeader, path);
   await withOrg(principal.organizationId, async ({ sql }) => {
     const rows = (await sql`
       UPDATE people SET last_seen_at = now(), last_seen_where = COALESCE(${where}, last_seen_where)

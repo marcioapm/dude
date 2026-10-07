@@ -138,7 +138,7 @@ describe("tiers", () => {
     expect(res.upgrade).toEqual([]);
     expect(res.tiers.map((t: Json) => [t.name, t.model])).toEqual([["Thinker", null], ["Coder", null], ["Fast", null]]);
     const thinker = res.tiers[0];
-    expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["conductor", "investigator", "qa_browser", "reviewer", "simplifier"]);
+    expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["brainstorm", "conductor", "investigator", "qa_browser", "reviewer", "simplifier"]);
     expect(res.tiers[1].usedBy).toEqual([
       { kind: "organization", role: "implementer", project: null, effort: null },
       { kind: "organization", role: "fixer", project: null, inherited: true, effort: null },

@@ -33,6 +33,7 @@ import { registerServerRoutes } from "./api/routes/servers.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { registerMachineRoutes } from "./api/routes/machines.ts";
 import { registerAttachmentRoutes } from "./api/routes/attachments.ts";
+import { registerSessionRoutes } from "./api/routes/sessions.ts";
 import { registerModelRoutes } from "./api/routes/models.ts";
 import { registerImageRoutes } from "./api/routes/images.ts";
 import { webApp } from "./api/web.ts";
@@ -75,6 +76,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerLiveRoutes(router);
   registerServerRoutes(router);
   registerAttachmentRoutes(router);
+  registerSessionRoutes(router);
 
   if (webDir) router.fallback(webApp(webDir));
 
