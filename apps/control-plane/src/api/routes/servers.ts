@@ -5,7 +5,7 @@
  *
  * Who may do what: anyone in the organization reads; a project's editors
  * (api/access.ts — its maintainers, for now the organization's admins)
- * change its recipes and preview settings; any member starts, stops, adds
+ * change its recipes, preview settings and preview secrets; any member starts, stops, adds
  * and removes a Run's servers and a task's preview. Opening a terminal is
  * lux's to allow, not dude's.
  */
@@ -13,10 +13,16 @@
 import { auditActor } from "../auth.ts";
 import {
   EventTypes,
+  addSecretSchema,
   addServerSchema,
   previewSettingsSchema,
   recipeInputSchema,
+  recipeSecretClash,
+  replaceSecretSchema,
+  secretHint,
+  secretNameProblem,
   serverNameSchema,
+  type PreviewSecret,
   type PreviewSettings,
   type Recipe,
 } from "@dude/domain";
@@ -66,7 +72,9 @@ async function putProjectServer(ctx: RequestContext): Promise<Response> {
   const current = ctx.params.name!;
   const input = await parseBody(ctx.request, recipeInputSchema);
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
-    await projectServers(scope, projectId); // 404 for another organization's
+    await lockProject(scope, projectId); // 404 for another organization's
+    const clash = recipeSecretClash({ name: input.name, env: input.env ?? [] }, await secretNames(scope, projectId));
+    if (clash) throw conflict(clash);
     if (input.name !== current) {
       const taken = await scope.sql`SELECT 1 FROM project_servers WHERE project_id = ${projectId} AND name = ${input.name}`;
       if (taken.length > 0) throw conflict(`the project already has a server named ${input.name}`);
@@ -139,6 +147,92 @@ async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
+// A project's preview secrets: write-only. No query here selects a value;
+// every answer carries the hint stored beside it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Holds the project's row for the transaction (404 for another
+ * organization's): a secret's name and a recipe's env are checked against
+ * each other, so the two writes take turns.
+ */
+async function lockProject(scope: OrgScope, projectId: string): Promise<void> {
+  const [row] = await scope.sql`SELECT 1 FROM projects WHERE id = ${projectId} FOR UPDATE`;
+  if (!row) throw notFound(`project ${projectId} not found`);
+}
+
+async function secretNames(scope: OrgScope, projectId: string): Promise<string[]> {
+  const rows = (await scope.sql`SELECT name FROM project_secrets WHERE project_id = ${projectId}`) as Array<{ name: string }>;
+  return rows.map((r) => r.name);
+}
+
+async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<PreviewSecret[]> {
+  return (await scope.sql`
+    SELECT s.name, s.hint, s.updated_at AS "updatedAt",
+      (SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = s.updated_by) AS "updatedBy"
+    FROM project_secrets s
+    WHERE s.project_id = ${projectId} AND (${name ?? null}::text IS NULL OR s.name = ${name ?? null})
+    ORDER BY s.name`) as PreviewSecret[];
+}
+
+async function getProjectSecrets(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  const secrets = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [project] = await scope.sql`SELECT 1 FROM projects WHERE id = ${projectId}`;
+    if (!project) throw notFound(`project ${projectId} not found`);
+    return listSecrets(scope, projectId);
+  });
+  return json({ secrets });
+}
+
+async function addProjectSecret(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await requireProjectEditor(ctx, projectId);
+  const input = await parseBody(ctx.request, addSecretSchema);
+  const secret = await withOrg(ctx.principal.organizationId, async (scope) => {
+    await lockProject(scope, projectId);
+    const { servers } = await projectServers(scope, projectId);
+    const problem = secretNameProblem(input.name, { secrets: await secretNames(scope, projectId), recipes: servers });
+    if (problem) throw problem.kind === "conflict" ? conflict(problem.message) : badRequest(problem.message);
+    await scope.sql`
+      INSERT INTO project_secrets (project_id, organization_id, name, value, hint, updated_by)
+      VALUES (${projectId}, ${scope.organizationId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId})`;
+    await recordChange(scope, ctx, projectId, { secrets: { [input.name]: "added" } });
+    return (await listSecrets(scope, projectId, input.name))[0]!;
+  });
+  return json(secret, 201);
+}
+
+async function replaceProjectSecret(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await requireProjectEditor(ctx, projectId);
+  const name = ctx.params.name!;
+  const input = await parseBody(ctx.request, replaceSecretSchema);
+  const secret = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const changed = await scope.sql`
+      UPDATE project_secrets SET value = ${input.value}, hint = ${secretHint(input.value)}, updated_at = now(),
+        updated_by = ${ctx.principal.personId}
+      WHERE project_id = ${projectId} AND name = ${name} RETURNING name`;
+    if (changed.length === 0) throw notFound(`project ${projectId} has no secret ${name}`);
+    await recordChange(scope, ctx, projectId, { secrets: { [name]: "replaced" } });
+    return (await listSecrets(scope, projectId, name))[0]!;
+  });
+  return json(secret);
+}
+
+async function removeProjectSecret(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await requireProjectEditor(ctx, projectId);
+  const name = ctx.params.name!;
+  await withOrg(ctx.principal.organizationId, async (scope) => {
+    const gone = await scope.sql`DELETE FROM project_secrets WHERE project_id = ${projectId} AND name = ${name} RETURNING name`;
+    if (gone.length === 0) throw notFound(`project ${projectId} has no secret ${name}`);
+    await recordChange(scope, ctx, projectId, { secrets: { [name]: "removed" } });
+  });
+  return noContent();
+}
+
+// ---------------------------------------------------------------------------
 // A task's and a Run's servers: the orchestrator's, through lux
 // ---------------------------------------------------------------------------
 
@@ -190,6 +284,10 @@ export function registerServerRoutes(router: Router): void {
   router.put("/v1/projects/:id/servers/:name", putProjectServer);
   router.delete("/v1/projects/:id/servers/:name", deleteProjectServer);
   router.put("/v1/projects/:id/preview-settings", putPreviewSettings);
+  router.get("/v1/projects/:id/secrets", getProjectSecrets);
+  router.post("/v1/projects/:id/secrets", addProjectSecret);
+  router.put("/v1/projects/:id/secrets/:name", replaceProjectSecret);
+  router.delete("/v1/projects/:id/secrets/:name", removeProjectSecret);
 
   router.get("/v1/tasks/:id/servers", (ctx) => forward(ctx, "GET", taskPath(ctx, "servers")));
   router.post("/v1/tasks/:id/preview", startPreview);

@@ -138,6 +138,10 @@ type Run struct {
 
 	// Its servers (servers.go).
 	servers []*server
+	// The values of its secrets lux holds for its next placement: the
+	// submit's, then each resume's for the names the Run declared, as lux
+	// keeps them in memory (secretValues).
+	secretValues map[string]string
 	// What GET /cost answers; nil is lux's answer before any plugin priced
 	// anything: pending, no amounts.
 	cost *lux.RunCost
@@ -996,7 +1000,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.next++
-	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1}
+	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1,
+		secretValues: secretValues(raw, nil)}
 	if len(promptImages) > 0 {
 		run.attachments = map[string][]attachmentMeta{"prompt": promptImages}
 	}
@@ -1452,13 +1457,25 @@ func (s *Server) view(run *Run) map[string]any {
 			host = p.HostName
 		}
 	}
-	// The stored spec, as lux returns it: every secret's value dropped.
+	// The stored spec, as lux returns it: every secret's value dropped, its
+	// as normalized and a credential marked runnerOnly (lux's Normalize).
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	runnerOnly := runnerOnlySecrets(run.Spec)
 	if secrets, ok := spec["secrets"].([]any); ok {
 		for _, sec := range secrets {
 			if m, ok := sec.(map[string]any); ok {
 				delete(m, "value")
+				name, _ := m["name"].(string)
+				if as, _ := m["as"].(string); as == "" {
+					m["as"] = "env"
+					if runnerOnly[name] {
+						m["as"] = "none"
+					}
+				}
+				if runnerOnly[name] {
+					m["runnerOnly"] = true
+				}
 			}
 		}
 	}
@@ -1974,6 +1991,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		run.Spec, _ = json.Marshal(spec)
 	}
 	run.Resumed++
+	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
 	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)
 	run.ResumeSyncs = append(run.ResumeSyncs, in.Sync)

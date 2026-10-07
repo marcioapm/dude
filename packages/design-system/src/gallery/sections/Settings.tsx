@@ -9,7 +9,7 @@ import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote
 import { Input } from "../../primitives/Input.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
-import { KeyValueList } from "../../primitives/Layout.tsx";
+import { FormActions, KeyValueList } from "../../primitives/Layout.tsx";
 import { SearchResultList, SearchResultRow } from "../../components/SearchResultRow.tsx";
 import { EntityLine } from "../../components/EntityLine.tsx";
 import { AuthorLine } from "../../components/PersonAvatar.tsx";
@@ -20,6 +20,7 @@ import { GitHubUserLine, type GitHubUser } from "../../components/GitHubUserLine
 import { PullRequestPanel } from "../../components/PullRequestPanel.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
+import { Table, TBody, Td, Th, THead, Tr } from "../../primitives/Table.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
 import { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
 import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
@@ -92,6 +93,16 @@ function SettingsDemo() {
         <SettingRow label="Reasoning effort">
           <Select aria-label="Reasoning effort" value={effort} onValueChange={setEffort}
             options={["low", "medium", "high", "max"].map((v) => ({ value: v, label: v }))} />
+        </SettingRow>
+        <SettingRow label="Secrets" help="A block control: a table and its actions at the column's width." block>
+          <Table density="compact" aria-label="Secrets">
+            <THead><Tr><Th>Name</Th><Th>Value</Th></Tr></THead>
+            <TBody>
+              <Tr><Td mono>SEED_LLM_KEY</Td><Td mono muted>…3f9a</Td></Tr>
+              <Tr><Td mono>STRIPE_TEST_KEY</Td><Td mono muted>…x7Qb</Td></Tr>
+            </TBody>
+          </Table>
+          <FormActions><Button leadingIcon="plus">Add secret</Button></FormActions>
         </SettingRow>
       </SettingsSection>
     </SettingsLayout>
