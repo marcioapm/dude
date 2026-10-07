@@ -359,7 +359,9 @@ type refusingLux struct {
 	entered, answer chan struct{}
 }
 
-func (c *refusingLux) Get(context.Context, string) (lux.Run, error) { return lux.Run{State: "stopped"}, nil }
+func (c *refusingLux) Get(context.Context, string) (lux.Run, error) {
+	return lux.Run{State: "stopped"}, nil
+}
 
 func (c *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
 	close(c.entered)
