@@ -104,6 +104,9 @@ type PhaseRun struct {
 	// the Run's creation — before the attempt, so a fixer that crashes still
 	// spends one, and once however often the step runs again.
 	CountAttempts bool
+	// A restart (RestartRunTx): what its agent is told of why, and the
+	// model tier it runs on in place of its role's, "" for the role's.
+	RestartNote, Tier string
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -113,70 +116,76 @@ type PhaseRun struct {
 // is the same attempt, not a new one.
 func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (string, error) {
 	var runID string
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		if in.Key != "" {
-			var err error
-			if runID, err = runByKey(ctx, tx, in.TaskID, in.Key); err != nil || runID != "" {
-				return err
-			}
-		}
-		if Publishes[in.Phase] {
-			// A writer waits for the conductor's publish moving the task
-			// branch.
-			if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
-				return err
-			}
-		}
-		var projectID string
-		var attempt int
-		if err := tx.QueryRow(ctx, `
-			SELECT w.project_id, COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = w.id), 1)
-			FROM tasks w WHERE w.id = $1`, in.TaskID, in.Attempt).Scan(&projectID, &attempt); err != nil {
-			return fmt.Errorf("task %s: %w", in.TaskID, err)
-		}
-		feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
-		bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
-		runID = ids.New(ids.Run)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
-			                  parent_run_id, base_refs, category, pr_feedback, creation_key,
-			                  finding_ids, blocking_severities, conductor_run_id, conductor_note)
-			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-			        $15, $16)`,
-			runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
-			db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
-			db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
-			db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote)); err != nil {
-			return err
-		}
-		if in.CountAttempts && len(in.FindingIDs) > 0 {
-			if _, err := tx.Exec(ctx, `UPDATE review_findings SET fix_attempts = fix_attempts + 1, updated_at = now()
-				WHERE id = ANY($1)`, in.FindingIDs); err != nil {
-				return err
-			}
-		}
-		payload := map[string]any{
-			"attempt": attempt, "phase": in.Phase, "role": RoleForPhase[in.Phase],
-			"publishes": Publishes[in.Phase], "baseRefs": nonNilMap(in.BaseRefs),
-		}
-		if in.ConductorRunID != "" {
-			payload["conductorRunId"] = in.ConductorRunID
-		}
-		if in.Category != "" {
-			payload["category"] = in.Category
-		}
-		if len(in.FindingIDs) > 0 {
-			payload["findingIds"] = in.FindingIDs
-		}
-		if len(in.PRFeedback) > 0 {
-			payload["prFeedbackCount"] = len(in.PRFeedback)
-		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: EvRunCreated, OrganizationID: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID,
-			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: in.TaskID, Payload: payload,
-		})
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		runID, err = createPhaseRunTx(ctx, tx, org, in)
 		return err
+	})
+	return runID, err
+}
+
+func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (string, error) {
+	var runID string
+	if in.Key != "" {
+		var err error
+		if runID, err = runByKey(ctx, tx, in.TaskID, in.Key); err != nil || runID != "" {
+			return runID, err
+		}
+	}
+	if Publishes[in.Phase] {
+		// A writer waits for the conductor's publish moving the task
+		// branch.
+		if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
+			return "", err
+		}
+	}
+	var projectID string
+	var attempt int
+	if err := tx.QueryRow(ctx, `
+		SELECT w.project_id, COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = w.id), 1)
+		FROM tasks w WHERE w.id = $1`, in.TaskID, in.Attempt).Scan(&projectID, &attempt); err != nil {
+		return "", fmt.Errorf("task %s: %w", in.TaskID, err)
+	}
+	feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
+	bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
+	runID = ids.New(ids.Run)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
+		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
+		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override)
+		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
+		        $15, $16, $17, $18)`,
+		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
+		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
+		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
+		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier)); err != nil {
+		return "", err
+	}
+	if in.CountAttempts && len(in.FindingIDs) > 0 {
+		if _, err := tx.Exec(ctx, `UPDATE review_findings SET fix_attempts = fix_attempts + 1, updated_at = now()
+			WHERE id = ANY($1)`, in.FindingIDs); err != nil {
+			return "", err
+		}
+	}
+	payload := map[string]any{
+		"attempt": attempt, "phase": in.Phase, "role": RoleForPhase[in.Phase],
+		"publishes": Publishes[in.Phase], "baseRefs": nonNilMap(in.BaseRefs),
+	}
+	if in.ConductorRunID != "" {
+		payload["conductorRunId"] = in.ConductorRunID
+	}
+	if in.Category != "" {
+		payload["category"] = in.Category
+	}
+	if len(in.FindingIDs) > 0 {
+		payload["findingIds"] = in.FindingIDs
+	}
+	if len(in.PRFeedback) > 0 {
+		payload["prFeedbackCount"] = len(in.PRFeedback)
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{
+		Type: EvRunCreated, OrganizationID: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID,
+		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
+		CorrelationID: in.TaskID, Payload: payload,
 	})
 	return runID, err
 }

@@ -95,6 +95,20 @@ type Behaviour struct {
 	// A task's conductor: each turn's reply quotes its briefing and the
 	// input it answers (fakeagent.ConductorReply), in place of Reply.
 	Conductor bool
+	// Tool calls to open before a Hang, each as OpenCode reports it:
+	// [title, kind, raw input as JSON]. They stay open, as a call that
+	// never settles does.
+	OpenCalls [][3]string
+}
+
+// Exec answers for `ps` in a Run's container: the fake has no processes,
+// so a test says what lux's exec would print (PS), or that exec fails
+// (ExecFails, with lux's refusal). Usage is what GET /v1/runs/{id} reports
+// as the Run's usage, by lux Run id; none reports no usage.
+type execPlay struct {
+	PS        func(runID string) string
+	ExecFails string
+	Usage     map[string]lux.Usage
 }
 
 type Run struct {
@@ -562,6 +576,26 @@ type Server struct {
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
+	// What exec and GET say of a Run's processes and usage (execPlay).
+	execPlay
+}
+
+// SetUsage is what lux reports as the Run's usage from now on.
+func (s *Server) SetUsage(luxRunID string, u lux.Usage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Usage == nil {
+		s.Usage = map[string]lux.Usage{}
+	}
+	s.Usage[luxRunID] = u
+}
+
+// SetPS is what `ps` prints in a Run's container ("" fails exec with
+// reason ExecFails when that is set).
+func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PS, s.ExecFails = ps, execFails
 }
 
 // Close is the fake lux shutting down: work held on InputGate is dropped,
@@ -1186,6 +1220,18 @@ func (s *Server) turn(run *Run) {
 		}
 	}
 	if b.Hang && !run.woken {
+		if first {
+			for i, c := range b.OpenCalls {
+				var input any
+				_ = json.Unmarshal([]byte(c[2]), &input)
+				id := fmt.Sprintf("open_%d", i)
+				s.agent(run, map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": c[0], "kind": c[1],
+					"status": "pending"})
+				s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": c[0], "kind": c[1],
+					"status": "in_progress", "rawInput": input})
+				run.openTools = append(run.openTools, id)
+			}
+		}
 		return
 	}
 	if b.Crash {
@@ -1477,8 +1523,12 @@ func (s *Server) view(run *Run) map[string]any {
 			}
 		}
 	}
-	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID,
+	out := map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID,
 		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
+	if u, ok := s.Usage[run.ID]; ok {
+		out["usage"] = u
+	}
+	return out
 }
 
 // generic: the spec's workload is a plain command, no agent (a branch
