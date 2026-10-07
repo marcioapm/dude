@@ -246,7 +246,7 @@ func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSea
 }
 
 func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
-	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID))
+	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	if err != nil {
 		return memory.Memory{}, refuse("no memory %s", in.ID)
 	}
@@ -263,37 +263,29 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 	return getMemory(ctx, tx, c, in)
 }
 
+// sessionRememberIn has no scope or project: what a session's agent
+// remembers is the session's alone (its members, its agent), never the
+// organisation's or a project's — that would export a private
+// conversation without anyone choosing to.
 type sessionRememberIn struct {
-	Project string   `json:"project,omitempty" jsonschema:"a linked project's key; optional when only one is linked; ignored for scope organization"`
 	Title   string   `json:"title" jsonschema:"one line that says what it is"`
 	Content string   `json:"content" jsonschema:"the fact, procedure or note, in Markdown"`
 	Kind    string   `json:"kind,omitempty" jsonschema:"fact (default), procedure or note"`
-	About   []string `json:"about,omitempty" jsonschema:"task keys or epic titles in that project"`
-	Scope   string   `json:"scope,omitempty" jsonschema:"project (default) or organization"`
+	About   []string `json:"about,omitempty" jsonschema:"task keys in a linked project, or epic titles there (project:Title when more than one is linked)"`
 }
 
 func sessionRemember(ctx context.Context, tx pgx.Tx, c Caller, in sessionRememberIn) (rememberOut, error) {
-	project := ""
-	if in.Scope != "organization" {
-		p, err := linkedProject(ctx, tx, c, in.Project)
-		if err != nil {
-			return rememberOut{}, err
-		}
-		project = p.ID
-	} else if len(in.About) > 0 {
-		return rememberOut{}, refuse("about names a project's tasks or epics: give scope project and the project")
-	}
 	var about []memory.Ref
 	for _, a := range in.About {
-		ref, err := resolveAbout(ctx, tx, project, a)
+		ref, err := sessionAbout(ctx, tx, c, a)
 		if err != nil {
 			return rememberOut{}, err
 		}
 		about = append(about, ref)
 	}
-	m, err := memory.Create(ctx, tx, c.Org, memory.New{ProjectID: project, Title: in.Title, Content: in.Content, Kind: in.Kind,
+	m, err := memory.Create(ctx, tx, c.Org, memory.New{SessionID: c.SessionID, Title: in.Title, Content: in.Content, Kind: in.Kind,
 		About: about, Author: memory.Author{Kind: "agent", RunID: c.RunID}},
-		memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, ProjectID: project, RunID: c.RunID})
+		memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, RunID: c.RunID})
 	var bad *memory.Invalid
 	if errors.As(err, &bad) {
 		return rememberOut{}, refuse("%s", bad.Reason)
@@ -305,6 +297,36 @@ func sessionRemember(ctx context.Context, tx pgx.Tx, c Caller, in sessionRemembe
 		c.env.kick()
 	}
 	return rememberOut{ID: m.ID}, nil
+}
+
+// sessionAbout resolves what a session memory is about: a task by its key
+// in a linked project, or an epic by title ("KEY:Title" when more than one
+// project is linked).
+func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory.Ref, error) {
+	name = strings.TrimSpace(name)
+	projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
+	if err != nil {
+		return memory.Ref{}, err
+	}
+	ids := make([]string, len(projects))
+	for i, p := range projects {
+		ids[i] = p.ID
+	}
+	if task, _, err := delivery.TaskByKey(ctx, tx, ids, name); err != nil || task != "" {
+		return memory.Ref{Type: "task", ID: task}, err
+	}
+	key, title, named := strings.Cut(name, ":")
+	if !named {
+		key, title = "", name
+	}
+	p, err := linkedProject(ctx, tx, c, key)
+	if err != nil {
+		return memory.Ref{}, err
+	}
+	if id, err := epicByTitle(ctx, tx, p.ID, strings.TrimSpace(title)); err != nil || id != "" {
+		return memory.Ref{Type: "epic", ID: id}, err
+	}
+	return memory.Ref{}, refuse("%q is not a task or epic of the linked projects", name)
 }
 
 type proposeIn struct {

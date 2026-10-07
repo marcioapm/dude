@@ -42,7 +42,7 @@ type Failure struct {
 	LastTry  time.Time `json:"lastTry"`
 }
 
-func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health Health, project string) (Status, error) {
+func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health Health, project string, v Viewer) (Status, error) {
 	s := Status{Kinds: []Kind{}, Failures: []Failure{}, Health: health}
 	if e != nil {
 		s.Model, s.Dimensions = e.Model(), e.Dimensions()
@@ -58,7 +58,8 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health H
 			count(d.source_id) FILTER (WHERE (d.embedding IS NULL OR d.embedding_model IS DISTINCT FROM $1) AND d.last_error IS NOT NULL)
 		FROM unnest($3::text[]) WITH ORDINALITY AS t(type, n)
 		LEFT JOIN search_documents d ON d.source_type = t.type AND ($2 = '' OR d.project_id = $2 OR d.project_id IS NULL)
-		GROUP BY t.type, t.n ORDER BY t.n`, s.Model, project, Types)
+			AND memory_visible(d.session_id, $4, $5)
+		GROUP BY t.type, t.n ORDER BY t.n`, s.Model, project, Types, v.Session, v.Person)
 	if err != nil {
 		return s, err
 	}
@@ -80,7 +81,8 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health H
 	rows, err = tx.Query(ctx, `SELECT source_type, source_id, title, last_error, attempts, coalesce(last_attempt_at, updated_at)
 		FROM search_documents
 		WHERE embedding IS NULL AND last_error IS NOT NULL AND ($1 = '' OR project_id = $1 OR project_id IS NULL)
-		ORDER BY next_attempt_at LIMIT 50`, project)
+			AND memory_visible(session_id, $2, $3)
+		ORDER BY next_attempt_at LIMIT 50`, project, v.Session, v.Person)
 	if err != nil {
 		return s, err
 	}

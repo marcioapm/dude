@@ -63,6 +63,8 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 		limit = 8
 	}
 	scope.Text, scope.Types, scope.Limit = in.Query, in.Types, min(limit, 20)
+	// An agent finds its own session's memories, no other session's.
+	scope.Viewer = memory.Viewer{Session: c.SessionID}
 	out, err := memory.Ranked(ctx, tx, emb, scope)
 	if err != nil {
 		return nil, err
@@ -82,7 +84,7 @@ type getMemoryIn struct {
 }
 
 func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
-	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID))
+	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	switch {
 	case errors.Is(err, memory.ErrNotFound):
 		return memory.Memory{}, refuse("no memory %s", in.ID)

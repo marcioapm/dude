@@ -654,7 +654,7 @@ func TestASessionsToolsAreScopedToItsLinkedProjects(t *testing.T) {
 		{"findings", `{"project":"WC"}`},
 		{"list_repositories", `{"project":"WC"}`},
 		{"search_memory", `{"project":"WC","query":"meter"}`},
-		{"remember", `{"project":"WC","title":"t","content":"c"}`},
+		{"remember", `{"title":"t","content":"c","about":["` + s.keyOf(other) + `"]}`},
 		{"propose", `{"items":[{"kind":"task","project":"WC","title":"x","goal":"a goal long enough to keep"}]}`},
 		{"propose", `{"items":[{"kind":"comment","task":"` + s.keyOf(other) + `","text":"hi"}]}`},
 	} {
