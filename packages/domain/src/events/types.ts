@@ -235,6 +235,13 @@ export const EventTypes = {
   QuestionAsked: "question.asked",
   QuestionAnswered: "question.answered",
   /**
+   * A question closed unanswered because what it asked was settled
+   * elsewhere: the conductor's question about an escalation, once the
+   * escalation was decided on the banner. Payload: `{ questionId, by:
+   * "decision", action }`.
+   */
+  QuestionClosed: "question.closed",
+  /**
    * A message in a task's Chat, on its conductor's Run. Payload:
    * `{ text, directiveId?, github?, by? }`. A person's: the first has no
    * `directiveId` (it is the conductor's briefing, with dude's note before

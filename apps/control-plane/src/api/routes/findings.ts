@@ -21,7 +21,7 @@ import type { RequestContext, Router } from "../router.ts";
 
 const FINDING_SELECT = `
   id, organization_id AS "organizationId", task_id AS "taskId",
-  run_id AS "runId", category, severity, status, repo, file, line,
+  run_id AS "runId", category, topic, severity, status, repo, file, line,
   title, description, suggested_fix AS "suggestedFix",
   resolved_by_run_id AS "resolvedByRunId", resolution_note AS "resolutionNote",
   fix_attempts AS "fixAttempts",

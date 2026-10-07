@@ -83,6 +83,12 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 		if err != nil {
 			return err
 		}
+		// The message may answer the conductor's question about the
+		// escalation: the task's row after the delivery decideFor locked,
+		// before the question (delivery.LockEscalationTx's order).
+		if err := delivery.LockTaskTx(r.Context(), tx, taskID); err != nil {
+			return err
+		}
 		var runID string
 		var ending bool
 		find := func() error {
@@ -127,7 +133,7 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, actor(r))
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, p)
 			if err != nil {
 				return err
 			}

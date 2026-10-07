@@ -315,6 +315,18 @@ describe("the Chat tab", () => {
     expect(client.sent).toEqual([`${TASK_ID}:Yes`]);
   });
 
+  test("the conductor's escalation question, decided on the banner: its card says so, and the composer no longer answers it", async () => {
+    const decided = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_e", prompt: "Stuck: retry once more?", options: ["Retry", "Stop"] }, { type: "agent", id: CONDUCTOR }),
+      ev("question.closed", { questionId: "q_e", by: "decision", action: "retry" })];
+    const page = await chatPage(new ChatClient({ status: "running" }, decided));
+    await until(() => page.textContent?.includes("Stuck: retry once more?") ? page : null, "the question");
+    const card = page.querySelector("[data-testid=task-chat] article[data-state]")!;
+    expect(card.getAttribute("data-state")).toBe("dismissed");
+    expect(card.querySelector("[data-testid=settled-by]")?.textContent).toBe("Decided on the banner");
+    expect(page.querySelector("[data-testid=task-chat] form[data-mode=answer]")).toBeNull();
+  });
+
   test("Sessions lists the conductor first", async () => {
     const page = await chatPage(new ChatClient({ status: "paused", dudePause: "conductor" }, conductorEvents()), { runId: CONDUCTOR });
     const list = await until(() => page.querySelector("[data-testid=sessions]"), "the sessions");

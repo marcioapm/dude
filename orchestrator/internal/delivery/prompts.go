@@ -196,7 +196,8 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 func earlierFindings(findings []Finding) string {
 	var b strings.Builder
 	b.WriteString("## Findings from the last review\n\nA fix has been made since. For each finding below, " +
-		"check the code as it is now and say whether it is fixed. Report a problem that is still there " +
+		"check the code as it is now and say whether it is fixed — every one, whatever its category or the " +
+		"reviewer that raised it: you are the one judging it this round. Report a problem that is still there " +
 		"in your verdicts, not as a new finding; report anything new as a finding as usual.")
 	for i, f := range findings {
 		b.WriteString(fmt.Sprintf("\n\n**F%d** [%s] %s", i+1, f.Severity, f.Title))
@@ -329,6 +330,11 @@ var builtinInstructions = map[string][]string{
 			"(fix some, dismiss others with a reason, or ask), and before the pull request always ask the person " +
 			"(decide ask_person), saying what ran and what was not verified; open it (decide open_pull_request) only " +
 			"when they answered Open or Draft. Past the policy's bounds, or for what only a person may decide, ask.",
+		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
+			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
+			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
+			"answers in their own words (\"your call\"), decide it yourself with decide_escalation, once. While the " +
+			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
 			"reads your words at its next step. Start another phase only once the Run has ended. Interrupt only when " +
 			"its current work is wasted.",
@@ -425,12 +431,14 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"task, before the implementer; start_phase starts implement, review (some or all categories), fix (some or " +
 	"all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, " +
 	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
-	"why, when it is not yours to take. steer tells a running phase Run of this task something, whoever decides. " +
+	"why, when it is not yours to take. decide_escalation decides an escalation the owner handed you with a free " +
+	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides. " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
 	"publish takes what you committed in your checkout to the task branch, while you decide. " +
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
 	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
+	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A`, " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the

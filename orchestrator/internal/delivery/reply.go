@@ -32,92 +32,135 @@ type Replied struct {
 	URL       string `json:"url"`
 }
 
-// ConductReply posts the live conductor's reply on a pull request of its
-// own task, as dude's GitHub login, and records it in Chat. Allowed
-// whoever decides, and on a task that ended: it answers, and changes
-// nothing. GitHub refusing it is the conductor's to hear (a Refusal), and
-// nothing is recorded. The Chat lock is held across the post, so a
-// conductor superseded meanwhile posts nothing.
-func ConductReply(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in Reply) (Replied, error) {
+// ReplyPost is a reply checked and not yet posted.
+//
+// A conductor's reply on a pull request is three steps, so that no lock is
+// held while GitHub answers (up to forge's 15 s timeout):
+//
+//  1. CheckReplyTx, under the task's Chat lock: the caller is the task's live
+//     conductor, the pull request is the task's, the comment answered is on
+//     it. The transaction then commits.
+//  2. PostReply, with no transaction open.
+//  3. RecordReplyTx, in a short transaction of its own: the chat.message on
+//     the posting Run, unconditionally. A conductor ended or replaced after
+//     step 1 did post the comment, so it is recorded as that Run's and the
+//     call answers with it, as for any reply.
+//
+// Nothing is reserved between the steps: a reply changes nothing another
+// action reads, and dude's own comment is told apart when read back by its
+// marker (forge.ReplyMarker), not by its record. Two replies of one
+// conductor at once are not serialised: each posts its own comment and
+// records its own message, possibly in a different order from GitHub's.
+// Allowed whoever decides, and on a task that ended. GitHub refusing it is
+// the conductor's to hear (a Refusal), and nothing is recorded.
+type ReplyPost struct {
+	ref       RunRef
+	repo      string
+	number    int
+	slug      string
+	text      string
+	inReplyTo string
+	// The line comment whose thread is replied in; 0 posts on the
+	// conversation.
+	thread int64
+	body   string
+}
+
+// CheckReplyTx is step 1: the reply as it will be posted, or a Refusal.
+func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in Reply) (ReplyPost, error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
-		return Replied{}, err
+		return ReplyPost{}, err
 	}
 	var live bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
 		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
-		return Replied{}, err
+		return ReplyPost{}, err
 	}
 	if !live {
-		return Replied{}, refusef("you are no longer this task's conductor: another took over from you. Post nothing")
+		return ReplyPost{}, refusef("you are no longer this task's conductor: another took over from you. Post nothing")
 	}
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
-		return Replied{}, refusef("say what to post: text is required")
+		return ReplyPost{}, refusef("say what to post: text is required")
 	case len(text) > ChatMessageMax:
-		return Replied{}, refusef("a reply is at most %d bytes, as a Chat message is", ChatMessageMax)
+		return ReplyPost{}, refusef("a reply is at most %d bytes, as a Chat message is", ChatMessageMax)
 	}
 	repo, number, err := parsePR(in.PR)
 	if err != nil {
-		return Replied{}, err
+		return ReplyPost{}, err
 	}
 	var url string
 	err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
 		ref.TaskID, number, repo).Scan(&repo, &url)
 	if db.IsNotFound(err) {
-		return Replied{}, refusef("%s is not a pull request of your task: you reply only on your task's (pull_requests lists them)", in.PR)
+		return ReplyPost{}, refusef("%s is not a pull request of your task: you reply only on your task's (pull_requests lists them)", in.PR)
 	}
 	if err != nil {
-		return Replied{}, err
+		return ReplyPost{}, err
 	}
 	slug := forge.SlugFromURL(url)
 	if gh == nil || slug == "" {
-		return Replied{}, refusef("%s#%d is not on a GitHub dude is connected to: there is nowhere to post", repo, number)
+		return ReplyPost{}, refusef("%s#%d is not on a GitHub dude is connected to: there is nowhere to post", repo, number)
 	}
-	inReplyTo := strings.TrimSpace(in.InReplyTo)
+	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo)}
 	var author, said string
-	if inReplyTo != "" {
+	if p.inReplyTo != "" {
 		// Its words as last read: an edit since it was first recorded is
 		// what was answered.
 		err := tx.QueryRow(ctx, `SELECT COALESCE(payload->>'author', ''), COALESCE(payload->>'body', '') FROM events
 			WHERE task_id = $1 AND event_type IN ($2, $3) AND payload->>'feedbackId' = $4
 			  AND (payload->>'number')::int = $5 AND payload->>'repo' = $6 ORDER BY cursor DESC LIMIT 1`,
-			ref.TaskID, EvPullRequestCommented, EvPullRequestCommentEdited, inReplyTo, number, repo).Scan(&author, &said)
+			ref.TaskID, EvPullRequestCommented, EvPullRequestCommentEdited, p.inReplyTo, number, repo).Scan(&author, &said)
 		if db.IsNotFound(err) {
-			return Replied{}, refusef("%s is not a comment on %s#%d (pull_requests lists its feedback)", inReplyTo, repo, number)
+			return ReplyPost{}, refusef("%s is not a comment on %s#%d (pull_requests lists its feedback)", p.inReplyTo, repo, number)
 		}
 		if err != nil {
-			return Replied{}, err
+			return ReplyPost{}, err
 		}
 	}
+	if id, ok := strings.CutPrefix(p.inReplyTo, "line-comment-"); ok {
+		if p.thread, err = strconv.ParseInt(id, 10, 64); err != nil {
+			return ReplyPost{}, refusef("%s is not a line comment's id", p.inReplyTo)
+		}
+		p.body = text + "\n\n" + forge.ReplyMarker
+		return p, nil
+	}
+	p.body = text
+	if p.inReplyTo != "" {
+		p.body = fmt.Sprintf("> @%s: %s\n\n%s", author, clip(firstLine(said), 200), text)
+	}
+	p.body += "\n\n" + forge.ReplyMarker
+	return p, nil
+}
+
+// PostReply is step 2: the comment posted on GitHub. Called with no
+// transaction open.
+func PostReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted, error) {
 	var posted forge.Posted
-	if id, ok := strings.CutPrefix(inReplyTo, "line-comment-"); ok {
-		n, perr := strconv.ParseInt(id, 10, 64)
-		if perr != nil {
-			return Replied{}, refusef("%s is not a line comment's id", inReplyTo)
-		}
-		posted, err = gh.ReplyToLineComment(ctx, slug, number, n, text+"\n\n"+forge.ReplyMarker)
+	var err error
+	if p.thread != 0 {
+		posted, err = gh.ReplyToLineComment(ctx, p.slug, p.number, p.thread, p.body)
 	} else {
-		body := text
-		if inReplyTo != "" {
-			body = fmt.Sprintf("> @%s: %s\n\n%s", author, clip(firstLine(said), 200), text)
-		}
-		posted, err = gh.Comment(ctx, slug, number, body+"\n\n"+forge.ReplyMarker)
+		posted, err = gh.Comment(ctx, p.slug, p.number, p.body)
 	}
 	if forge.Refused(err) || forge.Transient(err) {
-		return Replied{}, refusef("GitHub did not take the reply, and nothing was posted: %v", err)
+		return forge.Posted{}, refusef("GitHub did not take the reply, and nothing was posted: %v", err)
 	}
-	if err != nil {
-		return Replied{}, err
+	return posted, err
+}
+
+// RecordReplyTx is step 3: the posted reply in Chat, on the Run that
+// posted it, whether or not it is still the task's conductor.
+func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Posted) (Replied, error) {
+	g := map[string]any{"repo": p.repo, "number": p.number, "feedbackId": posted.ID, "url": posted.URL}
+	if p.inReplyTo != "" {
+		g["inReplyTo"] = p.inReplyTo
 	}
-	g := map[string]any{"repo": repo, "number": number, "feedbackId": posted.ID, "url": posted.URL}
-	if inReplyTo != "" {
-		g["inReplyTo"] = inReplyTo
-	}
-	_, err = ledger.Append(ctx, tx, ref.Event(EvChatMessage, ledger.ActorAgent,
-		map[string]any{"text": text, "by": "conductor", "github": g}))
-	return Replied{Repo: repo, Number: number, CommentID: posted.ID, URL: posted.URL}, err
+	_, err := ledger.Append(ctx, tx, p.ref.Event(EvChatMessage, ledger.ActorAgent,
+		map[string]any{"text": p.text, "by": "conductor", "github": g}))
+	return Replied{Repo: p.repo, Number: p.number, CommentID: posted.ID, URL: posted.URL}, err
 }
 
 // parsePR reads a pull request as the conductor names it: 12, #12, or

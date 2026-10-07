@@ -43,7 +43,7 @@ export type Effort = z.infer<typeof effortSchema>;
 export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 
@@ -649,6 +649,8 @@ export const findingSchema = z.object({
   taskId: z.string(),
   runId: z.string().nullable(),
   category: z.string(),
+  /** The reviewer's own word for it, when it differs from its flavour (category). */
+  topic: z.string().nullish(),
   severity: findingSeveritySchema,
   status: findingStatusSchema,
   file: z.string().nullable(),

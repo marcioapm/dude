@@ -91,16 +91,20 @@ var tools = []tool{
 		"the person answered Open or Draft to that question, at the task's current head.", conductors, decide),
 	define("dismiss_finding", "Leave an open review finding as it is, with the reason — shown with the finding, as a "+
 		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
+	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, resume, done, wait or "+
+		"stop, as it offers), with a note: only after the task's owner answered your question about this escalation in "+
+		"their own words, handing it to you. A choice they pick decides it without you; otherwise the person decides on "+
+		"the banner. Allowed once per escalation.", conductors, decideEscalation),
 	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
 		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
 		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
 		"started on this attempt.", conductors, updateTask),
-	define("reply_on_pull_request", "Answer on one of your task's pull requests, as dude's GitHub login: for a "+
+	around(define("reply_on_pull_request", "Answer on one of your task's pull requests, as dude's GitHub login: for a "+
 		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
 		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
 		"request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. "+
 		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted.",
-		conductors, replyOnPullRequest).before(forgeFor),
+		conductors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
 	define("publish", "Publish what you committed in your checkout to the task branch, as a phase's work is: lux "+
 		"pushes it, then dude fast-forwards the task branch to it. Only for small, well-understood changes while you "+
 		"take the decisions: refused while an implementer or fixer is at work, when your checkout is behind the task "+
@@ -305,6 +309,7 @@ func listEpics(ctx context.Context, tx pgx.Tx, c Caller, _ listEpicsIn) ([]epicO
 type askIn struct {
 	Question string   `json:"question" jsonschema:"what you need a person to decide, with enough context to answer it"`
 	Choices  []string `json:"choices,omitempty" jsonschema:"answers to offer, when there are some"`
+	Actions  []string `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it"`
 }
 
 type askOut struct {
@@ -330,9 +335,28 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	if open {
 		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
 	}
+	// A conductor's question while its task's escalation waits on a person
+	// is that escalation's question.
+	var escalation string
+	if c.Role == delivery.RoleConductor {
+		if escalation, err = conducted(delivery.EscalationQuestion(ctx, tx, c.run(), in.Choices, in.Actions)); err != nil {
+			return askOut{}, err
+		}
+	} else if len(in.Actions) > 0 {
+		return askOut{}, refuse("actions are a conductor's, for a question about an escalation")
+	}
 	id, err := delivery.AskTx(ctx, tx, c.run(), q, in.Choices)
 	if err != nil {
 		return askOut{}, err
+	}
+	if escalation != "" {
+		acts, _ := json.Marshal(in.Actions)
+		if _, err := tx.Exec(ctx, `UPDATE questions SET escalation = $2, actions = $3::jsonb WHERE id = $1`,
+			id, escalation, acts); err != nil {
+			return askOut{}, err
+		}
+		return askOut{QuestionID: id, Next: "End your turn now. The owner picking a choice decides the escalation, as the " +
+			"banner does; an answer in their own words is your next message, and lets you decide it with decide_escalation."}, nil
 	}
 	return askOut{QuestionID: id, Next: "End your turn now. The person's answer will be your next message."}, nil
 }

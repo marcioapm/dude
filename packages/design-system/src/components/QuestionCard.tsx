@@ -44,6 +44,12 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    */
   readonly dismissed?: boolean | undefined;
   /**
+   * Settled without an answer here: what was asked was decided elsewhere,
+   * named in a few words ("Decided on the banner"). Settles the card as
+   * `dismissed` does, saying where instead of "No longer needed".
+   */
+  readonly settledBy?: string | undefined;
+  /**
    * Make the offered choices one-click replies in the card while waiting.
    * Without it a waiting card does not list them: the composer carries the
    * same choices as buttons, and they are shown once. Settled cards list
@@ -84,11 +90,11 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, kind = "question", isNew, className, ...rest }: QuestionCardProps) {
+export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, settledBy, onChoose, waitingOn, kind = "question", isNew, className, ...rest }: QuestionCardProps) {
   const words = WORDS[kind];
   const takeOver = `Take over this task to ${words.verb}`;
   const answered = toDate(answeredAt);
-  const state: QuestionState = answered ? "answered" : dismissed ? "dismissed" : "waiting";
+  const state: QuestionState = answered ? "answered" : dismissed || settledBy ? "dismissed" : "waiting";
   const waiting = state === "waiting";
   const asked = toDate(askedAt);
   const who = name ?? ROLE_LABEL[role];
@@ -125,7 +131,8 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
       data-role={role}
       aria-label={someoneElse ? `${who} asks ${words.noun} and is waiting for ${waitingOn} to ${words.verb}`
         : waiting ? `${who} asks ${words.noun} and is waiting for ${words.awaited}`
-        : state === "dismissed" ? `${who} asked a question that is no longer needed: its run ended` : `${who} asked a question`}
+        : state === "dismissed" ? (settledBy ? `${who} asked a question, settled elsewhere: ${settledBy}`
+          : `${who} asked a question that is no longer needed: its run ended`) : `${who} asked a question`}
       {...rest}
     >
       <div className={styles["gutter"]}>
@@ -153,7 +160,9 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           ) : (
             <span className={cx(styles["tag"], styles["tagDismissed"])}>
               <Icon name="cross" size={10} strokeWidth={2} />
-              <span className="ds-cap" title="Its run ended: nobody would hear an answer">No longer needed</span>
+              {settledBy
+                ? <span className="ds-cap" data-testid="settled-by">{settledBy}</span>
+                : <span className="ds-cap" title="Its run ended: nobody would hear an answer">No longer needed</span>}
             </span>
           )}
           {asked ? (

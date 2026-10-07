@@ -221,6 +221,12 @@ type HumanDecision struct {
 	Action string `json:"action"`
 	// What they said, for the agents from here on.
 	Note string `json:"note,omitempty"`
+	// Taken on the owner's answer to the conductor's question about the
+	// escalation: the question, and the person who answered.
+	QuestionID string `json:"questionId,omitempty"`
+	AnsweredBy string `json:"answeredBy,omitempty"`
+	// Taken by the conductor (decide_escalation) on that answer: its Run.
+	Conductor string `json:"conductor,omitempty"`
 }
 
 // BranchFor is the task's branch — the one its pull requests are opened
@@ -419,12 +425,14 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if d != nil && len(d.Categories) > 0 {
 		categories = d.Categories
 	}
-	// A re-review judges what the fixer was sent: the open findings of its
-	// category that a fix has attempted.
-	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
+	// A re-review judges what the fixer was sent: every open finding a fix
+	// has attempted, by the reviewer of its category, or by one of this
+	// round's when it has none (judgedBy).
+	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	toJudge := judgedBy(st.Policy, categories, attempted)
 	var runIDs []string
 	for _, c := range categories {
 		k := key(sc, st, ":review:", st.Iteration, ":", c)
@@ -446,6 +454,32 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	return park("awaitReview", st, runIDs), nil
+}
+
+// judgedBy assigns each category's attempted findings to a reviewer of the
+// round: its own, else the policy's first required reviewer the round has,
+// else the round's first. A finding no reviewer is shown can never be
+// resolved, and would count toward stuck for nothing.
+func judgedBy(p Policy, round []string, attempted map[string][]string) map[string][]string {
+	if len(round) == 0 {
+		return attempted
+	}
+	fallback := round[0]
+	for _, r := range p.RequiredReviewers {
+		if slices.Contains(round, r) {
+			fallback = r
+			break
+		}
+	}
+	out := map[string][]string{}
+	for _, c := range slices.Sorted(maps.Keys(attempted)) {
+		to := c
+		if !slices.Contains(round, c) {
+			to = fallback
+		}
+		out[to] = append(out[to], attempted[c]...)
+	}
+	return out
 }
 
 func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
@@ -1110,7 +1144,9 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides; explain and propose.",
+		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
+			"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
+			"you decide_escalation.",
 			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
