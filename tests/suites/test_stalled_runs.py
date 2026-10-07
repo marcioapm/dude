@@ -76,12 +76,18 @@ def test_the_conductor_is_told_once_and_restarts_the_stalled_reviewer(client: Ap
                        timeout=60, message="the conductor was never told of the stalled reviewer")
     assert "`task`" in woken[0] and "Review worker state behavior" in woken[0], woken[0]
     assert "restart_run" in woken[0], woken[0]
+    assert len(woken) == 1, woken
     assert len(_stalled(client, hung["id"])) == 1
     # Told once: the facts unchanged, the next sweeps say nothing more.
     wait_until(lambda: client.get_run(hung["id"])["stalled"] is not None, timeout=30, message="the Run never showed as stalled")
     assert not (client.get_run(hung["id"])["stalled"] or {}).get("owner")
 
     _say(client, task["id"], "Restart it.", _tool("restart_run", {"run": hung["id"], "note": "Read the worker yourself."}))
+    # The conductor's own call of the tool, as its Run recorded it.
+    called = wait_until(lambda: [e for e in client.events(runId=conductor, limit=1000)
+                                 if e["eventType"] == "agent.tool.dude" and e["payload"].get("tool") == "restart_run"],
+                        timeout=60, message="the conductor never called restart_run")
+    assert called[0]["payload"]["arguments"]["run"] == hung["id"], called[0]
     restarted = wait_until(lambda: [e for e in client.events(runId=hung["id"], limit=1000) if e["eventType"] == "run.restarted"],
                            timeout=60, message="the conductor's restart never reached the ledger")
     fresh = restarted[0]["payload"]["to"]
@@ -93,6 +99,13 @@ def test_the_conductor_is_told_once_and_restarts_the_stalled_reviewer(client: Ap
     _waiting_on(client, task["id"], "after_review", "the restarted review never came back to the conductor")
     assert client.get_run(fresh)["status"] == "completed"
     assert len(_stalled(client, hung["id"])) == 1
+    escalations = [e for e in client.events(taskId=task["id"], limit=1000)
+                   if e["eventType"] == "question.asked" and e["payload"].get("reason") == "review_failed"]
+    assert escalations == [], escalations
+    # One stalled wake in all, the round over.
+    stalled_wakes = [e for e in client.events(taskId=task["id"], limit=1000)
+                     if e["eventType"] == "conductor.woken" and "made no progress" in e["payload"]["text"]]
+    assert len(stalled_wakes) == 1, [e["payload"]["text"] for e in stalled_wakes]
 
 
 def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_url: str, client: ApiClient, org: dict,
@@ -120,7 +133,10 @@ def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_ur
     fresh = restarted[0]["payload"]["to"]
     assert restarted[0]["payload"]["note"] == "Read the worker yourself.", restarted[0]
     assert "by" not in restarted[0]["payload"], restarted[0]
+    me = client.get("/v1/me").json()["person"]
+    assert restarted[0]["actor"]["id"] == me["id"], restarted[0]["actor"]
     assert client.get_run(hung["id"])["status"] == "aborted"
+    assert client.get_run(hung["id"])["replacedBy"] == fresh
     # The delivery goes on with the new Run.
     wait_until(lambda: client.get_run(fresh)["status"] == "completed", timeout=90, message="the restarted reviewer never finished")
     wait_until(lambda: any(r["phase"] == "simplify" for r in client.task_runs(task["id"])), timeout=120,

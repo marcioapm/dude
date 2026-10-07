@@ -12,7 +12,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
-	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 func TestEveryPhaseRunIsSentTheHardLimitAndTheConductorNone(t *testing.T) {
@@ -30,8 +29,8 @@ func TestEveryPhaseRunIsSentTheHardLimitAndTheConductorNone(t *testing.T) {
 	if got, ok := seen["conductor"]; !ok || got != "" {
 		t.Errorf("the conductor's timeout is %q (seen %v), want none", got, ok)
 	}
-	if seen["implement"] != phases.DefaultTimeout {
-		t.Errorf("the implementer's timeout is %q, want %s", seen["implement"], phases.DefaultTimeout)
+	if seen["implement"] != "4h" {
+		t.Errorf("the implementer's timeout is %q, want 4h", seen["implement"])
 	}
 	w2 := newWorld(t)
 	w2.syncer.Agent.Timeout = "90m"
@@ -64,7 +63,7 @@ func TestARunLuxTimesOutFailsAndEscalates(t *testing.T) {
 	var keep bool
 	_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, ''), keep FROM runs WHERE id = $1`, runID).
 		Scan(&status, &errText, &keep)
-	if status != "failed" || !strings.Contains(errText, "time limit") || !strings.Contains(errText, phases.DefaultTimeout) || keep {
+	if status != "failed" || !strings.Contains(errText, "time limit") || !strings.Contains(errText, "4h") || keep {
 		t.Errorf("run %s %q keep=%v: want failed at its time limit, not kept", status, errText, keep)
 	}
 	if got := w.escalationReason(wi); got != "implement_failed" {
