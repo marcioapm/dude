@@ -183,7 +183,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	if err := EndConductorWait(ctx, tx, org, projectID, taskID); err != nil {
 		return err
 	}
-	payload := map[string]any{"reason": e.Reason, "action": in.Action, "note": note, "by": "person"}
+	payload := map[string]any{"reason": e.Reason, "action": in.Action, "note": note}
 	if in.QuestionID != "" {
 		payload["questionId"], payload["answeredBy"] = in.QuestionID, in.AnsweredBy
 	}
@@ -202,7 +202,9 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 // Events about escalations decided.
 const (
 	// A person (or the conductor, on the owner's answer) decided an
-	// escalation. Payload: {reason, action, note, by, questionId?, answeredBy?}.
+	// escalation. Payload: {reason, action, note, by?, questionId?, answeredBy?}:
+	// by is "conductor" when the conductor decided it, absent for a person,
+	// as on every event a conductor or a person may cause.
 	EvTaskDecided = "task.decided"
 	// A question was closed unanswered because what it asked was settled
 	// elsewhere. Payload: {questionId, by: "decision", action}.

@@ -105,7 +105,7 @@ func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
 			}
 			w.until("the delivery to go on", func() bool { return w.phaseRuns(task, c.phase) == before+1 })
 			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
-				AND payload->>'action' = $2 AND payload->>'questionId' = $3 AND payload->>'by' = 'person'
+				AND payload->>'action' = $2 AND payload->>'questionId' = $3 AND NOT payload ? 'by'
 				AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)
 				AND strpos(payload->>'note', 'The owner answered: '||$5) > 0
 				AND strpos(payload->>'note', 'one more narrow fix round') > 0`, task, c.action, q, ana, c.choice); n != 1 {
