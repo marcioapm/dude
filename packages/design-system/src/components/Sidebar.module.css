@@ -133,6 +133,23 @@
   flex-direction: column;
   gap: var(--ds-space-nav-row-gap);
 }
+/* Your sessions, above the projects: rows as the waiting ones are. */
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-nav-row-gap);
+  max-height: 30vh;
+  overflow: auto;
+}
+.sessions .treeHead .link {
+  color: var(--ds-color-text-muted);
+}
+.sessionShared {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+}
 .navRow {
   display: flex;
   align-items: center;
