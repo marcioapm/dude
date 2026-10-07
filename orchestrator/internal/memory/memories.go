@@ -162,7 +162,7 @@ func Create(ctx context.Context, tx pgx.Tx, org string, n New, by Actor) (Memory
 	if err := setRefs(ctx, tx, org, id, about); err != nil {
 		return Memory{}, err
 	}
-	if err := record(ctx, tx, org, by, EvCreated, id, n.ProjectID, map[string]any{"title": title, "kind": kind}); err != nil {
+	if err := record(ctx, tx, org, by, EvCreated, id, n.ProjectID, n.SessionID, map[string]any{"title": title, "kind": kind}); err != nil {
 		return Memory{}, err
 	}
 	return get(ctx, tx, id)
@@ -221,7 +221,7 @@ func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Ac
 			return Memory{}, err
 		}
 	}
-	if err := record(ctx, tx, org, by, EvUpdated, id, project, map[string]any{"title": title}); err != nil {
+	if err := record(ctx, tx, org, by, EvUpdated, id, project, m.SessionID, map[string]any{"title": title}); err != nil {
 		return Memory{}, err
 	}
 	return get(ctx, tx, id)
@@ -244,19 +244,22 @@ func Archive(ctx context.Context, tx pgx.Tx, org string, m Memory, archived bool
 	if err != nil {
 		return Memory{}, err
 	}
-	if err := record(ctx, tx, org, by, ev, id, m.ProjectID, map[string]any{"title": m.Title}); err != nil {
+	if err := record(ctx, tx, org, by, ev, id, m.ProjectID, m.SessionID, map[string]any{"title": m.Title}); err != nil {
 		return Memory{}, err
 	}
 	return get(ctx, tx, id)
 }
 
-func record(ctx context.Context, tx pgx.Tx, org string, by Actor, typ, id, project string, payload map[string]any) error {
+// record appends a memory's event. A session's memory's events are on its
+// session (events.session_id), whoever acts — a person, dude or a Run — so
+// the ledger shows them, title and all, to its members alone.
+func record(ctx context.Context, tx pgx.Tx, org string, by Actor, typ, id, project, session string, payload map[string]any) error {
 	payload["memoryId"] = id
 	if project == "" {
 		project = by.ProjectID
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: org, ProjectID: project, TaskID: by.TaskID, RunID: by.RunID,
+		Type: typ, OrganizationID: org, ProjectID: project, TaskID: by.TaskID, RunID: by.RunID, SessionID: session,
 		ActorType: by.Type, ActorID: by.ID, Source: ledger.SourceOrchestrator, Payload: payload,
 	})
 	return err

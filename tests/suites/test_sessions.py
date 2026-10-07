@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+
+import requests
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, query, wait_until
 
 
-def _person(admin: ApiClient, env, name: str) -> tuple[dict, ApiClient]:
+def _person(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
     email = name.split()[0].lower().encode("ascii", "ignore").decode()
-    resp = admin.post("/v1/people", {"name": name, "email": f"{email}@acme.dev", "role": "member"})
+    resp = admin.post("/v1/people", {"name": name, "email": f"{email}@acme.dev", "role": role})
     assert resp.status_code == 201, resp.text
     body = resp.json()
     return body["person"], ApiClient(env.control_plane_url, body["key"])
@@ -241,3 +244,72 @@ def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient,
     assert ana_client.post(f"/v1/brainstorms/{session}/people/{me}/remove").status_code == 200
     assert client.get(f"/v1/brainstorms/{session}").status_code == 404
     assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == []
+
+
+def _listen(who: ApiClient, frames: list, ready: threading.Event, stop: threading.Event) -> None:
+    """Every frame of the organisation's live stream, as `who`'s browser hears it."""
+    with requests.get(f"{who.base_url}/v1/events/stream", params={"live": "1", "key": who.api_key},
+                      stream=True, timeout=(5, 60)) as res:
+        for raw in res.iter_lines(decode_unicode=True):
+            if raw and raw.startswith(":"):
+                ready.set()
+            if stop.is_set():
+                return
+            if raw and raw.startswith("data:"):
+                frames.append(json.loads(raw[5:]))
+
+
+def test_a_members_change_to_a_session_memory_reaches_no_one_else(client: ApiClient, env):
+    """An admin who is in the session renames, archives and restores what its
+    agent remembered: the ledger and the live stream give those changes,
+    title and all, to the session's members and to nobody else — a pending
+    invitee, someone else, an admin not in it."""
+    _scripted_brainstorm(client)
+    boss, boss_client = _person(client, env, "Bea Boss", role="admin")
+    ana, ana_client = _person(client, env, "Ana Nunes")
+    otto, otto_client = _person(client, env, "Otto Other")
+    admin2, admin2_client = _person(client, env, "Ada Admin", role="admin")
+    session = client.post("/v1/brainstorms", {"title": "Acquisitions", "projects": []}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/people", {"people": [boss["id"]], "role": "chat"})
+    assert boss_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    client.post(f"/v1/brainstorms/{session}/people", {"people": [ana["id"]], "role": "chat"})
+    remember = _tool("remember", {"title": "Confidential zephyr acquisition", "content": "Private terms."})
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "note it\n" + remember})
+    mid = wait_until(lambda: next((m["id"] for m in client.get("/v1/memory/memories", params={"q": "zephyr"}).json()["memories"]), None),
+                     timeout=60, message="the agent never remembered")
+
+    outsiders = {"a pending invitee": ana_client, "someone else": otto_client, "an admin not in it": admin2_client}
+    listeners = {name: ([], threading.Event()) for name in [*outsiders, "a member"]}
+    stop = threading.Event()
+    threads = []
+    for name, who in [*outsiders.items(), ("a member", client)]:
+        frames, ready = listeners[name]
+        th = threading.Thread(target=_listen, args=(who, frames, ready, stop), daemon=True)
+        th.start()
+        threads.append(th)
+    for name, (_, ready) in listeners.items():
+        assert ready.wait(10), f"{name}'s stream never opened"
+    after = max([e["cursor"] for e in client.get("/v1/events", params={"limit": 1000}).json()["events"]] or [0])
+
+    assert boss_client.patch(f"/v1/memory/memories/{mid}", {"title": "Confidential zephyr acquisition, signed"}).status_code == 200
+    assert boss_client.post(f"/v1/memory/memories/{mid}/archive").status_code == 200
+    assert boss_client.post(f"/v1/memory/memories/{mid}/restore").status_code == 200
+    # A marker everyone hears, after the changes: a project made by the owner.
+    marker = client.create_project(name="Marker", slug=f"mk-{os.urandom(3).hex()}")
+    heard = lambda frames: any(e.get("projectId") == marker["id"] for e in frames)  # noqa: E731
+    wait_until(lambda: all(heard(frames) for frames, _ in listeners.values()), timeout=30, message="the marker never reached every stream")
+    stop.set()
+
+    changes = {"memory.updated", "memory.archived", "memory.restored"}
+    member = [e["eventType"] for e in listeners["a member"][0] if e.get("payload", {}).get("memoryId") == mid]
+    assert sorted(member) == sorted(changes), member
+    for name, who in outsiders.items():
+        frames = listeners[name][0]
+        assert not [e for e in frames if e.get("payload", {}).get("memoryId") == mid], (name, frames)
+        assert "zephyr" not in json.dumps(frames).lower(), name
+        history = who.get("/v1/events", params={"after": after, "limit": 1000}).json()["events"]
+        assert history, f"{name} reads nothing after the changes: the check would be empty"
+        assert not [e for e in history if e["eventType"] in changes], (name, history)
+        assert "zephyr" not in json.dumps(history).lower(), name
+    mine = client.get("/v1/events", params={"after": after, "limit": 1000}).json()["events"]
+    assert sorted(e["eventType"] for e in mine if e["eventType"] in changes) == sorted(changes)
