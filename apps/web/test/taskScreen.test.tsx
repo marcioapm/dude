@@ -42,6 +42,19 @@ describe("the task page's tab from its URL", () => {
   });
 });
 
+describe("a finding's category", () => {
+  test("is its reviewer's flavour, with the reviewer's own word beside it when it has one", async () => {
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
+    const rows = await until(() => {
+      const r = [...page.querySelectorAll<HTMLElement>("[data-testid=finding]")];
+      return r.length === 4 ? r : null;
+    }, "the findings");
+    const text = rows.map((r) => r.textContent ?? "");
+    expect(text.filter((t) => t.includes("correctness · css"))).toHaveLength(1);
+    expect(text.filter((t) => t.includes("correctness") && !t.includes("·"))).toHaveLength(3);
+  });
+});
+
 /** The Servers tab: its count, its mark's state, and what its tooltip says on focus. */
 async function serversTab(scenario: "a" | "b" | "c" | "d" | "e") {
   const page = await taskPage(new FixtureClient(scenario));

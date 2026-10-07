@@ -72,6 +72,11 @@ export interface QuestionTurn {
   at: string;
   /** Null while it waits for an answer. */
   answeredAt: string | null;
+  /**
+   * Closed unanswered, when: what it asked was decided elsewhere (an
+   * escalation decided on the task's banner). Null while it may be answered.
+   */
+  closedAt: string | null;
 }
 
 /**
@@ -769,12 +774,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           options: Array.isArray(payload.options) ? payload.options.map(String) : [],
           at: event.occurredAt,
           answeredAt: null,
+          closedAt: null,
         };
         state.questionsById.set(turn.questionId, turn);
         turns.push(turn);
         // The agent is not working: it is waiting on a person.
         state.activity = null;
         state.activeTool = null;
+        break;
+      }
+
+      case EventTypes.QuestionClosed: {
+        // Settled elsewhere: no answer will come, and none is asked for.
+        const question = state.questionsById.get(String(payload.questionId ?? ""));
+        if (question && question.answeredAt === null) question.closedAt = event.occurredAt;
         break;
       }
 
@@ -982,7 +995,7 @@ function modelCost(state: Projection): Pick<Conversation, "costUsd" | "costSourc
 /** The latest question still waiting for an answer. */
 function openQuestion(state: Projection): QuestionTurn | null {
   let open: QuestionTurn | null = null;
-  for (const q of state.questionsById.values()) if (q.answeredAt === null) open = q;
+  for (const q of state.questionsById.values()) if (q.answeredAt === null && q.closedAt === null) open = q;
   return open;
 }
 

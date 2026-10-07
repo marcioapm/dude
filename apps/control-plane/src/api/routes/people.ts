@@ -372,6 +372,15 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing";
     if (rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) return "lastAdmin";
+    // Their tasks are not locked ahead: holding this person's row while
+    // waiting on a task deadlocks with putTaskPeople, which holds the task
+    // and takes this row's KEY SHARE re-inserting them. The conductor's
+    // decide_escalation (delivery.LockEscalationTx holds the task's row) is
+    // serial with this: if it read the owner first, passOnTasks' UPDATE of
+    // that task waits for it; if that UPDATE came first, the decision waits
+    // and reads the new owner. Removal vs. task-people replacement and vs.
+    // an answer (answered_by_person's KEY SHARE on this row) can still
+    // deadlock: pre-existing, see dude issue #65.
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;

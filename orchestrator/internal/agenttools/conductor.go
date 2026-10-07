@@ -74,7 +74,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	full := len(ids) > 0
 	// The text only when asked for by id: a list of up to findingsMax reads
 	// none of it.
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, category || COALESCE(' · ' || topic, ''), COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
 			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
 			CASE WHEN $2 THEN suggested_fix ELSE '' END
@@ -300,6 +300,19 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 	return conducted(map[string]any{"dismissed": in.ID}, err)
 }
 
+type decideEscalationIn struct {
+	Action string `json:"action" jsonschema:"one of the escalation's actions: retry, accept, resume, done, wait or stop"`
+	Note   string `json:"note,omitempty" jsonschema:"what you decided and why, kept with the task for every agent from here on"`
+}
+
+func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalationIn) (map[string]any, error) {
+	out, err := delivery.ConductDecideEscalation(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note)
+	if err == nil && c.env.kick != nil {
+		c.env.kick()
+	}
+	return conducted(out, err)
+}
+
 type steerIn struct {
 	Run       string `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
 	Text      string `json:"text" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
@@ -341,15 +354,37 @@ func forgeFor(ctx context.Context, c Caller, _ json.RawMessage) any {
 	return gh
 }
 
-func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (delivery.Replied, error) {
-	var gh *forge.GitHub
+// githubOf is the client forgeFor resolved.
+func githubOf(c Caller) (*forge.GitHub, error) {
 	switch p := c.env.prepared.(type) {
 	case error:
-		return delivery.Replied{}, p
+		return nil, p
 	case *forge.GitHub:
-		gh = p
+		return p, nil
 	}
-	return conducted(delivery.ConductReply(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
+	return nil, nil
+}
+
+// reply_on_pull_request is checked under the task's Chat lock, posted with
+// no transaction open, then recorded (delivery.ReplyPost).
+func replyOnPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in replyIn) (delivery.ReplyPost, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return delivery.ReplyPost{}, err
+	}
+	return conducted(delivery.CheckReplyTx(ctx, tx, c.run(), gh, delivery.Reply{PR: in.PR, Text: in.Text, InReplyTo: in.InReplyTo}))
+}
+
+func postReply(ctx context.Context, c Caller, p delivery.ReplyPost) (forge.Posted, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return forge.Posted{}, err
+	}
+	return conducted(delivery.PostReply(ctx, gh, p))
+}
+
+func recordReply(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.ReplyPost, posted forge.Posted) (delivery.Replied, error) {
+	return delivery.RecordReplyTx(ctx, tx, p, posted)
 }
 
 type publishIn struct {

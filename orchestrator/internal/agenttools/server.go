@@ -265,6 +265,13 @@ type tool struct {
 	// prepare runs before the transaction opens, for slow work that must not
 	// hold a connection (an embedding); its result is c.env.prepared.
 	prepare func(ctx context.Context, c Caller, args json.RawMessage) any
+	// outside, when set, splits the call around slow work that must hold
+	// no lock (a GitHub post): run's transaction commits with its result,
+	// outside does the work with no transaction open, and settle records
+	// it in a second transaction, with the call's ledger event. An error
+	// from either leaves the call unrecorded, as run's does.
+	outside func(ctx context.Context, c Caller, checked any) (any, error)
+	settle  func(ctx context.Context, tx pgx.Tx, c Caller, checked, done any) (any, error)
 }
 
 func (t tool) allowed(role string) bool {
@@ -331,6 +338,19 @@ func (t tool) before(prepare func(ctx context.Context, c Caller, args json.RawMe
 	return t
 }
 
+// around splits the tool's call around work done outside any transaction
+// (see tool.outside): its run's result is Checked.
+func around[Checked, Done, Out any](t tool, outside func(ctx context.Context, c Caller, checked Checked) (Done, error),
+	settle func(ctx context.Context, tx pgx.Tx, c Caller, checked Checked, done Done) (Out, error)) tool {
+	t.outside = func(ctx context.Context, c Caller, checked any) (any, error) {
+		return outside(ctx, c, checked.(Checked))
+	}
+	t.settle = func(ctx context.Context, tx pgx.Tx, c Caller, checked, done any) (any, error) {
+		return settle(ctx, tx, c, checked.(Checked), done.(Done))
+	}
+	return t
+}
+
 // Calls a Run may make in a minute, and tasks and events it may
 // create in its lifetime: enough for real work, not for a runaway loop.
 const (
@@ -342,7 +362,8 @@ const (
 )
 
 // call runs a tool and records the call in the ledger, in the same
-// transaction as what the tool did.
+// transaction as what the tool did (for a tool split by outside, the
+// transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges}
@@ -352,19 +373,14 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	if s.BeforeCall != nil {
 		s.BeforeCall(t.name)
 	}
-	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		if err := withinLimits(ctx, tx, c, t); err != nil {
-			return err
-		}
-		result, err := t.run(ctx, tx, c, args)
-		if err != nil {
-			return err
-		}
+	if len(args) == 0 {
+		args = json.RawMessage("{}")
+	}
+	// record keeps the call in the ledger, with its result, in tx.
+	record := func(tx pgx.Tx, result any) error {
+		var err error
 		if out, err = json.Marshal(result); err != nil {
 			return err
-		}
-		if len(args) == 0 {
-			args = json.RawMessage("{}")
 		}
 		// A large answer (a whole project's listing) is not copied into the
 		// ledger on every call: its size is.
@@ -374,6 +390,35 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		_, err = ledger.Append(ctx, tx, c.event(EventType, map[string]any{"tool": t.name, "arguments": args, "result": recorded}))
 		return err
+	}
+	var checked any
+	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		if err := withinLimits(ctx, tx, c, t); err != nil {
+			return err
+		}
+		result, err := t.run(ctx, tx, c, args)
+		if err != nil {
+			return err
+		}
+		if t.outside != nil {
+			checked = result
+			return nil
+		}
+		return record(tx, result)
+	})
+	if err != nil || t.outside == nil {
+		return out, err
+	}
+	done, err := t.outside(ctx, c, checked)
+	if err != nil {
+		return nil, err
+	}
+	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		result, err := t.settle(ctx, tx, c, checked, done)
+		if err != nil {
+			return err
+		}
+		return record(tx, result)
 	})
 	return out, err
 }
