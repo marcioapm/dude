@@ -13,7 +13,6 @@ call open, saying nothing: its owner is told it is silent, and leaves it.
 from __future__ import annotations
 
 import json
-import time
 
 from playwright.sync_api import Page, expect
 
@@ -146,20 +145,31 @@ def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_ur
     assert console_errors == []
 
 
-def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
-    """fake/silent's first reviewer starts its turn and then says and does
-    nothing, no call open, as a model call that never answers. Its last
-    activity is back-dated past the role's window; the sweep reports it as
-    silent to the owner, once; Leave it keeps it from being asked again."""
-    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/silent"})}
-    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], "Greet, past a silent review")
-    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review" and r["status"] == "running"), None),
+def _silent_reviewer(client: ApiClient, owner_dsn: str, task_id: str) -> dict:
+    """The task's first reviewer, once it has started its turn with no call
+    open."""
+    run = wait_until(lambda: next((r for r in client.task_runs(task_id) if r["phase"] == "review" and r["status"] == "running"), None),
                      timeout=90, message="the reviewer never ran")
     wait_until(lambda: query(owner_dsn, """SELECT 1 FROM runs WHERE id = %s AND agent_active_at IS NOT NULL
                                            AND open_tool_calls_at = '{}'::jsonb""", (run["id"],)),
                timeout=60, message="the reviewer never started its turn")
+    return run
+
+
+def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
+    """fake/silent's first reviewer starts its turn and then says and does
+    nothing, no call open, as a model call that never answers. Its last
+    activity is back-dated past the role's window; the sweep reports it as
+    silent to the owner, once; Leave it keeps it from being asked again.
+    Another task's silent reviewer, reported after that, shows a sweep
+    looked at both."""
+    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/silent"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet, past a silent review")
+    other = client.create_task(forge_project["id"], "Greet, past another silent review")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    assert client.post(f"/v1/tasks/{other['id']}/deliver").status_code == 201
+    run = _silent_reviewer(client, owner_dsn, task["id"])
     execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, run["id"]))
 
     stalled = wait_until(lambda: (client.get_run(run["id"])["stalled"] or {}).get("owner") and client.get_run(run["id"])["stalled"],
@@ -170,8 +180,11 @@ def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, 
 
     assert client.post(f"/v1/runs/{run['id']}/leave").status_code == 200
     assert client.get_run(run["id"])["stalled"]["left"] is True
-    # Left as it is: not reported again, though still silent, over several
-    # of the orchestrator's one-second sweeps.
+    # Left as it is: not reported again, though still silent and its report
+    # cleared. The other reviewer, back-dated after that, is reported by a
+    # sweep that read both rows as they are now.
     execute(owner_dsn, "UPDATE runs SET stall_reported_at = NULL WHERE id = %s", (run["id"],))
-    time.sleep(5)
+    barrier = _silent_reviewer(client, owner_dsn, other["id"])
+    execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, barrier["id"]))
+    wait_until(lambda: _stalled(client, barrier["id"]), timeout=60, message="the other silent reviewer was never reported")
     assert len(_stalled(client, run["id"])) == 1
