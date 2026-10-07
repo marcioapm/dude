@@ -220,10 +220,6 @@ func sessionFindings(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, 
 	return map[string]any{"findings": db.NonNil(fs)}, err
 }
 
-// orgOnly is a project id no project has: memory search scoped by it
-// finds the organisation's own memories and nothing of any project.
-const orgOnly = "\x00session"
-
 type sessionSearchIn struct {
 	Project string   `json:"project,omitempty" jsonschema:"a linked project's key; optional when only one is linked"`
 	Query   string   `json:"query" jsonschema:"what you want to know, in words"`
@@ -231,8 +227,10 @@ type sessionSearchIn struct {
 	Limit   int      `json:"limit,omitempty" jsonschema:"how many results, 1 to 20 (default 8)"`
 }
 
+// sessionSearchMemory searches a linked project and its organisation; with
+// nothing linked, the organisation's own memories only.
 func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSearchIn) ([]searchHit, error) {
-	project := orgOnly
+	scope := memory.Query{OrgOnly: true}
 	projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
 	if err != nil {
 		return nil, err
@@ -242,10 +240,9 @@ func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSea
 		if err != nil {
 			return nil, err
 		}
-		project = p.ID
+		scope = memory.Query{Project: p.ID}
 	}
-	c.ProjectID = project
-	return searchMemory(ctx, tx, c, searchMemoryIn{Query: in.Query, Types: in.Types, Limit: in.Limit})
+	return searchScoped(ctx, tx, c, searchMemoryIn{Query: in.Query, Types: in.Types, Limit: in.Limit}, scope)
 }
 
 func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
