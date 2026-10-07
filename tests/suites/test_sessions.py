@@ -114,6 +114,48 @@ def test_a_session_reads_two_projects_proposes_and_files_as_the_person_with_no_t
     again = client.post(f"/v1/brainstorms/{session}/file", {"proposalId": card["id"], "items": [1]}).json()["results"]
     assert again == [{"item": 1, "status": "refused", "why": "already filed"}]
 
+    # An edit to a task of mine not started, and a comment on it: filed as me, as if typed.
+    mine = client.create_task(billing["id"], "Daily per-org usage rollup", goal="meter_daily(org, kind, day, count), backfilled.",
+                              acceptanceCriteria=["backfilled"])
+    key = client.get(f"/v1/tasks/{mine['id']}").json()["key"]
+    edit = {"items": [
+        {"kind": "edit", "task": key, "after": {"goal": "meter_daily(org, kind, day, count), each run id counted once.",
+                                                "acceptanceCriteria": ["backfilled", "each run id once"]}},
+        {"kind": "comment", "task": key, "text": "Retries can come days later: dedupe on run id."},
+    ]}
+    said = len(_said(client, session))
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "fix the rollup\n" + _tool("propose", edit)})
+    wait_until(lambda: len(_said(client, session)) > said, timeout=60, message="the agent never answered the edit")
+    second = wait_until(lambda: [p for p in client.get(f"/v1/brainstorms/{session}").json()["proposals"] if p["id"] != card["id"]],
+                        timeout=30, message="no second card")[0]
+    filed = client.post(f"/v1/brainstorms/{session}/file", {"proposalId": second["id"], "items": [0, 1]}).json()["results"]
+    assert [r["status"] for r in filed] == ["filed", "filed"], filed
+    edited = client.get(f"/v1/tasks/{mine['id']}").json()
+    assert edited["goal"] == "meter_daily(org, kind, day, count), each run id counted once."
+    task_events = client.get("/v1/events", params={"taskId": mine["id"], "limit": 1000}).json()["events"]
+    kinds = [e["eventType"] for e in task_events]
+    assert "task.updated" in kinds and "task.comment" in kinds, kinds
+    comment = next(e for e in task_events if e["eventType"] == "task.comment")
+    assert comment["payload"]["text"] == "Retries can come days later: dedupe on run id."
+    assert comment["sessionId"] is None and comment["runId"] is None, comment
+
+    # Every public read of the filed work — each task, its ledger, the
+    # project's ledger, the task list and navigation — names neither the
+    # session, its title, its Run nor where the work came from.
+    traces = [session, run["id"], "Usage-based billing", "ssn_", "prp_", "brainstorm", "proposal"]
+    reads = [client.get(f"/v1/tasks/{t}").text for t in [mine["id"], *(t["id"] for t in tasks)]]
+    reads += [client.get("/v1/events", params={"taskId": t, "limit": 1000}).text for t in [mine["id"], *(t["id"] for t in tasks)]]
+    reads += [client.get("/v1/events", params={"projectId": p["id"], "limit": 1000}).text for p in (billing, web)]
+    reads += [client.get("/v1/tasks", params={"projectId": p["id"]}).text for p in (billing, web)]
+    reads += [client.get("/v1/navigation").text]
+    for text in reads:
+        for trace in traces:
+            assert trace.lower() not in text.lower(), (trace, text[:400])
+    rows = query(owner_dsn, "SELECT row_to_json(t)::text AS row FROM tasks t WHERE t.project_id = ANY(%s)", ([billing["id"], web["id"]],))
+    for row in rows:
+        for trace in traces:
+            assert trace.lower() not in row["row"].lower(), (trace, row["row"])
+
 
 def test_a_shared_session_signs_every_message_and_a_question_to_one_member_waits_for_them(client: ApiClient, env, owner_dsn: str):
     _scripted_brainstorm(client)
