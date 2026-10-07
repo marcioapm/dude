@@ -448,11 +448,14 @@ async function createSession(ctx: RequestContext): Promise<Response> {
   return json(result.session, 201);
 }
 
+/** An agent's session inside a Run; one inside a brainstorm session's Run, for that session's accepted members only. */
 async function getSession(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const session = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions WHERE id = ${id}`) as Array<
+      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions s WHERE id = ${id}
+        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = s.run_id AND r.session_id IS NOT NULL
+                        AND session_role(r.session_id, ${ctx.principal.personId}) IS NULL)`) as Array<
       Record<string, unknown>
     >;
     if (!rows[0]) return null;
