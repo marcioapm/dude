@@ -62,15 +62,9 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if err != nil {
 		return "", err
 	}
-	heads, err := TaskHeads(ctx, tx, taskID)
+	baseRefs, err := conductorBases(ctx, tx, taskID)
 	if err != nil {
 		return "", err
-	}
-	baseRefs := map[string]string{}
-	for _, h := range heads {
-		if h.SHA != "" {
-			baseRefs[h.Repo] = h.SHA
-		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role,
 			base_refs, prompt, started_by)
@@ -100,6 +94,37 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	return id, err
 }
 
+// conductorBases is where a new conductor's checkout starts, by
+// repository: the current attempt's task branch head, from its delivery's
+// heads; none where this attempt has no head yet (its default branch,
+// where a later sync tells it to switch). With no delivery, the task's
+// heads (TaskHeads).
+func conductorBases(ctx context.Context, tx pgx.Tx, taskID string) (map[string]string, error) {
+	bases := map[string]string{}
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if d != nil {
+		for repo, sha := range d.State.Heads {
+			if sha != "" {
+				bases[repo] = sha
+			}
+		}
+		return bases, nil
+	}
+	heads, err := TaskHeads(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range heads {
+		if h.SHA != "" {
+			bases[h.Repo] = h.SHA
+		}
+	}
+	return bases, nil
+}
+
 // ChatEvent records a message in the task's Chat, on the conductor's Run,
 // with where it came from (w.Via) when it came from elsewhere.
 func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map[string]any) error {
@@ -123,9 +148,20 @@ const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_stat
 	AND r.lux_stop_reason IS NULL AND r.control = 'none')`
 
 // EndConductor completes a conductor that can no longer be resumed, and
-// hands what it was sent and never read to the next (HandOver). The caller
-// holds the task's Chat lock.
+// hands what it was sent and never read to the next (HandOver); its
+// publishes that moved nothing are refused. ErrPublishMoving while one of
+// them moves the task branch. The caller holds the task's Chat lock.
 func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error {
+	var ending bool
+	if err := tx.QueryRow(ctx, `SELECT `+Ending+` FROM runs r WHERE r.id = $1 FOR NO KEY UPDATE`, ref.RunID).Scan(&ending); err != nil || !ending {
+		if db.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if err := RefuseUnmovedTx(ctx, tx, ref, "your conductor ended before it was published"); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), lux_stop_reason = 'complete'
 		WHERE r.id = $1 AND `+Ending, ref.RunID)
 	if err != nil || tag.RowsAffected() == 0 {

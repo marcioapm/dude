@@ -1,7 +1,8 @@
 /**
  * What a task's Chat shows beside its conductor's own conversation, when
  * the conductor takes the task's decisions: each Run it started, where it
- * started; each decision the delivery waited on it for; and what happened
+ * started; each decision the delivery waited on it for; each commit it
+ * published itself; and what happened
  * on the pull requests that wakes nobody — an approval, checks passing,
  * ready to merge or no longer — as dude's notices. From the task's Runs and its ledger,
  * which the task page already reads.
@@ -12,7 +13,8 @@ import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
 
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
-  | { kind: "decision" | "notice"; id: string; at: string; text: string };
+  | { kind: "decision" | "notice"; id: string; at: string; text: string }
+  | { kind: "commit"; id: string; at: string; text: string; sha: string; paths: string[] };
 
 /**
  * A steer the conductor sent one of its Runs, and what became of it, as a
@@ -49,6 +51,16 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
         // dude's own line, in its words: ready to merge, or no longer.
         if (typeof p.text === "string" && p.text) out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: p.text });
         break;
+      case EventTypes.GitCommitCreated: {
+        // A commit the conductor published itself: its short sha and files.
+        if (p.by !== "conductor" || typeof p.headSha !== "string") break;
+        const paths = Array.isArray(p.changedPaths) ? p.changedPaths.filter((x): x is string => typeof x === "string") : [];
+        const sha = p.headSha.slice(0, 7);
+        const repo = typeof p.repo === "string" ? `${p.repo}@` : "";
+        out.push({ kind: "commit", id: e.eventId, at: e.occurredAt, sha, paths,
+          text: `The conductor published ${repo}${sha}: ${paths.length === 0 ? "no files" : paths.join(", ")}.` });
+        break;
+      }
     }
   }
   return out.sort((a, b) => a.at.localeCompare(b.at));

@@ -82,6 +82,9 @@ type Syncer struct {
 	// much earlier, so a retry a minute out is exercised without the wait.
 	// Zero outside tests.
 	RetryAhead time.Duration
+	// For tests: how long a conductor's input waits for its checkout's
+	// sync to be reported; zero is checkoutSyncWait.
+	CheckoutSyncWait time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
 	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration
@@ -840,7 +843,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if base := r.BaseRefs[repo.Name]; base != "" {
 			ref = base
 		}
-		readOnly := repo.Access == "read" || r.conductor()
+		// A conductor may change what the task may change: it commits in its
+		// own checkout and publishes like a phase (edits.go).
+		readOnly := repo.Access == "read"
+		if r.conductor() && !readOnly && r.BaseRefs[repo.Name] != "" {
+			// On the task branch by name, where lux's fast-forward sync can
+			// move it: lux never switches a checkout's branch.
+			ref = delivery.BranchFor(r.TaskID, r.Attempt)
+		}
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
@@ -871,13 +881,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
+		promptIn.TaskBranch = delivery.BranchFor(r.TaskID, r.Attempt)
 		in.Prompt = delivery.ConductorPrompt(briefing, promptIn)
 	}
-	// Pushed only by a phase that publishes — never a conductor, which has
-	// no phase. Even with nowhere to change
+	// Pushed only by a phase that publishes, or a conductor, which
+	// publishes when it asks to. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a
 	// resume, and lux pushes only to the branch the spec named at submit.
-	if delivery.Publishes[r.Phase] {
+	if delivery.Publishes[r.Phase] || r.conductor() {
 		in.PushBranch = runBranch(r)
 	}
 	// A forge that cannot be read now is asked again, not left out: a spec
@@ -1560,8 +1571,28 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
 		return lux.Run{}, 0, err
 	}
+	if r.conductor() {
+		if in.Sync, err = s.currentRefs(ctx, r); err != nil {
+			return lux.Run{}, 0, err
+		}
+		// Recorded before lux is asked: its git.sync events may come first.
+		if len(in.Sync) > 0 {
+			if err := s.syncAsked(ctx, r, resumeSyncID(lr), in.Sync); err != nil {
+				return lux.Run{}, 0, err
+			}
+		}
+	}
 	foreseen = s.resumeAsked(ctx, r, lr)
 	resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	if len(in.Sync) > 0 && lux.SyncModesRefused(err) {
+		// A lux that cannot keep the checkout current: read-only for the
+		// rest of this conductor, and resumed as before.
+		if err := s.checkoutReadOnly(ctx, r, err); err != nil {
+			return lux.Run{}, foreseen, err
+		}
+		in.Sync = nil
+		resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	}
 	return resumed, foreseen, err
 }
 
@@ -1706,6 +1737,16 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	if r.Status != statusRunning || r.LuxState != "running" {
 		return false, nil
 	}
+	var upTo *time.Time
+	if r.conductor() {
+		// A wake note waits for the conductor's checkout to be brought
+		// current, and says how that went (edits.go).
+		hold, issued, cutoff, err := s.keepCurrent(ctx, r)
+		if hold || err != nil {
+			return issued, err
+		}
+		upTo = cutoff
+	}
 	type directive struct {
 		ID, Text  string
 		Interrupt bool
@@ -1716,7 +1757,8 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, COALESCE(resends, '')
-			FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL ORDER BY created_at`, r.ID)
+			FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL
+			  AND ($2::timestamptz IS NULL OR created_at <= $2) ORDER BY created_at`, r.ID, upTo)
 		if err != nil {
 			return err
 		}

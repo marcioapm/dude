@@ -227,6 +227,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		}
 		return s.event(ctx, tx, t.run, "git.checkout", ledger.ActorSystem, d)
 	case "git.push":
+		if t.run.conductor() {
+			// A publish the conductor asked for (edits.go).
+			return publishPushed(ctx, tx, str("requestId"), "", f.EventData)
+		}
 		// Only the push this finish asked for — recorded or not yet (lux can
 		// answer before dude has written that it asked): one an earlier turn
 		// asked for, before the Run was aborted and taken back up, is not
@@ -237,6 +241,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		raw, _ := json.Marshal(d)
 		_, err := tx.Exec(ctx, `UPDATE runs SET push_result = $2::jsonb WHERE id = $1`, t.run.ID, raw)
 		return err
+	case "git.sync":
+		if t.run.conductor() {
+			return t.checkoutSynced(ctx, tx, f.EventData)
+		}
 	}
 	if strings.HasPrefix(f.EventType, "server.") {
 		// A server of the agent's Run changed (a person started it, it became

@@ -246,6 +246,14 @@ class FakeGitHub:
         )
         return result.stdout.split()
 
+    def file_at(self, branch: str, path: str) -> str | None:
+        """A file's contents on a branch; None when it is absent."""
+        result = subprocess.run(
+            ["git", "show", f"refs/heads/{branch}:{path}"],
+            cwd=self.bare, capture_output=True, text=True,
+        )
+        return result.stdout if result.returncode == 0 else None
+
     def branch_log(self, branch: str) -> list[str]:
         result = subprocess.run(
             ["git", "log", "--format=%s", f"refs/heads/{branch}"],
@@ -705,13 +713,19 @@ class FakeGitHub:
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
-                    diff = self._git("diff", "--name-only", m[1], m[2])
+                    diff = self._git("diff", "--numstat", m[1], m[2])
                     if diff.returncode:
                         return self._send(404, {"message": "Not Found"})
-                    files = [{"filename": f} for f in diff.stdout.splitlines() if f]
-                    # Commits on the base the head lacks: how far behind it is.
+                    files = []
+                    for line in diff.stdout.splitlines():
+                        parts = line.split("\t", 2)
+                        if len(parts) == 3:
+                            files.append({"filename": parts[2], "additions": int(parts[0]) if parts[0].isdigit() else 0,
+                                          "deletions": int(parts[1]) if parts[1].isdigit() else 0})
+                    # Commits on the base the head lacks: how far behind it is; and the reverse.
                     behind = self._git("rev-list", "--count", f"{m[2]}..{m[1]}").stdout.strip()
-                    return self._send(200, {"files": files, "behind_by": int(behind or 0)})
+                    ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
+                    return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0)})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
                 if m := re.fullmatch(rf"/orgs/([^/]+)/members/([^/]+)", path):

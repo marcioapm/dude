@@ -102,7 +102,8 @@ func (w *world) workflowState(task string) string {
 }
 
 // The first message in a delivered task's Chat starts its conductor: a Run
-// with no phase, role conductor, at the task's head, read-only, briefed by
+// with no phase, role conductor, at the task's head (its branch, writable),
+// briefed by
 // dude with the message; it answers. A second message reaches the same
 // conductor as its next input. The task, its workflow and its branch are
 // as they were.
@@ -140,14 +141,15 @@ func TestTheFirstMessageStartsTheConductorAndTheNextReachesIt(t *testing.T) {
 		t.Errorf("answer %q does not quote the briefing's task line %q and the message", first, key)
 	}
 
-	// Read-only, by its spec: nothing pushed, nothing pushable.
+	// Its checkout: writable, on the task branch by name (lux's fast-forward
+	// never switches branches), pushed only to a branch of its own.
 	spec := w.conductorSpec()
-	if spec == nil || spec.Git == nil || spec.Git.Push != nil {
-		t.Fatalf("the conductor's spec pushes: %+v", spec)
+	if spec == nil || spec.Git == nil || spec.Git.Push == nil || spec.Git.Push.Branch != "dude/"+task+"/run-"+runID {
+		t.Fatalf("the conductor's spec: %+v", spec)
 	}
 	for _, r := range spec.Git.Repositories {
-		if r.Push == nil || *r.Push || r.Ref != head {
-			t.Errorf("repository %s: push %v at %s, want read-only at %s", r.Name, r.Push, r.Ref, head)
+		if r.Push != nil || r.Ref != delivery.BranchFor(task, 1) {
+			t.Errorf("repository %s: push %v at %s, want writable on the task branch", r.Name, r.Push, r.Ref)
 		}
 	}
 

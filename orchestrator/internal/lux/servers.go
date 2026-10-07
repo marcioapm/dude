@@ -98,6 +98,95 @@ type CreateServer struct {
 type SyncRef struct {
 	Repo string `json:"repo"`
 	Ref  string `json:"ref"`
+	// How it may move: SyncMove (lux's default, "" on the wire),
+	// SyncFastForward or SyncFetch. A lux without modes refuses the safe
+	// ones with a 409 (SyncModesRefused).
+	Mode string `json:"mode,omitempty"`
+}
+
+// Sync modes. Every non-failed sync in a safe mode sets
+// refs/remotes/lux/<ref> in the checkout, and its git.sync event carries
+// {mode, status, ahead, behind, dirty?, diverged?}.
+const (
+	SyncMove = "move"
+	// Moves the checkout only when nothing can be lost; otherwise it is
+	// left as it is, SyncKept (local changes, or the histories diverged)
+	// or SyncAhead (local commits on top).
+	SyncFastForward = "fast-forward"
+	// Never moves the checkout.
+	SyncFetch = "fetch"
+
+	SyncKept  = "kept"
+	SyncAhead = "ahead"
+)
+
+// SyncResult is one repository's git.sync event data.
+type SyncResult struct {
+	Repo      string `json:"repo"`
+	Ref       string `json:"ref"`
+	RequestID string `json:"requestId,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
+	Ahead     int    `json:"ahead"`
+	Behind    int    `json:"behind"`
+	Dirty     bool   `json:"dirty,omitempty"`
+	Diverged  bool   `json:"diverged,omitempty"`
+	// The git operation in progress in the checkout (Operation*), whatever
+	// the status; "" when none. Mid-operation a fast-forward is SyncKept.
+	Operation string `json:"operation,omitempty"`
+}
+
+// Operations git can be stopped in the middle of, as lux names them.
+// OperationSequencer is a multi-commit cherry-pick or revert between picks;
+// OperationAm is a git am stopped on a patch.
+const (
+	OperationMerge      = "merge"
+	OperationRebase     = "rebase"
+	OperationAm         = "am"
+	OperationCherryPick = "cherry-pick"
+	OperationRevert     = "revert"
+	OperationSequencer  = "sequencer"
+)
+
+// PushResult is a git.push event's data.
+type PushResult struct {
+	RequestID string           `json:"requestId,omitempty"`
+	Results   []PushRepoResult `json:"results"`
+}
+
+// PushRepoResult is one repository's part of a push. Status is pushed,
+// up-to-date, skipped, failed or PushRefused.
+type PushRepoResult struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	Commit string `json:"commit,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// Set with PushRefused: the operation in progress in the checkout.
+	Operation string `json:"operation,omitempty"`
+}
+
+// PushRefused: lux would not push the repository, an operation being in
+// progress in its checkout; nothing was bundled. Definitive until the
+// operation is finished or aborted.
+const PushRefused = "refused"
+
+// SyncModesRefused says lux refused a sync for its mode: a 409 that is
+// none of the refusals a sync or resume gives for the Run's state. A lux
+// from before sync modes answers a safe mode so.
+func SyncModesRefused(err error) bool {
+	e, ok := AsError(err)
+	if !ok || e.Status != http.StatusConflict {
+		return false
+	}
+	switch e.Code {
+	case "not_running", "not_resumable", "no_snapshot", "snapshot_unavailable":
+		return false
+	}
+	return true
 }
 
 // FeedEvent is one event of the tenant's feed, GET /v1/events.

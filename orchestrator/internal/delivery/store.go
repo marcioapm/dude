@@ -100,6 +100,10 @@ type PhaseRun struct {
 	// The task's conductor, when it started the Run (start_phase or
 	// decide), and what it asked of it.
 	ConductorRunID, ConductorNote string
+	// A review fix: one attempt is counted against each of FindingIDs in
+	// the Run's creation — before the attempt, so a fixer that crashes still
+	// spends one, and once however often the step runs again.
+	CountAttempts bool
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -113,6 +117,13 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		if in.Key != "" {
 			var err error
 			if runID, err = runByKey(ctx, tx, in.TaskID, in.Key); err != nil || runID != "" {
+				return err
+			}
+		}
+		if Publishes[in.Phase] {
+			// A writer waits for the conductor's publish moving the task
+			// branch.
+			if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
 				return err
 			}
 		}
@@ -137,6 +148,12 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 			db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 			db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote)); err != nil {
 			return err
+		}
+		if in.CountAttempts && len(in.FindingIDs) > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE review_findings SET fix_attempts = fix_attempts + 1, updated_at = now()
+				WHERE id = ANY($1)`, in.FindingIDs); err != nil {
+				return err
+			}
 		}
 		payload := map[string]any{
 			"attempt": attempt, "phase": in.Phase, "role": RoleForPhase[in.Phase],
@@ -303,20 +320,6 @@ func (s *Store) Findings(ctx context.Context, org string, st *State) ([]FindingS
 	return out, err
 }
 
-// MarkAttempted counts one fix attempt against each finding the fixer was
-// given — before the attempt, so a fixer that crashes still spends one, and
-// a crash loop reaches the bound meant to stop it.
-func (s *Store) MarkAttempted(ctx context.Context, org string, findingIDs []string) error {
-	if len(findingIDs) == 0 {
-		return nil
-	}
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE review_findings SET fix_attempts = fix_attempts + 1, updated_at = now()
-			WHERE id = ANY($1)`, findingIDs)
-		return err
-	})
-}
-
 // AcceptFindings is a person deciding the task ships with the findings
 // still open: accepted, they block nothing.
 func (s *Store) AcceptFindings(ctx context.Context, org string, st *State) error {
@@ -362,6 +365,12 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 // the task waiting on it. With from set, only a task in that
 // status moves — a person answering must not revive an aborted one.
 func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, from, status, reason string) (bool, error) {
+	if Ended(status) {
+		// Not while the conductor's publish moves the task branch.
+		if err := lockAndRefuseWhileMovingTx(ctx, tx, taskID); err != nil {
+			return false, err
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE tasks SET status = $2::task_status, updated_at = now()
 		WHERE id = $1 AND status <> $2::task_status
 		  AND ($3 = '' OR status = $3::task_status)
