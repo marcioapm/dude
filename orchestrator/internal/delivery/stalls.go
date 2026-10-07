@@ -126,7 +126,7 @@ func (s Stall) Text(options string) string {
 		fmt.Fprintf(&b, " Processes: %s.", strings.Join(ps, "; "))
 	}
 	if s.CPUSecs != nil {
-		fmt.Fprintf(&b, " CPU over %s: %s; network: %s.", duration(s.UsageSecs), seconds(*s.CPUSecs), bytesWord(*s.NetBytes))
+		fmt.Fprintf(&b, " CPU over %s: %.0f s; network: %s.", duration(s.UsageSecs), *s.CPUSecs, bytesWord(*s.NetBytes))
 	} else {
 		b.WriteString(" lux reported no CPU or network figures.")
 	}
@@ -167,11 +167,8 @@ func (s Stall) callsLine() string {
 	return strings.Join(slices.Compact(parts), "; ") + "."
 }
 
-// ConductorOptions and OwnerOptions are each reader's options line.
-const (
-	ConductorOptions = "Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier)."
-	OwnerOptions     = "Restart it, leave it (it is stopped at its time limit), or stop the task."
-)
+// ConductorOptions is the conductor's options line; the owner's banner has buttons.
+const ConductorOptions = "Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier)."
 
 func duration(secs int64) string {
 	switch d := time.Duration(secs) * time.Second; {
@@ -183,8 +180,6 @@ func duration(secs int64) string {
 		return fmt.Sprintf("%.1f h", d.Hours())
 	}
 }
-
-func seconds(s float64) string { return fmt.Sprintf("%.0f s", s) }
 
 func bytesWord(n int64) string {
 	switch {

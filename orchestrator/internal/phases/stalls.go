@@ -115,7 +115,6 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 // matters most, and leaving it to the next sweep would never report it.
 // Its report is recorded once per window all the same (stallDue).
 func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
-	window := time.Duration(r.WindowSecs) * time.Second
 	stall := delivery.Stall{RunID: r.ID, Role: r.Role, Phase: r.Phase, Category: r.Category, Tier: r.Tier,
 		RunningSecs: r.RunningSecs, WindowSecs: r.WindowSecs, Calls: []delivery.OpenCall{}, Processes: []delivery.Process{}}
 	if r.Call {
@@ -137,7 +136,7 @@ func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
 			return err
 		}
 		if changes {
-			return codeFacts(ctx, tx, r, window, &stall)
+			return codeFacts(ctx, tx, r, &stall)
 		}
 		return nil
 	}); err != nil {
@@ -207,12 +206,12 @@ func callInput(raw json.RawMessage) string {
 
 // codeFacts adds what a code-changing Run did in the window: when its files
 // last changed, its tool calls by tool, its latest plan and last message.
-func codeFacts(ctx context.Context, tx pgx.Tx, r stallRow, window time.Duration, s *delivery.Stall) error {
+func codeFacts(ctx context.Context, tx pgx.Tx, r stallRow, s *delivery.Stall) error {
 	s.FilesChangedAt = r.FilesChangedAt
 	s.ToolsInWindow = map[string]int{}
 	rows, err := tx.Query(ctx, `SELECT COALESCE(payload->>'tool', 'tool'), count(*)::int FROM events
 		WHERE run_id = $1 AND event_type = $2 AND occurred_at >= now() - make_interval(secs => $3) GROUP BY 1`,
-		r.ID, evToolCalled, window.Seconds())
+		r.ID, evToolCalled, float64(r.WindowSecs))
 	if err != nil {
 		return err
 	}
