@@ -516,6 +516,104 @@ func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
 	}
 }
 
+// A Run not held up by itself is not reported, however old its open call
+// or its files: one waiting on a person, one whose turn is over, one
+// paused or with a pause asked for; and a reviewer, which changes no code,
+// whose files are old and whose call is not. Each beside a reviewer whose
+// call is as old, which is reported in the same sweep.
+func TestARunNotHeldUpByItselfIsNotReported(t *testing.T) {
+	cases := []struct{ name, set string }{
+		{"waiting on a person", `waiting_since = now() - interval '3 hours'`},
+		{"its turn done", `turn_done_at = now() - interval '3 hours'`},
+		{"paused", `status = 'paused'`},
+		{"a pause asked for", `control = 'pause_graceful', control_requested_at = now()`},
+		{"a reviewer whose files are old, its call not",
+			`open_tool_calls_at = (SELECT jsonb_object_agg(k, to_jsonb(now())) FROM jsonb_object_keys(open_tool_calls_at) k),
+			 files_changed_at = now() - interval '3 hours'`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.hangingReviews(taskCall)
+			wi := w.task()
+			w.deliver(wi)
+			runs := w.reviewersOpen(wi, 2)
+			held, stalled := runs[0], runs[1]
+			w.openSince(held, 3*time.Hour)
+			w.openSince(stalled, 3*time.Hour)
+			mustExec(t, w.owner, `UPDATE runs SET `+c.set+` WHERE id = $1`, held)
+			w.sweep()
+			if n := w.stalls(stalled); n != 1 {
+				t.Fatalf("the reviewer beside it, stalled: %d reports, want 1", n)
+			}
+			if n := w.stalls(held); n != 0 {
+				t.Errorf("a reviewer %s was reported (%d)", c.name, n)
+			}
+		})
+	}
+}
+
+// Under a conductor, a Run whose facts changed is told again only once
+// the window has passed since its last report.
+func TestChangedFactsAreNotToldAgainBeforeTheWindow(t *testing.T) {
+	w := conducting(t)
+	w.hangingReviews(taskCall)
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersOpen(task, 2)
+	id := runs[0]
+	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
+	w.openSince(id, 31*time.Minute)
+	w.sweep()
+	if w.stalls(id) != 1 {
+		t.Fatalf("%d reports, want 1", w.stalls(id))
+	}
+	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = open_tool_calls_at || jsonb_build_object('call_new', now() - interval '40 minutes')
+		WHERE id = $1`, id)
+	w.reportedAgo(id, 20*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Errorf("changed facts told again 20 minutes after the last report (%d reports)", n)
+	}
+	w.reportedAgo(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 2 {
+		t.Errorf("changed facts not told at 30 minutes (%d reports)", n)
+	}
+}
+
+// A Run's diff whose checksum changed is changed facts, its open calls the
+// same: told again at 30 minutes, not 60.
+func TestAChangedDiffIsChangedFacts(t *testing.T) {
+	w := conducting(t)
+	w.hangingReviews(taskCall)
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersOpen(task, 2)
+	id := runs[0]
+	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
+	diff := func(checksum string) {
+		mustExec(t, w.owner, `INSERT INTO run_diffs (run_id, organization_id, base, checksum) VALUES ($1, $2, 'base', $3)
+			ON CONFLICT (run_id) DO UPDATE SET checksum = EXCLUDED.checksum`, id, w.org, checksum)
+	}
+	diff("sum-1")
+	w.openSince(id, 31*time.Minute)
+	w.sweep()
+	if w.stalls(id) != 1 {
+		t.Fatalf("%d reports, want 1", w.stalls(id))
+	}
+	w.reportedAgo(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("the same facts told again at 30 minutes (%d reports)", n)
+	}
+	diff("sum-2")
+	w.sweep()
+	if n := w.stalls(id); n != 2 {
+		t.Errorf("a changed diff not told at 30 minutes (%d reports)", n)
+	}
+}
+
 // migrate085 applies migration 085 to the world's database as a deploy
 // finds it: what it adds is dropped (every row otherwise as it is), then
 // the file runs as the migrator runs it, in one transaction.
