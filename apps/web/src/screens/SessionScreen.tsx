@@ -23,6 +23,7 @@ import { ApiError, type ApiClient } from "../api/client.ts";
 import { apply, emptyProjection, snapshot, steerWait, type Turn } from "../api/conversation.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
@@ -36,10 +37,17 @@ const OPEN_EVERY_MS = 60_000;
 const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
-  EventTypes.BrainstormFiled, EventTypes.BrainstormOpen, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
+  EventTypes.BrainstormFiled, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
-  EventTypes.QuestionAnswered, "run.parked", "run.unparked",
+  EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
 ]);
+
+/** The detail with one member's open state as a session.open says it: the rest as it was. */
+export function withOpen(detail: SessionDetail, personId: string, open: boolean): SessionDetail {
+  const people = detail.session.people;
+  if (!people.some((m) => m.person.id === personId && m.open !== open)) return detail;
+  return { ...detail, session: { ...detail.session, people: people.map((m) => (m.person.id === personId ? { ...m, open } : m)) } };
+}
 
 export function SessionScreen({ client, sessionId, projects, onBack, onChanged }: {
   client: ApiClient;
@@ -69,18 +77,21 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     setMissing(false);
     void load();
   }, [load]);
-  useReloadOnEvents({ client, sessionId }, () => void load(), 300, (e) => !SESSION_EVENTS.has(e.eventType));
+  // Someone opening or leaving it changes their dot, nothing the page reads:
+  // it is applied where it is, and only what changes the page re-reads it.
+  useReloadOnEvents({ client, sessionId }, () => void load(), 300, (e) => {
+    if (e.eventType === EventTypes.BrainstormOpen) {
+      const { personId, open } = e.payload as { personId?: unknown; open?: unknown };
+      if (typeof personId === "string") setDetail((d) => (d ? withOpen(d, personId, open === true) : d));
+      return true;
+    }
+    return !SESSION_EVENTS.has(e.eventType);
+  });
 
-  // Open, for its members' rail: said now, every minute, and no longer on leaving.
-  useEffect(() => {
-    const say = (open: boolean) => void client.sessionOpen(sessionId, open).catch(() => undefined);
-    say(true);
-    const t = setInterval(() => say(true), OPEN_EVERY_MS);
-    return () => {
-      clearInterval(t);
-      say(false);
-    };
-  }, [client, sessionId]);
+  // Open, for its members' rail: said now and every minute while the page is
+  // shown (a background tab says nothing), and no longer on leaving.
+  useVisibleInterval(() => void client.sessionOpen(sessionId, true).catch(() => undefined), OPEN_EVERY_MS);
+  useEffect(() => () => void client.sessionOpen(sessionId, false).catch(() => undefined), [client, sessionId]);
 
   const { events } = useEventStream({ client, sessionId });
   const status = (detail?.session.run?.status ?? undefined) as RunStatus | undefined;

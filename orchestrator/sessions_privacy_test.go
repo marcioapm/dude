@@ -468,6 +468,7 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 
 	_, few := get(s.ana, small)
 	out, many := get(s.ana, big)
+	t.Logf("queries: %d for 1 card, %d for 40", few, many)
 	if many != few {
 		t.Errorf("the detail ran %d queries with 40 cards, %d with 1: it must not grow with the cards", many, few)
 	}
