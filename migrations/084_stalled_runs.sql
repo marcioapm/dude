@@ -56,6 +56,14 @@ ALTER TABLE conductor_wakes ADD CONSTRAINT conductor_wakes_line_check
 -- changed.
 GRANT SELECT ON run_diffs TO dude_sweeper;
 
+-- The scripted agent's fake/stall (a task's first reviewer hangs in an open
+-- tool call) is a test model a tier may request.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/command',
+                   'fake/stuck', 'fake/stall')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));
+
 -- The notifier tells a task's owner of a Run that makes no progress.
 DROP INDEX IF EXISTS events_asks_idx;
 CREATE INDEX events_asks_idx ON events (cursor)
