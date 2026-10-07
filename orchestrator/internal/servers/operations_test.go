@@ -296,6 +296,130 @@ func TestAReplacementPastItsReservationsTimeCallsLuxNoMore(t *testing.T) {
 	}
 }
 
+// delayedUpdateResult holds the result of a connection's first UPDATE for
+// delay before the caller sees it, as a slow network or a descheduled
+// process does.
+type delayedUpdateResult struct {
+	delay time.Duration
+	once  sync.Once
+}
+
+func (g *delayedUpdateResult) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (g *delayedUpdateResult) TraceQueryEnd(_ context.Context, _ *pgx.Conn, d pgx.TraceQueryEndData) {
+	if d.CommandTag.Update() {
+		g.once.Do(func() { time.Sleep(g.delay) })
+	}
+}
+
+// A reservation whose answer arrives after its time for lux calls is over
+// is let go at once: its holder makes no lux call, and another takes the row.
+func TestAReservationAnsweredAfterItsTimeMakesNoLuxCall(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	_, rows := previewRows(t, owner, 1, false)
+	r := rows[0].previewRun
+	cfg := app.Pool.Config()
+	cfg.ConnConfig.Tracer = &delayedUpdateResult{delay: 1100 * time.Millisecond}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	late := &Previews{Service: &Service{DB: &db.DB{Pool: pool}, Log: log}, OperationFor: 900 * time.Millisecond}
+	op, _, err := late.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
+	if op != nil || !errors.Is(err, errLapsed) {
+		left := time.Duration(0)
+		if op != nil {
+			left = time.Until(op.until)
+		}
+		t.Errorf("reserve answered past its time = op with %s left locally, %v; want the lapse", left, err)
+	}
+	var reserved bool
+	if err := owner.QueryRow(ctx, `SELECT op_token IS NOT NULL FROM runs WHERE id = $1`, r.ID).Scan(&reserved); err != nil {
+		t.Fatal(err)
+	}
+	if reserved {
+		t.Error("the lapsed reservation was not let go")
+	}
+	other := &Previews{Service: &Service{DB: app, Log: log}, OperationFor: 900 * time.Millisecond}
+	next, _, err := other.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
+	if err != nil || next == nil {
+		t.Fatalf("another reserve after the lapse = %v, %v; want the row", next, err)
+	}
+	other.release(ctx, next)
+}
+
+// refusingLux refuses a resume once answer is closed, after entered.
+type refusingLux struct {
+	lux.Client
+	entered, answer chan struct{}
+}
+
+func (c *refusingLux) Get(context.Context, string) (lux.Run, error) { return lux.Run{State: "stopped"}, nil }
+
+func (c *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	close(c.entered)
+	<-c.answer
+	return lux.Run{}, &lux.Error{Status: 409, Code: "not_resumable", Message: "old Run refused"}
+}
+
+func (c *refusingLux) Servers(context.Context, string) ([]lux.Server, error) { return nil, nil }
+
+func (c *refusingLux) Cancel(context.Context, string) error { return nil }
+
+// A resume lux refuses only after its reservation lapsed, and another
+// replaced the Run meanwhile, fails nothing: the refusal is of a Run and
+// generation the preview no longer has.
+func TestALapsedResumesRefusalDoesNotFailTheNextGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	app, owner := dbtest.Open(t)
+	_, rows := previewRows(t, owner, 1, false)
+	r := rows[0].previewRun
+	c := &refusingLux{entered: make(chan struct{}), answer: make(chan struct{})}
+	var once sync.Once
+	answer := func() { once.Do(func() { close(c.answer) }) }
+	defer answer()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := &Previews{Service: &Service{DB: app, Lux: c, Log: log}, OperationFor: 900 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() { done <- p.resume(ctx, r) }()
+	select {
+	case <-c.entered:
+	case <-ctx.Done():
+		t.Fatal("resume did not reach lux")
+	}
+	for {
+		var lapsed bool
+		if err := owner.QueryRow(ctx, `SELECT op_deadline <= now() FROM runs WHERE id = $1`, r.ID).Scan(&lapsed); err != nil {
+			t.Fatal(err)
+		}
+		if lapsed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := p.replaceParked(ctx, r, []string{"REMOVED"}); err != nil {
+		t.Fatal(err)
+	}
+	answer()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var generation int
+	if err := owner.QueryRow(ctx, `SELECT status::text, lux_generation FROM runs WHERE id = $1`, r.ID).Scan(&status, &generation); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || generation != 1 {
+		t.Errorf("after the lapsed refusal: status %s generation %d; want the replacement's pending generation 1", status, generation)
+	}
+}
+
 // A reservation in force keeps every other wake claim, replacement and
 // sweep off the row; once it has lapsed (its holder gone without letting
 // go), the row is taken over.

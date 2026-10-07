@@ -65,7 +65,8 @@ func (p *Previews) operationFor() time.Duration {
 
 // reserve reserves the preview's row for one operation of kind, when held
 // (SQL over runs: $1 is the run id, args are $2 on) is true of it. nil: held
-// is false, or another reservation is in force (busy).
+// is false, or another reservation is in force (busy); errLapsed: the
+// database's answer came too late to leave any time for lux calls.
 func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args ...any) (op *operation, busy bool, err error) {
 	token := ids.New("op")
 	err = p.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -75,6 +76,9 @@ func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args
 			append([]any{id}, args...)...).Scan(&ok, &busy); err != nil || !ok || busy {
 			return err
 		}
+		// The remaining time counts from before the UPDATE is sent: a
+		// delayed answer shortens the holder's time, never extends it.
+		start := time.Now()
 		var remaining float64
 		if err := tx.QueryRow(ctx, `UPDATE runs SET op_token = $2, op_kind = $3, op_deadline = now() + make_interval(secs => $4)
 			WHERE id = $1 RETURNING extract(epoch FROM op_deadline - clock_timestamp())::float8`,
@@ -83,11 +87,15 @@ func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args
 		}
 		margin := min(operationMargin, p.operationFor()/9)
 		op = &operation{id: id, org: org, token: token,
-			until: time.Now().Add(time.Duration(remaining*float64(time.Second)) - margin)}
+			until: start.Add(time.Duration(remaining*float64(time.Second)) - margin)}
 		return nil
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if op != nil && !time.Now().Before(op.until) {
+		p.release(ctx, op)
+		return nil, false, errLapsed
 	}
 	return op, busy, nil
 }
