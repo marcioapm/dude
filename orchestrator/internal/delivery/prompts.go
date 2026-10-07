@@ -51,6 +51,8 @@ type PromptInput struct {
 	TaskBranch string
 	// What the task's conductor asked of this Run, when it started it.
 	ConductorNote string
+	// Why this Run replaces one restarted in its step (RestartRunTx).
+	RestartNote string
 	// The images the Run is given with its prompt, in the order lux gets
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
@@ -590,6 +592,9 @@ func Prompt(phase string, in PromptInput) string {
 
 	if n := strings.TrimSpace(in.ConductorNote); n != "" {
 		add("## From the task's conductor\n\nThe conductor, who plans this task with its people, started this Run and asks:\n\n" + n)
+	}
+	if n := strings.TrimSpace(in.RestartNote); n != "" {
+		add("## Restarted\n\n" + n)
 	}
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)

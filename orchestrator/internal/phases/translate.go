@@ -144,9 +144,13 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEvent int64) error {
 	u := t.usage
 	open := slices.Sorted(maps.Keys(t.openCalls))
+	// Each open call keeps the time it was first seen open
+	// (open_tool_calls_at): what "open for how long" is measured from.
 	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
+		open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, COALESCE(open_tool_calls_at->c, to_jsonb(now())))
+			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13)
@@ -187,8 +191,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A Run lux is moving to another host stops on the way, and is
 		// resumed by lux itself: recorded as resuming, not over.
 		state := lux.Recorded(str("state"), str("reason"))
+		// Its files are as they were when it started: what "no change for
+		// so long" counts from until the live diff reads a change.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
+			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(files_changed_at, now()) ELSE files_changed_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err

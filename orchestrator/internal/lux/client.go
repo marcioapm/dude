@@ -42,6 +42,16 @@ type Run struct {
 	Placements []Placement `json:"placements,omitempty"`
 	// The spec lux stored, without secret values; only filled in by Get.
 	Spec StoredSpec `json:"spec"`
+	// What it used, summed over its placements; nil from a lux that does
+	// not say. Only filled in by Get.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage is a Run's resource counters, as lux rolls its placements up.
+type Usage struct {
+	CPUSeconds float64 `json:"cpuSeconds"`
+	NetRxBytes int64   `json:"netRxBytes"`
+	NetTxBytes int64   `json:"netTxBytes"`
 }
 
 // StoredSpec is the part of a Run's stored spec dude reads back.

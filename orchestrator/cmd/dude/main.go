@@ -18,6 +18,7 @@
 //	dude prs                              a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
+//	dude restart RUN NOTE [--tier T]      a conductor's: a fresh Run in its slot
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
 //	dude escalation decide ACTION [--note N]
@@ -306,6 +307,17 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("steer", map[string]any{"run": args[0], "text": strings.Join(args[1:], " "),
 			"interrupt": *interrupt}))
+	case "restart":
+		tier := fs.String("tier", "", "a model tier to run the new Run on")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) < 2 || !runID.MatchString(args[0]) {
+			return errors.New(`usage: dude restart RUN "why, and what to do differently" [--tier T]`)
+		}
+		return show(out, *asJSON, call("restart_run", map[string]any{"run": args[0], "note": strings.Join(args[1:], " "),
+			"tier": *tier}))
 	case "decide":
 		note := fs.String("note", "", "why; for ask_person, the question")
 		args, err := parse(fs, rest)
@@ -588,6 +600,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test
   dude steer RUN TEXT [--interrupt]          a conductor's: tell a running phase Run of this task
+  dude restart RUN NOTE [--tier T]           a conductor's: restart a phase Run in its slot, fresh
                                              something, read at its next step (--interrupt stops
                                              its turn: only when its current work is wasted)
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or

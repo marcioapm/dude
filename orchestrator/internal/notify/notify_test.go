@@ -170,6 +170,13 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
 		VALUES ($1, $2, 'task.ready_to_merge', $3, $4, 'system', 'orchestrator', 'orchestrator', '{}')`,
 		"evt_r_"+org, org, "prj_"+org, "wi_legacy_"+org)
+	// A Run of the owner's that made no progress: told on a plain delivery,
+	// not where the conductor is told instead.
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'run.stalled', $3, $4, $5, 'system', $5, 'orchestrator', $6),
+		       ($7, $2, 'run.stalled', $3, $4, $5, 'system', $5, 'orchestrator', '{"conducted":true}')`,
+		"evt_s_"+org, org, "prj_"+org, "wi_"+org, "run_"+org, `{"conducted":false,"text":"Your implement Run has made no progress for 2.0 h."}`,
+		"evt_sc_"+org)
 
 	// Other tests' asks may be swept too; ours must be among them.
 	for range 5 {
@@ -179,13 +186,21 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	}
 	mine.mu.Lock()
 	defer mine.mu.Unlock()
-	if len(mine.got) != 2 {
-		t.Fatalf("the owner's browser got %d notifications, want 2: %+v", len(mine.got), mine.got)
+	if len(mine.got) != 3 {
+		t.Fatalf("the owner's browser got %d notifications, want 3: %+v", len(mine.got), mine.got)
 	}
-	// Sent concurrently, so in either order.
-	m := mine.got[0]
-	if m.Title != "TEXT-19 · Implementer asks" {
-		m = mine.got[1]
+	// Sent concurrently, so in any order.
+	var m, stalled notify.Message
+	for _, g := range mine.got {
+		switch g.Title {
+		case "TEXT-19 · Implementer asks":
+			m = g
+		case "TEXT-19 · Implementer has made no progress":
+			stalled = g
+		}
+	}
+	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/task/wi_"+org {
+		t.Errorf("the stall's notification = %+v", stalled)
 	}
 	if m.Title != "TEXT-19 · Implementer asks" || m.Body != "Does an ellipsis end a sentence?" || m.URL != "#/run/run_"+org {
 		t.Errorf("notification = %+v", m)

@@ -338,33 +338,3 @@ const Wakeable = `c.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
 		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))`
-
-// SafetyNet (SQL, over runs r, $1 seconds): a task's conductor whose last
-// turn ended that long ago, with a phase Run it started still in flight
-// that has not woken it yet.
-const SafetyNet = `r.role = 'conductor' AND r.kind = 'agent' AND r.status IN ('running', 'paused')
-	AND r.turn_done_at < now() - make_interval(secs => $1)
-	AND EXISTS (SELECT 1 FROM runs k WHERE k.conductor_run_id = r.id
-		AND k.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-		AND NOT EXISTS (SELECT 1 FROM conductor_wakes c WHERE c.task_id = k.task_id AND c.key = 'safety:' || k.id))`
-
-// RecordSafetyTx is the safety net's reason: once per Run in flight.
-func RecordSafetyTx(ctx context.Context, tx pgx.Tx, org, taskID, conductorID string) error {
-	rows, err := tx.Query(ctx, `SELECT id, COALESCE(phase::text, ''), status::text FROM runs
-		WHERE conductor_run_id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, conductorID)
-	if err != nil {
-		return err
-	}
-	type kid struct{ ID, Phase, Status string }
-	kids, err := pgx.CollectRows(rows, pgx.RowToStructByPos[kid])
-	if err != nil {
-		return err
-	}
-	for _, k := range kids {
-		if _, err := RecordWakeTx(ctx, tx, org, taskID, "safety", "safety:"+k.ID,
-			fmt.Sprintf("Still in flight: your %s Run %s is %s. Say in Chat what you are waiting for.", k.Phase, k.ID, k.Status)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
