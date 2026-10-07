@@ -580,7 +580,7 @@ func (p *Previews) replaceWoken(ctx context.Context, r wakeRun, cancel bool) err
 // the claim or the Run moved on, the preview was stopped, or another
 // operation holds it; the retirement is not recorded.
 func (p *Previews) replaceRun(ctx context.Context, r *wakeRun, cancel bool) (bool, error) {
-	op, _, err := p.reserve(ctx, r.Org, r.ID, opReplace, ownsWakeSQL, r.ClaimedAt, *r.WakeWanted, r.LuxRunID, r.Generation)
+	op, err := p.reserve(ctx, r.Org, r.ID, opReplace, ownsWakeSQL, r.ClaimedAt, *r.WakeWanted, r.LuxRunID, r.Generation)
 	if err != nil || op == nil {
 		return false, err
 	}

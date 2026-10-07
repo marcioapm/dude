@@ -252,7 +252,7 @@ func withoutCarried(servers []lux.ServerInput, carried []lux.ServerInput) []lux.
 // as a resume reserves it (parkedOnSQL): a sweep that read the preview
 // before another moved it on (resumed, replaced) cancels nothing.
 func (p *Previews) replaceParked(ctx context.Context, r previewRun, gone []string) error {
-	op, _, err := p.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
+	op, err := p.reserve(ctx, r.Org, r.ID, opReplace, parkedOnSQL, r.LuxRunID, r.Generation)
 	if err != nil || op == nil {
 		return err
 	}

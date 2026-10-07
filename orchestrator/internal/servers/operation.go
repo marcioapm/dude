@@ -67,10 +67,10 @@ func (p *Previews) operationFor() time.Duration {
 // (SQL over runs: $1 is the run id, args are $2 on) is true of it. nil: held
 // is false, or another reservation is in force (busy); errLapsed: the
 // database's answer came too late to leave any time for lux calls.
-func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args ...any) (op *operation, busy bool, err error) {
+func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args ...any) (op *operation, err error) {
 	token := ids.New("op")
 	err = p.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var ok bool
+		var ok, busy bool
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(`+held+` AND `+liveStatus+`, false),
 				op_token IS NOT NULL AND op_deadline > now() FROM runs WHERE id = $1 FOR UPDATE`,
 			append([]any{id}, args...)...).Scan(&ok, &busy); err != nil || !ok || busy {
@@ -91,13 +91,13 @@ func (p *Previews) reserve(ctx context.Context, org, id, kind, held string, args
 		return nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if op != nil && !time.Now().Before(op.until) {
 		p.release(ctx, op)
-		return nil, false, errLapsed
+		return nil, errLapsed
 	}
-	return op, busy, nil
+	return op, nil
 }
 
 // context is ctx ending when the operation's time for lux calls does.

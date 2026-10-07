@@ -783,7 +783,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	// replacement (replaceParked) reserves it too, so neither acts on a Run
 	// the other has moved on. A preview stopped meanwhile records nothing,
 	// and the sweep cancels the Run as for any stop.
-	op, _, err := p.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
+	op, err := p.reserve(ctx, r.Org, r.ID, opResume, parkedOnSQL, r.LuxRunID, r.Generation)
 	if err != nil || op == nil {
 		return err
 	}
