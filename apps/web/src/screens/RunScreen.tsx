@@ -1003,7 +1003,7 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           askedAt={turn.at}
           answeredAt={turn.answeredAt}
           dismissed={ended && turn.answeredAt === null}
-          settledBy={turn.closedAt !== null ? "Decided on the banner" : undefined}
+          settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
           waitingOn={turn.to ? questionFor(turn.to, people) : waitingOn}
           onlyThey={turn.to !== null}
         />

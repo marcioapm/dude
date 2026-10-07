@@ -390,6 +390,44 @@ const UnheardBrainstorm = `(SELECT d.run_id FROM directives d WHERE d.delivered_
 	CROSS JOIN LATERAL (SELECT u.id, u.organization_id, u.session_id, u.status, u.ended_at FROM runs u
 	  WHERE u.id = c.run_id AND u.role = 'brainstorm' AND u.status IN ('completed', 'failed') OFFSET 0) r`
 
+// WithdrawQuestionsTo closes, unanswered, the session's open questions put
+// to person (removed, or no longer able to chat): nobody else may answer
+// them, so they would hold the agent and every message behind them for
+// ever. The messages held for them are released, and dude tells the agent
+// the question is withdrawn, which resumes it if parked. No one's message
+// is taken as the answer. Under the session's lock.
+func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person string) error {
+	rows, err := tx.Query(ctx, `UPDATE questions q SET status = 'cancelled'
+		FROM runs r WHERE r.id = q.run_id AND r.session_id = $1 AND q.to_person = $2 AND q.status = 'open'
+		RETURNING q.id, q.run_id, q.prompt`, sessionID, person)
+	if err != nil {
+		return err
+	}
+	closed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, RunID, Prompt string }])
+	if err != nil || len(closed) == 0 {
+		return err
+	}
+	name, err := PersonName(ctx, tx, person)
+	if err != nil {
+		return err
+	}
+	for _, q := range closed {
+		if _, err := tx.Exec(ctx, `UPDATE directives SET held_for = NULL WHERE held_for = $1`, q.ID); err != nil {
+			return err
+		}
+		ref := RunRef{Org: org, SessionID: sessionID, RunID: q.RunID}
+		if _, err := ledger.Append(ctx, tx, ref.Event(EvQuestionClosed, ledger.ActorSystem,
+			map[string]any{"questionId": q.ID, "by": "withdrawn"})); err != nil {
+			return err
+		}
+		if _, err := TellBrainstorm(ctx, tx, org, sessionID, fmt.Sprintf("Your question to %s is withdrawn: they can no longer answer "+
+			"in this session. Nobody answered %q; ask someone else if you still need it decided.", name, oneLine(q.Prompt))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // TellBrainstorm queues a line from dude for the session's live agent,
 // resuming it if it is parked; nothing when none is live.
 func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string) (string, error) {

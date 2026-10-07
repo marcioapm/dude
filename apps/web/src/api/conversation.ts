@@ -77,6 +77,8 @@ export interface QuestionTurn {
    * escalation decided on the task's banner). Null while it may be answered.
    */
   closedAt: string | null;
+  /** Why it closed unanswered: decided on the banner, or withdrawn (its one recipient left the session). */
+  closedBy?: "decision" | "withdrawn";
   /** In a brainstorm session: the one member it is put to (ask_person `to`); null for anyone who can chat. */
   to: ActorRef | null;
 }
@@ -804,7 +806,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.QuestionClosed: {
         // Settled elsewhere: no answer will come, and none is asked for.
         const question = state.questionsById.get(String(payload.questionId ?? ""));
-        if (question && question.answeredAt === null) question.closedAt = event.occurredAt;
+        if (question && question.answeredAt === null) {
+          question.closedAt = event.occurredAt;
+          question.closedBy = payload.by === "withdrawn" ? "withdrawn" : "decision";
+        }
         break;
       }
 
