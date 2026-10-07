@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1103,5 +1104,135 @@ func TestARunWhoseAgentNeverDidAnythingIsReported(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND run_stalled(runs)`, id); n != 1 {
 		t.Errorf("the Run does not read as stalled")
+	}
+}
+
+// movedAndHeld has lux move the running Run to another host, as a drain or
+// an operator's migrate does (lux.Recorded: resuming, not an end), and
+// holds its new placement before it runs until release is called. It
+// returns once dude has recorded the Run resuming.
+func (w *world) movedAndHeld(runID string) (release func()) {
+	w.t.Helper()
+	luxID := w.luxRunOf(runID)
+	gate := make(chan struct{})
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			w.lux.BeforeStart(nil)
+			close(gate)
+		})
+	}
+	w.t.Cleanup(release)
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-gate
+		}
+	})
+	w.lux.Migrate(luxID)
+	w.until("the Run resuming on another host", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'resuming'`, runID) == 1
+	})
+	return release
+}
+
+// runningAgain releases a held placement and waits for dude to record the
+// Run running on it.
+func (w *world) runningAgain(runID string, release func()) {
+	w.t.Helper()
+	release()
+	w.until("the Run running again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, runID) == 1
+	})
+}
+
+// A reviewer resumed after a 3-hour wait for a host, started 3 hours ago,
+// its agent not yet active on the new placement: its silence counts from
+// when it ran again, not from the resume's acceptance nor its first start.
+// Silent for the window after that, it is reported.
+func TestAResumedRunIsNotSilentForItsWaitToRun(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.silentReviews()
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersSilent(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	release := w.movedAndHeld(id)
+	// As a resume lux accepted leaves the row (whilePaused): no activity,
+	// no turn, files dated at the acceptance — 3 hours ago.
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = NULL, agent_busy_at = NULL,
+		started_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports while waiting for a host", n)
+	}
+	w.runningAgain(id, release)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d silent reports on reaching running; the wait counted as silence", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_active_at IS NULL`, id); n != 1 {
+		t.Fatal("the resumed agent was active: the case is not the one under test")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports of a Run silent for 3 hours since it ran again, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["silent"]` {
+		t.Errorf("reasons %s", r)
+	}
+}
+
+// hangingImplementer delivers a task whose implementer reads and then
+// works on without ending its turn or changing a file, and returns it once
+// its live diff has settled.
+func (w *world) hangingImplementer() string {
+	w.t.Helper()
+	w.quickDiffs()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Tools: []string{"todowrite", "read"}}
+	}
+	w.lux.SetPS(agentPS, "")
+	wi := w.task()
+	w.deliver(wi)
+	var id string
+	w.until("the implementer working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND status = 'running' AND lux_state = 'running' AND agent_busy_at IS NOT NULL`, wi).Scan(&id)
+		return id != ""
+	})
+	w.diffsSettled([]string{id})
+	return id
+}
+
+// An implementer resumed after a 3-hour wait for a host, its files as the
+// acceptance dated them: no change in its files counts from when it ran
+// again. Unchanged for the window after that, it is reported for its files.
+func TestAResumedImplementerIsNotReportedForItsWaitToRun(t *testing.T) {
+	w := newWorld(t)
+	id := w.hangingImplementer()
+	release := w.movedAndHeld(id)
+	mustExec(t, w.owner, `UPDATE runs SET agent_busy_at = NULL, files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports while waiting for a host", n)
+	}
+	w.runningAgain(id, release)
+	// Its agent at work again since.
+	w.silentFor(id, 0)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports for files on reaching running; the wait counted as no change", n)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	w.silentFor(id, 0)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports of files unchanged for 3 hours since it ran again, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["files"]` {
+		t.Errorf("reasons %s", r)
 	}
 }

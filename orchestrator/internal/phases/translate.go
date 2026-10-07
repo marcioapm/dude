@@ -191,11 +191,16 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A Run lux is moving to another host stops on the way, and is
 		// resumed by lux itself: recorded as resuming, not over.
 		state := lux.Recorded(str("state"), str("reason"))
-		// Its files are as they were when it started: what "no change for
-		// so long" counts from until the live diff reads a change.
+		// A placement that enters running (lux_state was anything else: a
+		// first start, or a resume after however long a wait for a host)
+		// dates its files now: what "no change for so long", and silence
+		// before the agent's first activity (silentSince), count from. A
+		// placement goes running → stopping → exited, never back to running
+		// (lux.Placement.State), so every such entry is a new placement.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
-			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(files_changed_at, now()) ELSE files_changed_at END,
+			files_changed_at = CASE WHEN $2 = 'running' AND lux_state IS DISTINCT FROM 'running' THEN now()
+				WHEN $2 = 'running' THEN COALESCE(files_changed_at, now()) ELSE files_changed_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
