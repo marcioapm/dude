@@ -235,6 +235,64 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelector("[data-testid=waiting-on]")).toBeNull();
   });
 
+  test("a member opening the session updates the people where they are; the page is not read again", async () => {
+    class Counting extends SessionClient {
+      reads = 0;
+      override getSession(): Promise<SessionDetail> {
+        this.reads++;
+        return super.getSession();
+      }
+    }
+    const client = new Counting(detail("owner"));
+    const page = await sessionPage(client);
+    await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
+    await settle(400);
+    const reads = client.reads;
+    const anaOpen = () => [...page.querySelectorAll("[data-testid=session-rail] [data-open=true]")]
+      .some((li) => li.textContent?.includes(ANA.name));
+    expect(anaOpen()).toBe(false);
+    await act(async () => {
+      emit({ eventType: "session.open", occurredAt: new Date().toISOString(), organizationId: "org_1", projectId: null as unknown as string,
+        taskId: null as unknown as string, runId: null, sessionId: SESSION, workflowRunId: null, actor: { type: "person", id: ANA.id },
+        source: "control-plane", correlationId: null, causationId: null, payload: { personId: ANA.id, open: true } });
+    });
+    await until(() => (anaOpen() ? true : null), "Ana shown as here");
+    await settle(400);
+    expect(client.reads).toBe(reads);
+  });
+
+  test("the open heartbeat is not sent while the page is hidden, and is sent once it is shown again", async () => {
+    let hidden = false;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    try {
+      class Beats extends SessionClient {
+        beats: boolean[] = [];
+        override sessionOpen(_id: string, open: boolean) {
+          this.beats.push(open);
+          return Promise.resolve({ open });
+        }
+      }
+      const client = new Beats(detail("chat"));
+      await sessionPage(client);
+      await until(() => (client.beats.length >= 1 ? true : null), "the first heartbeat");
+      const at = client.beats.length;
+      hidden = true;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await settle(50);
+      expect(client.beats.length).toBe(at);
+      hidden = false;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await settle(50);
+      expect(client.beats.slice(at)).toEqual([true]);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).hidden;
+    }
+  });
+
   test("a session you are not in is not there", async () => {
     const { ApiError } = await import("../src/api/client.ts");
     class Gone extends SessionClient {
