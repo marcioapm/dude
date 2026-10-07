@@ -110,7 +110,9 @@ const (
 // specInput is everything a phase Run's spec is built from.
 type specInput struct {
 	RunID, OrganizationID, TaskID, Phase, Role string
-	Image                                      string
+	// A session's agent: its session, in place of a task.
+	SessionID string
+	Image     string
 	// The model the Run's tier requests, as the proxy names it, and the
 	// tier's name (recorded on the Run and as a label).
 	Model, ModelTier string
@@ -184,13 +186,22 @@ type specRepo struct {
 	Name, URL, Ref string
 	// Cloned for context only: never pushed.
 	ReadOnly bool
+	// Where it is checked out; "" is RepoPath(Name).
+	Path string
+}
+
+func (r specRepo) path() string {
+	if r.Path != "" {
+		return r.Path
+	}
+	return RepoPath(r.Name)
 }
 
 // workdir is where the agent starts: the one repository, or the directory
 // holding them all (the prompt names each).
 func workdir(repos []specRepo) string {
 	if len(repos) == 1 {
-		return RepoPath(repos[0].Name)
+		return repos[0].path()
 	}
 	return workspaceDir
 }
@@ -225,8 +236,12 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if step == "" {
 		step = in.Role
 	}
+	owner := in.TaskID
+	if owner == "" {
+		owner = in.SessionID
+	}
 	spec := lux.Spec{
-		Name: fmt.Sprintf("%s %s", step, in.TaskID),
+		Name: fmt.Sprintf("%s %s", step, owner),
 		Labels: map[string]string{
 			"dude.org": in.OrganizationID, "dude.task": in.TaskID,
 			"dude.run": in.RunID, "dude.phase": step, "dude.role": in.Role,
@@ -238,7 +253,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			Prompt:  in.Prompt,
 			Workdir: workdir(in.Repos),
 			// On every stop lux can see coming, the checkout's final diff
-			// (livediff.go).
+			// (livediff.go). A session's agent changes nothing: none.
 			BeforeStop: beforeStop(repoRefs(in.Repos)),
 		},
 		Volumes: []lux.Volume{
@@ -254,6 +269,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if in.TimeLimitMinutes > 0 {
 		spec.Timeout = fmt.Sprintf("%dm", in.TimeLimitMinutes)
 	}
+	if in.SessionID != "" {
+		delete(spec.Labels, "dude.task")
+		spec.Labels["dude.session"] = in.SessionID
+		spec.Workload.BeforeStop = nil
+	}
 	if in.Effort != "" {
 		spec.Labels["dude.effort"] = in.Effort
 	}
@@ -265,7 +285,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
 		for _, r := range in.Repos {
-			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: RepoPath(r.Name)}
+			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: r.path()}
 			if in.ForgeToken != "" {
 				// Used by lux to clone and push; never placed in the container.
 				// Declared as a secret only with a repository that uses it:
@@ -316,7 +336,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
 		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
-		if in.Phase == "" && in.Role == fakeagent.Conductor {
+		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
 		if len(spec.Workload.MCPServers) > 0 {
