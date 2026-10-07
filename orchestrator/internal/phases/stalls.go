@@ -117,9 +117,28 @@ func (s *Syncer) reportStall(ctx context.Context, r stallRow) error {
 	s.processes(ctx, r.LuxRunID, &stall)
 	usage := s.usage(ctx, r, &stall)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if ok, err := stillStalled(ctx, tx, r); err != nil || !ok {
+			return err
+		}
 		ref := delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}
 		return delivery.RecordStallTx(ctx, tx, ref, stall, r.Conducted, r.Fingerprint, usage, r.ReportedAt)
 	})
+}
+
+// stillStalled locks the Run and says whether it is still due the report
+// its facts were gathered for: no progress and due (noProgress, stallDue,
+// as the sweep read them), with the same facts. Gathering them takes up to
+// psTimeout and more outside any transaction; in that time its call may
+// have closed, its files changed, a person been asked, its turn ended, or
+// a pause or abort been asked for.
+func stillStalled(ctx context.Context, tx pgx.Tx, r stallRow) (bool, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+		return false, err
+	}
+	var ok bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+stallFrom+` WHERE r.id = $3 AND `+noProgress+` AND `+stallDue+`
+		AND `+stallFacts+` = $4)`, delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds(), r.ID, r.Fingerprint).Scan(&ok)
+	return ok, err
 }
 
 // openCalls fills in each open call's tool and input, as the agent sent

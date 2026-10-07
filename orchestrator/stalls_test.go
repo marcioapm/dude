@@ -349,6 +349,51 @@ func TestAStallReportSaysWhatTheProcessesShow(t *testing.T) {
 	}
 }
 
+// The facts are gathered outside any transaction. A Run that, while they
+// are, closes its call and asks a person (or is otherwise no longer
+// stalled) is not reported.
+func TestF6StallRechecksPersonWaitProbe(t *testing.T) {
+	cases := []struct {
+		name, change string
+		// Reports after the next sweep, which reads the facts as they are.
+		then int
+	}{
+		{"its call closes and it asks a person", `open_tool_calls = '{}', open_tool_calls_at = '{}', waiting_since = now()`, 0},
+		{"its turn ends", `turn_done_at = now()`, 0},
+		{"a pause is asked for", `control = 'pause_graceful', control_requested_at = now()`, 0},
+		{"another call opens", `open_tool_calls_at = open_tool_calls_at || jsonb_build_object('call_late', now() - interval '3 hours')`, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.hangingReviews(taskCall)
+			wi := w.task()
+			w.deliver(wi)
+			runs := w.reviewersOpen(wi, 2)
+			mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
+			w.openSince(runs[0], 3*time.Hour)
+			var changed atomic.Bool
+			w.lux.SetPS(func(string) string {
+				if changed.CompareAndSwap(false, true) {
+					mustExec(t, w.owner, `UPDATE runs SET `+c.change+` WHERE id = $1`, runs[0])
+				}
+				return agentPS("")
+			}, "")
+			w.sweep()
+			if !changed.Load() {
+				t.Fatal("the report read no processes")
+			}
+			if n := w.stalls(runs[0]); n != 0 {
+				t.Fatalf("%d reports from facts that changed while they were gathered", n)
+			}
+			w.sweep()
+			if n := w.stalls(runs[0]); n != c.then {
+				t.Errorf("%d reports after the next sweep, want %d", n, c.then)
+			}
+		})
+	}
+}
+
 // migrate085 applies migration 085 to the world's database as a deploy
 // finds it: what it adds is dropped (every row otherwise as it is), then
 // the file runs as the migrator runs it, in one transaction.
