@@ -363,7 +363,7 @@ func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
 	}
 	var due []untimed
 	if err := s.DB.InSystem(ctx, "resume-timing", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, rr.epoch
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''), rr.epoch
 			FROM run_resumes rr JOIN runs r ON r.id = rr.run_id
 			WHERE rr.timed_at IS NULL AND (rr.first_output_at IS NOT NULL OR rr.frames_missed)
 			  AND rr.created_at > now() - make_interval(secs => $1)

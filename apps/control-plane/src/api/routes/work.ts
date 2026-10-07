@@ -343,11 +343,13 @@ async function createRun(ctx: RequestContext): Promise<Response> {
 async function getRun(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const run = await withOrg(ctx.principal.organizationId, async (scope) => {
+    // A brainstorm session's Run is its accepted members' alone.
     const rows = (await scope.sql`
-      SELECT ${runSelect(scope.sql)} FROM runs WHERE id = ${id}`) as Array<Record<string, unknown>>;
+      SELECT ${runSelect(scope.sql)} FROM runs
+      WHERE id = ${id} AND (session_id IS NULL OR session_role(session_id, ${ctx.principal.personId}) IS NOT NULL)`) as Array<Record<string, unknown>>;
     if (!rows[0]) return null;
     const sessions = await scope.sql`
-      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE run_id = ${id}
+      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions WHERE run_id = ${id}
       ORDER BY created_at ASC`;
     return { ...rows[0], sessions };
   });
@@ -421,7 +423,7 @@ async function createSession(ctx: RequestContext): Promise<Response> {
     const sessionId = newId("session");
 
     const rows = (await scope.sql`
-      INSERT INTO sessions (id, organization_id, run_id, parent_session_id, role, harness, model, status)
+      INSERT INTO agent_sessions (id, organization_id, run_id, parent_session_id, role, harness, model, status)
       VALUES (${sessionId}, ${organizationId}, ${runId}, ${input.parentSessionId},
               ${input.role}, ${harness}, ${model}, 'pending')
       RETURNING ${scope.sql.unsafe(SESSION_SELECT)}`) as Array<Record<string, unknown>>;
@@ -450,12 +452,12 @@ async function getSession(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const session = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE id = ${id}`) as Array<
+      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions WHERE id = ${id}`) as Array<
       Record<string, unknown>
     >;
     if (!rows[0]) return null;
     const children = await scope.sql`
-      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE parent_session_id = ${id}
+      SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions WHERE parent_session_id = ${id}
       ORDER BY created_at ASC`;
     return { ...rows[0], children };
   });

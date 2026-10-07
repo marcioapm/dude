@@ -177,7 +177,8 @@ func taskRun(ctx context.Context, tx pgx.Tx, taskID string) (*runRow, error) {
 }
 
 func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runRow, error) {
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+` WHERE r.id = $1`, runID))
+	// A session's Run serves nothing, and is its members' alone.
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+` WHERE r.id = $1 AND r.session_id IS NULL`, runID))
 	if db.IsNotFound(err) {
 		return r, refuse(http.StatusNotFound, "not_found", "run %s not found", runID)
 	}
