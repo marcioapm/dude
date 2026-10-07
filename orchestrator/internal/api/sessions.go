@@ -363,6 +363,10 @@ type proposalCard struct {
 	raw       json.RawMessage
 }
 
+// proposalsFor reads the session's cards for one member. Every card it ever
+// had is read in a fixed number of queries, whatever their number: their
+// filings in one, and what deciding who may file each item needs
+// (fileFacts) in a few more.
 func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string) ([]proposalCard, error) {
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(run_id, ''), created_at, items FROM session_proposals
 		WHERE session_id = $1 ORDER BY created_at`, sessionID)
@@ -382,28 +386,42 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	projects, err := linkedProjectIDs(ctx, tx, sessionID)
+	type filing struct{ by, key string }
+	filed := map[string]filing{}
+	rows, err = tx.Query(ctx, `SELECT f.proposal_id, f.item, COALESCE(p.name, ''), f.key
+		FROM session_filings f LEFT JOIN people p ON p.id = f.filed_by WHERE f.session_id = $1`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var pid, by, key string
+	var item int
+	if _, err := pgx.ForEachRow(rows, []any{&pid, &item, &by, &key}, func() error {
+		filed[fmt.Sprintf("%s/%d", pid, item)] = filing{by, key}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	var open []delivery.ProposalItem
+	for _, c := range cards {
+		for n, it := range c.Items {
+			if _, done := filed[fmt.Sprintf("%s/%d", c.ID, n)]; !done {
+				open = append(open, it)
+			}
+		}
+	}
+	facts, err := readFileFacts(ctx, tx, sessionID, open, false)
 	if err != nil {
 		return nil, err
 	}
 	for i := range cards {
 		c := &cards[i]
 		c.Status = make([]map[string]any, len(c.Items))
-		for n, item := range c.Items {
+		for n, it := range c.Items {
 			st := map[string]any{}
-			var filedBy, key string
-			err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT name FROM people WHERE id = f.filed_by), ''), f.key
-				FROM session_filings f WHERE f.proposal_id = $1 AND f.item = $2`, c.ID, n).Scan(&filedBy, &key)
-			switch {
-			case err == nil:
-				st["filed"], st["filedBy"], st["key"] = true, filedBy, key
-			case !db.IsNotFound(err):
-				return nil, err
-			default:
-				why, err := cannotFile(ctx, tx, projects, item, person, role)
-				if err != nil {
-					return nil, err
-				}
+			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
+				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
+			} else {
+				why := facts.cannotFile(it, person, role)
 				st["canFile"] = why == ""
 				if why != "" {
 					st["why"] = why
@@ -424,51 +442,112 @@ func linkedProjectIDs(ctx context.Context, tx pgx.Tx, sessionID string) ([]strin
 	return db.NonNil(out), err
 }
 
+// fileFacts is what deciding who may file a set of items reads: the
+// linked projects' keys, and each task the items name in them (by key)
+// with its owner and whether it has started.
+type fileFacts struct {
+	projects map[string]bool // linked projects, by upper-case key
+	tasks    map[string]taskFacts
+}
+
+type taskFacts struct {
+	ID, OwnerID, OwnerName, Status string
+	Started                        bool
+}
+
+// readFileFacts reads the facts for items in three queries. lock takes the
+// named tasks' rows FOR UPDATE, as filing must before it edits one.
+func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
+	f := fileFacts{projects: map[string]bool{}, tasks: map[string]taskFacts{}}
+	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
+		WHERE sp.session_id = $1`, sessionID)
+	if err != nil {
+		return f, err
+	}
+	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return f, err
+	}
+	for _, k := range keys {
+		f.projects[k] = true
+	}
+	var named []string
+	for _, it := range items {
+		if it.Kind == "edit" || it.Kind == "comment" {
+			if k, ok := delivery.TaskKey(it.Task); ok {
+				named = append(named, k)
+			}
+		}
+	}
+	if len(named) == 0 {
+		return f, nil
+	}
+	lockClause := ""
+	if lock {
+		lockClause = " FOR UPDATE OF t"
+	}
+	// The owner as TaskOwnerNamed reads it; started as TaskStarted does.
+	rows, err = tx.Query(ctx, `SELECT upper(p.key_prefix) || '-' || t.number, t.id,
+			COALESCE(o.id, ''), COALESCE(o.name, ''), t.status::text,
+			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
+		FROM tasks t JOIN projects p ON p.id = t.project_id
+		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1
+		LEFT JOIN LATERAL (SELECT pe.id, pe.name FROM task_people tp JOIN people pe ON pe.id = tp.person_id
+			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true
+		WHERE upper(p.key_prefix) || '-' || t.number = ANY($2)`+lockClause, sessionID, named)
+	if err != nil {
+		return f, err
+	}
+	var k string
+	var t taskFacts
+	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.OwnerID, &t.OwnerName, &t.Status, &t.Started}, func() error {
+		f.tasks[k] = t
+		return nil
+	})
+	return f, err
+}
+
 // cannotFile says why person may not file item, "" when they may: a
 // reader files nothing; an edit is its task's owner's alone, and only
 // before it has started (the control plane's rule for a task's text); a
 // task or epic needs its project still linked.
-func cannotFile(ctx context.Context, tx pgx.Tx, linked []string, item delivery.ProposalItem, person, role string) (string, error) {
+func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) string {
 	if role == delivery.SessionRead {
-		return "readers can't file", nil
+		return "readers can't file"
 	}
 	switch item.Kind {
 	case "epic", "task":
-		var id string
-		err := tx.QueryRow(ctx, `SELECT id FROM projects WHERE upper(key_prefix) = upper($1) AND id = ANY($2) LIMIT 1`,
-			item.Project, linked).Scan(&id)
-		if db.IsNotFound(err) {
-			return fmt.Sprintf("project %s is not linked to this session", item.Project), nil
+		if !f.projects[strings.ToUpper(strings.TrimSpace(item.Project))] {
+			return fmt.Sprintf("project %s is not linked to this session", item.Project)
 		}
-		return "", err
+		return ""
 	case "edit", "comment":
-		taskID, _, err := delivery.TaskByKey(ctx, tx, linked, item.Task)
-		if err != nil {
-			return "", err
-		}
-		if taskID == "" {
-			return fmt.Sprintf("%s is not a task of a linked project", item.Task), nil
+		k, _ := delivery.TaskKey(item.Task)
+		t, ok := f.tasks[k]
+		if !ok {
+			return fmt.Sprintf("%s is not a task of a linked project", item.Task)
 		}
 		if item.Kind == "comment" {
-			return "", nil
+			return ""
 		}
-		ownerID, ownerName, err := delivery.TaskOwnerNamed(ctx, tx, taskID)
-		if err != nil {
-			return "", err
+		if t.OwnerID != "" && t.OwnerID != person {
+			return fmt.Sprintf("only %s can file this: it's their task", t.OwnerName)
 		}
-		if ownerID != "" && ownerID != person {
-			return fmt.Sprintf("only %s can file this: it's their task", ownerName), nil
+		if t.Started {
+			return fmt.Sprintf("%s has started (%s): its text can no longer change", item.Task, t.Status)
 		}
-		started, status, err := delivery.TaskStarted(ctx, tx, taskID)
-		if err != nil {
-			return "", err
-		}
-		if started {
-			return fmt.Sprintf("%s has started (%s): its text can no longer change", item.Task, status), nil
-		}
-		return "", nil
+		return ""
 	}
-	return "unknown item", nil
+	return "unknown item"
+}
+
+// cannotFile is fileFacts.cannotFile for one item, its task locked.
+func cannotFile(ctx context.Context, tx pgx.Tx, sessionID string, item delivery.ProposalItem, person, role string) (string, error) {
+	f, err := readFileFacts(ctx, tx, sessionID, []delivery.ProposalItem{item}, true)
+	if err != nil {
+		return "", err
+	}
+	return f.cannotFile(item, person, role), nil
 }
 
 // fileProposal files the items a member kept, as that member. Items they
@@ -543,7 +622,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			why, err := cannotFile(r.Context(), tx, linked, item, p.Person, role)
+			why, err := cannotFile(r.Context(), tx, id, item, p.Person, role)
 			if err != nil {
 				return err
 			}
