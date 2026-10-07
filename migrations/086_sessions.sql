@@ -129,8 +129,9 @@ BEGIN
       ' WITH CHECK (organization_id = current_organization_id())', t);
   END LOOP;
 END $$;
--- The push loop names a question's audience across organisations.
-GRANT SELECT ON sessions, session_people TO dude_sweeper;
+-- The syncer finds sessions' agents with a repository to bring, and the
+-- push loop a question's audience, across organisations.
+GRANT SELECT ON sessions, session_people, session_projects, session_repositories TO dude_sweeper;
 
 -- The role a person has in a session, accepted; NULL for anyone else —
 -- an invitee who has not accepted included. Every read and write of a
@@ -193,8 +194,11 @@ CREATE TRIGGER events_session_of_run BEFORE INSERT ON events
   FOR EACH ROW EXECUTE FUNCTION events_session_of_run();
 
 -- A question an agent puts to one member (ask_person with to): only that
--- person answers it.
+-- person answers it. What others write meanwhile is held for the agent
+-- (directives.held_for) and goes with the answer, not as it.
 ALTER TABLE questions ADD COLUMN to_person text REFERENCES people(id) ON DELETE SET NULL;
+ALTER TABLE directives ADD COLUMN held_for text REFERENCES questions(id) ON DELETE SET NULL;
+CREATE INDEX directives_held_idx ON directives (held_for) WHERE held_for IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- The brainstorm's settings: Thinker, on Small, in every organisation.

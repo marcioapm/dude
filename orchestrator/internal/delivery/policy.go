@@ -110,10 +110,15 @@ var RoleForPhase = map[string]string{
 // no phase, which people talk to in its Chat.
 const RoleConductor = "conductor"
 
+// RoleBrainstorm is the role of a session's agent: a Run of the session,
+// which its members talk to and which reads, never changes, code.
+const RoleBrainstorm = "brainstorm"
+
 // RoleLabel is how a role is named to a person, as the app names it
 // (ROLE_LABEL, packages/design-system AgentAvatar).
 var RoleLabel = map[string]string{
 	RoleConductor:  "Conductor",
+	RoleBrainstorm: "Brainstorm",
 	"investigator": "Investigator",
 	"implementer":  "Implementer",
 	"reviewer":     "Reviewer",
