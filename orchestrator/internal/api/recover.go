@@ -97,7 +97,7 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	// failed Run the escalation named.
 	stoppedRuns := t.State.PendingRunIDs
 	if e := t.State.Stopped; e != nil && e.RunID() != "" {
-		stoppedRuns = []string{e.RunID()}
+		stoppedRuns = e.RunIDs()
 	}
 	if len(stoppedRuns) == 0 {
 		return t, nil

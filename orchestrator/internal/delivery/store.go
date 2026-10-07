@@ -245,6 +245,46 @@ func (o Outcome) line(runID, phase string) string {
 	return fmt.Sprintf("%s, %d files changed.", line, len(o.ChangedPaths))
 }
 
+// Unfinished is a phase Run that ended failed or aborted.
+type Unfinished struct{ ID, Category, Error string }
+
+// EndedUnfinished is those of runIDs that ended failed or aborted, oldest
+// first: work that was asked for and not done.
+func (s *Store) EndedUnfinished(ctx context.Context, org string, runIDs []string) ([]Unfinished, error) {
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+	var out []Unfinished
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, COALESCE(category, ''), COALESCE(error, status::text) FROM runs
+			WHERE id = ANY($1) AND status IN ('failed', 'aborted') ORDER BY created_at, id`, runIDs)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Unfinished])
+		return err
+	})
+	return out, err
+}
+
+func failedIDs(u []Unfinished) []string {
+	out := make([]string, len(u))
+	for i, f := range u {
+		out[i] = f.ID
+	}
+	return out
+}
+
+func failedCategories(u []Unfinished) []string {
+	var out []string
+	for _, f := range u {
+		if f.Category != "" && !slices.Contains(out, f.Category) {
+			out = append(out, f.Category)
+		}
+	}
+	return out
+}
+
 func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, error) {
 	var o Outcome
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
