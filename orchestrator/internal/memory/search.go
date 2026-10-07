@@ -20,6 +20,8 @@ type Query struct {
 	// OrgOnly: the organisation's own memories and nothing of any project
 	// (Project is then ignored).
 	OrgOnly bool
+	// Who searches: a session's memories are found by its members and its agent alone.
+	Viewer Viewer
 	// Types to include: memory, task, epic, project. Empty: all.
 	Types []string
 	Limit int
@@ -152,9 +154,10 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		types = Types
 	}
 	// A document is in scope when it is the project's, or the whole
-	// organization's (memories only); with $6 only the organization's.
+	// organization's (memories only); with $6 only the organization's. A
+	// session's memory only for whom it is visible ($7, $8).
 	const scope = `source_type = ANY($2) AND (CASE WHEN $6::bool THEN project_id IS NULL
-		ELSE ($3 = '' OR project_id = $3 OR project_id IS NULL) END)`
+		ELSE ($3 = '' OR project_id = $3 OR project_id IS NULL) END) AND memory_visible(d.session_id, $7, $8)`
 	any, none := wordQuery(q.Text)
 
 	byKey := map[string]*Result{}
@@ -176,7 +179,7 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		SELECT source_type, source_id, ts_rank_cd(tsv, q.q)
 		FROM search_documents d, q
 		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
-		ORDER BY 3 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly)
+		ORDER BY 3 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly, q.Viewer.Session, q.Viewer.Person)
 	if err != nil {
 		return out, err
 	}
@@ -209,8 +212,9 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		}
 		rows, err := tx.Query(ctx, `SELECT source_type, source_id, embedding <=> $1::halfvec
 			FROM search_documents d
-			WHERE embedding IS NOT NULL AND embedding_model = $7 AND `+excluded+` AND `+scope+`
-			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, q.OrgOnly, emb.Model)
+			WHERE embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+` AND `+scope+`
+			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, q.OrgOnly,
+			q.Viewer.Session, q.Viewer.Person, emb.Model)
 		if err != nil {
 			return out, err
 		}

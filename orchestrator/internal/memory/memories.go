@@ -47,8 +47,10 @@ type Author struct {
 }
 
 type Memory struct {
-	ID         string     `json:"id"`
-	ProjectID  string     `json:"projectId,omitempty"`
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId,omitempty"`
+	// A brainstorm session's memory: only its members and its agent read it.
+	SessionID  string     `json:"sessionId,omitempty"`
 	Title      string     `json:"title"`
 	Content    string     `json:"content"`
 	Kind       string     `json:"kind"`
@@ -70,12 +72,28 @@ func (e *Invalid) Error() string { return e.Reason }
 
 func invalid(format string, a ...any) error { return &Invalid{Reason: fmt.Sprintf(format, a...)} }
 
-// ErrNotFound: no such memory in this organization.
+// ErrNotFound: no such memory in this organization, or none the viewer may read.
 var ErrNotFound = errors.New("memory: not found")
+
+// Viewer is who reads: a person (Person), or an agent — a brainstorm
+// session's (Session) or any other (neither). A session's memories are
+// read by its accepted members and its own agent, by nobody else.
+type Viewer struct {
+	Person  string
+	Session string
+}
+
+// visible (SQL) keeps what the viewer may read, over a row with session_id;
+// $n and $n+1 are the viewer's session and person.
+func visible(alias string, n int) string {
+	return fmt.Sprintf(`memory_visible(%s.session_id, $%d, $%d)`, alias, n, n+1)
+}
 
 // New is what is written: the fields, who, and where it was learned.
 type New struct {
 	ProjectID string
+	// A brainstorm session's memory: ProjectID is then empty.
+	SessionID string
 	Title     string
 	Content   string
 	Kind      string
@@ -116,6 +134,9 @@ func Create(ctx context.Context, tx pgx.Tx, org string, n New, by Actor) (Memory
 	if err != nil {
 		return Memory{}, err
 	}
+	if n.ProjectID != "" && n.SessionID != "" {
+		return Memory{}, invalid("a session's memory belongs to no project")
+	}
 	if n.ProjectID != "" {
 		if err := exists(ctx, tx, "project", n.ProjectID); err != nil {
 			return Memory{}, err
@@ -130,10 +151,10 @@ func Create(ctx context.Context, tx pgx.Tx, org string, n New, by Actor) (Memory
 	if n.Source != nil {
 		srcType, srcID = n.Source.Type, n.Source.ID
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO memories (id, organization_id, project_id, title, content, kind,
+	if _, err := tx.Exec(ctx, `INSERT INTO memories (id, organization_id, project_id, session_id, title, content, kind,
 			author_kind, author_person_id, created_by_run_id, system_reason, source_type, source_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		id, org, db.Nullable(n.ProjectID), title, content, kind,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		id, org, db.Nullable(n.ProjectID), db.Nullable(n.SessionID), title, content, kind,
 		n.Author.Kind, db.Nullable(n.Author.PersonID), db.Nullable(n.Author.RunID), db.Nullable(n.Author.Reason),
 		srcType, srcID); err != nil {
 		return Memory{}, err
@@ -144,7 +165,7 @@ func Create(ctx context.Context, tx pgx.Tx, org string, n New, by Actor) (Memory
 	if err := record(ctx, tx, org, by, EvCreated, id, n.ProjectID, map[string]any{"title": title, "kind": kind}); err != nil {
 		return Memory{}, err
 	}
-	return Get(ctx, tx, id)
+	return get(ctx, tx, id)
 }
 
 // Patch changes what is given; About, when given, replaces the list.
@@ -172,6 +193,9 @@ func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Ac
 	}
 	if p.ProjectID != nil {
 		project = *p.ProjectID
+		if project != "" && m.SessionID != "" {
+			return Memory{}, invalid("a session's memory stays the session's: it belongs to no project")
+		}
 		if project != "" {
 			if err := exists(ctx, tx, "project", project); err != nil {
 				return Memory{}, err
@@ -200,7 +224,7 @@ func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Ac
 	if err := record(ctx, tx, org, by, EvUpdated, id, project, map[string]any{"title": title}); err != nil {
 		return Memory{}, err
 	}
-	return Get(ctx, tx, id)
+	return get(ctx, tx, id)
 }
 
 // Archive takes m, already read, out of every search, or puts it back.
@@ -223,7 +247,7 @@ func Archive(ctx context.Context, tx pgx.Tx, org string, m Memory, archived bool
 	if err := record(ctx, tx, org, by, ev, id, m.ProjectID, map[string]any{"title": m.Title}); err != nil {
 		return Memory{}, err
 	}
-	return Get(ctx, tx, id)
+	return get(ctx, tx, id)
 }
 
 func record(ctx context.Context, tx pgx.Tx, org string, by Actor, typ, id, project string, payload map[string]any) error {
@@ -316,7 +340,7 @@ func setRefs(ctx context.Context, tx pgx.Tx, org, id string, refs []Ref) error {
 
 // selectMemory reads a memory as people see it: who wrote it (an agent's
 // Run gives the person it worked for and its task), and its index state.
-const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), m.title, m.content, m.kind, m.author_kind,
+const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_id, ''), m.title, m.content, m.kind, m.author_kind,
 		coalesce(m.author_person_id, op.id, ''), coalesce(p.name, op.name, ''),
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
@@ -336,7 +360,7 @@ const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), m.title, m.conten
 func scan(row pgx.Row) (Memory, error) {
 	var m Memory
 	var srcType, srcID string
-	err := row.Scan(&m.ID, &m.ProjectID, &m.Title, &m.Content, &m.Kind, &m.Author.Kind,
+	err := row.Scan(&m.ID, &m.ProjectID, &m.SessionID, &m.Title, &m.Content, &m.Kind, &m.Author.Kind,
 		&m.Author.PersonID, &m.Author.PersonName, &m.Author.Role, &m.Author.RunID, &m.Author.TaskKey,
 		&m.Author.Reason, &srcType, &srcID, &m.ArchivedAt, &m.CreatedAt, &m.UpdatedAt, &m.Index, &m.IndexNote)
 	if srcType != "" {
@@ -345,10 +369,19 @@ func scan(row pgx.Row) (Memory, error) {
 	return m, err
 }
 
-// Get reads one memory, with what it is about and where it was learned
-// labelled.
-func Get(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
-	m, err := scan(tx.QueryRow(ctx, selectMemory+` WHERE m.id = $1`, id))
+// Get reads one memory the viewer may read, with what it is about and
+// where it was learned labelled; ErrNotFound for one they may not.
+func Get(ctx context.Context, tx pgx.Tx, id string, v Viewer) (Memory, error) {
+	return getWhere(ctx, tx, ` WHERE m.id = $1 AND `+visible("m", 2), id, v.Session, v.Person)
+}
+
+// get reads one memory just written by the caller, whoever may read it.
+func get(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
+	return getWhere(ctx, tx, ` WHERE m.id = $1`, id)
+}
+
+func getWhere(ctx context.Context, tx pgx.Tx, where string, args ...any) (Memory, error) {
+	m, err := scan(tx.QueryRow(ctx, selectMemory+where, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Memory{}, ErrNotFound
 	}
@@ -372,6 +405,7 @@ type ListQuery struct {
 	Text     string // a filter on the title and content, not a search
 	Archived bool
 	Limit    int
+	Viewer   Viewer
 }
 
 func List(ctx context.Context, tx pgx.Tx, q ListQuery) ([]Memory, error) {
@@ -380,12 +414,13 @@ func List(ctx context.Context, tx pgx.Tx, q ListQuery) ([]Memory, error) {
 	}
 	rows, err := tx.Query(ctx, selectMemory+`
 		WHERE ($1 = '' OR m.project_id = $1 OR m.project_id IS NULL)
-		  AND ($2 = '' OR ($2 = 'organization' AND m.project_id IS NULL) OR m.project_id = $2)
+		  AND ($2 = '' OR ($2 = 'organization' AND m.project_id IS NULL AND m.session_id IS NULL) OR m.project_id = $2)
 		  AND ($3 = '' OR m.author_kind = $3)
 		  AND ($4 = '' OR m.title ILIKE '%' || $4 || '%' ESCAPE '\' OR m.content ILIKE '%' || $4 || '%' ESCAPE '\')
 		  AND ($5 OR m.archived_at IS NULL)
+		  AND `+visible("m", 7)+`
 		ORDER BY m.archived_at IS NOT NULL, m.created_at DESC LIMIT $6`,
-		q.Project, q.Scope, q.Author, db.LikeLiteral(strings.TrimSpace(q.Text)), q.Archived, q.Limit)
+		q.Project, q.Scope, q.Author, db.LikeLiteral(strings.TrimSpace(q.Text)), q.Archived, q.Limit, q.Viewer.Session, q.Viewer.Person)
 	if err != nil {
 		return nil, err
 	}
