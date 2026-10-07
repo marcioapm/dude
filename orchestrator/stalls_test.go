@@ -8,6 +8,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -345,5 +346,62 @@ func TestAStallReportSaysWhatTheProcessesShow(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// migrate085 applies migration 085 to the world's database as a deploy
+// finds it: what it adds is dropped (every row otherwise as it is), then
+// the file runs as the migrator runs it, in one transaction.
+func (w *world) migrate085() {
+	w.t.Helper()
+	sql, err := os.ReadFile("../migrations/085_stalled_runs.sql")
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ctx := context.Background()
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DROP FUNCTION run_stalled(runs);
+		ALTER TABLE runs DROP COLUMN open_tool_calls_at, DROP COLUMN files_changed_at, DROP COLUMN stall_reported_at,
+			DROP COLUMN stall_reasons, DROP COLUMN stall_fingerprint, DROP COLUMN stall_usage, DROP COLUMN stall_left_at,
+			DROP COLUMN restart_note, DROP COLUMN tier_override, DROP COLUMN replaced_by`); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(sql)); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// Two reviewers already hung in an open call when 085 deploys, which write
+// nothing more: the one whose call the ledger shows open for 3 hours is
+// reported; the one started 3 hours ago whose call opened just now is not.
+func TestF6UpgradeHungCallProbe(t *testing.T) {
+	w := newWorld(t)
+	w.hangingReviews(taskCall)
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersOpen(wi, 2)
+	mustExec(t, w.owner, `UPDATE runs SET started_at = now() - interval '3 hours' WHERE id = ANY($1)`, runs)
+	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '3 hours' WHERE run_id = $1
+		AND event_type = 'agent.tool.called'`, runs[0])
+	w.migrate085()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND open_tool_calls_at <> '{}' AND files_changed_at IS NOT NULL`,
+		runs); n != 2 {
+		t.Errorf("%d of the 2 live reviewers have their calls and files dated", n)
+	}
+	w.sweep()
+	if a, b := w.stalls(runs[0]), w.stalls(runs[1]); a != 1 || b != 0 {
+		t.Fatalf("reports: %d for the call open 3 hours (want 1), %d for the one open now (want 0)", a, b)
+	}
+	if stall, _ := w.stallOf(runs[0]); stall["calls"] == nil {
+		t.Errorf("the report names no call: %v", stall)
+	} else if calls, _ := json.Marshal(stall["calls"]); !strings.Contains(string(calls), `"openSecs":108`) {
+		t.Errorf("the call is not open since its ledger event, 3 hours: %s", calls)
 	}
 }
