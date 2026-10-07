@@ -279,10 +279,10 @@ var (
 )
 
 // silentSince (SQL, over runs r): when the agent last said, thought or did
-// anything (agent_active_at); before it has, since the Run went running —
-// files_changed_at, which its start and every resume set, and which is
-// read only while agent_active_at is NULL. run_stalled (migration 085)
-// repeats it.
+// anything (agent_active_at); before it has, since its placement entered
+// running — files_changed_at, which that entry sets (luxEvent) and only a
+// change of its files moves on, read only while agent_active_at is NULL,
+// as a resume leaves it. run_stalled (migration 085) repeats it.
 const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
@@ -1558,7 +1558,10 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
-			-- Time stopped is not time without progress.
+			-- Time stopped is not time without progress. The stream's
+			-- running dates them again (luxEvent), so a wait for a host
+			-- does not count either; this date stands only when lux
+			-- answered the resume as already running.
 			files_changed_at = now(),
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
