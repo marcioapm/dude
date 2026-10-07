@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
 
@@ -300,6 +301,42 @@ func TestAQuestionIsPushedOnlyToWhoMayStillAnswerIt(t *testing.T) {
 				t.Errorf("%d notifications, want %d", got, want)
 			}
 		})
+	}
+}
+
+// A session Run's artifacts are its members' to download, as everything of
+// it is: the internal route checks the person it acts for, and with no
+// person names no session artifact at all. A task's are as they were.
+func TestASessionsArtifactsAreItsMembersAlone(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Reply: "private", Publish: map[string]string{"private.md": "private session artifact"}}
+	}
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people", map[string]any{"people": []string{s.ana}})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "plan"})
+	run := s.started(id)
+	mustExec(t, s.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, run)
+	s.until("the session's artifact", func() bool {
+		s.pump()
+		return s.count(`SELECT count(*) FROM artifacts WHERE run_id = $1`, run) > 0
+	})
+	var aid string
+	if err := s.owner.QueryRow(t0(), `SELECT id FROM artifacts WHERE run_id = $1 LIMIT 1`, run).Scan(&aid); err != nil {
+		t.Fatal(err)
+	}
+	path := "/internal/artifacts/" + aid + "/content"
+	if status, out := s.as(s.marcio, "GET", path, nil); status != 200 {
+		t.Errorf("the owner downloads it: %d %v", status, out)
+	}
+	for _, who := range []string{s.outsider, s.ana, s.admin} {
+		status, out := s.as(who, "GET", path, nil)
+		if status != 404 || strings.Contains(fmtJSON(out), "private session artifact") {
+			t.Errorf("%s downloads the session's artifact: %d %v", who, status, out)
+		}
+	}
+	if status, body := s.get(path, s.org); status != 404 || strings.Contains(body, "private session artifact") {
+		t.Errorf("with no person, a session's artifact is downloaded: %d %s", status, body)
 	}
 }
 

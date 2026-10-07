@@ -11,6 +11,7 @@
 
 import { withOrg } from "../../db/client.ts";
 import { orchestratorStream } from "../../orchestrator/client.ts";
+import type { Principal } from "../auth.ts";
 import { badRequest, HttpError, json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { zipStream, type ZipEntry } from "../zip.ts";
@@ -104,9 +105,12 @@ async function artifactNamed(organizationId: string, personId: string, id: strin
   });
 }
 
-/** An artifact's bytes from lux, through the orchestrator. */
-function fetchContent(organizationId: string, id: string): Promise<Response> {
-  return orchestratorStream(organizationId, `/internal/artifacts/${encodeURIComponent(id)}/content`);
+/**
+ * An artifact's bytes from lux, through the orchestrator, as the person
+ * asking: it checks a session Run's artifact against them too.
+ */
+function fetchContent(principal: Principal, id: string): Promise<Response> {
+  return orchestratorStream(principal.organizationId, `/internal/artifacts/${encodeURIComponent(id)}/content`, principal);
 }
 
 /**
@@ -121,7 +125,7 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
   // Asked for first: one the caller may not see is never fetched.
   const artifact = await artifactNamed(organizationId, ctx.principal.personId, id);
   if (!artifact) throw notFound(`artifact ${id} not found`);
-  const res = await fetchContent(organizationId, id);
+  const res = await fetchContent(ctx.principal, id);
   const headers = new Headers({
     "x-content-type-options": "nosniff",
     "content-security-policy": "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
@@ -193,7 +197,7 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
     for (const a of latest) {
       // The orchestrator unreachable throws rather than answers: that file
       // is missing too, not the end of the archive.
-      const res = await fetchContent(organizationId, a.id).catch(
+      const res = await fetchContent(ctx.principal, a.id).catch(
         (e: unknown) => new Response(null, { status: e instanceof HttpError ? e.status : 502 }),
       );
       if (!res.ok || !res.body) {
