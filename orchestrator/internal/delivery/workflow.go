@@ -49,6 +49,12 @@ type State struct {
 
 	// Phase Runs being waited for.
 	PendingRunIDs []string `json:"pendingRunIds,omitempty"`
+	// The review round's Runs, every one, while it is waited for: each
+	// must have finished for the round to be complete.
+	ReviewRunIDs []string `json:"reviewRunIds,omitempty"`
+	// The categories the next review round is limited to: a retry of a
+	// round whose reviewers in them failed.
+	RetryCategories []string `json:"retryCategories,omitempty"`
 	// Review → fix cycles spent.
 	Iteration int `json:"iteration,omitempty"`
 	// PR feedback → fix cycles spent in this review round: a person's new
@@ -173,6 +179,11 @@ func (e *Escalation) Actions() []string {
 		if e.Step != "" {
 			out = append(out, "retry")
 		}
+		// A review round short of a reviewer may go on without it, as a
+		// person's choice.
+		if e.Reason == "review_failed" {
+			out = append(out, "accept")
+		}
 	}
 	return append(out, "stop")
 }
@@ -184,6 +195,31 @@ func (e *Escalation) RunID() string {
 	}
 	e.decode(&d)
 	return d.RunID
+}
+
+// RunIDs are the Runs a resume takes back up: every reviewer of a round
+// that failed, or the one Run the escalation is about.
+func (e *Escalation) RunIDs() []string {
+	var d struct {
+		RunIDs []string `json:"runIds"`
+	}
+	if e.decode(&d); len(d.RunIDs) > 0 {
+		return d.RunIDs
+	}
+	if id := e.RunID(); id != "" {
+		return []string{id}
+	}
+	return nil
+}
+
+// categories are the review categories whose reviewers failed, for a
+// review_failed escalation.
+func (e *Escalation) categories() []string {
+	var d struct {
+		Categories []string `json:"categories"`
+	}
+	e.decode(&d)
+	return d.Categories
 }
 
 // detail reads a number the escalation's detail carries, as JSON left it.
@@ -425,12 +461,21 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if d != nil && len(d.Categories) > 0 {
 		categories = d.Categories
 	}
+	// A retry of a round some reviewers failed: only theirs run again.
+	retrying := st.RetryCategories
+	if len(retrying) > 0 {
+		categories, st.RetryCategories = retrying, nil
+	}
 	// A re-review judges what the fixer was sent: every open finding a fix
 	// has attempted, by the reviewer of its category, or by one of this
 	// round's when it has none (judgedBy).
 	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if len(retrying) > 0 {
+		// The round's other reviewers judged theirs already.
+		maps.DeleteFunc(attempted, func(c string, _ []string) bool { return !slices.Contains(retrying, c) })
 	}
 	toJudge := judgedBy(st.Policy, categories, attempted)
 	var runIDs []string
@@ -453,6 +498,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		map[string]any{"phase": "review", "reviewers": categories, "iteration": st.Iteration}); err != nil {
 		return workflow.Result{}, err
 	}
+	st.ReviewRunIDs = runIDs
 	return park("awaitReview", st, runIDs), nil
 }
 
@@ -492,6 +538,19 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitReview", st, pending), nil
 	}
+	// A reviewer that failed or was aborted read nothing: the round is not
+	// complete, and its silence is not a clear review.
+	failed, err := w.s.EndedUnfinished(ctx, sc.OrganizationID, st.ReviewRunIDs)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if len(failed) > 0 {
+		f := failed[0]
+		detail := map[string]any{"runId": f.ID, "category": f.Category, "error": f.Error,
+			"runIds": failedIDs(failed), "categories": failedCategories(failed)}
+		return w.escalate(ctx, sc, st, "review_failed", detail)
+	}
+	st.ReviewRunIDs = nil
 	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
@@ -1123,12 +1182,20 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		return workflow.Result{}, err
 	}
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
-	if id := st.Escalation.RunID(); id != "" && strings.HasSuffix(reason, "_failed") {
+	if reason == "review_failed" {
+		// Its retry is the failed reviewers again, not a fix.
+		st.Escalation.Step = "review"
+	}
+	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
-		// it again, resumed.
-		kept, err := w.s.Kept(ctx, sc.OrganizationID, id)
-		if err != nil {
-			return workflow.Result{}, err
+		// it again, resumed. Every one, for a round of several.
+		kept := true
+		for _, id := range ids {
+			k, err := w.s.Kept(ctx, sc.OrganizationID, id)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			kept = kept && k
 		}
 		if kept {
 			st.Escalation.At = sc.Step
@@ -1209,6 +1276,12 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	switch d.Action {
 	case "accept":
+		if e.Reason == "review_failed" {
+			// The round goes on without the reviewers that failed: its
+			// findings are what the others reported.
+			st.ReviewRunIDs = nil
+			return workflow.Result{Next: "awaitReview", State: st}, nil
+		}
 		// The findings it was stuck on ship as they are: a person's call.
 		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st); err != nil {
 			return workflow.Result{}, err
@@ -1222,7 +1295,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// The Run that failed was taken back up with the decision (the API
 		// does it, where it can say if it no longer can): the step that
 		// waited on it waits on it again.
-		return park(e.At, st, []string{e.RunID()}), nil
+		return park(e.At, st, e.RunIDs()), nil
 	}
 	return retry(st, e.Step, e), nil
 }
@@ -1233,6 +1306,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 func retry(st *State, step string, e *Escalation) workflow.Result {
 	st.Retries++
 	switch step {
+	case "review":
+		if e != nil && e.Reason == "review_failed" {
+			st.RetryCategories = e.categories()
+		}
 	case "fix":
 		// A new budget for the loop: its rounds, and each finding's fixes.
 		st.Iteration = 0
