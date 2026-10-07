@@ -855,7 +855,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model, in.ModelTier, in.Effort, in.TimeLimitMinutes = tier.Model, tier.Name, settings.Effort, settings.TimeLimitMinutes
+	in.Model, in.ModelTier, in.Effort = tier.Model, tier.Name, settings.Effort
 	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m
 	}

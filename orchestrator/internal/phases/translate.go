@@ -258,20 +258,29 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 // ended: the container stopped without dude asking — the agent crashed,
 // timed out, or its host died. A phase whose turn was already done is
 // finished by the sweep, and one dude stopped is dude's business; any other
-// has failed.
+// has failed. One lux stopped at its time limit is not kept: its running
+// time is spent, so a resume would be stopped again at once.
 func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
 	if reason == "" {
 		reason = state
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = true
+	why, event := "the agent's run ended before finishing its task: "+reason, reason
+	if reason == luxTimeout {
+		why = "lux stopped it at its time limit: " + cmp.Or(s.Agent.Timeout, DefaultTimeout) + " of running"
+		event = why
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
-		t.run.ID, "the agent's run ended before finishing its task: "+reason)
+		t.run.ID, why, reason != luxTimeout)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	return s.failedTx(ctx, tx, t.run, reason)
+	return s.failedTx(ctx, tx, t.run, event)
 }
+
+// luxTimeout is the reason lux gives a Run it failed past its spec's timeout.
+const luxTimeout = "timeout"
 
 // shimEvent handles what lux's shim reports about the agent. These come in
 // the record stream, in order with the agent's own messages — unlike lux's

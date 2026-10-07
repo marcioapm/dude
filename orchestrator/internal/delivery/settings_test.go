@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+func TestARolesNoProgressLimitIsReadAtHalfAnHourAtLeast(t *testing.T) {
+	for stored, want := range map[int]int{0: DefaultTimeLimitMinutes, 10: 30, 30: 30, 45: 45} {
+		if got := (RoleSettings{TimeLimitMinutes: stored}).TimeLimit(); got != want {
+			t.Errorf("stored %d reads as %d, want %d", stored, got, want)
+		}
+	}
+}
+
 func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
 	org := json.RawMessage(`{"reviewer":{"tier":"mtr_thinker","effort":"high","timeLimitMinutes":20},
 		"implementer":{"tier":"mtr_coder","context":"org notes"}}`)

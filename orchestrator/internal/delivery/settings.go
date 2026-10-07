@@ -22,8 +22,8 @@ type RoleSettings struct {
 	// How hard the model thinks (low, medium, high, max); "" leaves it to
 	// the model.
 	Effort string
-	// Running time allowed per session, in minutes; 0 is no limit of the
-	// role's own.
+	// How long a phase Run of the role may go without progress before its
+	// owner is told, in minutes (TimeLimitFor).
 	TimeLimitMinutes int
 	// Per-role notes, appended to the role's prompt.
 	Context string
@@ -79,6 +79,22 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 		}
 	}
 	return rs
+}
+
+// The no-progress limit: a role's default, and the least a stored one is
+// read as (packages/domain timeLimitMinutesSchema).
+const (
+	DefaultTimeLimitMinutes = 120
+	MinTimeLimitMinutes     = 30
+)
+
+// TimeLimit is the role's no-progress limit as it applies: its own,
+// raised to the minimum, or the default.
+func (rs RoleSettings) TimeLimit() int {
+	if rs.TimeLimitMinutes == 0 {
+		return DefaultTimeLimitMinutes
+	}
+	return max(rs.TimeLimitMinutes, MinTimeLimitMinutes)
 }
 
 // ResolvePolicy is the delivery policy a task runs with: the factory's
