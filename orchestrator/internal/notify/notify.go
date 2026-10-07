@@ -133,12 +133,16 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		// A session's ask is for the member it is put to, else its owner:
-		// never the organisation.
+		// never the organisation. Read now, just before it is sent: only
+		// while the question is open and they may still answer it (an
+		// accepted owner or member who can chat); else nobody's.
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(CASE WHEN e.session_id IS NOT NULL THEN COALESCE(
-					(SELECT q.to_person FROM questions q WHERE q.id = e.payload->>'questionId'),
-					(SELECT sp.person_id FROM session_people sp WHERE sp.session_id = e.session_id AND sp.role = 'owner'))
+				COALESCE(CASE WHEN e.session_id IS NOT NULL THEN (
+					SELECT x.person FROM (SELECT COALESCE(q.to_person,
+						(SELECT sp.person_id FROM session_people sp WHERE sp.session_id = e.session_id AND sp.role = 'owner')) AS person
+						FROM questions q WHERE q.id = e.payload->>'questionId' AND q.status = 'open') x
+					WHERE session_role(e.session_id, x.person) IN ('owner', 'chat'))
 					ELSE owner.person_id END, ''),
 				COALESCE(e.session_id, ''), e.payload
 			FROM events e

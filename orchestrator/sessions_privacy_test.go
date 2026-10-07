@@ -2,11 +2,19 @@ package orchestrator_test
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
 
 // A session with no linked projects still searches its organisation's
@@ -218,6 +226,78 @@ func TestAQuestionToSomeoneWhoLeavesIsWithdrawn(t *testing.T) {
 			// A message now goes as a message, not as an answer.
 			if out := s.ok(writer, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "next"}); out["questionId"] != nil {
 				t.Errorf("a later message answered a withdrawn question: %v", out)
+			}
+		})
+	}
+}
+
+// A session's question reaches by push only someone who may still answer
+// it, when the push goes: not a member removed or made a reader before
+// the notifier swept, and nobody once it is closed.
+func TestAQuestionIsPushedOnlyToWhoMayStillAnswerIt(t *testing.T) {
+	for _, how := range []string{"still a member", "removed", "demoted", "answered", "to nobody: owner removed it", "reader, question still open"} {
+		t.Run(how, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.withTools()
+			id := s.session()
+			s.join(id, s.ana, "chat")
+			var sent atomic.Int32
+			var body atomic.Value
+			push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sent.Add(1)
+				b, _ := io.ReadAll(r.Body)
+				body.Store(len(b))
+				w.WriteHeader(201)
+			}))
+			defer push.Close()
+			key, err := ecdh.P256().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth := make([]byte, 16)
+			_, _ = rand.Read(auth)
+			to := s.ana
+			if how == "to nobody: owner removed it" {
+				to = s.marcio
+			}
+			mustExec(t, s.owner, `INSERT INTO push_subscriptions (endpoint, organization_id, person_id, p256dh, auth) VALUES ($1, $2, $3, $4, $5)`,
+				push.URL, s.org, to, base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), base64.RawURLEncoding.EncodeToString(auth))
+			n := &notify.Notifier{DB: s.app, Log: quiet, Subject: "ops@example.com", HTTP: push.Client()}
+			if _, _, err := n.Keys(t0()); err != nil {
+				t.Fatal(err)
+			}
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "plan"})
+			run := s.started(id)
+			ask := `{"question":"Confidential acquisition price?","to":"Ana"}`
+			if how == "to nobody: owner removed it" {
+				ask = `{"question":"Confidential acquisition price?"}`
+			}
+			if status, out := s.tool(run, "ask_person", ask); status != 200 {
+				t.Fatal(out)
+			}
+			switch how {
+			case "removed":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people/"+s.ana+"/remove", nil)
+			case "demoted":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people/"+s.ana+"/role", map[string]any{"role": "read"})
+			case "answered":
+				s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "a lot"})
+			case "to nobody: owner removed it":
+				// The owner, the push's recipient, hands it to Ana and leaves.
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.ana, "keep": "leave"})
+			case "reader, question still open":
+				// The role alone decides, whatever else closed or did not.
+				mustExec(t, s.owner, `UPDATE session_people SET role = 'read' WHERE session_id = $1 AND person_id = $2`, id, s.ana)
+			}
+			if _, err := n.Sweep(t0()); err != nil {
+				t.Fatal(err)
+			}
+			want := int32(0)
+			if how == "still a member" {
+				want = 1
+			}
+			if got := sent.Load(); got != want {
+				t.Errorf("%d notifications, want %d", got, want)
 			}
 		})
 	}
