@@ -805,8 +805,21 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		return err
 	}
 	if refused != nil {
-		defer p.release(ctx, op)
-		return p.fail(ctx, r, "lux refused to resume the preview: "+refused.Message)
+		// Failed only while the reservation and the Run it refused still
+		// hold: a refusal answered after a lapse is of a Run moved on.
+		reason := "lux refused to resume the preview: " + refused.Message
+		won, err := p.finish(ctx, op, func(tx pgx.Tx) (bool, error) {
+			tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $4, ended_at = now(), pending_starts = '{}'
+				WHERE id = $1 AND `+parkedOnSQL, r.ID, r.LuxRunID, r.Generation, reason)
+			if err != nil || tag.RowsAffected() == 0 {
+				return false, err
+			}
+			return true, phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "failed", "error": reason})
+		})
+		if won {
+			p.unfollow(r.ID)
+		}
+		return err
 	}
 	_, err = p.finish(ctx, op, func(tx pgx.Tx) (bool, error) {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $4, lux_stop_reason = NULL, dude_pause = NULL,
