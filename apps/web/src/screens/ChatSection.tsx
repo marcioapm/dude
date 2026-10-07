@@ -139,6 +139,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
             steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />;
         case "commit":
           return <ChatNotice data-testid="chat-commit" data-sha={l.sha} kind="commit" by="Conductor" text={l.text} at={l.at} />;
+        case "restart":
+          return <ChatNotice data-testid="chat-restart" data-run={l.to} kind="restart" by={l.by === "conductor" ? "Conductor" : dude} text={l.text} at={l.at} />;
         default:
           return <ChatNotice data-testid={l.kind === "decision" ? "chat-decision" : "chat-dude-notice"} kind={l.kind} by={dude} text={l.text} at={l.at} />;
       }

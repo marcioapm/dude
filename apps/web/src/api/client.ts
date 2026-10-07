@@ -1107,6 +1107,16 @@ export class ApiClient {
     return this.#request("POST", `/v1/runs/${runId}/abort`, { reason });
   }
 
+  /** A stalled Run, started over in its slot: a fresh agent, told the note. Returns the new Run. */
+  restart(runId: string, note: string): Promise<{ runId: string; replaced: string }> {
+    return this.#request("POST", `/v1/runs/${runId}/restart`, { note });
+  }
+
+  /** A stalled Run left as it is: its owner is not asked again; its time limit stops it. */
+  leaveStalled(runId: string): Promise<{ runId: string; left: true }> {
+    return this.#request("POST", `/v1/runs/${runId}/leave`, {});
+  }
+
   /**
    * Live event stream for a scope, resuming from `after`.
    *

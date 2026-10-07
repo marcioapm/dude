@@ -59,13 +59,19 @@ export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; rol
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
     image: null, preparingImage: null,
-    createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null,
+    createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null, stalled: null, replacedBy: null,
     ...patch,
   };
 }
 
 /** The task with its implementer at work (a, b, c, e, f). */
 export const RUN_IMPLEMENT = run({ id: RUN_ID, phase: "implement", role: "implementer", status: "running", heads: { "web-console": "3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b" } });
+
+/** What dude told the owner of the implementer when it made no progress (`dude.fixtures.run` = stalled). */
+export const STALLED_TEXT = `Your implement Run ${RUN_ID} (Coder, running 2.1 h) has made no progress for 2.0 h. It has 1 tool call open: ` +
+  "`task` \"Review worker state behavior\", for 2.0 h; `task` runs inside the agent: no separate process is expected. " +
+  "Processes: opencode acp (1.2 % CPU, up 2:06:11). CPU over 2.1 h: 18 s; network: 0 B. Its files last changed at 09:12 UTC. " +
+  "Its tool calls in the window: 41 read, 6 grep, 0 bash, 0 edit.";
 
 /** The task in review with a pull request open (d): every phase done. */
 const RUNS_REVIEW: Run[] = [

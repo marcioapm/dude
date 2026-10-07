@@ -339,7 +339,15 @@ var builtinInstructions = map[string][]string{
 			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
 			"reads your words at its next step. Start another phase only once the Run has ended. Interrupt only when " +
-			"its current work is wasted.",
+			"its current work is wasted. Steer keeps the agent's context; restart_run starts over: a fresh Run in the " +
+			"same step, from the task's head, its uncommitted work lost.",
+		"dude tells you when a Run of yours has made no progress for 30 minutes: a tool call open all that time, or " +
+			"an implementer, fixer or simplifier whose files did not change. The report is facts, not a verdict: its " +
+			"open calls, its processes, its CPU and network, and what it did. A long test suite with a live process " +
+			"and CPU is usually fine to leave. An open call with no process and no CPU or network is usually stuck: " +
+			"restart it. An agent with many reads and no edits for 30 minutes is usually looping: steer it first. " +
+			"Leaving it is fine: you are told again only if nothing changes, after 60 minutes, and every Run is " +
+			"stopped at its time limit.",
 		"Someone who writes @dude on one of the task's pull requests reaches you as a Chat message from a GitHub " +
 			"person, naming the pull request and the comment. It is a question or an instruction, not a hand-over: it " +
 			"changes nothing about who decides. Answer it on the pull request (reply_on_pull_request, in reply to that " +
@@ -434,12 +442,13 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, " +
 	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
 	"why, when it is not yours to take. decide_escalation decides an escalation the owner handed you with a free " +
-	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides. " +
+	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides; " +
+	"restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier). " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
 	"publish takes what you committed in your checkout to the task branch, while you decide. " +
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
-	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
+	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
 	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A`, " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 

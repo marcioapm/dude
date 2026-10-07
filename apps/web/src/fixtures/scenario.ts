@@ -8,12 +8,12 @@ export const SCENARIOS = ["a", "b", "c", "d", "e"] as const;
 export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";
-/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted. */
+/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled. */
 export const RUN_KEY = `${KEY}.run`;
 
 /**
  * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
- * `?run=aborted` (failed, restarted, paused, preview; `off` forgets) puts the task's run in that state, remembered too.
+ * `?run=aborted` (failed, restarted, paused, preview, stalled; `off` forgets) puts the task's run in that state, remembered too.
  */
 export function fixtureScenario(): FixtureScenario | null {
   const params = new URLSearchParams(window.location.search);
