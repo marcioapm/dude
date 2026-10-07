@@ -66,7 +66,14 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
            AND runs.status NOT IN ('completed', 'failed', 'aborted')) AS "preparingImage",
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
-  created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
+  created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt",
+  -- While it makes no progress (run_stalled, migration 084): the latest
+  -- report, in the words its reader was given.
+  CASE WHEN run_stalled(runs) THEN (SELECT json_build_object('at', e.occurred_at,
+      'text', COALESCE(e.payload->>'text', ''), 'owner', NOT COALESCE((e.payload->>'conducted')::boolean, false),
+      'left', runs.stall_left_at IS NOT NULL)
+    FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
+  replaced_by AS "replacedBy"`;
 
 const SESSION_SELECT = `
   id, organization_id AS "organizationId", run_id AS "runId",

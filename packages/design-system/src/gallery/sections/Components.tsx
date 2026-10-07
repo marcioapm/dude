@@ -14,6 +14,9 @@ import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { ArtifactGroup, ArtifactRow, type ArtifactChange } from "../../components/ArtifactRow.tsx";
 import { ArtifactPreview } from "../../components/ArtifactPreview.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
+import { Callout } from "../../primitives/Layout.tsx";
+import { SessionItem, SessionList } from "../../components/SessionList.tsx";
+import { StatusMark } from "../../components/StatusMark.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Card, CardBody, CardHeader } from "../../primitives/Card.tsx";
@@ -235,6 +238,37 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
       <Block id="c-tree" title="SessionTreeNode" note="Orchestrator at depth 0, subagents nested. Finished sessions demote to a status dot and lighter text so live work stands out; the right column keeps tokens · cost · duration aligned so you can sum a tree by eye. Arrow keys expand/collapse.">
         <Panes mode={mode} surface>
           <TreeDemo />
+        </Panes>
+      </Block>
+
+      <Block id="c-sessions" title="SessionList · a stalled Run" note="A task's sessions. A Run dude reported as making no progress — a tool call open for its window, or a Run that changes code whose files did not change — carries a 'stalled' Badge before its status, dude's facts as its title, until it makes progress or ends. Its owner's banner on a plain delivery is a Callout with the facts and three choices: Restart it (a fresh agent in its place, an optional note), Leave it, Stop the task.">
+        <Panes mode={mode} surface>
+          <Col>
+            <SessionList style={{ maxWidth: 360 }}>
+              <SessionItem onOpen={() => undefined} avatar={<AgentAvatar role="reviewer" size="lg" live />} title="Review · frontend"
+                detail="gpt-5.6-sol · 31m" trailing={<>
+                  <Badge tone="attention" size="sm" icon="warning" title="Your review Run has made no progress for 30 min.">stalled</Badge>
+                  <StatusMark status="running" size="sm" />
+                </>} />
+              <SessionItem onOpen={() => undefined} avatar={<AgentAvatar role="reviewer" size="lg" live />} title="Review · correctness"
+                detail="gpt-5.6-sol · 31m" trailing={<StatusMark status="running" size="sm" />} />
+              <SessionItem onOpen={() => undefined} avatar={<AgentAvatar role="implementer" size="lg" />} title="Implement"
+                detail="claude-opus-5-5 · 12m" trailing={<StatusMark status="completed" size="sm" iconOnly />} />
+            </SessionList>
+            <Label>its owner's banner, on a plain delivery</Label>
+            <Callout tone="attention">
+              <p style={{ margin: 0 }}>
+                <strong>Review has made no progress.</strong> Your frontend review Run (round 3, Sol, running 2.1 h) has made no progress for
+                2.0 h. It has 1 tool call open: <code>task</code> "Review worker state behavior", for 2.0 h; <code>task</code> runs inside the
+                agent: no separate process is expected. Processes: opencode acp (1.2 % CPU). CPU over 2.0 h: 18 s; network: 0 B.
+              </p>
+              <Row>
+                <Button size="sm" variant="primary">Restart it</Button>
+                <Button size="sm" variant="secondary">Leave it</Button>
+                <Button size="sm" variant="quiet">Stop the task</Button>
+              </Row>
+            </Callout>
+          </Col>
         </Panes>
       </Block>
 

@@ -25,7 +25,7 @@ const DIRECTIVE_SELECT = `
   created_at AS "createdAt", supersedes, delivered_at AS "deliveredAt"`;
 
 /** Forward a run-control request, naming the person who made it. */
-function forward(action: "steer" | "pause" | "resume" | "abort") {
+function forward(action: "steer" | "pause" | "resume" | "abort" | "restart" | "leave") {
   return async (ctx: RequestContext): Promise<Response> =>
     orchestrator(ctx.principal.organizationId, "POST", `/internal/runs/${ctx.params.id}/${action}`,
       await ctx.request.text(), ctx.principal);
@@ -107,4 +107,7 @@ export function registerInterventionRoutes(router: Router): void {
   router.post("/v1/runs/:id/pause", forward("pause"));
   router.post("/v1/runs/:id/resume", forward("resume"));
   router.post("/v1/runs/:id/abort", forward("abort"));
+  // A stalled Run's banner: a fresh Run in its slot, or leave it as it is.
+  router.post("/v1/runs/:id/restart", forward("restart"));
+  router.post("/v1/runs/:id/leave", forward("leave"));
 }

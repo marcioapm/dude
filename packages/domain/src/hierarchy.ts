@@ -53,7 +53,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck", "fake/stall"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 
@@ -572,6 +572,23 @@ export const runSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),
+  /**
+   * While it makes no progress, as dude last reported it (run.stalled):
+   * when, the report in words, and whether its owner was told (a plain
+   * delivery; a conductor's task tells the conductor) and left it as it
+   * is. Null once it makes progress or ends.
+   */
+  stalled: z
+    .object({
+      at: z.string().datetime({ offset: true }),
+      text: z.string(),
+      owner: z.boolean(),
+      left: z.boolean(),
+    })
+    .nullable()
+    .default(null),
+  /** The Run that replaced it when it was restarted; null for none. */
+  replacedBy: z.string().nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
 
