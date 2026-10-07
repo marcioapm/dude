@@ -340,6 +340,50 @@ func TestASessionsArtifactsAreItsMembersAlone(t *testing.T) {
 	}
 }
 
+// A session's agent is driven only through its session: the task routes
+// that steer, pause, resume or abort a Run, answer its question, or run its
+// servers find no such Run — for its owner as for anyone else — and change
+// nothing.
+func TestASessionsRunIsNotATasksToControl(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/people", map[string]any{"people": []string{s.ana}})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "plan"})
+	run := s.started(id)
+	_, out := s.tool(run, "ask_person", `{"question":"Which window?"}`)
+	qid, _ := out["questionId"].(string)
+	before := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run)
+	routes := []struct{ method, path string }{
+		{"POST", "/internal/runs/" + run + "/steer"}, {"POST", "/internal/runs/" + run + "/pause"},
+		{"POST", "/internal/runs/" + run + "/resume"}, {"POST", "/internal/runs/" + run + "/abort"},
+		{"POST", "/internal/questions/" + qid + "/answer"},
+		{"GET", "/internal/runs/" + run + "/servers"}, {"POST", "/internal/runs/" + run + "/servers"},
+		{"POST", "/internal/runs/" + run + "/servers/start-all"}, {"POST", "/internal/runs/" + run + "/servers/stop-all"},
+		{"POST", "/internal/runs/" + run + "/servers/web/start"}, {"DELETE", "/internal/runs/" + run + "/servers/web"},
+		{"GET", "/internal/runs/" + run + "/servers/web/log"},
+	}
+	for _, who := range []string{s.marcio, s.ana, s.outsider, s.admin} {
+		for _, r := range routes {
+			status, body := s.as(who, r.method, r.path, map[string]any{"text": "go", "name": "web", "command": "true"})
+			if status != 404 || strings.Contains(fmtJSON(body), "Which window") {
+				t.Errorf("%s %s as %s: %d %v, want 404", r.method, r.path, who, status, body)
+			}
+		}
+	}
+	var status, control string
+	_ = s.owner.QueryRow(t0(), `SELECT status::text, coalesce(control::text, '') FROM runs WHERE id = $1`, run).Scan(&status, &control)
+	if status == "aborted" || control != "none" {
+		t.Errorf("the session's Run was controlled: status %s, control %q", status, control)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run); n != before {
+		t.Errorf("%d directives queued through task routes", n-before)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, qid); n != 1 {
+		t.Errorf("the question was settled through a task route")
+	}
+}
+
 // ownerOf is the session's owner, and whether person is still in it.
 func (s *sessionWorld) ownerOf(session, person string) (string, bool) {
 	var owner string
