@@ -6,6 +6,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -58,6 +59,66 @@ func TestAFailedReviewerIsNotAClearReview(t *testing.T) {
 	}
 	if actions != `["resume", "retry", "accept", "stop"]` {
 		t.Errorf("a failed reviewer offers %s", actions)
+	}
+}
+
+// A round already waited on when this version deploys has no reviewRunIds
+// in its state, only the Runs still pending; one of its reviewers may have
+// settled before. Either failing is still not a clear review.
+func TestF6UpgradeFailedReviewProbe(t *testing.T) {
+	cases := []struct {
+		name string
+		// Whether the first reviewer failed and was settled before the
+		// deploy; the second then ends as second.
+		settledFirst bool
+		second       string
+		failed       []int
+	}{
+		{"both fail after the deploy", false, "failed", []int{0, 1}},
+		{"one failed before it, the other completes", true, "completed", []int{0}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.hangingReviews(taskCall)
+			wi := w.task()
+			w.deliver(wi)
+			runs := w.reviewersOpen(wi, 2)
+			pending := func() int {
+				return w.count(`SELECT COALESCE(jsonb_array_length(state->'pendingRunIds'), 0) FROM workflow_runs WHERE task_id = $1`, wi)
+			}
+			end := func(id, status string) {
+				mustExec(t, w.owner, `UPDATE runs SET status = $2::run_status, error = CASE WHEN $2 = 'failed' THEN 'lux lost it' END,
+					ended_at = now() WHERE id = $1`, id, status)
+			}
+			if c.settledFirst {
+				end(runs[0], "failed")
+				w.until("the first reviewer settled", func() bool { return pending() == 1 })
+			}
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'reviewRunIds' WHERE task_id = $1`, wi)
+			if !c.settledFirst {
+				end(runs[0], "failed")
+			}
+			end(runs[1], c.second)
+			w.until("the round to end", func() bool {
+				return w.taskStatus(wi) == "awaiting_input" || len(w.gh.Pulls()) > 0
+			})
+			if got, n := w.escalationReason(wi), len(w.gh.Pulls()); got != "review_failed" || n != 0 {
+				t.Fatalf("escalation=%q, PRs=%d; want review_failed and none", got, n)
+			}
+			var ids []string
+			_ = w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(payload->'detail'->'runIds'))
+				FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&ids)
+			var want []string
+			for _, i := range c.failed {
+				want = append(want, runs[i])
+			}
+			slices.Sort(ids)
+			slices.Sort(want)
+			if !slices.Equal(ids, want) {
+				t.Errorf("the escalation's runIds %v, want %v", ids, want)
+			}
+		})
 	}
 }
 
