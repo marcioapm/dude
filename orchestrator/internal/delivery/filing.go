@@ -83,27 +83,6 @@ func CreateTaskTx(ctx context.Context, tx pgx.Tx, org, projectID string, f Filer
 	return id, fmt.Sprintf("%s-%d", prefix, number), nil
 }
 
-// TaskOwnerNamed is TaskOwner with the owner's name.
-func TaskOwnerNamed(ctx context.Context, tx pgx.Tx, taskID string) (id, name string, err error) {
-	err = tx.QueryRow(ctx, `SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
-		WHERE tp.task_id = $1 AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1`, taskID).Scan(&id, &name)
-	if db.IsNotFound(err) {
-		return "", "", nil
-	}
-	return id, name, err
-}
-
-// TaskStarted is the control plane's rule for a task's text: fixed once a
-// delivery exists, unless it stopped (aborted or failed).
-func TaskStarted(ctx context.Context, tx pgx.Tx, taskID string) (bool, string, error) {
-	var started bool
-	var status string
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs WHERE task_id = t.id)
-			AND t.status NOT IN ('aborted', 'failed'), t.status::text
-		FROM tasks t WHERE t.id = $1 FOR UPDATE`, taskID).Scan(&started, &status)
-	return started, status, err
-}
-
 // EditTaskTx writes a new goal and/or criteria into a task as the filer,
 // recorded as a person's edit is (task.updated with the fields changed).
 // The caller checked the filer owns it and it has not started.

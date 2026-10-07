@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
@@ -381,6 +388,112 @@ func TestASessionsRunIsNotATasksToControl(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, qid); n != 1 {
 		t.Errorf("the question was settled through a task route")
+	}
+}
+
+// queryCount counts the statements a pool runs.
+type queryCount struct{ n atomic.Int64 }
+
+func (q *queryCount) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	q.n.Add(1)
+	return ctx
+}
+func (q *queryCount) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// A session's detail reads its proposal cards — every one it ever had,
+// with each item's filing and who may file it — in a number of queries
+// that does not grow with them: one session with 1 card and one with 40
+// cards of 10 items (half filed, edits and comments among them) cost the
+// same. And it says the same thing, item by item, as before.
+func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
+	s := newSessionWorld(t)
+	counter := &queryCount{}
+	cfg, err := pgxpool.ParseConfig(s.app.Pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(t0(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	get := func(person, session string) (map[string]any, int64) {
+		req, _ := http.NewRequest("GET", srv.URL+"/internal/sessions/"+session, nil)
+		for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": s.org,
+			"X-Dude-Credential-Kind": "person", "X-Dude-Person": person, "X-Dude-Actor": person} {
+			req.Header.Set(k, v)
+		}
+		before := counter.n.Load()
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		if res.StatusCode != 200 {
+			t.Fatalf("detail: %d %v", res.StatusCode, out)
+		}
+		return out, counter.n.Load() - before
+	}
+
+	mine := s.taskIn(s.project, "Daily rollup", s.marcio)
+	anas := s.taskIn(s.project, "Ana's task", s.ana)
+	card := func() []delivery.ProposalItem {
+		items := []delivery.ProposalItem{{Kind: "epic", Project: "BL", Title: "Metering"}}
+		for i := 0; i < 6; i++ {
+			items = append(items, delivery.ProposalItem{Kind: "task", Project: "BL", Epic: "Metering", Title: fmt.Sprintf("Meter %d", i),
+				Goal: "Count experiment runs per org per day"})
+		}
+		return append(items,
+			delivery.ProposalItem{Kind: "edit", Task: s.keyOf(mine), After: &delivery.TaskText{Goal: ptr("A goal long enough to keep, changed")}},
+			delivery.ProposalItem{Kind: "edit", Task: s.keyOf(anas), After: &delivery.TaskText{Goal: ptr("A goal long enough to keep, Ana's")}},
+			delivery.ProposalItem{Kind: "comment", Task: s.keyOf(anas), Text: "a note"})
+	}
+	small := s.session()
+	s.join(small, s.ana, "chat")
+	s.proposal(small, card())
+	big := s.session()
+	s.join(big, s.ana, "chat")
+	var last string
+	for i := 0; i < 40; i++ {
+		last = s.proposal(big, card())
+		if i%2 == 0 {
+			s.ok(s.marcio, "POST", "/internal/sessions/"+big+"/file", map[string]any{"proposalId": last, "items": []int{0, 1, 2, 3}})
+		}
+	}
+
+	_, few := get(s.ana, small)
+	out, many := get(s.ana, big)
+	if many != few {
+		t.Errorf("the detail ran %d queries with 40 cards, %d with 1: it must not grow with the cards", many, few)
+	}
+	cards, _ := out["proposals"].([]any)
+	if len(cards) != 40 {
+		t.Fatalf("%d cards", len(cards))
+	}
+	// What each item says, for Ana (who can chat): filed by Márcio; hers to
+	// file; Márcio's edit not hers to file, and why.
+	first := cards[0].(map[string]any)["status"].([]any)
+	want := []string{`"filed":true`, `"filed":true`, `"filed":true`, `"filed":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`,
+		`"canFile":false`, `"canFile":true`, `"canFile":true`}
+	for i, w := range want {
+		if got := fmtJSON(first[i]); !strings.Contains(got, w) {
+			t.Errorf("item %d: %s, want %s", i, got, w)
+		}
+	}
+	if got := fmtJSON(first[0]); !strings.Contains(got, `"filedBy":"Márcio Martins"`) || !strings.Contains(got, `"key":`) {
+		t.Errorf("a filed item says who and what: %s", got)
+	}
+	if got := fmtJSON(first[7]); !strings.Contains(got, "Márcio") {
+		t.Errorf("Márcio's edit says who may file it: %s", got)
+	}
+	lastCard := cards[39].(map[string]any)["status"].([]any)
+	if got := fmtJSON(lastCard[0]); !strings.Contains(got, `"canFile":true`) {
+		t.Errorf("an unfiled card's epic: %s", got)
 	}
 }
 

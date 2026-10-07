@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -494,6 +495,20 @@ func RecordProposal(ctx context.Context, tx pgx.Tx, ref RunRef, items []Proposal
 
 // taskKey matches a task's key as people write it (BL-58).
 var taskKey = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-([0-9]+)$`)
+
+// TaskKey is a task's key as TaskByKey reads it, written one way
+// ("BL-58" for "bl-058"), and whether it is one.
+func TaskKey(key string) (string, bool) {
+	m := taskKey.FindStringSubmatch(strings.TrimSpace(key))
+	if m == nil {
+		return "", false
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return "", false
+	}
+	return strings.ToUpper(m[1]) + "-" + strconv.Itoa(n), true
+}
 
 // TaskByKey finds a task by its key among the projects given; "" for none.
 func TaskByKey(ctx context.Context, tx pgx.Tx, projectIDs []string, key string) (id, projectID string, err error) {
