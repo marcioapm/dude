@@ -6,7 +6,7 @@
  * Only the task's owner decides; anyone else sees whom it waits on.
  */
 
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { Button, Callout, Textarea } from "@dude/design-system/primitives";
 import { runLabel } from "@dude/domain";
 import type { ApiClient, Person, Run } from "../api/client.ts";
@@ -14,14 +14,18 @@ import { errorText } from "../hooks/useSave.tsx";
 
 type Action = "restart" | "leave" | "stop";
 
-const ACTION_LABEL: Record<Action, string> = { restart: "Restart it", leave: "Leave it", stop: "Stop the task" };
+const ACTIONS = {
+  restart: { label: "Restart it", variant: "primary" },
+  leave: { label: "Leave it", variant: "secondary" },
+  stop: { label: "Stop the task", variant: "quiet" },
+} as const;
 
 /** The Runs a banner is for: stalled, reported to their owner, and not left. */
 export function stalledForOwner(runs: readonly Run[]): Run[] {
   return runs.filter((r) => r.stalled?.owner && !r.stalled.left);
 }
 
-export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: {
+type StalledPanelProps = {
   client: ApiClient;
   run: Run & { stalled: NonNullable<Run["stalled"]> };
   owner: Person | null;
@@ -29,7 +33,9 @@ export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: {
   you: string | null;
   onOpenRun: (runId: string) => void;
   onDone: () => void;
-}) {
+};
+
+export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: StalledPanelProps): ReactElement {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<Action | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -37,7 +43,7 @@ export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: {
   const theirs = you !== null && !someoneElse;
   const label = runLabel(run);
 
-  const act = async (action: Action) => {
+  async function act(action: Action): Promise<void> {
     setBusy(action);
     setProblem(null);
     try {
@@ -47,11 +53,11 @@ export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: {
       setNote("");
       onDone();
     } catch (err) {
-      setProblem(`Could not ${ACTION_LABEL[action].toLowerCase()}: ${errorText(err)}`);
+      setProblem(`Could not ${ACTIONS[action].label.toLowerCase()}: ${errorText(err)}`);
     } finally {
       setBusy(null);
     }
-  };
+  }
 
   return (
     <Callout tone="attention" data-testid="stalled" data-run={run.id}>
@@ -64,15 +70,16 @@ export function StalledPanel({ client, run, owner, you, onOpenRun, onDone }: {
         </p>
         {someoneElse ? (
           <p className="escalationWaiting">Waiting for {owner.name} to decide.</p>
-        ) : theirs ? (
+        ) : null}
+        {theirs ? (
           <>
             <Textarea label="A note for the new agent (optional)" rows={2} value={note} onChange={(e) => setNote(e.target.value)}
               hint="Restart starts over from the task's branch: what it had not committed is lost." data-testid="stalled-note" />
             <div className="escalationActions">
               {(["restart", "leave", "stop"] as const).map((action) => (
-                <Button key={action} size="sm" variant={action === "restart" ? "primary" : action === "leave" ? "secondary" : "quiet"}
+                <Button key={action} size="sm" variant={ACTIONS[action].variant}
                   disabled={busy !== null} loading={busy === action} onClick={() => void act(action)} data-testid={`stalled-${action}`}>
-                  {ACTION_LABEL[action]}
+                  {ACTIONS[action].label}
                 </Button>
               ))}
             </div>
