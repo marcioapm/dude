@@ -393,7 +393,7 @@ const sweepBatch = 1000
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
 	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
 		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
-		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost'))))`
+		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
 
 // due is what one sweep takes up: every live Run, not the oldest N — a Run
 // with nothing to do still needs its stream followed, and a paused, idle
@@ -1367,8 +1367,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 
-	// Stopped rather than cancelled: the workspace and the agent's session
-	// are kept, so a person can still look at or resume a finished phase.
+	// Stopped rather than cancelled: its exit is collected as any stop's
+	// is (artifacts, the final diff); RetireCompleted terminates it after.
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return true, err
 	}
@@ -1566,12 +1566,14 @@ func pushRequest(r phaseRun) string {
 // end settles the lux Run of a failed or aborted Run. One worth resuming
 // (runs.keep) is stopped and kept until kept_until, its workspace and the
 // agent's conversation with it; then, or straight away for any other, it is
-// cancelled. A conductor is never kept: nothing resumes an ended one, and
-// the next message starts another.
+// cancelled. A succeeded lux Run is kept as a stopped one is: lux resumes
+// it (a lux from before refuses, and the resume fails it). A conductor or
+// session agent is never kept: nothing resumes an ended one, and the next
+// message starts another.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
-	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
+	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
 		err = s.keep(ctx, r)
 	} else {
 		// Not worth keeping, its time is up, or lux has nothing left to resume.
@@ -1599,9 +1601,11 @@ func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
+// cancel ends the lux Run of a failed or aborted Run: every one lux has not
+// ended for good, since lux keeps a stopped, failed, lost or succeeded Run
+// to resume, and its storage with it, until it is terminated.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
-	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
+	if r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
 		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
 			return err
 		}
@@ -1612,6 +1616,71 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		return err
 	})
 }
+
+// retireBatch bounds how many completed Runs one pass terminates in lux.
+const retireBatch = 100
+
+// RetireCompleted terminates the lux Run of every completed phase Run,
+// conductor and session agent: nothing in dude resumes one (only a failed
+// or aborted Run is kept, and a conductor's or session's next message
+// starts another), and lux keeps a stopped or succeeded Run, and its
+// storage, for 90 days. finish stops it so its exit is collected; it is
+// terminated once the artifacts sweep has collected that exit
+// (artifacts_due_at cleared). Its own loop, apart from Sweep: a slow lux
+// holds this one, never the live Runs. Returns how many it retired.
+func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
+	type done struct{ ID, Org, LuxRunID string }
+	var todo []done
+	if err := s.DB.InSystem(ctx, "lux-retire", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.lux_run_id FROM runs r
+			WHERE `+retirable+` AND `+sweptRuns+` ORDER BY r.ended_at LIMIT $1`, retireBatch)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[done])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	// 8 at a time; the first retryable error (lux unhealthy) dispatches no
+	// more, so an outage costs a few calls per pass, not retireBatch.
+	errs := make([]error, len(todo))
+	var retired atomic.Int64
+	var halted atomic.Bool
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
+	for i, d := range todo {
+		slots <- struct{}{}
+		if halted.Load() {
+			break
+		}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			err := s.Lux.Cancel(ctx, d.LuxRunID)
+			if le, ok := lux.AsError(err); err != nil && (!ok || le.Retryable()) {
+				halted.Store(true)
+				errs[i] = err
+				return
+			}
+			// A refusal (unknown, already terminated) is as good as done.
+			errs[i] = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
+				return err
+			})
+			if errs[i] == nil {
+				retired.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	return int(retired.Load()), errors.Join(errs...)
+}
+
+// retirable (SQL, over runs r): a completed Run whose lux Run dude has not
+// terminated, its last exit collected. Served by runs_retirable_idx (092).
+// 'cancel' is the lux_stop_reason recorded once dude has terminated a Run.
+const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
+	AND r.artifacts_due_at IS NULL)`
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
 // here: lux asks the agent to end its turn cleanly before the container stops.
@@ -1684,8 +1753,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming (an earlier attempt got through and its answer
 		// was lost: lux's stream reports how it went) — or not resumable at
-		// all, cancelled or finished in lux, which fails it.
-		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (cur.State == "cancelled" || cur.State == "succeeded") {
+		// all, ended in lux (or succeeded, on a lux from before succeeded
+		// resumed), which fails it.
+		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (lux.Terminated(cur.State) || cur.State == "succeeded") {
 			refused()
 			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)
 		}

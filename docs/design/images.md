@@ -25,7 +25,7 @@ are in `packages/domain/src/images.ts`.
     in `failed`, `superseded` or `cancelled`.
   - `user_ref` is the image without the dude layer, by digest. Children
     build `FROM` it.
-  - `can_run_containers` (migration 092): Runs in it may start containers
+  - `can_run_containers` (migration 093): Runs in it may start containers
     (see [Can run containers](#can-run-containers)). Each version keeps its
     own, like its Containerfile.
 - **`image_version_parents`**: the images a version is built `FROM`,
