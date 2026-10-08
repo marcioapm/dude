@@ -546,6 +546,39 @@ describe("a session's files", () => {
 });
 
 describe("a session's events", () => {
+  // What arrives once the turn is over: its name (name_session, called in
+  // the turn but recorded with its rename) and the file lux collects when
+  // the container stops. Neither is the agent working, and a trip through
+  // Events and back reads the same ledger.
+  test("a rename and a published file after the turn's end start no Thinking, through Events and back", async () => {
+    const agent = { type: "agent", id: RUN } as const;
+    const client = new SessionClient(detail("owner"), [
+      ev("chat.message", { text: "metering" }, { type: "human", id: YOU }),
+      ev("agent.prompt.delivered", { text: "metering" }, agent),
+      ev("agent.tool.called", { tool: "name_session", callId: "n1" }, agent),
+      ev("agent.tool.completed", { tool: "name_session", callId: "n1", status: "completed" }, agent),
+      // Between requests, mid-turn: the agent is thinking until the turn's totals and end say otherwise.
+      ev("agent.model.request.completed", { tokens: { input: 1, output: 1 } }, agent),
+      ev("agent.message", { text: "Named it; the note is in Files." }, agent),
+      ev("agent.model.request.completed", { turn: true, tokens: { input: 1, output: 1 } }, agent),
+      ev("agent.session.stopped", { reason: "turn_complete" }, agent),
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, agent),
+      ev("artifact.created", { artifactId: "art_1", name: "design.md" }, agent),
+    ]);
+    const page = await sessionPage(client);
+    await until(() => page.querySelector("[data-kind=renamed]"), "the rename notice");
+    await settle();
+    const activity = () => page.querySelectorAll("[data-testid=session-screen] [data-activity]").length;
+    expect(activity()).toBe(0);
+    const bar = page.querySelector("[data-testid=session-view]")!;
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Events"))!);
+    await until(() => page.querySelector("[data-testid=event-log]"), "the ledger");
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent === "Conversation")!);
+    await until(() => page.querySelector("[data-kind=renamed]"), "the conversation again");
+    await settle();
+    expect(activity()).toBe(0);
+  });
+
   test("the switch is Conversation | Events (count), with no Changes; Events lists every Run's events and the session's own", async () => {
     const other = "run_brainstorm2";
     const client = new SessionClient(detail("read"), [
