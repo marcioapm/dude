@@ -201,6 +201,8 @@ func run(log *slog.Logger) error {
 		// Conductors' publishes, apart from the phase sweep: a slow forge
 		// holds this loop, never the Runs.
 		{"conductor-publishes", time.Second, syncer.SettlePublishes},
+		// Completed Runs terminated in lux, apart from the phase sweep too.
+		{"lux-retire", time.Second, syncer.RetireCompleted},
 		{"phase-notifier", time.Second, func(ctx context.Context) (int, error) {
 			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status, key string) error {
 				return runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished,

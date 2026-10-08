@@ -443,9 +443,6 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.wakeConductors(ctx); err != nil {
 		s.Log.Warn("waking conductors failed", "error", err)
 	}
-	if err := s.retireCompleted(ctx); err != nil {
-		s.Log.Warn("terminating completed Runs in lux failed", "error", err)
-	}
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
@@ -1359,7 +1356,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 
 	// Stopped rather than cancelled: its exit is collected as any stop's
-	// is (artifacts, the final diff); retireCompleted terminates it after.
+	// is (artifacts, the final diff); RetireCompleted terminates it after.
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return true, err
 	}
@@ -1608,20 +1605,21 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// retireBatch bounds how many completed Runs one sweep terminates in lux.
+// retireBatch bounds how many completed Runs one pass terminates in lux.
 const retireBatch = 100
 
-// retireCompleted terminates the lux Run of every completed phase Run and
+// RetireCompleted terminates the lux Run of every completed phase Run and
 // ended conductor: nothing in dude resumes one (only a failed or aborted
 // Run is kept, and a conductor's next message starts another), and lux
 // keeps a stopped or succeeded Run, and its storage, for 90 days. finish
 // stops it rather than terminating it so its exit is collected as any
 // stop's is; it is terminated once the artifacts sweep has collected that
-// exit (artifacts_due_at cleared).
-func (s *Syncer) retireCompleted(ctx context.Context) error {
+// exit (artifacts_due_at cleared). Its own loop, apart from Sweep: a slow
+// lux holds this one, never the live Runs. Returns how many it retired.
+func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 	type done struct{ ID, Org, LuxRunID string }
 	var todo []done
-	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+	if err := s.DB.InSystem(ctx, "lux-retire", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.lux_run_id FROM runs r
 			WHERE `+retirable+` AND `+sweptRuns+` ORDER BY r.ended_at LIMIT $1`, retireBatch)
 		if err != nil {
@@ -1630,25 +1628,47 @@ func (s *Syncer) retireCompleted(ctx context.Context) error {
 		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[done])
 		return err
 	}); err != nil {
-		return err
+		return 0, err
 	}
+	// A few at a time; the first retryable error (lux unhealthy) ends the
+	// batch, so an outage costs a few calls per pass, not retireBatch.
+	var mu sync.Mutex
 	var errs []error
+	var retired atomic.Int64
+	var halted atomic.Bool
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
 	for _, d := range todo {
-		// A refusal (unknown, already terminated) is as good as done.
-		if err := s.Lux.Cancel(ctx, d.LuxRunID); err != nil {
-			if le, ok := lux.AsError(err); !ok || le.Retryable() {
-				errs = append(errs, err)
-				continue
+		slots <- struct{}{}
+		if halted.Load() {
+			<-slots
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			err := s.Lux.Cancel(ctx, d.LuxRunID)
+			// A refusal (unknown, already terminated) is as good as done.
+			if le, ok := lux.AsError(err); err != nil && (!ok || le.Retryable()) {
+				halted.Store(true)
+			} else {
+				err = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
+					return err
+				})
+				if err == nil {
+					retired.Add(1)
+				}
 			}
-		}
-		if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
-			return err
-		}); err != nil {
-			errs = append(errs, err)
-		}
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}()
 	}
-	return errors.Join(errs...)
+	wg.Wait()
+	return int(retired.Load()), errors.Join(errs...)
 }
 
 // retirable (SQL, over runs r): a completed Run whose lux Run dude has not
