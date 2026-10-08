@@ -41,6 +41,24 @@ describe("a project's key, when none is chosen", () => {
     }
     expect(deriveProjectKey("billing", projectKeyCandidates("billing"))).toBeNull();
   });
+
+  test("a slug as long as a slug may be, 100 letters or 100 digits, still gives only keys a person could choose", () => {
+    const letters = "abcdefghijklmnopqrstuvwxyz".repeat(4).slice(0, 100);
+    const digits = "1234567890".repeat(10);
+    expect([letters.length, digits.length]).toEqual([100, 100]);
+
+    const fromLetters = projectKeyCandidates(letters);
+    expect(fromLetters.slice(0, 2)).toEqual(["ABCD", "ABCD2"]);
+    expect(fromLetters.at(-1)).toBe("ABCD99");
+    expect(fromLetters.length).toBe(99);
+    for (const k of fromLetters) expect(k).toMatch(PROJECT_KEY);
+
+    const fromDigits = projectKeyCandidates(digits);
+    expect(fromDigits.slice(0, 2)).toEqual(["WI", "WI2"]);
+    expect(fromDigits.at(-1)).toBe("WI99");
+    expect(fromDigits.length).toBe(99);
+    for (const k of fromDigits) expect(k).toMatch(PROJECT_KEY);
+  });
 });
 
 describe("a chosen key", () => {
