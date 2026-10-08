@@ -95,7 +95,8 @@ type schema struct {
 		Image   any `toml:"image" env:"DUDE_AGENT_IMAGE" kind:"string" use:"orchestrator" default:"localhost/dude-runtime:dev"`
 		Timeout any `toml:"timeout" env:"DUDE_AGENT_TIMEOUT" kind:"string" use:"orchestrator"`
 		Egress  any `toml:"egress" env:"DUDE_AGENT_EGRESS" kind:"list" use:"orchestrator"`
-		// NestedContainers is agent.nested_containers.
+		// NestedContainers is agent.nested_containers: agent.image (the
+		// fallback) can run containers, for agents and previews on it.
 		NestedContainers any `toml:"nested_containers" env:"DUDE_AGENT_NESTED_CONTAINERS" kind:"bool" use:"orchestrator" default:"false"`
 	} `toml:"agent"`
 	Registry struct {
