@@ -1,6 +1,6 @@
 /**
- * Why a Run waits for a host: useWaitingReason with WaitingForHost, as a
- * page renders them, and the Run page itself. lux's answer, read with the
+ * Why a Run waits for a host: useRunServers with WaitingForHost, as the
+ * Run page renders them, and the Run page itself. lux's answer, read with the
  * Run's servers, is what shows or hides the wait, whatever dude's status
  * says: a Run resumed or moved is running to dude while lux finds a host.
  */
@@ -11,9 +11,10 @@ import { mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
-import { useWaitingReason, WaitingForHost } from "../src/waiting.tsx";
+import { WaitingForHost } from "../src/waiting.tsx";
+import { useRunServers } from "../src/runServers.ts";
 import type { RunDetail } from "../src/api/client.ts";
-import type { TaskServers } from "@dude/domain";
+import type { RunStatus, TaskServers } from "@dude/domain";
 
 const NESTED = "waiting for capacity: 1 host in its pool does not support nested containers";
 
@@ -41,20 +42,22 @@ class WaitClient extends FixtureClient {
   }
 }
 
-/** The hook and the callout as a page puts them together. */
-function Harness({ client, runId, live, askAgain }: { client: WaitClient; runId: string; live: boolean; askAgain: number }) {
-  const reason = useWaitingReason(client, runId, live, askAgain);
-  return reason ? <WaitingForHost reason={reason} onRunPage /> : <p data-testid="placed">placed</p>;
+type Props = { runId: string; status: RunStatus; waitAsk: number };
+
+/** The hook and the callout as the Run page puts them together. */
+function Harness({ client, runId, status, waitAsk }: { client: WaitClient } & Props) {
+  const { waitingReason } = useRunServers(client, runId, status, 0, waitAsk);
+  return waitingReason ? <WaitingForHost reason={waitingReason} onRunPage /> : <p data-testid="placed">placed</p>;
 }
 
-let drive: ((p: { runId: string; live: boolean; askAgain: number }) => void) | null = null;
-function Driven({ client, initial }: { client: WaitClient; initial: { runId: string; live: boolean; askAgain: number } }) {
+let drive: ((p: Props) => void) | null = null;
+function Driven({ client, initial }: { client: WaitClient; initial: Props }) {
   const [p, setP] = useState(initial);
   drive = setP;
   return <Harness client={client} {...p} />;
 }
 
-async function harness(client: WaitClient, initial: { runId: string; live: boolean; askAgain: number }) {
+async function harness(client: WaitClient, initial: Props) {
   const { container, unmount } = await mount(<Driven client={client} initial={initial} />);
   mounted.push(unmount);
   return container;
@@ -62,16 +65,16 @@ async function harness(client: WaitClient, initial: { runId: string; live: boole
 
 const callout = (page: HTMLElement) => page.querySelector("[data-testid=waiting-for-host]");
 
-describe("useWaitingReason", () => {
+describe("useRunServers: why a Run waits", () => {
   test("the same Run, once placed, asked again: the wait is gone", async () => {
     const client = new WaitClient();
     client.reasons.set("run_1", NESTED);
-    const page = await harness(client, { runId: "run_1", live: true, askAgain: 0 });
+    const page = await harness(client, { runId: "run_1", status: "scheduled", waitAsk: 0 });
     const shown = await until(() => callout(page), "the wait");
     expect(shown.textContent).toBe(
       "Waiting for a host that can run containers. lux has no host that can run containers. An admin can add one to a pool. Nothing is spent meanwhile.");
     client.reasons.set("run_1", null);
-    await act(async () => drive!({ runId: "run_1", live: true, askAgain: 1 }));
+    await act(async () => drive!({ runId: "run_1", status: "scheduled", waitAsk: 1 }));
     await until(() => page.querySelector("[data-testid=placed]"), "the wait gone");
     expect(callout(page)).toBeNull();
   });
@@ -79,10 +82,10 @@ describe("useWaitingReason", () => {
   test("a Run that ends shows no wait, without asking", async () => {
     const client = new WaitClient();
     client.reasons.set("run_1", NESTED);
-    const page = await harness(client, { runId: "run_1", live: true, askAgain: 0 });
+    const page = await harness(client, { runId: "run_1", status: "scheduled", waitAsk: 0 });
     await until(() => callout(page), "the wait");
     const reads = client.reads.length;
-    await act(async () => drive!({ runId: "run_1", live: false, askAgain: 0 }));
+    await act(async () => drive!({ runId: "run_1", status: "completed", waitAsk: 0 }));
     expect(callout(page)).toBeNull();
     await settle();
     expect(client.reads.length).toBe(reads);
@@ -98,22 +101,35 @@ describe("useWaitingReason", () => {
       if (id === "run_1") await slow;
       return read(id);
     };
-    const page = await harness(client, { runId: "run_1", live: true, askAgain: 0 });
-    await act(async () => drive!({ runId: "run_2", live: true, askAgain: 0 }));
+    const page = await harness(client, { runId: "run_1", status: "scheduled", waitAsk: 0 });
+    await act(async () => drive!({ runId: "run_2", status: "scheduled", waitAsk: 0 }));
     await until(() => page.querySelector("[data-testid=placed]"), "run_2 placed");
     await act(async () => release());
     await settle();
     expect(callout(page)).toBeNull();
   });
 
+  test("a running Run that lux has placed is asked once, until lux's state changes", async () => {
+    const client = new WaitClient();
+    const page = await harness(client, { runId: "run_1", status: "running", waitAsk: 0 });
+    await until(() => page.querySelector("[data-testid=placed]"), "placed");
+    await settle(100);
+    expect(client.reads).toEqual(["run_1"]);
+    // lux moves it: a state change, and now it waits.
+    client.reasons.set("run_1", NESTED);
+    await act(async () => drive!({ runId: "run_1", status: "running", waitAsk: 1 }));
+    await until(() => callout(page), "the wait on a running Run being moved");
+    expect(client.reads).toEqual(["run_1", "run_1"]);
+  });
+
   test("any other reason of lux's is shown as lux wrote it, with one period", async () => {
     const client = new WaitClient();
     client.reasons.set("run_1", "waiting for capacity: 2 hosts in its pool lack cpus (requested 4).");
-    const page = await harness(client, { runId: "run_1", live: true, askAgain: 0 });
+    const page = await harness(client, { runId: "run_1", status: "scheduled", waitAsk: 0 });
     const shown = await until(() => callout(page), "the wait");
     expect(shown.textContent).toBe("Waiting for a host. lux says: waiting for capacity: 2 hosts in its pool lack cpus (requested 4). Nothing is spent meanwhile.");
     client.reasons.set("run_1", "waiting for capacity: 2 hosts in its pool lack cpus (requested 4)");
-    await act(async () => drive!({ runId: "run_1", live: true, askAgain: 1 }));
+    await act(async () => drive!({ runId: "run_1", status: "scheduled", waitAsk: 1 }));
     await until(() => (callout(page)?.textContent?.includes("(requested 4). Nothing") ? true : null), "one period, added");
   });
 });

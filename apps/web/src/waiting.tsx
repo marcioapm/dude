@@ -5,10 +5,8 @@
  * sentence; any other is shown as lux wrote it.
  */
 
-import { useEffect, useState } from "react";
 import { Callout } from "@dude/design-system/primitives";
 import { waitsForContainerHost } from "@dude/domain";
-import type { ApiClient } from "./api/client.ts";
 
 export function WaitingForHost({ reason, onRunPage }: { reason: string; onRunPage?: boolean | undefined }) {
   const meanwhile = onRunPage ? " Nothing is spent meanwhile." : "";
@@ -31,26 +29,4 @@ export function WaitingForHost({ reason, onRunPage }: { reason: string; onRunPag
 function sentence(reason: string): string {
   const r = reason.trim();
   return /[.!?]$/.test(r) ? r : `${r}.`;
-}
-
-/**
- * Why lux has not placed a Run yet, read with its servers (the one place
- * dude reads lux's Run for the page) whenever `askAgain` moves while it is
- * live: its stream's servers.changed (lux's state changed while it waits
- * for a host, or it got one) and the stream coming back. Null when lux
- * says it is not waiting: a running, resumed or moved Run alike.
- */
-export function useWaitingReason(client: ApiClient, runId: string, live: boolean, askAgain: number): string | null {
-  const [reason, setReason] = useState<{ runId: string; reason: string | null } | null>(null);
-  useEffect(() => {
-    if (!live) return;
-    let cancelled = false;
-    client.runServers(runId).then((s) => {
-      if (!cancelled) setReason({ runId, reason: s.run?.waitingReason ?? null });
-    }, () => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [client, runId, live, askAgain]);
-  return live && reason?.runId === runId ? reason.reason : null;
 }
