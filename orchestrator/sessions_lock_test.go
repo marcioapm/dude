@@ -1,8 +1,11 @@
 package orchestrator_test
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -10,7 +13,9 @@ import (
 // A member's write that waits on the session's lock is decided by the
 // membership the lock's holder leaves behind: demoted to reader or
 // removed while their chat or filing waits, they are refused and nothing
-// they sent lands — no Run, no message, no filed task, no event.
+// they sent lands — no Run, no message, no filed task, no event. The
+// test waits for Ana's request itself to block on that session's lock; an
+// unrelated advisory waiter in the same database does not count.
 func TestAWriteWaitingOnTheSessionIsDecidedByWhoTheyAreAfter(t *testing.T) {
 	type write struct {
 		path   string
@@ -60,20 +65,24 @@ func TestAWriteWaitingOnTheSessionIsDecidedByWhoTheyAreAfter(t *testing.T) {
 				if err := delivery.LockSession(t0(), holder, id); err != nil {
 					t.Fatal(err)
 				}
+				// Another backend already waits on an unrelated advisory lock: it
+				// must not pass for Ana's request.
+				unrelated := s.advisoryWaiter(8675309)
+				if pids := blockedOnSession(t, holder, id); len(pids) != 0 {
+					t.Fatalf("before Ana's %s, %v counted as waiting on the session's lock", what, pids)
+				}
 				result := make(chan int, 1)
 				go func() {
 					status, _ := s.as(s.ana, "POST", "/internal/sessions/"+id+wr.path, body)
 					result <- status
 				}()
-				// Ana's request is waiting on the session's lock: another backend
-				// waits on an advisory lock. Each probe is a round trip; no sleep.
+				// Each probe is a round trip; no sleep.
 				for deadline := time.Now().Add(10 * time.Second); ; {
-					var waiting int
-					if err := holder.QueryRow(t0(), `SELECT count(*) FROM pg_stat_activity
-						WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event = 'advisory'`).Scan(&waiting); err != nil {
-						t.Fatal(err)
+					pids := blockedOnSession(t, holder, id)
+					if slices.Contains(pids, unrelated) {
+						t.Fatalf("the unrelated waiter %d counted as waiting on the session's lock", unrelated)
 					}
-					if waiting > 0 {
+					if len(pids) == 1 {
 						break
 					}
 					select {
@@ -103,6 +112,68 @@ func TestAWriteWaitingOnTheSessionIsDecidedByWhoTheyAreAfter(t *testing.T) {
 					t.Errorf("Ana's refused %s left %d rows behind", what, after-before)
 				}
 			})
+		}
+	}
+}
+
+// blockedOnSession is the backends waiting, ungranted, on session's
+// advisory lock and blocked by holder's backend. The key is
+// delivery.LockSession's: hashtext('session:' || id) as one bigint, which
+// pg_locks shows split into classid (high 32 bits), objid (low) and
+// objsubid 1.
+func blockedOnSession(t *testing.T, holder pgx.Tx, session string) []int32 {
+	t.Helper()
+	rows, err := holder.Query(t0(), `WITH k AS (SELECT hashtext('session:' || $1)::bigint AS key)
+		SELECT l.pid FROM pg_locks l, k
+		WHERE l.locktype = 'advisory' AND NOT l.granted
+			AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND l.classid = ((k.key >> 32) & 4294967295)::oid AND l.objid = (k.key & 4294967295)::oid AND l.objsubid = 1
+			AND pg_backend_pid() = ANY(pg_blocking_pids(l.pid))
+		ORDER BY l.pid`, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pids, err := pgx.CollectRows(rows, pgx.RowTo[int32])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pids
+}
+
+// advisoryWaiter has one connection hold advisory lock key and a second
+// wait on it, until the test ends; returns the waiting backend's pid once
+// Postgres shows it waiting.
+func (s *sessionWorld) advisoryWaiter(key int64) int32 {
+	s.t.Helper()
+	connect := func() *pgx.Conn {
+		c, err := pgx.ConnectConfig(t0(), s.owner.Config().Copy())
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		return c
+	}
+	holder, waiter := connect(), connect()
+	if _, err := holder.Exec(t0(), `SELECT pg_advisory_lock($1)`, key); err != nil {
+		s.t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() {
+		_, err := waiter.Exec(t0(), `SELECT pg_advisory_lock($1)`, key)
+		waited <- err
+	}()
+	s.t.Cleanup(func() {
+		_, _ = holder.Exec(t0(), `SELECT pg_advisory_unlock($1)`, key)
+		<-waited
+		_ = waiter.Close(t0())
+		_ = holder.Close(t0())
+	})
+	pid := waiter.PgConn().PID()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if s.count(`SELECT count(*) FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted`, pid) == 1 {
+			return int32(pid)
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("the unrelated advisory waiter %d never waited", pid)
 		}
 	}
 }
