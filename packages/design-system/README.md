@@ -23,8 +23,8 @@ The operator has one screen, many agents, and five questions: **what is
 running, what is stuck, what needs me, what did it cost, what did the agent
 do**. Every decision below serves those questions.
 
-The screen they have open all day is the **chat transcript** of a Session
-(`ChatTranscript` and friends): the agent's narrative, its tool calls, the
+The screen they have open all day is the **chat transcript** of an agent
+session (`ChatTranscript` and friends): the agent's narrative, its tool calls, the
 subagents it delegates to, its plan, and the composer through which a human
 answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
 `NavTree`): what exists, what is active, what needs a person, who is on
@@ -45,8 +45,9 @@ behind all of these, reached when something looks off.
    screen; it never takes the text below readable.
 2. **Meaning never lives in hue alone.** Every status has a tone *and* a glyph
    *and* a label. Diffs have background *and* gutter color *and* a sign
-   column. Roles have a hue *and* a glyph *and* (for the conductor) a
-   shape. Grayscale the gallery and nothing is lost.
+   column. Roles have a hue *and* a glyph *and* (for the conversation
+   agents, the conductor and the brainstorm) a shape. Grayscale the gallery
+   and nothing is lost.
 3. **Dark is primary, light is a peer.** The operator spends hours here, often
    at night, on a big monitor. Dark mode gets the most careful contrast work
    and is the default. Light is designed alongside it, not derived from it:
@@ -56,7 +57,7 @@ behind all of these, reached when something looks off.
    duration and timestamp is tabular. Costs, tokens and durations each have
    exactly one formatter, so a value in a tile and the same value in a table
    never disagree.
-5. **`awaiting_human` is the only loud thing.** It is the single state where
+5. **`awaiting_input` is the only loud thing.** It is the single state where
    the system is blocked on a person. It alone defaults to a solid fill with a
    slow expanding ring. Nothing else may be promoted to solid; if it were, the
    signal would be gone.
@@ -168,7 +169,7 @@ gallery for every value.
 | Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
-| Roles | `--ds-role-{conductor,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
+| Roles | `--ds-role-{conductor,investigator,implementer,reviewer,simplifier,qa-browser,brainstorm}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. Six colour slots: `brainstorm` holds the conductor's values. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
@@ -188,11 +189,20 @@ Tones and role colours are OKLCH with per-slot lightness found by search, then
 validated (protan/deutan simulation, normal-vision distance, WCAG contrast)
 rather than eyeballed. The four chromatic tone foregrounds clear ΔE ≥ 8 under
 CVD simulation and ΔE ≥ 15 in normal vision for every pair, in both modes,
-while every `fg` stays ≥ 4.5:1 on the surface. The six role colours clear the
-same bar across all 15 pairs, and every role `fg` clears 4.5:1 on its
-theme's surface. If you change a hue or a surface, re-run the search; do not
-nudge by eye. `test/palette.test.ts` holds the WCAG half: the text ladder,
-tone and role foregrounds, link, focus ring and button label.
+while every `fg` stays ≥ 4.5:1 on the surface. There are seven roles and
+six role colour slots: the brainstorm wears the conductor's colour
+(`ROLE_COLOUR_OF` in `palette.ts`), because no seventh hue at the slots'
+chroma and lightness clears the bar against all six in both modes, and the
+free hues near 80 sit on the attention tone, which a role must never read
+as. Both are conversation agents, so they share the round shape too; the
+glyph and the label tell them apart. The six slots clear the same bar
+across all 15 pairs, and every role `fg` clears 4.5:1 on its theme's
+surface. If you change a hue or a surface, re-run the search; do not nudge
+by eye. `test/paletteDistance.test.ts` enforces the pair bar (OKLab ΔE×100,
+Machado 2009 protan and deutan at severity 1.0, slots that share a colour
+counted once) and keeps every role colour more than ΔE 3 from the attention
+fg, mark and solid (every way needs-you is drawn) in normal vision. `test/palette.test.ts` holds the WCAG half: the text
+ladder, tone and role foregrounds, link, focus ring and button label.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
 faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close
@@ -207,7 +217,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 ### Status
 
-- Use `StatusBadge` for every Run, Session and Task state. Never a
+- Use `StatusBadge` for every Run, agent session and Task state. Never a
   `Badge` with a hand-picked tone, never a coloured dot with a tooltip.
 - The mapping from status to tone/glyph/emphasis lives in
   `src/tokens/status.ts`. That table is the contract. Add a state there or it
@@ -217,7 +227,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   something is paused; **success** = finished well; **danger** = finished badly.
 - `aborted` is neutral, not danger. An operator stopping a run is a decision,
   not a failure, and must not look like one in a list of failures.
-- Only `awaiting_human` / `waiting_on_human` are solid by default. Do not
+- Only `awaiting_input` ("Needs you") is solid by default. Do not
   override `emphasis` to solid for anything else.
 - In dense lists (trees, kanban cards) use `variant="dot"`: shape still carries
   meaning (hollow = pending, round = active, square = terminal, diamond =
@@ -317,12 +327,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 ### Human intervention
 
-- The two ways a person acts on a session are distinct on four channels in
+- The two ways a person acts on an agent session are distinct on four channels in
   `ChatComposer`: focus tint, context line, button label, button colour.
-  **Answer** (session blocked on a question) has an attention-filled button —
+  **Answer** (agent session blocked on a question) has an attention-filled button —
   the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
   Orchestrator: …") and the offered choices are neutral at rest; a choice
-  chip takes the attention tint only on hover. **Steer** (session running) is
+  chip takes the attention tint only on hover. **Steer** (agent session running) is
   accent-toned. A steer lands at the agent's next step — the harness takes
   it while a tool runs and the model reads it before its next call, in the
   same turn, nothing cancelled — so sending one costs nothing and plain
@@ -344,7 +354,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   buttons) or once it has settled, as the record of what was offered.
   `answeredAt` settles it: no wash, "Answered · after 4m 12s", and the answer follows as
   its own `intent="answer"` turn — the card never quotes it, so nothing is
-  said twice. `dismissed` is for a question the session died on: "Not
+  said twice. `dismissed` is for a question the agent session died on: "Not
   answered", settled, and it never rings. The waiting card is a polite live
   region announced once; the clock sits outside it.
 - The same tints mark the human turns in the transcript (`ChatMessage
@@ -384,7 +394,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 - A task's **Chat** is its conversation with its conductor, the agent
   people talk to about a task — any task, delivered weeks ago or not
-  started. It is a transcript like a session's (`ChatTranscript`,
+  started. It is a transcript like an agent session's (`ChatTranscript`,
   `ChatMessage`, `ChatAside`, `QuestionCard`), with three differences.
 - **`TaskHistory`** heads it, pinned: the task's history in one line on
   the raised shade — how it went, what ran (a fan-out folded, "reviewers
@@ -395,7 +405,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   is `role="system" intent="briefing"`: the prompt's frame, clamp and
   face, tagged "Briefing", signed with the task's dude name; the message
   it ends with is the person's own turn just before it, never said twice.
-  The conductor answers as `role="conductor"`: its round violet face. dude's
+  The conductor answers as `role="conductor"`: its round face. dude's
   notices there name him (`ChatNotice by`): "El Duderino: Parked while
   nobody is writing". A parked conductor is quiet: nothing about it is
   amber, and nothing counts it as needing you; its question is the usual
@@ -407,7 +417,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   each Run it started is a **`ChatRunLine`** where it started: one
   collapsed line on a 2px rail in the Run's role colour — face, role,
   what it is, `StatusMark`, its facts — the whole line a button that opens
-  the Run's session. A decision the delivery waits on is dude's notice,
+  the Run's agent session. A decision the delivery waits on is dude's notice,
   `ChatNotice kind="decision"`; something that wakes nobody (an approval, a
   green check) is `kind="notice"`. **`DeciderLine`** sits above the
   composer on the raised shade: who decides ("The conductor decides ·
@@ -420,7 +430,57 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
   where "Sent as" would be. While the conductor asks, it is the answer
-  composer, as in a session.
+  composer, as in an agent session.
+
+### Brainstorm sessions
+
+- A **brainstorm session** is a conversation with one agent that belongs
+  to its members, not a task: it reads the projects linked to it and
+  proposes work, and a member files it. It is `sessions` in the code; an
+  agent's session inside a Run is an *agent session* (above).
+- **The brainstorm's face** is `AgentAvatar role="brainstorm"`: the
+  conductor's colour and round shape, its own bulb glyph and the label
+  "Brainstorm". Both are conversation agents; the glyph tells them apart,
+  and no hue of its own sits near the attention tone, so the face never
+  reads as needs-you.
+- Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
+  role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+- **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
+  comments, each saying where it goes, an edit with its text Now and
+  After. Filing acts as whoever presses File (`filingAs`): the footer says
+  "Filing as Ana: 2 tasks, 1 edit. Nothing starts." An item only someone
+  else may file is dimmed and says whose ("Only Márcio can file this: it's
+  his task"); a filed one says who filed it as what ("Ana filed BL-61").
+  A reader (`readOnly`) sees the card and files nothing. Nothing on the
+  card names the session: the work filed is the person's, as if typed.
+- **`QuestionCard onlyThey`** is the agent's question to one member: "Only
+  Ana can answer this one", and no "Take over this task" hint, because
+  there is no task to take over.
+- **The rail** is `SessionRail` with a `SessionRailBlock` per part:
+  `SessionPeople` (owner first, each with their role in words — Owner, Can
+  chat, Can read, Invited), `LinkedProjects` (each project and its
+  repositories, read only; "No project linked yet" when none) and
+  `Capabilities` (what it can and cannot do, each line a check or a cross
+  as well as words).
+- **Presence is said in words, not colour alone.** Who has the session
+  open now takes the online dot on their face *and* "· here" after their
+  role.
+- **`SessionRow`** is a session in the list: the bulb face, its title,
+  what it filed in a line, the projects it reads as chips, its state and
+  age in words. **`SharedMark`** marks one someone else is in too: the
+  shared glyph, and the owner's face when it is not yours, so it reads
+  without colour.
+- **`SidebarSessions`** sits above Projects in the sidebar: only the
+  sessions you are in, each with the bulb glyph and the `SharedMark`'s
+  parts, then New session. The app passes it as `Sidebar`'s `sessions`
+  slot, so the sidebar draws it in place and knows nothing of sessions.
+- **`Sidebar waitingExtra`** adds what waits on you outside the tree —
+  session invitations and brainstorm questions put to you — to the
+  "Waiting on you" count, so one number answers "what needs me".
+- **A session's name never leaves it.** The tab title and the presence
+  word teammates see beside your face are the fixed "A session", never its
+  title, because a private session's name must not reach people outside
+  it. The same words stand for where a question waits in the inbox.
 
 ### Images in a conversation
 
@@ -460,7 +520,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   `Callout` under the header (attention for an abort, danger for a
   failure), in the escalation's grammar. First line: **who stopped what,
   and why**, quoted ("Ana aborted the implementer 1h ago: “…”"), with the
-  way to the session. Second line, secondary ink: what it left — the commit
+  way to the agent session. Second line, secondary ink: what it left — the commit
   it pushed (mono) and its counts, and whether its workspace and
   conversation are still kept and until when ("kept until Thu 8 Oct"), or
   that they are gone.
@@ -470,26 +530,28 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (a new attempt on a new branch). Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
-  conversation, workspace, branch, session — marked *kept*, *new* or
+  conversation, workspace, branch, agent session (labelled "Session") —
+  marked *kept*, *new* or
   *gone*. A way that is not possible stays in the list with its reason
   (`disabledReason`: "No longer kept: lux keeps a stopped session 7
-  days"); it is never simply missing. A note for the agents (optional)
+  days", the words shown); it is never simply missing. A note for the agents (optional)
   follows — on Resume it is the agent's next message, otherwise one of the
   task's decisions.
 - Only the task's owner picks it back up; anyone else reads, in the
   notice's place for the buttons, whom it waits on and how to make it
   theirs ("Only Márcio, its owner, can pick it back up. Take over the task
   to do it yourself.").
-- A stopped session's end strip (`RunEnded`) offers the same: **Resume…**
+- A stopped agent session's end strip (`RunEnded`) offers the same: **Resume…**
   while it is kept, and **Other ways…**, both opening the dialog.
 - **Nothing of an earlier attempt is hidden or lost.** The pipeline shows
   the current attempt ("Pipeline · attempt 2") with one muted line under it
   for each earlier one — how it stopped, and **Show attempt 1**, which
   folds it open: its steps as they ended, who stopped it and why, who set
   it aside and their note, its branch and last commit, and what lux still
-  keeps. The Sessions list groups by attempt under small-caps heads
+  keeps. The list of agent sessions on the task's Sessions tab groups by
+  attempt under small-caps heads
   ("Attempt 2 · current", "Attempt 1 · set aside") once there is more than
-  one; a set-aside session reads as it ended, its strip saying it was set
+  one; a set-aside agent session reads as it ended, its strip saying it was set
   aside and the way to where the work goes on. Activity is one timeline
   across attempts.
 
@@ -500,7 +562,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   coloured rails, not shades of grey. Indent is 12px then 8px; depth 2 starts
   collapsed; depth 3+ shows only its header with an Open action. A collapsed
   live thread keeps its activity in its header.
-- Only the watched session pins its plan (`AgentPlan sticky` under the
+- Only the watched agent session pins its plan (`AgentPlan sticky` under the
   transcript header). A child's plan lives inside its own thread, flat and
   collapsed. Two pinned plans would be two competing answers to "what is it
   doing".
@@ -512,26 +574,26 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Keyed on the domain unions, so a new status is a compile error until it is
   placed. Only the first four are *counted*; waiting and done are the calm
   majority and are never rolled up.
-- A task's bucket is the most urgent of its own status and the sessions
+- A task's bucket is the most urgent of its own status and the agent sessions
   of its current run (`taskTriage`). A `running` task whose reviewer
   is `awaiting_input` needs you, whatever the macro state says.
 - **Amber once per region.** In the sidebar the pinned needs-you block (tint
   and bar) is the one amber area; the filter chip, the tree row's pill, the
-  asking session's activity and the roll-up counts are neutral ink, and the
+  asking agent session's activity and the roll-up counts are neutral ink, and the
   diamond marks carry the hue. In the transcript it is the header's
   Needs-you badge and the waiting question's highlight.
-- The tree shows four levels — Project → Epic → Task → Session — and
-  folds Runs into their task: the current run's sessions sit directly
+- The tree shows four levels — Project → Epic → Task → agent session — and
+  folds Runs into their task: the current run's agent sessions sit directly
   under it; earlier attempts fold into one "Attempt n" row each. Retrying is
   rare and must not cost every task a level.
 - Levels differ in row grammar, not just indent (16px): projects are sticky
   small-caps headers, epics carry the layers glyph and a total, tasks
-  lead with a status dot and a mono key, sessions sit on a guide line behind
+  lead with a status dot and a mono key, agent sessions sit on a guide line behind
   a role avatar. A tree four deep still reads in grayscale.
 - Default open state is derived from triage and never needs three clicks: a
   project opens if anything inside is counted; an epic if anything needs you
   or is active; a task only if it needs you, down to the asking
-  session. The user's toggles override these per row and survive refreshes,
+  agent session. The user's toggles override these per row and survive refreshes,
   so a newly blocked item still opens its ancestors unless the operator
   explicitly folded them.
 - "What needs me" must be answerable without expanding anything. The
@@ -547,7 +609,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Board (the overview)
 
 - `Board` is what the main pane shows when the sidebar selection is a
-  project or an epic; a task or session opens the transcript. It takes
+  project or an epic; a task or agent session opens the transcript. It takes
   the same `NavProject` / `NavEpic` the sidebar takes — `boardScope` maps a
   `NavRef` to one or the other — so the two can never disagree about what
   exists or what needs you.
@@ -575,7 +637,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   scheduler starts work, the agent opens the PR, the checks make it ready,
   the merge closes it — and the two a person performs (confirm a plan, abort
   a run) are decisions with context, taken in the transcript. A card is a way
-  in, not a handle; clicking a needs-you card lands on the asking session.
+  in, not a handle; clicking a needs-you card lands on the asking agent session.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -590,30 +652,34 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
 
-### Sessions (live work on a task)
+### Agent sessions (live work on a task)
 
-- A task's sessions and the one open share its page: the **Sessions** tab
-  is the task's sessions down the left (`SessionList`, newest first, the
-  open one `current`) and the open session beside them. There is no
-  separate session page: a link to a session (`#/session/<id>`) opens its
-  task on that tab with that session open, so the task's people, pull
-  requests and findings stay one tab away while you watch an agent. Only a
-  session whose task cannot be learned stands on its own, and says the way
-  to its task when it ends.
-- The open session is `SessionHeader` (whose agent, for whom, its model,
-  status, cost, tokens and elapsed, Pause / Abort, and the terminal where
-  the rail is not — on every view, so the
-  numbers never depend on the rail being there), then **one bar**: a
-  `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
+An agent session is one agent's work inside a task's Run (`agent_sessions`
+in the code). A brainstorm session (`sessions`) belongs to its members,
+not a task; see *Brainstorm sessions*. Components keep their names
+(`SessionList`, `SessionHeader`, `SessionRail`, …) but show agent sessions
+here.
+
+- The task's **Sessions** tab puts its agent sessions on the left
+  (`SessionList`, newest first, the open one `current`) and the open one
+  beside them. A link (`#/session/<id>`) opens it on that tab, not a
+  separate page: the task's people, pull requests and findings stay one
+  tab away while you watch an agent. Only a session whose task cannot be
+  learned stands alone; when it ends, it says the way to its task.
+- `SessionHeader` heads the open agent session on every view: whose agent,
+  for whom, model, status, cost, tokens, elapsed, Pause / Abort, and the
+  terminal where the rail is absent. The numbers never depend on the rail.
+  Then **one bar**: a `Segmented` switch at the density's control size
+  between **Conversation**, **Changes** and **Events**
   (debugging, last), and on Changes the diff's own controls after it
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
   place under the bar; none opens over the page.
-- **Servers live on the task's tab**, not in a session: a Run's servers
-  are the task's while that Run serves it, so the session bar has no
+- **Servers live on the task's tab**, not in an agent session: a Run's
+  servers are the task's while that Run serves it, so the bar has no
   Servers toggle and nothing opens beside the conversation for them. A
-  branch preview's session, which has no agent, says so in place of the
-  composer and links to its task's Servers tab (`#/task/<id>/servers`).
+  branch preview's agent session, which has no agent, says so in place of
+  the composer and links to its task's Servers tab (`#/task/<id>/servers`).
 - **Changes** in the switch carries its file count and, while the agent is
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
@@ -621,26 +687,28 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-  the diff's own list does. When the session is narrower than about 820px
-  the rail goes and the conversation keeps the width. Narrower than 900px
-  the sessions list sits above the session.
+  the diff's own list does. When the agent session is narrower than about
+  820px the rail goes and the conversation keeps the width. Narrower than
+  900px the list of agent sessions sits above the open one.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
-  tab). Where the rail is not — the session narrower than about 820px, or
-  on Changes or Events — the header keeps the same link as a terminal icon
-  (`LinkButton iconOnly`), chosen by the same container query on the
-  session's width, so the terminal is never unreachable and never shown
-  twice. A branch preview has no agent session to hold it: its terminal
-  stays in the run line of the task's Servers tab.
-- With no session asked for, the one shown is picked once (running, else
-  newest) and kept: a phase ending must not swap it under someone reading.
-- **Two edges.** Everything in a session shares one outer edge and one
-  inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
+  tab). Where the rail is not — the agent session narrower than about
+  820px, or on Changes or Events — the header keeps the same link as a
+  terminal icon (`LinkButton iconOnly`), chosen by the same container
+  query on the agent session's width, so the terminal is never unreachable
+  and never shown twice. A branch preview has no agent to hold it: its
+  terminal stays in the run line of the task's Servers tab.
+- With no agent session asked for, the one shown is picked once (running,
+  else newest) and kept: a phase ending must not swap it under someone
+  reading.
+- **Two edges.** Everything in an agent session shares one outer edge and
+  one inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
   to edge across the transcript's column. Content sits on the chat inset
-  (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
+  (`--ds-space-chat-pad-x`): the header's face, the bar's switch,
   the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
-  Changes and Events views. Nothing in a session uses the page's 24px pad.
+  Changes and Events views. Nothing in an agent session uses the page's
+  24px pad.
 - A turn's text spans its column: chat turns have no measure (`Markdown
   unmeasured`: messages, thoughts, questions), so a long line wraps at the
   column's edge, not beside empty space.
@@ -649,9 +717,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   avatar gutter, so its left edge lines up with the words above), 4px
   between its items, and a turn's air above and below the run. Never a
   tool call on its own at the transcript's edge.
-- The sessions list is 260px (200px below 1280px).
+- The list of agent sessions is 260px (200px below 1280px).
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
-  session started from, uncommitted work included. Its toolbar reads
+  agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
   Split (`Segmented`). It wraps before it truncates: the summary is never
   cut to "3 fil…". With nothing changed there is no summary, only the empty
@@ -738,7 +806,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   asks. The app decides the threshold (dude's: more than 20 words in
   fields that changed).
 - **Segmented or Tabs.** `Segmented` switches between two or three views
-  of one thing inside a bar with other controls (the session bar, the
+  of one thing inside a bar with other controls (the agent session's bar, the
   editor's Write / Preview; `size="toolbar"` in a bar of `sm` buttons).
   With `tabs="<id>"` it is a tablist whose tabs control
   `<id>-<value>-panel`s the caller renders: one Tab stop, ← → Home End.
@@ -849,9 +917,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   other.
 - Humans and agents differ on three channels at once: a human is a full
   circle with a ring, shows initials, and takes a muted identity colour;
-  agents are squares (the conductor a round glyph), show a glyph, and
-  take a vivid role colour. Nothing about a person is ever a role colour or
-  a tone.
+  agents are squares (the conductor and the brainstorm round), show a
+  glyph, and take a vivid role colour. Nothing about a person is ever a
+  role colour or a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
   person is the same colour on every screen with no profile record. A
   `photoUrl` replaces the initials and nothing else changes.
@@ -928,7 +996,7 @@ shrinking something already small makes it cramped, not dense:
 | composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
 | board card padding and gap (`space-card-pad`) | 12 | 6 | |
 | rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
-| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, epics, projects, tool calls / sessions, thoughts, needs-you header |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, epics, projects, tool calls / agent sessions, thoughts, needs-you header |
 | needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
 | sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
@@ -1038,6 +1106,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Size them to the text beside them: 14px next to 14–15px text, 16px in an
   icon button, 11–12px only inside chips and badges. Strokes are 1.5 on the
   16px grid and 1.75 at 20px and up.
+- Every agent role has its own glyph (`ROLE_ICON` in `AgentAvatar`), the
+  brainstorm's a bulb (`brainstorm`), also on each brainstorm session in a
+  list. `shared` (two people) marks a brainstorm session someone else is in
+  too (`SharedMark`, `SidebarSessions`).
 
 ### Numbers and identifiers
 
@@ -1137,14 +1209,15 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   names it, and says what the whole is on the right. Given parts take the
   info tint. It is a figure with an `aria-label` that says the same in
   words.
-- **The machine a session runs on is a `MachineChip`** in its header,
+- **The machine an agent session runs on is a `MachineChip`** in the
+  agent session's header (`SessionHeader`),
   after the model and effort: the `chip` glyph, the size's name strong,
   its spec muted, on the raised shade at the chip height. Its tooltip
   (`MachineTip`) says where the size came from, that it is fixed for the
-  session, and what the container actually got when lux says. It opens on
+  agent session, and what the container actually got when lux says. It opens on
   focus and hover and stays open on a press; the chip acts on nothing.
 - **The Machines settings page** (an organisation's): its note says only
-  admins change sizes and that a change reaches sessions that start after
+  admins change sizes and that a change reaches agents that start after
   it. Sizes are a `Table` — the name with a Default badge, CPUs, memory
   and disk right-aligned and tabular, the pool in mono ("Default pool" for
   none; a pool the runtime no longer has is a danger `Badge` with the
@@ -1212,7 +1285,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 | Do | Don't |
 |---|---|
-| `<StatusBadge status="awaiting_human" />` | `<Badge tone="attention">Blocked</Badge>` |
+| `<StatusBadge status="awaiting_input" />` | `<Badge tone="attention">Blocked</Badge>` |
 | `<CostDisplay usd={run.costUsd} budgetUsd={run.budgetUsd} />` | `${run.costUsd.toFixed(2)}` |
 | `<Td align="right" mono><Duration ms={ms} /></Td>` | `<Td>{ms / 1000}s</Td>` |
 | `<AgentAvatar role="reviewer" name="reviewer-2" />` | a coloured circle with an initial |
@@ -1245,7 +1318,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
 | `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
 | `<SearchPicker findOnEmpty group={…} optionDisabled={…} clearOnPick />` over a `RemovableList` of `GitHubUserLine`s | `<Input placeholder="logins, comma-separated">` |
-| a run's servers on its task's Servers tab; `<TerminalLink>` in the session's rail | a servers panel or drawer inside a session |
+| a run's servers on its task's Servers tab; `<TerminalLink>` in the agent session's rail | a servers panel or drawer inside an agent session |
 | `<Tab count={on} tooltip={<ServersTabTip summary={s} />}>` | a native `title` on a tab, or "N ready" beside it |
 | `<NumberInput step={0.5} min={0.5} unit="CPUs" error="Whole or half CPUs: 0.5, 1, 1.5…" />` | `<input type="number" step="0.5">`, rounding what was typed without saying |
 | `<Select options={[{ value, label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB" }]} />` | a label string with the spec glued on in the same ink |
@@ -1276,7 +1349,8 @@ MarkdownCheatsheet.
 - **StatusBadge** — every domain status; badge, small, icon-only and dot
   variants.
 - **AgentAvatar** — conductor, investigator, implementer, reviewer,
-  simplifier, qa_browser, plus human / system / integration actors.
+  simplifier, qa_browser, brainstorm (the conductor's colour and round
+  shape, the bulb glyph), plus human / system / integration actors.
 - **CostDisplay, TokenCount, Duration** — the three formatters as components,
   with live ticking and budget colouring.
 - **MetricTile / MetricGroup** — label, big tabular value, delta with a
@@ -1347,7 +1421,7 @@ MarkdownCheatsheet.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **ChatRunLine** — a Run the conductor started, one line in its Chat on
-  its role's rail, opening its session.
+  its role's rail, opening its agent session.
 - **DeciderLine** — who takes a task's decisions, and the way to hand
   them back.
 - **StartChoice** — the ways to start a task, equal, side by side.
@@ -1363,7 +1437,7 @@ MarkdownCheatsheet.
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
   controlled or uncontrolled.
-- **NavTree** — Project → Epic → Task → Session, flat with `aria-level`,
+- **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
   defaults, and a filter that forces ancestors open. Earlier runs fold into
@@ -1424,7 +1498,7 @@ MarkdownCheatsheet.
   out of an `href`.
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
-  a phone, its rows stack). A session has no servers panel; its servers
+  a phone, its rows stack). An agent session has no servers panel; its servers
   are its task's. A live run's line offers Start all, Stop all and Add
   server; a branch preview's adds Stop preview, which ends the run, where
   Stop all leaves it live.
@@ -1437,7 +1511,7 @@ MarkdownCheatsheet.
   and a preview's egress allowlist as chips.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
   out among actions. **TerminalLink** is it for a run's lux terminal
-  ("Open terminal in lux ↗"): in a session's rail, and in a branch
+  ("Open terminal in lux ↗"): in an agent session's rail, and in a branch
   preview's run line; the overview's `ServersSummary` carries it short,
   as "Terminal".
 
@@ -1446,7 +1520,7 @@ MarkdownCheatsheet.
 - **FitBar** — how much of one host a size takes, or "Unknown".
 - **ProportionBar / ReservedSwatch** — a whole split into shares, the part
   nobody gets hatched; the memory of one host between Linux and its runs.
-- **MachineChip / MachineTip** — the machine in a session's header, and
+- **MachineChip / MachineTip** — the machine in an agent session's header, and
   its tooltip. The rules are under *Machines*.
 - **TierLine / TierMark** — a model tier in a table or a picker: its mark
   (a glyph on its tone's tint), name, and what it is for under it.
@@ -1454,9 +1528,9 @@ MarkdownCheatsheet.
   shade, small-caps titles; they stack when narrow. Once per page.
 - **NameChips** — suggestions under a field that takes any name, mono, the
   chosen one on the info tint; say in words that they are suggestions.
-- **TierChip / TierTip** — the model in a session's header: the tier, then
+- **TierChip / TierTip** — the model in an agent session's header: the tier, then
   the model it requested in mono. Its tooltip says that is what dude asked
-  for when the session started; never what the proxy served.
+  for when the agent session started; never what the proxy served.
 - **UsedBy** — who uses something: small faces (agents' tiles, projects'
   squares), then the words.
 - **SettingsExplainer** (with the Settings pieces) — how something a
@@ -1478,7 +1552,7 @@ MarkdownCheatsheet.
 `src/components/` — live work:
 
 - **LiveDiff** — a working agent's checkout against where it started, as
-  it changes (the rules are under *Sessions*): files with status and
+  it changes (the rules are under *Agent sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
   the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
@@ -1489,17 +1563,32 @@ MarkdownCheatsheet.
   file on its own.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
-- **SessionHeader** — the transcript's header on its own, for a session
-  whose views sit under it.
+- **SessionHeader** — the transcript's header on its own, for an agent
+  session whose views sit under it.
 - **`.ds-live-dot`** (base.css) — the one breathing dot, on
   `--ds-color-live`: beside what is changing now (a view's name, a label).
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
-  ChangedFiles** — the column beside a session's conversation; its facts
-  are a `KeyValueList`, values to the right.
-- **SessionList / SessionItem** — a task's sessions, the open one `current`.
+  ChangedFiles** — the column beside an agent session's conversation; its
+  facts are a `KeyValueList`, values to the right. A brainstorm session's
+  rail is the same `SessionRail` and `SessionRailBlock`.
+- **SessionList / SessionItem** — a task's agent sessions, the open one
+  `current`.
 - **FileGallery / FileViewer** — a task's files and their versions.
 - **Cost** — a total, with the tokens / machine split as a hairline, and
   optionally where each part came from and whether lux has settled it.
+
+`src/components/` — brainstorm sessions (the rules are under *Brainstorm
+sessions*):
+
+- **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
+  as whoever presses File.
+- **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
+  who is in it, what it reads, what it can do.
+- **SessionRow / SharedMark** — a brainstorm session in the list, and the
+  marker for one someone else is in too.
+- **SidebarSessions** — your brainstorm sessions above the projects, in
+  `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
+  questions in Waiting on you.
 
 ## What is deliberately not here
 

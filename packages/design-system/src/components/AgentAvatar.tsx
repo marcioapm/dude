@@ -56,9 +56,11 @@ export interface AgentAvatarProps extends HTMLAttributes<HTMLSpanElement> {
 
 /**
  * Identifies *who* did something. Roles are distinguished by glyph shape,
- * hue, and — for the conductor — a round mask, so identity survives
- * colorblindness and monochrome. Humans are round with a ring; system is
- * hollow; integrations are outlined squares.
+ * hue, and — for the conversation agents (conductor, brainstorm) — a round
+ * mask, so identity survives colorblindness and monochrome. The brainstorm
+ * wears the conductor's colour; its bulb glyph and label tell them apart.
+ * Humans are round with a ring; system is hollow; integrations are
+ * outlined squares.
  */
 export function AgentAvatar({
   role,

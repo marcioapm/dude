@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
+import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
+import { AgentAvatar } from "../../components/AgentAvatar.tsx";
+import { StatusMark } from "../../components/StatusMark.tsx";
 import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
@@ -36,6 +38,27 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="brainstorm" title="Brainstorm sessions"
       intro="A conversation with an agent that belongs to its members, not a task. It reads the linked projects and proposes work; a member files it with a click, as themselves.">
+      <Block id="bs-avatar" title="The brainstorm's face"
+        note="The conductor's colour and round shape, its own bulb glyph and label: the glyph tells the two conversation agents apart. Beside needs-you, it has none of the attention tone's hue, so it never reads as waiting on you. Grayscale keeps all three apart by glyph and shape.">
+        <Panes mode={mode}>
+          <Col>
+            <Row style={{ gap: 16 }}>
+              <AgentAvatar role="conductor" size="chat" name="Conductor" />
+              <AgentAvatar role="brainstorm" size="chat" name="Brainstorm" />
+              <StatusMark status="awaiting_input" />
+            </Row>
+            <States items={[
+              ["sm / md / lg", <>{(["sm", "md", "lg"] as const).flatMap((s) => [
+                <AgentAvatar key={`c-${s}`} role="conductor" size={s} />, <AgentAvatar key={`b-${s}`} role="brainstorm" size={s} />,
+              ])}</>],
+              ["solid", <><AgentAvatar role="conductor" size="md" solid /><AgentAvatar role="brainstorm" size="md" solid /><StatusMark status="awaiting_input" size="sm" /></>],
+              ["grayscale", <span style={{ filter: "grayscale(1)", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <AgentAvatar role="conductor" size="md" /><AgentAvatar role="brainstorm" size="md" /><StatusMark status="awaiting_input" />
+              </span>],
+            ]} />
+          </Col>
+        </Panes>
+      </Block>
       <Block id="bs-proposal" title="ProposalCard"
         note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. A reader sees the card and files nothing. Nothing on it names the session.">
         <Panes mode={mode} surface>

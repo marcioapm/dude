@@ -147,7 +147,8 @@
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--ds-radius-face-agent);
+  /* The brainstorm's face: the conductor's round shape and colour, its own glyph. */
+  border-radius: var(--ds-radius-full);
   background: var(--ds-role-brainstorm-bg);
   color: var(--ds-role-brainstorm-fg);
 }
