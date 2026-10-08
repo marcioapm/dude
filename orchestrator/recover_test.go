@@ -531,8 +531,8 @@ func runSucceededInLux(t *testing.T, cancelledState bool) {
 	w.until("its lux run to be let go, not kept", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID) == 1
 	})
-	if r := w.lux.Runs()[0]; r.Resumed != 0 {
-		t.Errorf("the old lux resumed a succeeded Run %d times", r.Resumed)
+	if r := w.lux.Runs()[0]; r.Resumed != 0 || !r.Cancelled {
+		t.Errorf("the old lux's succeeded Run: resumed %d, cancelled %v; want let go in lux", r.Resumed, r.Cancelled)
 	}
 }
 

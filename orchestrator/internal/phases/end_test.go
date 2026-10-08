@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -96,7 +97,7 @@ func (w *resumeWorld) stopReason() string {
 // resumes a succeeded Run. Only a Run lux has ended for good, under either
 // name, is let go without a call; one whose kept_until has passed is
 // terminated, succeeded included.
-func TestAKeptRunThatSucceededInLuxIsKept(t *testing.T) {
+func TestAKeptRunIsKeptUnlessLuxEndedItOrItsKeepExpired(t *testing.T) {
 	for _, c := range []struct {
 		luxState    string
 		keepExpired bool
@@ -159,8 +160,9 @@ func TestAnEndedRunNotKeptIsCancelledInLux(t *testing.T) {
 }
 
 // A completed Run's lux Run is terminated once its exit is collected, and
-// once only; one still being collected, a failed one (end deals with it),
-// and a branch preview's (ended by the preview loop) are left alone.
+// once only, a conductor's and a session agent's included; one still being
+// collected, a failed one (end deals with it), a parked session agent, and
+// a branch preview's (ended by the preview loop) are left alone.
 func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	w := newResumeWorld(t)
 	fake := &callLux{}
@@ -181,13 +183,26 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status, lux_run_id, lux_state, ended_at)
 		VALUES ('run_preview', $1, 'prj_'||$1, 'wi_p'||$1, 1, 'preview', 'completed', 'lrun_preview', 'stopped', now())`, w.run.Org)
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_preview'`)
+	// A session with an ended agent Run and a parked one (paused), seeded as
+	// the sessions tests do: its one owner is checked at commit.
+	w.exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_'||$1, $1, 'C')`, w.run.Org)
+	w.exec(`BEGIN`)
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('sess_'||$1, $1, 'Ideas')`, w.run.Org)
+	w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+		VALUES ('sess_'||$1, 'per_'||$1, $1, 'owner', now())`, w.run.Org)
+	w.exec(`COMMIT`)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, lux_run_id, lux_state,
+			lux_stop_reason, ended_at)
+		VALUES ('run_session', $1, 'sess_'||$1, 1, 'completed', 'agent', 'brainstorm', 'lrun_session', 'succeeded', 'complete', now()),
+		       ('run_parked', $1, 'sess_'||$1, 2, 'paused', 'agent', 'brainstorm', 'lrun_parked', 'stopped', 'pause', NULL)`, w.run.Org)
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id IN ('run_session', 'run_parked')`)
 
-	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 2 {
-		t.Fatalf("retired %d, %v; want 2", n, err)
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 3 {
+		t.Fatalf("retired %d, %v; want 3", n, err)
 	}
 	got := fake.Calls()
 	slices.Sort(got)
-	if want := []string{"cancel lrun_1", "cancel lrun_cond"}; !slices.Equal(got, want) {
+	if want := []string{"cancel lrun_1", "cancel lrun_cond", "cancel lrun_session"}; !slices.Equal(got, want) {
 		t.Errorf("terminated %v, want %v", got, want)
 	}
 	// Collected now: its turn comes; and nothing is asked twice.
@@ -195,21 +210,26 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 1 {
 		t.Fatalf("retired %d, %v; want 1", n, err)
 	}
-	if got := fake.Calls(); len(got) != 3 || got[2] != "cancel lrun_due" {
+	if got := fake.Calls(); len(got) != 4 || got[3] != "cancel lrun_due" {
 		t.Errorf("after the second pass, asked lux %v", got)
 	}
 	// Nothing left: the loop sleeps.
 	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 0 {
 		t.Fatalf("retired %d, %v; want 0", n, err)
 	}
+	if got := fake.Calls(); slices.Contains(got, "cancel lrun_parked") {
+		t.Errorf("a parked session agent was terminated: %v", got)
+	}
 }
 
 // lux refusing a terminate for good (unknown, already terminated) counts as
-// terminated; lux unhealthy (503) leaves the Run to ask again and ends the
-// batch, so the Runs behind it wait for the next pass.
+// terminated; lux unhealthy (503), or a failure that is not lux's answer,
+// leaves the Run to ask again and ends the batch, so the Runs behind it
+// wait for the next pass.
 func TestARetireLuxRefusesIsDoneOrAskedAgain(t *testing.T) {
 	w := newResumeWorld(t)
-	// Oldest first: the 503 one, the two refusals, then seven healthy ones.
+	// Oldest first: the 503 one, the two refusals, six healthy ones, then
+	// h7, whose cancel never reaches lux.
 	ids := []string{"r503", "r404", "r409", "h1", "h2", "h3", "h4", "h5", "h6", "h7"}
 	for i, id := range ids {
 		w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state,
@@ -218,10 +238,12 @@ func TestARetireLuxRefusesIsDoneOrAskedAgain(t *testing.T) {
 				now() - make_interval(secs => $3))`, w.run.Org, id, 100-i)
 	}
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE organization_id = $1`, w.run.Org)
+	dialErr := errors.New("dial tcp: connection refused")
 	fake := &callLux{err: map[string]error{
 		"lr503": &lux.Error{Status: 503, Code: "unavailable"},
 		"lr404": &lux.Error{Status: 404, Code: "not_found"},
 		"lr409": &lux.Error{Status: 409, Code: "not_cancellable"},
+		"lh7":   dialErr,
 	}}
 	w.s.Lux = fake
 	terminated := func() []string {
@@ -250,20 +272,24 @@ func TestARetireLuxRefusesIsDoneOrAskedAgain(t *testing.T) {
 		t.Errorf("first pass recorded %v terminated, want %v", got, want)
 	}
 
-	// Then the rest and the 503 again; then the 503 alone.
-	for pass, want := range [][]string{{"cancel lh6", "cancel lh7", "cancel lr503"}, {"cancel lr503"}} {
+	// Then the rest and the 503 again; then the 503 and h7, whose cancel
+	// failed with an error that is not lux's answer and so proves nothing.
+	for pass, want := range [][]string{{"cancel lh6", "cancel lh7", "cancel lr503"}, {"cancel lh7", "cancel lr503"}} {
 		before := len(fake.Calls())
 		fake.setPass(false, before+len(want))
-		if _, err := w.s.RetireCompleted(w.ctx); err == nil {
-			t.Fatalf("pass %d: lux's 503 not returned", pass+2)
+		if _, err := w.s.RetireCompleted(w.ctx); !errors.Is(err, dialErr) {
+			t.Errorf("pass %d returned %v; want the dial error", pass+2, err)
 		}
 		got := fake.Calls()[before:]
 		slices.Sort(got)
 		if !slices.Equal(got, want) {
 			t.Errorf("pass %d asked lux %v, want %v", pass+2, got, want)
 		}
+		if got := terminated(); slices.Contains(got, "h7") {
+			t.Errorf("pass %d recorded h7 terminated after a dial error", pass+2)
+		}
 	}
-	if got := terminated(); slices.Contains(got, "r503") || len(got) != 9 {
-		t.Errorf("recorded %v terminated; want every one but r503", got)
+	if got := terminated(); slices.Contains(got, "r503") || slices.Contains(got, "h7") || len(got) != 8 {
+		t.Errorf("recorded %v terminated; want every one but r503 and h7", got)
 	}
 }
