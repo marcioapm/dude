@@ -114,7 +114,7 @@ describe("a brainstorm session's page", () => {
     await settle();
     const notice = page.querySelector('[data-kind="stopped"]');
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toContain("Stopped Brainstorm's turn: bash was open for 10 min.");
+    expect(notice!.textContent).toContain("Stopped Brainstorm's turn: bash was open for 10\u00a0min.");
     expect(notice!.querySelector('[data-icon="warning"]')).not.toBeNull();
   });
 
