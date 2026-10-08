@@ -254,6 +254,10 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
                 detail="gpt-5.6-sol · 31m" trailing={<StatusMark status="running" size="sm" />} />
               <SessionItem onOpen={() => undefined} avatar={<AgentAvatar role="implementer" size="lg" />} title="Implement"
                 detail="claude-opus-5-5 · 12m" trailing={<StatusMark status="completed" size="sm" iconOnly />} />
+              <SessionItem onOpen={() => undefined} avatar={<AgentAvatar role="reviewer" size="lg" />} title="Review · frontend"
+                detail="gpt-5.6-sol · 30m" trailing={<StatusMark status="aborted" label="Restarted" size="sm" />}>
+                <a href="#c-sessions">Open replacement Run</a>
+              </SessionItem>
             </SessionList>
             <Label>its owner's banner, on a plain delivery</Label>
             <Callout tone="attention">

@@ -15,6 +15,7 @@ import { RUN_ID, STALLED_TEXT, TASK_ID, run } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { conductedLines } from "../src/conducted.ts";
+import { RunScreen } from "../src/screens/RunScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -116,4 +117,39 @@ describe("a restart in Chat", () => {
     expect(lines.find((l) => l.kind === "restart")).toMatchObject({ by: "person",
       text: "A person restarted the frontend Run on another tier, starting over." });
   });
+});
+
+describe("a restarted Run's presentation", () => {
+  async function pageFor(restarted: boolean, view: "sessions" | "step" | "run") {
+    localStorage.setItem("dude.fixtures.run", restarted ? "stalled" : "aborted");
+    const client = new FixtureClient("a");
+    if (restarted) await client.restart(RUN_ID, "Read the files yourself.");
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        {view === "run" ? <RunScreen client={client} runId={RUN_ID} onBack={() => {}} /> :
+          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}}
+            tab={view === "sessions" ? "sessions" : "overview"} />}
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const selector = view === "run" ? "[data-testid=run-ended]" : view === "sessions"
+      ? `[data-testid=session][data-run="${RUN_ID}"]` : "[data-testid=phase][data-status=aborted]";
+    return await until(() => container.querySelector<HTMLElement>(selector), view);
+  }
+
+  for (const view of ["sessions", "step", "run"] as const) {
+    test(`a replaced Run says Restarted in ${view}, with its replacement reachable; a plain abort stays Aborted`, async () => {
+      const restarted = await pageFor(true, view);
+      expect(restarted.textContent).toContain("Restarted");
+      expect(restarted.textContent).not.toContain("Aborted");
+      expect(restarted.querySelector("a")?.getAttribute("href")).toContain(`${RUN_ID}_again`);
+      if (view === "run") {
+        expect(restarted.textContent).toContain("Restarted by Márcio Martins: Read the files yourself.");
+        expect(restarted.closest("[data-testid=run-screen]")?.textContent).not.toContain("Aborted");
+      }
+      const aborted = await pageFor(false, view);
+      expect(aborted.textContent?.toLowerCase()).toContain("aborted");
+      expect(aborted.textContent).not.toContain("Restarted");
+    });
+  }
 });
