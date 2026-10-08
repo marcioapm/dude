@@ -136,8 +136,8 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 		VALUES ('run_preview', $1, 'prj_'||$1, 'wi_p'||$1, 1, 'preview', 'completed', 'lrun_preview', 'stopped', now())`, w.run.Org)
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_preview'`)
 
-	if err := w.s.retireCompleted(w.ctx); err != nil {
-		t.Fatal(err)
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 2 {
+		t.Fatalf("retired %d, %v; want 2", n, err)
 	}
 	got := fake.Calls()
 	slices.Sort(got)
@@ -146,10 +146,14 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	}
 	// Collected now: its turn comes; and nothing is asked twice.
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_due'`)
-	if err := w.s.retireCompleted(w.ctx); err != nil {
-		t.Fatal(err)
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 1 {
+		t.Fatalf("retired %d, %v; want 1", n, err)
 	}
 	if got := fake.Calls(); len(got) != 3 || got[2] != "cancel lrun_due" {
 		t.Errorf("after the second pass, asked lux %v", got)
+	}
+	// Nothing left: the loop sleeps.
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 0 {
+		t.Fatalf("retired %d, %v; want 0", n, err)
 	}
 }

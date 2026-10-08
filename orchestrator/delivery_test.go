@@ -272,6 +272,9 @@ func (w *world) pump() {
 			w.t.Fatal(err)
 		}
 	}
+	if _, err := w.syncer.RetireCompleted(ctx); err != nil {
+		w.t.Fatal(err)
+	}
 	if _, err := w.artifacts.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
 	}
