@@ -53,7 +53,7 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 	err := tx.QueryRow(ctx, `SELECT COALESCE(r.task_id, ''), r.kind, COALESCE(r.phase::text, ''), COALESCE(r.role::text, ''), r.status::text,
 			r.attempt = (SELECT max(k.attempt) FROM runs k WHERE k.task_id = r.task_id AND k.phase IS NOT NULL),
 			r.control = 'abort' OR r.push_request_id IS NOT NULL
-			  OR (COALESCE(r.lux_state, '') IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost') AND r.lux_stop_reason IS NULL
+			  OR (COALESCE(r.lux_state, '') IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost') AND r.lux_stop_reason IS NULL
 			      AND r.control = 'none')
 		FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&taskID, &kind, &phase, &role, &rstatus, &current, &ending)
 	switch {

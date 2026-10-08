@@ -345,10 +345,12 @@ class Cycler:
 
 
 def lux_ended(status: str) -> tuple[str, ...]:
-    """The lux states that end a dude Run of this status. lux's failed and
-    succeeded are final; dude cancels nothing in them. Stopped is resumable,
-    so it ends only a completed Run, which dude stops on purpose."""
-    ended = ("cancelled", "succeeded", "failed")
+    """The lux states in which cleanup is done with a dude Run of this
+    status: nothing of it runs any more. A failed or succeeded lux Run may
+    still be terminated by dude afterwards, which cleanup does not wait for.
+    Stopped is resumable, so it is enough only for a completed Run, which
+    dude stops first and terminates once its exit is collected."""
+    ended = ("cancelled", "terminated", "succeeded", "failed")
     return ended + ("stopped",) if status == "completed" else ended
 
 
