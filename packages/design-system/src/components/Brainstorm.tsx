@@ -1,4 +1,4 @@
-import { useState, type HTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -35,6 +35,15 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  // Set when Enter or Escape ends the edit: the button that replaces the field takes the focus back.
+  // A blur leaves it unset, so the focus stays wherever it went.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    button.current?.focus();
+  }, [editing]);
   const shown = title ?? untitled;
   // The whole name in the tooltip, for when the line cuts it.
   const words = <span className={cx(styles["titleWords"], title === null && styles["untitled"])} data-title-words=""
@@ -42,8 +51,9 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
   if (!onRename) return <span className={styles["title"]} data-testid="session-title">{words}</span>;
   if (!editing) {
     return (
-      <button type="button" className={cx(styles["title"], styles["titleEdit"])} data-testid="session-title"
+      <button ref={button} type="button" className={cx(styles["title"], styles["titleEdit"])} data-testid="session-title"
         aria-label={`Rename “${shown}”`} onClick={() => {
+          refocus.current = false;
           setDraft(title ?? "");
           setEditing(true);
         }}>
@@ -52,16 +62,20 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
       </button>
     );
   }
+  const close = (fromKeyboard: boolean) => {
+    refocus.current = fromKeyboard;
+    setEditing(false);
+  };
   const save = async () => {
     const next = draft.trim().replace(/\s+/g, " ");
     if (!next || next === title) {
-      setEditing(false);
+      close(true);
       return;
     }
     setBusy(true);
     try {
       await onRename(next);
-      setEditing(false);
+      close(true);
     } catch {
       // The caller says why; the field stays open with what was typed.
     } finally {
@@ -74,14 +88,14 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
       size={Math.max(draft.length, untitled.length) + 2}
       value={draft} maxLength={maxLength} disabled={busy} placeholder={untitled}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => !busy && setEditing(false)}
+      onBlur={() => !busy && close(false)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();
           void save();
         } else if (e.key === "Escape") {
           e.preventDefault();
-          setEditing(false);
+          close(true);
         }
       }} />
   );

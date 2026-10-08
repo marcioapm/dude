@@ -468,6 +468,42 @@ def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page:
     assert console_errors == []
 
 
+def test_ending_a_title_edit_from_the_keyboard_gives_the_focus_back_to_the_title(gallery_page: Page, console_errors: list):
+    """Escape, Enter on an unchanged name and Enter saving a new one each return the focus to the title
+    button, so a keyboard user carries on from it; leaving the field for something else keeps the focus there."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    title = pane.get_by_test_id("session-title").nth(1)
+    field = pane.get_by_test_id("session-title-input")
+    is_title = "el => document.activeElement === el"
+
+    def edit() -> None:
+        title.focus()
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_focused()
+
+    edit()
+    gallery_page.keyboard.press("Escape")
+    expect(field).to_have_count(0)
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    edit()
+    gallery_page.keyboard.press("Enter")
+    expect(field).to_have_count(0)
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    edit()
+    field.fill("Keyboard rename")
+    gallery_page.keyboard.press("Enter")
+    expect(title).to_have_text("Keyboard rename")
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    # A blur cancels and leaves the focus where it went.
+    edit()
+    share = pane.get_by_test_id("title-in-header").get_by_role("button", name="Share")
+    share.focus()
+    expect(field).to_have_count(0)
+    expect(share).to_be_focused()
+    assert console_errors == []
+
+
 def _title_fits(title) -> dict:
     """A SessionTitle's words, as Chrome laid them out: whether they are cut, and the space around them."""
     return title.evaluate("""el => {

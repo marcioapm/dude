@@ -465,7 +465,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   characters), and again only if the subject clearly changes.
 - **`SessionTitle`** is the name in the session's header: untitled, "New
   session" in muted ink. For a member who can chat it is a button that
-  edits the name in place — Enter saves, Escape cancels; a reader's is
+  edits the name in place — Enter saves, Escape cancels, and either gives
+  the focus back to the name (a blur cancels and leaves it where it went); a reader's is
   plain words. **A person's name wins**: once someone has named it, the
   agent's `name_session` refuses. In the header (`ScreenHeader fillTitle`)
   the name takes the line's free width, shown and edited: it is cut, with
