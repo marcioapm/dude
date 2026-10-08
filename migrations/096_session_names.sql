@@ -1,4 +1,4 @@
--- 095_session_names.sql — a session starts untitled and names itself.
+-- 096_session_names.sql — a session starts untitled and names itself.
 --
 -- title is NULL until someone names it: its agent (name_session) or a
 -- member who can chat. titled_by says which named it last: once a person

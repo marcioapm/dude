@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "095_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "096_session_names.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -280,7 +280,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "089_session_functions_parallel.sql",
       "090_stalled_runs.sql",
       "091_brainstorm_stuck_turn.sql",
-      "095_session_names.sql",
+      "096_session_names.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -325,7 +325,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "095_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "096_session_names.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },
@@ -339,13 +339,13 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
   }
 }, 120_000);
 
-test("095 keeps every titled session's name as a person's, and lets a new one start untitled", async () => {
+test("096 keeps every titled session's name as a person's, and lets a new one start untitled", async () => {
   const url = await ownedByANonSuperuser();
   const sql = new SQL(url);
   try {
     await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
       checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
-    for (const file of (await listMigrationFiles()).filter((f) => f.version < "095")) {
+    for (const file of (await listMigrationFiles()).filter((f) => f.version < "096")) {
       const contents = await file.contents();
       const record = (tx: SQL) => tx`INSERT INTO schema_migrations (version, name, checksum)
         VALUES (${file.version}, ${file.name}, ${createHash("sha256").update(contents).digest("hex")})`;
@@ -361,7 +361,7 @@ test("095 keeps every titled session's name as a person's, and lets a new one st
     }
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_old', 'org_n', 'Usage-based billing')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql"]);
     const titled = async (id: string) => [...await sql`SELECT title, titled_by FROM sessions WHERE id = ${id}`];
     expect(await titled("ssn_old")).toEqual([{ title: "Usage-based billing", titled_by: "person" }]);
     await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_new', 'org_n', NULL, NULL)`;
