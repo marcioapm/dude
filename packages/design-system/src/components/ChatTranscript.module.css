@@ -32,6 +32,7 @@
 }
 .headerTitle {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--ds-space-8);
   min-width: 0;
@@ -56,14 +57,19 @@
   flex-shrink: 0;
   font-weight: var(--ds-weight-regular);
 }
+/* Its facts wrap to a second line rather than squeeze each other. */
 .headerSub {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-12);
+  gap: 2px var(--ds-space-12);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
+}
+.headerSub > * {
+  flex-shrink: 0;
 }
 .headerSub code {
   font-size: inherit;

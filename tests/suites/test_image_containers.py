@@ -28,14 +28,14 @@ NODE = "FROM node:22-bookworm-slim\nRUN apt-get update && apt-get install -y git
 SHOTS = Path(os.environ["DUDE_SHOTS"]) if os.environ.get("DUDE_SHOTS") else None
 
 
-def _shoot(page: Page, name: str) -> None:
+def _shoot(page: Page, name: str, width: int = 1440) -> None:
     if not SHOTS:
         return
     SHOTS.mkdir(parents=True, exist_ok=True)
     _dismiss_toasts(page)
     size = page.viewport_size
     # The app scrolls inside its panes: a tall viewport, not a full-page shot.
-    page.set_viewport_size({"width": 1440, "height": 1300})
+    page.set_viewport_size({"width": width, "height": 1300})
     page.wait_for_timeout(200)
     for theme in ("light", "dark"):
         page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
@@ -323,5 +323,16 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     expect(pinned).to_contain_text("Nothing is spent meanwhile.")
     expect(page.get_by_test_id("run-waiting")).to_have_text("Waiting for a host")
     expect(page.get_by_test_id("run-image")).to_contain_text("abs-preview")
+    # Nothing in the header is cut short by the badge: the title and each chip show all of their text.
+    header = page.locator("header").filter(has=page.get_by_test_id("run-waiting"))
+    for width in (1024, 1440):
+        page.set_viewport_size({"width": width, "height": 1000})
+        clipped = header.evaluate("""h => [...h.querySelectorAll('*')]
+            .filter((e) => e.children.length === 0 && e.textContent.trim() && e.scrollWidth > e.clientWidth + 1)
+            .concat([...h.querySelectorAll('button, [data-testid]')].filter((e) => e.scrollWidth > e.clientWidth + 1))
+            .map((e) => e.textContent.trim())""")
+        assert clipped == [], f"clipped at {width}px: {clipped}"
     _shoot(page, "09b-waiting-run")
+    _shoot(page, "09b-waiting-run-narrow", width=1024)
+    _shoot(page, "09b-waiting-run-wide", width=1920)
     assert all("409" in e for e in console_errors), console_errors
