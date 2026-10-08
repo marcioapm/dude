@@ -527,6 +527,11 @@ to end: a query sharing no word with a memory finds it by meaning.
 
 ### Agent image contract
 
+A runtime image must provide `ps` (the `procps` package on Debian). dude
+reads a stalled Run's processes with `ps -eo pid,ppid,etime,pcpu,args` in
+its container. An image without it still works, but its stall reports
+cannot list processes and report that they could not be read.
+
 dude gives every real agent Run these, and nothing else about its model:
 
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
