@@ -1673,6 +1673,7 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 
 // retirable (SQL, over runs r): a completed Run whose lux Run dude has not
 // terminated, its last exit collected. Served by runs_retirable_idx (092).
+// 'cancel' is the lux_stop_reason recorded once dude has terminated a Run.
 const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 	AND r.artifacts_due_at IS NULL)`
 

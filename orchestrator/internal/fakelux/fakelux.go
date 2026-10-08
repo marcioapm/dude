@@ -1439,7 +1439,7 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		s.exited(run)
 		s.placementEnded(run, state, reason)
 	}
-	if lux.Terminated(state) || state == "succeeded" && s.CancelledState {
+	if lux.Terminated(state) || (state == "succeeded" && s.CancelledState) {
 		// Never runs again: its owner servers are detached, as lux does.
 		defer s.ownerRunEnded(run)
 	}

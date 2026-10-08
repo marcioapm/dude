@@ -47,8 +47,8 @@ func (a *afterAttach) AttachServer(ctx context.Context, serverID, runID string) 
 // wake stays wanted. The next sweep resumes a Run that ran and can run again
 // (failed, lost, stopped), counting no failed start, and replaces one that
 // never runs again (terminated, or cancelled from a lux before the rename);
-// either then serves. lux's succeeded is not covered: the fake never ends a
-// preview's Run that way.
+// either then serves. A Run lux ended succeeded is covered by
+// TestASucceededPreviewRunIsResumedWhereLuxCan.
 func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 	for _, end := range []string{"failed", "lost", "stopped", "terminated", "cancelled"} {
 		t.Run(end, func(t *testing.T) {

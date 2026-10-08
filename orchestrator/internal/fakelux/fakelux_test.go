@@ -245,16 +245,17 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 		name string
 		// when, in fifths of the start, the Run is cancelled
 		at int
+		// a lux from before terminated, which says cancelled
+		old bool
 	}{
-		{"cancelled before a host", 0},
-		{"cancelled once placed", 2},
-		{"resumed, then cancelled while resuming", -1},
+		{"cancelled before a host", 0, false},
+		{"cancelled once placed", 2, true},
+		{"resumed, then cancelled while resuming", -1, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
-			// Every other case as a lux before terminated, which says cancelled.
 			want := "terminated"
-			if c.at == 2 {
+			if c.old {
 				fake.CancelledState, want = true, "cancelled"
 			}
 			fake.StartAfter = 500 * time.Millisecond

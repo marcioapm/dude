@@ -159,8 +159,8 @@ func TestAnEndedRunNotKeptIsCancelledInLux(t *testing.T) {
 }
 
 // A completed Run's lux Run is terminated once its exit is collected, and
-// once only; one still being collected, a kept failed one, and a branch
-// preview's (ended by the preview loop) are left alone.
+// once only; one still being collected, a failed one (end deals with it),
+// and a branch preview's (ended by the preview loop) are left alone.
 func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	w := newResumeWorld(t)
 	fake := &callLux{}
@@ -174,7 +174,7 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 		       ('run_conductor', $1, 'prj_'||$1, 'wi_'||$1, 1, NULL, 'completed', 'lrun_cond', 'succeeded', 'complete', now())`,
 		w.run.Org)
 	w.exec(`UPDATE runs SET role = 'conductor', kind = 'agent' WHERE id = 'run_conductor'`)
-	// Still collecting run_due's exit; run_kept is kept until it expires.
+	// Still collecting run_due's exit; run_kept is failed, not completed.
 	w.exec(`UPDATE runs SET artifacts_due_at = now() WHERE id = 'run_due'`)
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id IN ($1, 'run_kept', 'run_conductor')`, w.run.ID)
 	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_p'||$1, $1, 'prj_'||$1, 2, 'T', 'G')`, w.run.Org)
