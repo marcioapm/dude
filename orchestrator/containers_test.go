@@ -8,6 +8,7 @@ package orchestrator_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -200,5 +201,62 @@ func TestARunNotWaitingForAHostHasNoWaitingReason(t *testing.T) {
 	_, body = w.get("/internal/runs/"+runID+"/servers", w.org)
 	if !strings.Contains(body, `"luxState":"lost"`) || !strings.Contains(body, `"waitingReason":null`) {
 		t.Errorf("lost: servers = %s", body)
+	}
+}
+
+// A session's agent and a task's conductor ask for nested containers as
+// their image says, through the same submit as every agent: on a library
+// image whose version can, not on one that cannot, and on DUDE_AGENT_IMAGE
+// as the operator says. Neither keeps an engine store.
+func TestASessionAndAConductorAskForContainersAsTheirImageSays(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		image    string // "" for DUDE_AGENT_IMAGE
+		can      bool
+		operator bool
+		want     bool
+	}{
+		{"a library image that can", "img_podman", true, false, true},
+		{"a library image that cannot", "img_base", false, true, false},
+		{"the fallback, operator on", "", false, true, true},
+		{"the fallback, operator off", "", false, false, false},
+	} {
+		t.Run("session, "+c.name, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.syncer.Agent.NestedContainers = c.operator
+			if c.image != "" {
+				s.useLayer(imageLayer)
+				s.canRunContainers(s.libraryImage(c.image, strings.TrimPrefix(c.image, "img_"), true), c.can)
+				mustExec(t, s.owner, `UPDATE organizations SET default_image_id = $2 WHERE id = $1`, s.org, c.image)
+			}
+			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Containers"})["id"].(string)
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+			run := s.started(id)
+			spec := s.luxRun(run).spec
+			if got := nested(&spec); got != c.want {
+				t.Errorf("nested = %v, want %v", got, c.want)
+			}
+			keepsEngines(t, spec, false)
+			if got := s.str(`SELECT coalesce(image->>'canRunContainers', 'false') FROM runs WHERE id = $1`, run); got != fmt.Sprint(c.image != "" && c.can) {
+				t.Errorf("runs.image canRunContainers = %s", got)
+			}
+		})
+		t.Run("conductor, "+c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.syncer.Agent.NestedContainers = c.operator
+			if c.image != "" {
+				w.useLayer(imageLayer)
+				w.canRunContainers(w.libraryImage(c.image, strings.TrimPrefix(c.image, "img_"), true), c.can)
+				mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = $2 WHERE id = $1`, w.project, c.image)
+			} else {
+				mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
+			}
+			task := w.task()
+			spec := w.conductorSubmitted(task)
+			if got := nested(&spec); got != c.want {
+				t.Errorf("nested = %v, want %v", got, c.want)
+			}
+			keepsEngines(t, spec, false)
+		})
 	}
 }
