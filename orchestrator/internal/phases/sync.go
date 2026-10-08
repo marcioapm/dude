@@ -304,6 +304,16 @@ const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_a
 var noProgress = `(r.status = 'running' AND r.phase IS NOT NULL AND r.lux_state = 'running' AND r.control = 'none'
 	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND (` + stalledCall + ` OR ` + stalledFiles + ` OR ` + stalledSilent + `))`
 
+const brainstormCallLimit = 10 * time.Minute
+
+const brainstormCalls = `(SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k)`
+
+const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.session_id IS NOT NULL
+	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none' AND r.turn_done_at IS NULL
+	AND EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
+		WHERE oc.value::timestamptz <= now() - make_interval(secs => $1::float8))
+	AND (r.stuck_interrupted_at IS NULL OR r.stuck_fingerprint IS DISTINCT FROM ` + brainstormCalls + `))`
+
 // changesCode (SQL, over runs r): a phase whose commits are published
 // (delivery.Publishes): implement, fix, simplify.
 const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
@@ -420,6 +430,9 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 // Runs that need attention is the job; each is then handled in its own
 // organization's scope.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+	if err := s.interruptBrainstorms(ctx); err != nil {
+		return 0, err
+	}
 	if err := s.handOverUnheard(ctx); err != nil {
 		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
 	}
@@ -456,6 +469,64 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	}
 	wg.Wait()
 	return int(handled.Load()), nil
+}
+
+const stuckTurnNudge = "A tool call of yours was open for 10 minutes, so dude stopped your turn. " +
+	"Tell the people in the session briefly what you were doing and that it got stuck, then carry on or ask them."
+
+func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
+	type found struct{ ID, Org, SessionID string }
+	var due []found
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.session_id FROM runs r WHERE `+stuckBrainstorm,
+			brainstormCallLimit.Seconds())
+		if err != nil {
+			return err
+		}
+		due, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, r := range due {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+				return err
+			}
+			var fingerprint, callID string
+			var openSecs float64
+			err := tx.QueryRow(ctx, `SELECT `+brainstormCalls+`, oc.key, extract(epoch FROM now() - oc.value::timestamptz)
+				FROM runs r CROSS JOIN LATERAL (SELECT * FROM jsonb_each_text(r.open_tool_calls_at)
+					ORDER BY value::timestamptz, key LIMIT 1) oc
+				WHERE r.id = $2 AND `+stuckBrainstorm, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &callID, &openSecs)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			var tool string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'tool' FROM events WHERE run_id = $1
+				AND event_type = 'agent.tool.called' AND payload->>'callId' = $2 ORDER BY cursor LIMIT 1), 'tool')`,
+				r.ID, callID).Scan(&tool); err != nil {
+				return err
+			}
+			ref := delivery.RunRef{Org: r.Org, SessionID: r.SessionID, RunID: r.ID}
+			id, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: stuckTurnNudge, Interrupt: true, Scope: "turn"})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_interrupted_at = now(), stuck_fingerprint = $2 WHERE id = $1`,
+				r.ID, fingerprint); err != nil {
+				return err
+			}
+			return delivery.SessionEvent(ctx, tx, ref, delivery.EvSessionTurnStopped, ledger.ActorSystem, "dude",
+				map[string]any{"runId": r.ID, "tool": tool, "openSecs": openSecs, "directiveId": id})
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // advance moves one Run on by whatever its state calls for. Returns whether
