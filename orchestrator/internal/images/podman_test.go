@@ -430,15 +430,15 @@ func TestPodmanACancelledCheckLeavesNoContainer(t *testing.T) {
 	if err := os.WriteFile(deaf, []byte("#!/bin/sh\ntrap '' TERM\npodman \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, how := range []string{"timeout", "shutdown", "a client deaf to SIGTERM"} {
+	for _, how := range []string{"timeout", "shutdown", "a client deaf to SIGTERM", "a client deaf to SIGTERM on timeout"} {
 		t.Run(how, func(t *testing.T) {
 			c := c
-			if how == "a client deaf to SIGTERM" {
+			if strings.HasPrefix(how, "a client deaf") {
 				c.Bin = deaf
 			}
 			parent, cancel := context.WithCancel(context.Background())
 			ctx, stop := context.Context(parent), cancel
-			if how == "timeout" {
+			if strings.HasSuffix(how, "timeout") {
 				e := &expiring{Context: parent, done: make(chan struct{})}
 				ctx, stop = e, e.expire
 			}
@@ -455,13 +455,13 @@ func TestPodmanACancelledCheckLeavesNoContainer(t *testing.T) {
 			if name == "" {
 				t.Fatal("the check's container never ran")
 			}
+			t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", "-t", "0", "--ignore", name).Run() })
 			stop()
 			if err := <-done; err == nil {
 				t.Fatal("a stopped check returned no error")
 			}
 			if exec.Command("podman", "container", "exists", name).Run() == nil {
 				t.Errorf("container %s is left after the check returned", name)
-				_ = exec.Command("podman", "rm", "-f", "-t", "0", name).Run()
 			}
 		})
 	}
