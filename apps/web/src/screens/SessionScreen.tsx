@@ -15,10 +15,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { firstName, type NavProject } from "@dude/design-system";
 import {
   Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard,
-  ScreenHeader, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SharedMark, type ProposalCardItem,
+  ScreenHeader, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
+import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { apply, emptyProjection, snapshot, steerWait, type Turn } from "../api/conversation.ts";
 import { dudeName } from "../DudeMark.tsx";
@@ -37,7 +37,7 @@ const OPEN_EVERY_MS = 60_000;
 const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
-  EventTypes.BrainstormFiled, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
+  EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
 ]);
@@ -117,6 +117,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     }
   }, [client, sessionId]);
 
+  const rename = useCallback(async (title: string) => {
+    setProblem(null);
+    try {
+      await client.renameSession(sessionId, title);
+      setDetail((d) => (d ? { ...d, session: { ...d.session, title, titledBy: "person" } } : d));
+      onChanged();
+    } catch (err) {
+      setProblem(`Could not rename it: ${errorText(err)}`);
+      throw err;
+    }
+  }, [client, sessionId, onChanged]);
+
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
   const lines = useMemo(() => {
     if (!detail) return [];
@@ -129,9 +141,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     }
     for (const e of events) {
       const text = sessionNotice(e, people);
+      // A rename is signed by whoever named it: the agent, or the person its words name.
+      const renamed = e.eventType === EventTypes.BrainstormRenamed;
+      const by = renamed ? (e.payload.by === "agent" ? "Brainstorm" : undefined) : dudeName(sessionId);
       if (text) out.push({ id: e.eventId, at: e.occurredAt, node: <ChatNotice key={e.eventId}
-        kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : "notice"}
-        by={dudeName(sessionId)} text={text} at={e.occurredAt} data-testid="session-notice" /> });
+        kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : renamed ? "renamed" : "notice"}
+        by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
     return out.sort((a, b) => a.at.localeCompare(b.at));
   }, [detail, events, people, client, sessionId, linkedKeys, load]);
@@ -161,7 +176,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>
       <ScreenHeader
-        title={session.title}
+        title={<SessionTitle title={session.title} untitled={UNTITLED_SESSION} maxLength={200}
+          onRename={reader ? undefined : rename} />}
         meta={<>
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
@@ -183,6 +199,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                   mode={yours ? "answer" : "chat"}
                   question={yours ? { id: yours.id, text: yours.prompt, askedBy: "the brainstorm", askedAt: yours.askedAt, options: yours.options } : undefined}
                   disabled={reader}
+                  // A session nobody has written to yet (a new one, opened at once) is for writing in.
+                  autoFocus={!reader && session.messages === 0}
                   disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.` : undefined}
                   onSubmit={({ text }) => send(text)}
@@ -276,6 +294,10 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
     }
     case EventTypes.BrainstormLinked:
       return `${by} changed what the session reads.`;
+    case EventTypes.BrainstormRenamed: {
+      const title = typeof p.title === "string" ? p.title : "";
+      return p.by === "agent" ? `Named it “${title}”` : `${firstName(name(p.by))} renamed it “${title}”`;
+    }
     case EventTypes.BrainstormFiled: {
       const filed = Array.isArray(p.filed) ? p.filed as Array<{ key?: string }> : [];
       return `${typeof p.by === "string" ? p.by : by} filed ${filed.map((f) => f.key).filter(Boolean).join(", ")}.`;

@@ -204,6 +204,7 @@ func TestOnlyAcceptedMembersReachASession(t *testing.T) {
 		body         any
 	}{
 		{"GET", "/internal/sessions/" + id, nil},
+		{"POST", "/internal/sessions/" + id + "/title", map[string]any{"title": "Mine now"}},
 		{"POST", "/internal/sessions/" + id + "/chat", map[string]any{"text": "hi"}},
 		{"POST", "/internal/sessions/" + id + "/link", map[string]any{"projects": []any{}}},
 		{"POST", "/internal/sessions/" + id + "/people", map[string]any{"people": []string{s.joao}}},

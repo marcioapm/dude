@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+// A session's agent is told to name its session once the subject is clear
+// and to leave a member's name alone (with tools), and how to publish a
+// document for the members (always: it needs no tool), even under an
+// organisation's own instructions.
+func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
+	org := "Think with us."
+	for _, in := range []PromptInput{{Tools: true}, {Tools: true, OrgPrompt: &org}} {
+		got := BrainstormPrompt("briefing", in)
+		for _, want := range []string{"name_session once its subject is clear", "at most 60 characters",
+			"Name it again only if the subject clearly changes", "Once a member has named it, leave the name alone",
+			"`$LUX_ARTIFACTS/design.md`", "a design note, a diagram, a table, a CSV", "Say in your reply what you published"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the brainstorm's prompt lacks %q", want)
+			}
+		}
+	}
+	bare := BrainstormPrompt("briefing", PromptInput{})
+	if strings.Contains(bare, "name_session") || !strings.Contains(bare, "LUX_ARTIFACTS") {
+		t.Errorf("without tools it is told of a tool it lacks, or not how to publish:\n%s", bare)
+	}
+}
+
 // The conductor is told when to steer rather than start another phase, and
 // that interrupting is for wasted work only; with tools, how to from its shell.
 func TestTheConductorIsToldWhenToSteer(t *testing.T) {

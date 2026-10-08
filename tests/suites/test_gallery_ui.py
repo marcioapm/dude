@@ -445,3 +445,24 @@ def test_the_image_states_render_and_the_viewer_opens_from_a_turn(gallery_page: 
     gallery_page.keyboard.press("Escape")
     expect(viewer).to_have_count(0)
     assert console_errors == []
+
+
+def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page: Page, console_errors: list):
+    """SessionTitle: pressing a session's name opens it for editing in place;
+    Escape keeps the name, Enter saves the new one."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    titles = pane.get_by_test_id("session-title")
+    expect(titles.nth(0)).to_have_text("New session")
+    titles.nth(1).click()
+    field = pane.get_by_test_id("session-title-input")
+    expect(field).to_be_focused()
+    field.fill("Dropped")
+    gallery_page.keyboard.press("Escape")
+    expect(field).to_have_count(0)
+    expect(titles.nth(1)).to_have_text("Usage-based billing")
+    titles.nth(1).click()
+    pane.get_by_test_id("session-title-input").fill("Billing v2")
+    gallery_page.keyboard.press("Enter")
+    expect(titles.nth(1)).to_have_text("Billing v2")
+    assert console_errors == []

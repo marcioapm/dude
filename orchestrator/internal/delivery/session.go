@@ -43,7 +43,54 @@ const (
 	EvSessionFiled       = "session.filed"
 	EvSessionBriefed     = "session.briefed"
 	EvSessionTurnStopped = "session.turn_stopped"
+	EvSessionRenamed     = "session.renamed"
 )
+
+// UntitledSession is what a session is called until it is named.
+const UntitledSession = "New session"
+
+// AgentTitleMax bounds the title the agent gives a session (name_session),
+// in characters; a person's may run to the schema's 200.
+const AgentTitleMax = 60
+
+// ByAgent is session.renamed's by when the session's agent named it;
+// otherwise by is the person's id.
+const ByAgent = "agent"
+
+// ErrNamedByPerson refuses the agent a session a person has named.
+var ErrNamedByPerson = errors.New("a member named this session; their title stays")
+
+// RenameSession sets the session's title, locking its row so a person's
+// rename and the agent's are settled one after the other. by is ByAgent or
+// the person's id: the agent may not rename what a person named
+// (ErrNamedByPerson); a person always may. A title already set the same
+// way records nothing. The title is checked by the caller.
+func RenameSession(ctx context.Context, tx pgx.Tx, ref RunRef, title, by, actorType, actorID string) (bool, error) {
+	var current, titledBy *string
+	if err := tx.QueryRow(ctx, `SELECT title, titled_by FROM sessions WHERE id = $1 FOR UPDATE`, ref.SessionID).
+		Scan(&current, &titledBy); err != nil {
+		return false, err
+	}
+	kind := "person"
+	if by == ByAgent {
+		kind = ByAgent
+		if titledBy != nil && *titledBy == "person" {
+			return false, ErrNamedByPerson
+		}
+	}
+	if current != nil && *current == title && titledBy != nil && *titledBy == kind {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sessions SET title = $2, titled_by = $3, updated_at = now() WHERE id = $1`,
+		ref.SessionID, title, kind); err != nil {
+		return false, err
+	}
+	return true, SessionEvent(ctx, tx, ref, EvSessionRenamed, actorType, actorID, map[string]any{"title": title, "by": by})
+}
+
+// OneLineTitle is a title as typed, its whitespace runs (line breaks
+// included) made single spaces.
+func OneLineTitle(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // ErrNotMember is a session the person may not see: no such session, not
 // a member, or an invitation not accepted. One error for all three, so a
@@ -186,13 +233,21 @@ func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 // sessionBriefing is the brainstorm's first prompt before its
 // instructions: the session, who is in it, what it reads, and the message.
 func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) (string, error) {
-	var title string
-	if err := tx.QueryRow(ctx, `SELECT title FROM sessions WHERE id = $1`, sessionID).Scan(&title); err != nil {
+	var title, titledBy *string
+	if err := tx.QueryRow(ctx, `SELECT title, titled_by FROM sessions WHERE id = $1`, sessionID).Scan(&title, &titledBy); err != nil {
 		return "", fmt.Errorf("briefing: the session: %w", err)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Brainstorm, this is the session %q. You think with its members about their projects: read, "+
-		"ask, propose. Below is what dude knows; read more with your tools.", oneLine(title))
+	switch {
+	case title == nil:
+		b.WriteString("Brainstorm, this is a new session, not named yet.")
+	case titledBy != nil && *titledBy == "person":
+		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as a member named it: keep that name.", oneLine(*title))
+	default:
+		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as you named it.", oneLine(*title))
+	}
+	b.WriteString(" You think with its members about their projects: read, ask, propose. Below is what dude knows; " +
+		"read more with your tools.")
 	people, err := SessionMembers(ctx, tx, sessionID)
 	if err != nil {
 		return "", err
@@ -265,8 +320,9 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 		sections = append(sections, b.String())
 	}
 	if in.Tools {
-		sections = append(sections, brainstormToolsNote)
+		sections = append(sections, brainstormToolsNote, brainstormNamingNote)
 	}
+	sections = append(sections, brainstormPublishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
 		sections = append(sections, "## Notes\n\n"+c)
 	}
@@ -279,6 +335,20 @@ const brainstormToolsNote = "The dude tools read the linked projects: list_tasks
 	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
 	"and what others say meanwhile reaches you with the answer."
+
+// brainstormNamingNote is when the agent names its session. The rule
+// that a person's name stays is name_session's own, not only these words.
+const brainstormNamingNote = "Name the session with name_session once its subject is clear, typically after the " +
+	"first exchange or two: one line of plain words, at most 60 characters, no quotes or punctuation for show. " +
+	"Name it again only if the subject clearly changes. Once a member has named it, leave the name alone: " +
+	"name_session refuses."
+
+// brainstormPublishNote is how the agent hands the members a document. Its
+// files are listed beside the session, for its members alone.
+const brainstormPublishNote = "To give the members a document — a design note, a diagram, a table, a CSV — write it " +
+	"into the directory named by the LUX_ARTIFACTS environment variable (for example `$LUX_ARTIFACTS/design.md`, " +
+	"`$LUX_ARTIFACTS/usage.csv`). Each appears in the session's Files, Markdown rendered, for its members only. " +
+	"Say in your reply what you published and why. Never copy code there."
 
 // SessionHandOver settles what members sent an ended brainstorm and it
 // never read: each goes, in order and with its writer, to the session's

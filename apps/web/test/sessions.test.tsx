@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, SessionDetail, SessionsList } from "@dude/domain";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -42,7 +42,7 @@ function detail(role: "owner" | "chat" | "read", over: Partial<SessionDetail> = 
   const other = role === "owner" ? ANA : ME;
   return {
     session: {
-      id: SESSION, title: "Usage-based billing", createdAt: at(0),
+      id: SESSION, title: "Usage-based billing", titledBy: "agent", createdAt: at(0),
       people: [
         { person: ref(owner), role: "owner", accepted: true, becomesOwner: false, open: true },
         { person: ref(other), role: role === "owner" ? "chat" : role, accepted: true, becomesOwner: false, open: false },
@@ -63,10 +63,15 @@ class SessionClient extends FixtureClient {
     super("a");
   }
   sent: string[] = [];
+  renamed: string[] = [];
   filed: number[][] = [];
   fileResult: FileResult | null = null;
   override getSession(): Promise<SessionDetail> {
     return Promise.resolve(this.detail);
+  }
+  override renameSession(_id: string, title: string) {
+    this.renamed.push(title);
+    return Promise.resolve({ id: SESSION, title });
   }
   protected override ledgerFor(q: LedgerQuery): PersistedEvent[] {
     if (q.sessionId !== SESSION) return super.ledgerFor(q);
@@ -322,6 +327,114 @@ describe("a brainstorm session's page", () => {
     const shown = await until(() => container.querySelector("[data-testid=not-found]"), "not found");
     expect(shown.textContent).toContain("you're not in it");
     expect(container.querySelector("[data-testid=session-screen]")).toBeNull();
+  });
+});
+
+describe("a session's name", () => {
+  const untitled = (role: "owner" | "chat" | "read") => {
+    const d = detail(role);
+    return { ...d, session: { ...d.session, title: null, titledBy: null, messages: 0 } };
+  };
+
+  test("untitled, its header says New session, muted, and a new one opens with the composer focused", async () => {
+    const client = new SessionClient(untitled("owner"));
+    const page = await sessionPage(client);
+    const title = page.querySelector("[data-testid=session-title]")!;
+    expect(title.textContent).toBe("New session");
+    expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
+    expect(document.activeElement).toBe(page.querySelector("[data-testid=session-screen] textarea"));
+  });
+
+  test("a member who can chat renames it in place: Enter saves, Escape cancels", async () => {
+    const client = new SessionClient(detail("chat"));
+    const page = await sessionPage(client);
+    await click(page.querySelector("[data-testid=session-title]")!);
+    let input = await until(() => page.querySelector<HTMLInputElement>("[data-testid=session-title-input]"), "the name field");
+    expect(input.value).toBe("Usage-based billing");
+    await type(input, "Throwaway");
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(page.querySelector("[data-testid=session-title]")!.textContent).toBe("Usage-based billing");
+    expect(client.renamed).toEqual([]);
+
+    await click(page.querySelector("[data-testid=session-title]")!);
+    input = await until(() => page.querySelector<HTMLInputElement>("[data-testid=session-title-input]"), "the name field again");
+    await type(input, "  Billing   v2 ");
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    await settle();
+    expect(client.renamed).toEqual(["Billing v2"]);
+    expect(page.querySelector("[data-testid=session-title]")!.textContent).toBe("Billing v2");
+  });
+
+  test("a reader reads its name and cannot rename it", async () => {
+    const client = new SessionClient(untitled("read"));
+    const page = await sessionPage(client);
+    const title = page.querySelector("[data-testid=session-title]")!;
+    expect(title.tagName).not.toBe("BUTTON");
+    expect(title.textContent).toBe("New session");
+    await click(title);
+    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(document.activeElement).not.toBe(page.querySelector("[data-testid=session-screen] textarea"));
+  });
+
+  test("the Chat says who named it: the agent, or the person by name", async () => {
+    const client = new SessionClient(detail("owner"), [
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, { type: "agent", id: RUN }),
+      ev("session.renamed", { title: "Billing v2", by: ANA.id }, { type: "human", id: ANA.id }),
+    ]);
+    const page = await sessionPage(client);
+    const notices = await until(() => {
+      const found = [...page.querySelectorAll("[data-kind=renamed]")];
+      return found.length === 2 ? found : null;
+    }, "both renames");
+    expect(notices[0]!.textContent).toContain("Brainstorm: Named it “Usage metering”");
+    expect(notices[1]!.textContent).toContain(`${ANA.name.split(" ")[0]} renamed it “Billing v2”`);
+  });
+
+  test("untitled in the list, the sidebar's list and the inbox: New session", async () => {
+    const summary = { id: SESSION, title: null, role: "owner" as const, createdAt: at(0), owner: ref(ME), shared: false, projects: [],
+      runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0) };
+    const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
+    const client = new SessionClient(detail("owner"));
+    const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} /></ToastProvider>);
+    mounted.push(list.unmount);
+    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
+
+    const inbox = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <InboxScreen client={client} projects={[]} onSelect={() => {}} onOpenSession={() => {}} onChanged={() => {}} sessions={{
+            sessions: [],
+            invitations: [{ id: SESSION, title: null, role: "chat", becomesOwner: false, invitedAt: at(0), invitedBy: ref(ME), people: [ref(ME)],
+              projects: [], messages: 0 }],
+            questions: [{ id: "q_u", prompt: "Which window?", options: [], askedAt: at(1), sessionId: SESSION, title: null }],
+          }} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(inbox.unmount);
+    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: New session");
+    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in New session");
+  });
+
+  test("New session starts one at once, untitled and linked to nothing, and opens it", async () => {
+    const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
+    class Creating extends SessionClient {
+      made = 0;
+      override createSession() {
+        this.made++;
+        return Promise.resolve({ id: "ssn_new", title: null });
+      }
+    }
+    const client = new Creating(detail("owner"));
+    const opened: string[] = [];
+    const { container, unmount } = await mount(<ToastProvider><SessionsScreen client={client} sessions={[]} onOpen={(id) => opened.push(id)} /></ToastProvider>);
+    mounted.push(unmount);
+    await click(container.querySelector("[data-testid=new-session]")!);
+    await settle();
+    expect(client.made).toBe(1);
+    expect(opened).toEqual(["ssn_new"]);
+    expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 });
 

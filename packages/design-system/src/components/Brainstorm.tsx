@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -12,6 +12,76 @@ import styles from "./Brainstorm.module.css";
  * member files from, a session's row in the list, its people and what it
  * reads in the rail, and the marker for a session someone else is in too.
  */
+
+// ---------------------------------------------------------------------------
+// The session's name
+// ---------------------------------------------------------------------------
+
+export interface SessionTitleProps {
+  /** null until its agent or a member names it: shown as `untitled`. */
+  readonly title: string | null;
+  readonly untitled?: string | undefined;
+  /** Given, a member who can chat may rename it; a reader's title is plain words. Resolves once saved; a rejection keeps the field open. */
+  readonly onRename?: ((title: string) => Promise<void>) | undefined;
+  readonly maxLength?: number | undefined;
+}
+
+/**
+ * A session's name in its header. Untitled, it reads "New session" in
+ * muted ink. With `onRename`, the name is a button: pressing it edits the
+ * name in place, Enter saves, Escape (or an unchanged name) cancels.
+ */
+export function SessionTitle({ title, untitled = "New session", onRename, maxLength = 200 }: SessionTitleProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const shown = title ?? untitled;
+  const words = <span className={cx(styles["titleWords"], title === null && styles["untitled"])} data-untitled={title === null || undefined}>{shown}</span>;
+  if (!onRename) return <span className={styles["title"]} data-testid="session-title">{words}</span>;
+  if (!editing) {
+    return (
+      <button type="button" className={cx(styles["title"], styles["titleEdit"])} data-testid="session-title"
+        aria-label={`Rename “${shown}”`} title="Rename" onClick={() => {
+          setDraft(title ?? "");
+          setEditing(true);
+        }}>
+        {words}
+        <Icon name="edit" size={13} className={styles["titleGlyph"]} />
+      </button>
+    );
+  }
+  const save = async () => {
+    const next = draft.trim().replace(/\s+/g, " ");
+    if (!next || next === title) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onRename(next);
+      setEditing(false);
+    } catch {
+      // The caller says why; the field stays open with what was typed.
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <input className={styles["titleInput"]} aria-label="Session name" data-testid="session-title-input" autoFocus
+      value={draft} maxLength={maxLength} disabled={busy} placeholder={untitled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => !busy && setEditing(false)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void save();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setEditing(false);
+        }
+      }} />
+  );
+}
 
 // ---------------------------------------------------------------------------
 // The proposal card

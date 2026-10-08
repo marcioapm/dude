@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -50,6 +51,34 @@ var brainstormTools = []tool{
 	define("ask_person", "Ask the session's members something only they can decide, then end your turn: the answer is "+
 		"your next message. With to (a member's name), only that member can answer; what others say meanwhile reaches "+
 		"you with the answer.", brainstorms, sessionAsk),
+	define("name_session", "Name this session: one line of plain words, at most 60 characters, once its subject is "+
+		"clear. Name it again only if the subject clearly changes. Refused once a member has named it.",
+		brainstorms, nameSession).limit(namesPerRun),
+}
+
+// namesPerRun bounds how often one Run renames its session.
+const namesPerRun = 20
+
+type nameSessionIn struct {
+	Title string `json:"title" jsonschema:"the session's name: one line, at most 60 characters, plain words"`
+}
+
+type nameSessionOut struct {
+	Title string `json:"title"`
+}
+
+// nameSession names the agent's session, unless a person has: their title
+// wins from then on, and the agent is told so.
+func nameSession(ctx context.Context, tx pgx.Tx, c Caller, in nameSessionIn) (nameSessionOut, error) {
+	title := delivery.OneLineTitle(in.Title)
+	if title == "" || utf8.RuneCountInString(title) > delivery.AgentTitleMax {
+		return nameSessionOut{}, refuse("a title of 1 to %d characters, on one line", delivery.AgentTitleMax)
+	}
+	_, err := delivery.RenameSession(ctx, tx, c.run(), title, delivery.ByAgent, ledger.ActorAgent, c.RunID)
+	if errors.Is(err, delivery.ErrNamedByPerson) {
+		return nameSessionOut{}, refuse("a member named this session; their name stays: don't rename it")
+	}
+	return nameSessionOut{Title: title}, err
 }
 
 // linkedProject is the project a tool names, by key: one linked to the

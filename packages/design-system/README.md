@@ -445,6 +445,20 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   reads as needs-you.
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+- **A session starts untitled and names itself.** New session (the list's,
+  the sidebar's) makes one at once — no dialog, no title, nothing linked —
+  and opens it with the composer focused; its owner links projects from the
+  rail. Until it is named it reads **"New session"** everywhere it is
+  listed or headed (`sessionTitle` in `@dude/domain`). Its agent names it
+  once the subject is clear (`name_session`, one line of at most 60
+  characters), and again only if the subject clearly changes.
+- **`SessionTitle`** is the name in the session's header: untitled, "New
+  session" in muted ink. For a member who can chat it is a button that
+  edits the name in place — Enter saves, Escape cancels; a reader's is
+  plain words. **A person's name wins**: once someone has named it, the
+  agent's `name_session` refuses. The Chat says who named it, a
+  `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
+  unsigned, "Ana renamed it “…”".
 - **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
   comments, each saying where it goes, an edit with its text Now and
   After. Filing acts as whoever presses File (`filingAs`): the footer says
@@ -479,8 +493,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   "Waiting on you" count, so one number answers "what needs me".
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
-  title, because a private session's name must not reach people outside
-  it. The same words stand for where a question waits in the inbox.
+  title — named or "New session" — because a private session's name must
+  not reach people outside it. The same words stand for where a question
+  waits in the inbox.
 
 ### Images in a conversation
 
@@ -1582,6 +1597,8 @@ sessions*):
 
 - **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
   as whoever presses File.
+- **SessionTitle** — the session's name in its header: "New session"
+  muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
