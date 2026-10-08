@@ -92,6 +92,20 @@ function roleSlots(mode: (typeof MODES)[number]): Array<{ name: string; fg: stri
   return [...bySlot].map(([slot, roles]) => ({ name: roles.join("/"), fg: roleColors[mode][slot as AgentRoleName].fg }));
 }
 
+describe("role colour slots", () => {
+  // The one alias by design is the brainstorm wearing the conductor's colour;
+  // any other alias would silently drop that role from the pair checks.
+  test("every role but the brainstorm owns its colour, and the brainstorm wears the conductor's", () => {
+    const resolved = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, roleColourSlot(r)]));
+    const expected = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, r === "brainstorm" ? "conductor" : r]));
+    expect(resolved).toEqual(expected);
+  });
+
+  test("there are exactly six distinct colour slots in each mode", () => {
+    for (const mode of MODES) expect(roleSlots(mode).map((s) => s.name), mode).toHaveLength(6);
+  });
+});
+
 describe("role colour pair distance (OKLab ΔE×100, Machado 2009 at severity 1.0)", () => {
   for (const mode of MODES) {
     test(`${mode}: every pair of distinct role colours clears normal ≥ 15, protan ≥ 8, deutan ≥ 8`, () => {
