@@ -64,6 +64,7 @@ import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
+import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
@@ -678,8 +679,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                         {run.stalled ? (
                           <Badge tone="attention" size="sm" icon="warning" data-testid="session-stalled" title={run.stalled.text}>stalled</Badge>
                         ) : null}
-                        <StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />
-                      </>} />
+                        <StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
+                      </>}><RunReplacement run={run} /></SessionItem>
                   );
                   // A tree over the attempt shown: each conductor (the
                   // task's), the Runs it started in this attempt under it;
@@ -923,7 +924,7 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={running} />}
       label={runLabel(run)}
       note={note}
-      status={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />}
+      status={<StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />}
       meta={heads.length === 0 ? undefined : heads.length === 1 ? heads[0]![1].slice(0, 7) : `${heads.length} repos`}
       metaTitle={heads.length > 0 ? heads.map(([repo, sha]) => `${repo} ${sha}`).join("\n") : undefined}
       duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={running} tone="muted" /> : "—"}
@@ -934,7 +935,7 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
           {plan.current ? <span className="planNow">{plan.current}</span> : null}
         </>
       ) : undefined}
-    />
+    ><RunReplacement run={run} /></StepRow>
   );
 }
 

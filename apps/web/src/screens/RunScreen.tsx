@@ -63,6 +63,7 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
+import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -143,6 +144,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunCompleted,
   EventTypes.RunFailed,
   EventTypes.RunAborted,
+  EventTypes.RunRestarted,
   EventTypes.RunPaused,
   EventTypes.RunResumed,
   // Waiting for its image, then handed to lux: "Preparing image" comes and goes.
@@ -377,6 +379,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     id: run.id,
     role,
     status: run.status,
+    statusLabel: runStatusLabel(run),
     ...(owner ? { owner } : {}),
     subtitle: (
       <>
@@ -419,7 +422,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     resend: resteer,
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
-  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
+  const restartedText = runRestartedText(run, events, people);
+  const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
+    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -610,7 +615,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 ) : null
               }
               footer={!isLive || readOnly ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
-                stopped={stopped} /> : isPreviewRun ? (
+                stopped={stopped} restartedText={restartedText} /> : isPreviewRun ? (
                 // A preview run has no agent to steer: its servers are the whole of it,
                 // and they are on the task's Servers tab. A task this page could not
                 // read is no place to send anyone: the way there is said in words.
@@ -1110,20 +1115,21 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * while it is kept, and Other ways… — or, set aside, says where the work
  * went on.
  */
-function RunEnded({ run, onOpenTask, stopped }: { run: RunDetail; onOpenTask?: (() => void) | undefined; stopped?: StoppedRun | undefined }) {
+function RunEnded({ run, onOpenTask, stopped, restartedText }: { run: RunDetail; onOpenTask?: (() => void) | undefined; stopped?: StoppedRun | undefined; restartedText: string | null }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
   const setAside = stopped && "setAside" in stopped ? stopped.setAside : null;
   const toCurrent = stopped && "setAside" in stopped ? stopped.toCurrent : undefined;
   const pickUp = stopped && "onPickUp" in stopped ? stopped : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
-      tone={setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
+      tone={restartedText || setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
         <span>
-          {setAside === "restart" ? "Set aside when its task was started over." : setAside === "retry" ? "Set aside: a new session took its step up again." : ENDED_WORDS[outcome]}
+          {restartedText ?? (setAside === "restart" ? "Set aside when its task was started over." : setAside === "retry" ? "Set aside: a new session took its step up again." : ENDED_WORDS[outcome])}
           {pickUp ? <span className="runEndedKept"> {pickUp.keptUntil ? `Kept until ${keptUntilDay(pickUp.keptUntil)}.` : "Its workspace is no longer kept."}</span> : null}
         </span>
         <span className="runEndedActions">
+          <RunReplacement run={run} />
           {pickUp ? (
             <>
               {pickUp.keptUntil ? (
