@@ -81,13 +81,16 @@ export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
  */
 export function ProposalCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly, className, ...rest }: ProposalCardProps) {
   const ticked = items.flatMap((item, i) => (selected.has(i) && item.canFile && !item.filed ? [item] : []));
-  const left = items.filter((item, i) => !item.filed && !(selected.has(i) && item.canFile));
-  const stays = left.filter((item) => !item.canFile && item.why);
-  const foot = readOnly
-    ? "You can read this session: filing is for its owner and members who can chat."
-    : ticked.length === 0
-      ? "Tick what to file."
-      : `Filing as ${filingAs}: ${proposalSummary(ticked.map((t) => t.kind))}${stays.length > 0 ? ` · ${stays.length} stay${stays.length === 1 ? "s" : ""} for whoever can` : ""}. Nothing starts.`;
+  const stays = items.filter((item) => !item.filed && !item.canFile && item.why);
+  let foot: string;
+  if (readOnly) {
+    foot = "You can read this session: filing is for its owner and members who can chat.";
+  } else if (ticked.length === 0) {
+    foot = "Tick what to file.";
+  } else {
+    const staying = stays.length > 0 ? ` · ${stays.length} stay${stays.length === 1 ? "s" : ""} for whoever can` : "";
+    foot = `Filing as ${filingAs}: ${proposalSummary(ticked.map((t) => t.kind))}${staying}. Nothing starts.`;
+  }
   return (
     <section className={cx(styles["card"], className)} aria-label="Proposed work" data-testid="proposal-card" {...rest}>
       <header className={styles["cardHead"]}>
