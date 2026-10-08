@@ -45,8 +45,9 @@ behind all of these, reached when something looks off.
    screen; it never takes the text below readable.
 2. **Meaning never lives in hue alone.** Every status has a tone *and* a glyph
    *and* a label. Diffs have background *and* gutter color *and* a sign
-   column. Roles have a hue *and* a glyph *and* (for the conductor) a
-   shape. Grayscale the gallery and nothing is lost.
+   column. Roles have a hue *and* a glyph *and* (for the conversation
+   agents, the conductor and the brainstorm) a shape. Grayscale the gallery
+   and nothing is lost.
 3. **Dark is primary, light is a peer.** The operator spends hours here, often
    at night, on a big monitor. Dark mode gets the most careful contrast work
    and is the default. Light is designed alongside it, not derived from it:
@@ -168,7 +169,7 @@ gallery for every value.
 | Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
-| Roles | `--ds-role-{conductor,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
+| Roles | `--ds-role-{conductor,investigator,implementer,reviewer,simplifier,qa-browser,brainstorm}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. Six colour slots: `brainstorm` holds the conductor's values. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
@@ -188,11 +189,20 @@ Tones and role colours are OKLCH with per-slot lightness found by search, then
 validated (protan/deutan simulation, normal-vision distance, WCAG contrast)
 rather than eyeballed. The four chromatic tone foregrounds clear ΔE ≥ 8 under
 CVD simulation and ΔE ≥ 15 in normal vision for every pair, in both modes,
-while every `fg` stays ≥ 4.5:1 on the surface. The six role colours clear the
-same bar across all 15 pairs, and every role `fg` clears 4.5:1 on its
-theme's surface. If you change a hue or a surface, re-run the search; do not
-nudge by eye. `test/palette.test.ts` holds the WCAG half: the text ladder,
-tone and role foregrounds, link, focus ring and button label.
+while every `fg` stays ≥ 4.5:1 on the surface. There are seven roles and
+six role colour slots: the brainstorm wears the conductor's colour
+(`ROLE_COLOUR_OF` in `palette.ts`), because no seventh hue at the slots'
+chroma and lightness clears the bar against all six in both modes, and the
+free hues near 80 sit on the attention tone, which a role must never read
+as. Both are conversation agents, so they share the round shape too; the
+glyph and the label tell them apart. The six slots clear the same bar
+across all 15 pairs, and every role `fg` clears 4.5:1 on its theme's
+surface. If you change a hue or a surface, re-run the search; do not nudge
+by eye. `test/paletteDistance.test.ts` enforces the pair bar (OKLab ΔE×100,
+Machado 2009 protan and deutan at severity 1.0, slots that share a colour
+counted once) and keeps every role colour more than ΔE 3 from the attention
+fg in normal vision. `test/palette.test.ts` holds the WCAG half: the text
+ladder, tone and role foregrounds, link, focus ring and button label.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
 faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close
@@ -395,7 +405,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   is `role="system" intent="briefing"`: the prompt's frame, clamp and
   face, tagged "Briefing", signed with the task's dude name; the message
   it ends with is the person's own turn just before it, never said twice.
-  The conductor answers as `role="conductor"`: its round violet face. dude's
+  The conductor answers as `role="conductor"`: its round face. dude's
   notices there name him (`ChatNotice by`): "El Duderino: Parked while
   nobody is writing". A parked conductor is quiet: nothing about it is
   amber, and nothing counts it as needing you; its question is the usual
@@ -420,7 +430,53 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
   where "Sent as" would be. While the conductor asks, it is the answer
-  composer, as in a session.
+  composer, as in an agent session.
+
+### Brainstorm sessions
+
+- A **brainstorm session** is a conversation with one agent that belongs
+  to its members, not a task: it reads the projects linked to it and
+  proposes work, and a member files it. It is `sessions` in the code; an
+  agent's session inside a Run is an *agent session* (above).
+- **The brainstorm's face** is `AgentAvatar role="brainstorm"`: the
+  conductor's colour and round shape, its own bulb glyph and the label
+  "Brainstorm". Both are conversation agents; the glyph tells them apart,
+  and no hue of its own sits near the attention tone, so the face never
+  reads as needs-you.
+- Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
+  role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+- **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
+  comments, each saying where it goes, an edit with its text Now and
+  After. Filing acts as whoever presses File (`filingAs`): the footer says
+  "Filing as Ana: 2 tasks, 1 edit. Nothing starts." An item only someone
+  else may file is dimmed and says whose ("Only Márcio can file this: it's
+  his task"); a filed one says who filed it as what ("Ana filed BL-61").
+  A reader (`readOnly`) sees the card and files nothing. Nothing on the
+  card names the session: the work filed is the person's, as if typed.
+- **`QuestionCard onlyThey`** is the agent's question to one member: "Only
+  Ana can answer this one", and no "Take over this task" hint, because
+  there is no task to take over.
+- **The rail** is `SessionRail` with a `SessionRailBlock` per part:
+  `SessionPeople` (owner first, each with their role in words — Owner, Can
+  chat, Can read, Invited), `LinkedProjects` (each project and its
+  repositories, read only; "No project linked yet" when none) and
+  `Capabilities` (what it can and cannot do, each line a check or a cross
+  as well as words).
+- **Presence is said in words, not colour alone.** Who has the session
+  open now takes the online dot on their face *and* "· here" after their
+  role.
+- **`SessionRow`** is a session in the list: the bulb face, its title,
+  what it filed in a line, the projects it reads as chips, its state and
+  age in words. **`SharedMark`** marks one someone else is in too: the
+  shared glyph, and the owner's face when it is not yours, so it reads
+  without colour.
+- **`SidebarSessions`** sits above Projects in the sidebar: only the
+  sessions you are in, each with the bulb glyph and the `SharedMark`'s
+  parts, then New session.
+- **A session's name never leaves it.** The tab title and the presence
+  word teammates see beside your face are the fixed "A session", never its
+  title, because a private session's name must not reach people outside
+  it. The same words stand for where a question waits in the inbox.
 
 ### Images in a conversation
 
@@ -590,17 +646,23 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
 
-### Sessions (live work on a task)
+### Agent sessions (live work on a task)
 
-- A task's sessions and the one open share its page: the **Sessions** tab
-  is the task's sessions down the left (`SessionList`, newest first, the
-  open one `current`) and the open session beside them. There is no
-  separate session page: a link to a session (`#/session/<id>`) opens its
-  task on that tab with that session open, so the task's people, pull
-  requests and findings stay one tab away while you watch an agent. Only a
-  session whose task cannot be learned stands on its own, and says the way
-  to its task when it ends.
-- The open session is `SessionHeader` (whose agent, for whom, its model,
+An agent session is one agent's work inside a task's Run (`agent_sessions`
+in the code). It is not a brainstorm session (`sessions`), which belongs to
+its members, not a task: those are under *Brainstorm sessions*. The
+components here keep their names (`SessionList`, `SessionHeader`,
+`SessionRail`, …); in this section they show agent sessions.
+
+- A task's agent sessions and the one open share its page: the task's
+  **Sessions** tab is its agent sessions down the left (`SessionList`,
+  newest first, the open one `current`) and the open agent session beside
+  them. There is no separate page for one: a link to an agent session
+  (`#/session/<id>`) opens its task on that tab with it open, so the
+  task's people, pull requests and findings stay one tab away while you
+  watch an agent. Only an agent session whose task cannot be learned
+  stands on its own, and says the way to its task when it ends.
+- The open agent session is `SessionHeader` (whose agent, for whom, its model,
   status, cost, tokens and elapsed, Pause / Abort, and the terminal where
   the rail is not — on every view, so the
   numbers never depend on the rail being there), then **one bar**: a
@@ -609,11 +671,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
   place under the bar; none opens over the page.
-- **Servers live on the task's tab**, not in a session: a Run's servers
-  are the task's while that Run serves it, so the session bar has no
+- **Servers live on the task's tab**, not in an agent session: a Run's
+  servers are the task's while that Run serves it, so the bar has no
   Servers toggle and nothing opens beside the conversation for them. A
-  branch preview's session, which has no agent, says so in place of the
-  composer and links to its task's Servers tab (`#/task/<id>/servers`).
+  branch preview's agent session, which has no agent, says so in place of
+  the composer and links to its task's Servers tab (`#/task/<id>/servers`).
 - **Changes** in the switch carries its file count and, while the agent is
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
@@ -621,26 +683,28 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-  the diff's own list does. When the session is narrower than about 820px
-  the rail goes and the conversation keeps the width. Narrower than 900px
-  the sessions list sits above the session.
+  the diff's own list does. When the agent session is narrower than about
+  820px the rail goes and the conversation keeps the width. Narrower than
+  900px the list of agent sessions sits above the open one.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
-  tab). Where the rail is not — the session narrower than about 820px, or
-  on Changes or Events — the header keeps the same link as a terminal icon
-  (`LinkButton iconOnly`), chosen by the same container query on the
-  session's width, so the terminal is never unreachable and never shown
-  twice. A branch preview has no agent session to hold it: its terminal
-  stays in the run line of the task's Servers tab.
-- With no session asked for, the one shown is picked once (running, else
-  newest) and kept: a phase ending must not swap it under someone reading.
-- **Two edges.** Everything in a session shares one outer edge and one
-  inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
+  tab). Where the rail is not — the agent session narrower than about
+  820px, or on Changes or Events — the header keeps the same link as a
+  terminal icon (`LinkButton iconOnly`), chosen by the same container
+  query on the agent session's width, so the terminal is never unreachable
+  and never shown twice. A branch preview has no agent to hold it: its
+  terminal stays in the run line of the task's Servers tab.
+- With no agent session asked for, the one shown is picked once (running,
+  else newest) and kept: a phase ending must not swap it under someone
+  reading.
+- **Two edges.** Everything in an agent session shares one outer edge and
+  one inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
   to edge across the transcript's column. Content sits on the chat inset
-  (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
+  (`--ds-space-chat-pad-x`): the header's face, the bar's switch,
   the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
-  Changes and Events views. Nothing in a session uses the page's 24px pad.
+  Changes and Events views. Nothing in an agent session uses the page's
+  24px pad.
 - A turn's text spans its column: chat turns have no measure (`Markdown
   unmeasured`: messages, thoughts, questions), so a long line wraps at the
   column's edge, not beside empty space.
@@ -649,9 +713,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   avatar gutter, so its left edge lines up with the words above), 4px
   between its items, and a turn's air above and below the run. Never a
   tool call on its own at the transcript's edge.
-- The sessions list is 260px (200px below 1280px).
+- The list of agent sessions is 260px (200px below 1280px).
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
-  session started from, uncommitted work included. Its toolbar reads
+  agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
   Split (`Segmented`). It wraps before it truncates: the summary is never
   cut to "3 fil…". With nothing changed there is no summary, only the empty
@@ -849,9 +913,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   other.
 - Humans and agents differ on three channels at once: a human is a full
   circle with a ring, shows initials, and takes a muted identity colour;
-  agents are squares (the conductor a round glyph), show a glyph, and
-  take a vivid role colour. Nothing about a person is ever a role colour or
-  a tone.
+  agents are squares (the conductor and the brainstorm round), show a
+  glyph, and take a vivid role colour. Nothing about a person is ever a
+  role colour or a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
   person is the same colour on every screen with no profile record. A
   `photoUrl` replaces the initials and nothing else changes.
@@ -1038,6 +1102,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Size them to the text beside them: 14px next to 14–15px text, 16px in an
   icon button, 11–12px only inside chips and badges. Strokes are 1.5 on the
   16px grid and 1.75 at 20px and up.
+- Every agent role has its own glyph (`ROLE_ICON` in `AgentAvatar`), the
+  brainstorm's a bulb (`brainstorm`), also on each brainstorm session in a
+  list. `shared` (two people) marks a brainstorm session someone else is in
+  too (`SharedMark`, `SidebarSessions`).
 
 ### Numbers and identifiers
 
@@ -1276,7 +1344,8 @@ MarkdownCheatsheet.
 - **StatusBadge** — every domain status; badge, small, icon-only and dot
   variants.
 - **AgentAvatar** — conductor, investigator, implementer, reviewer,
-  simplifier, qa_browser, plus human / system / integration actors.
+  simplifier, qa_browser, brainstorm (the conductor's colour and round
+  shape, the bulb glyph), plus human / system / integration actors.
 - **CostDisplay, TokenCount, Duration** — the three formatters as components,
   with live ticking and budget colouring.
 - **MetricTile / MetricGroup** — label, big tabular value, delta with a
@@ -1478,7 +1547,7 @@ MarkdownCheatsheet.
 `src/components/` — live work:
 
 - **LiveDiff** — a working agent's checkout against where it started, as
-  it changes (the rules are under *Sessions*): files with status and
+  it changes (the rules are under *Agent sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
   the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
@@ -1489,17 +1558,30 @@ MarkdownCheatsheet.
   file on its own.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
-- **SessionHeader** — the transcript's header on its own, for a session
-  whose views sit under it.
+- **SessionHeader** — the transcript's header on its own, for an agent
+  session whose views sit under it.
 - **`.ds-live-dot`** (base.css) — the one breathing dot, on
   `--ds-color-live`: beside what is changing now (a view's name, a label).
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
-  ChangedFiles** — the column beside a session's conversation; its facts
-  are a `KeyValueList`, values to the right.
-- **SessionList / SessionItem** — a task's sessions, the open one `current`.
+  ChangedFiles** — the column beside an agent session's conversation; its
+  facts are a `KeyValueList`, values to the right. A brainstorm session's
+  rail is the same `SessionRail` and `SessionRailBlock`.
+- **SessionList / SessionItem** — a task's agent sessions, the open one
+  `current`.
 - **FileGallery / FileViewer** — a task's files and their versions.
 - **Cost** — a total, with the tokens / machine split as a hairline, and
   optionally where each part came from and whether lux has settled it.
+
+`src/components/` — brainstorm sessions (the rules are under *Brainstorm
+sessions*):
+
+- **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
+  as whoever presses File.
+- **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
+  who is in it, what it reads, what it can do.
+- **SessionRow / SharedMark** — a brainstorm session in the list, and the
+  marker for one someone else is in too.
+- **SidebarSessions** — your brainstorm sessions above the projects.
 
 ## What is deliberately not here
 
