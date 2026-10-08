@@ -164,6 +164,37 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelectorAll("[data-testid=session-screen] [data-activity]").length).toBe(0);
   });
 
+  // The orchestrator's record of a turn dude stopped for a call open 10
+  // minutes: the call never completes; the nudge is delivered; the agent
+  // answers in a turn whose totals and end follow (as the fake lux plays
+  // it), or the turn just ends. Either way the page shows the notice and
+  // nothing still running or thinking.
+  test("a turn dude stopped ends idle and keeps its notice", async () => {
+    const agent = { type: "agent", id: RUN } as const;
+    const stuck = [
+      ev("chat.message", { text: "hello" }, { type: "human", id: YOU }),
+      ev("agent.prompt.delivered", { text: "hello" }),
+      ev("agent.tool.called", { tool: "task", callId: "open_0", input: { description: "Review worker state behavior" } }, agent),
+      ev("session.turn_stopped", { runId: RUN, tool: "task", openSecs: 660, directiveId: "dir_stuck" }),
+      ev("run.directive.accepted", { directiveId: "dir_stuck", lands: "next_step", receipt: true }),
+      ev("run.directive.delivered", { directiveId: "dir_stuck", read: true }),
+    ];
+    const answered = [...stuck,
+      ev("agent.model.request.completed", { costUsd: 0.01, contextTokens: 1000, contextWindow: 200000 }, agent),
+      ev("agent.message", { text: "I was reading the worker through a sub-agent and it got stuck." }, agent),
+      ev("agent.model.request.completed", { turn: true, tokens: { input: 12, output: 34 }, contextTokens: 1000 }, agent),
+      ev("agent.session.stopped", { reason: "turn_complete" }, agent),
+    ];
+    const ended = [...stuck, ev("agent.session.stopped", { reason: "turn_complete" }, agent)];
+    for (const [name, events] of [["answered", answered], ["ended", ended]] as const) {
+      const page = await sessionPage(new SessionClient(detail("owner"), [...events]));
+      await until(() => page.querySelector('[data-kind="stopped"]'), `${name}: the stopped notice`);
+      await settle();
+      expect(page.querySelector('[data-kind="stopped"]')!.textContent).toContain("Stopped Brainstorm's turn: task was open for 10\u00a0min.");
+      expect(`${name}: ${page.querySelectorAll("[data-testid=session-screen] [data-activity]").length}`).toBe(`${name}: 0`);
+    }
+  });
+
   test("a message goes to the session's chat", async () => {
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);
