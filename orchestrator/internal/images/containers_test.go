@@ -1,9 +1,12 @@
 package images
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -149,6 +152,45 @@ func TestAVersionProbeThatHangsIsBounded(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("version still waiting after 10s")
+	}
+}
+
+// An engine's --version that exits at once, leaving a child in the
+// background, leaves no child once version returns.
+func TestAVersionProbeThatExitsFirstLeavesNoChild(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child")
+	bin := filepath.Join(dir, "podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 60 &\necho $! > "+pidFile+"\necho podman version 5.4.2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := version(bin); got != "podman version 5.4.2" {
+		t.Errorf("version = %q", got)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Killed, the child is gone, or a zombie until its new parent reaps it,
+	// once the kernel has acted on the signal.
+	state := func() string {
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if fields := strings.Fields(string(stat)); err == nil && len(fields) > 2 && fields[2] != "Z" {
+			return fields[2]
+		}
+		return ""
+	}
+	s := state()
+	for deadline := time.Now().Add(2 * time.Second); s != "" && time.Now().Before(deadline); s = state() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s != "" {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Errorf("child %d still running after version returned (state %s)", pid, s)
 	}
 }
 

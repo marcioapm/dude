@@ -346,9 +346,9 @@ func contains(list []string, s string) bool {
 // versionTimeout bounds an engine's --version, run from the image.
 var versionTimeout = 10 * time.Second
 
-// version is bin --version's output. A probe past versionTimeout is killed
-// with its whole process group, so a child left holding stdout cannot keep
-// Output waiting.
+// version is bin --version's output. The probe's whole process group is
+// killed past versionTimeout and again once it returns, so a child left
+// holding stdout can neither keep Output waiting nor outlive the probe.
 func version(bin string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	defer cancel()
@@ -357,6 +357,9 @@ func version(bin string) string {
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
 	out, _ := cmd.Output()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	return strings.TrimSpace(string(out))
 }
 
