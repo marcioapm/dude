@@ -21,7 +21,6 @@ import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
-import { runStatusLabel } from "../runPresentation.tsx";
 
 /** How the task stopped, as the record has it. */
 export interface Stop {
@@ -56,7 +55,7 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
   const attempt = Math.max(1, ...delivery.map((r) => r.attempt));
   const since = events.findLast((e) => e.eventType === "task.recovered" ||
     (e.eventType === "task.decided" && e.payload.action !== "stop"))?.occurredAt ?? "";
-  const ended = delivery.filter((r) => r.attempt === attempt && !runStatusLabel(r) && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
+  const ended = delivery.filter((r) => r.attempt === attempt && !r.replacedBy && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
   return run ? { run, ...howRunStopped(run, events, people) } : { run: null, by: null, why: null };
