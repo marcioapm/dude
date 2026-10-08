@@ -10,10 +10,10 @@ import styles from "./ChatNotice.module.css";
  * happened that wakes nobody, a commit the conductor published, or a Run
  * restarted in its place.
  */
-export type ChatNoticeKind = "parked" | "unparked" | "nudged" | "decision" | "notice" | "commit" | "restart";
+export type ChatNoticeKind = "parked" | "unparked" | "nudged" | "decision" | "notice" | "commit" | "restart" | "stopped";
 
 const GLYPH: Record<ChatNoticeKind, IconName> = { parked: "pause", unparked: "retry", nudged: "clock", decision: "hand", notice: "info",
-  commit: "git-branch", restart: "retry" };
+  commit: "git-branch", restart: "retry", stopped: "warning" };
 
 export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly kind: ChatNoticeKind;

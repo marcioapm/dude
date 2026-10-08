@@ -140,3 +140,19 @@ func TestOpenCallClocksExcludeHostMoveTime(t *testing.T) {
 		t.Fatalf("repeated running shifted open call from %v to %v", old, again)
 	}
 }
+
+func TestBrainstormHostMoveDoesNotConsumeItsCallLimit(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_' || $1, $1, 'Moving brainstorm')`, w.run.Org)
+	w.exec(`UPDATE runs SET role = 'brainstorm', phase = NULL, session_id = 'ssn_' || organization_id,
+		project_id = NULL, task_id = NULL, status = 'running', lux_state = 'resuming',
+		left_running_at = now() - interval '30 minutes', open_tool_calls = ARRAY['old'],
+		open_tool_calls_at = jsonb_build_object('old', now() - interval '39 minutes') WHERE id = $1`, w.run.ID)
+	w.follow(running(2))
+	if err := w.s.interruptBrainstorms(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND interrupt`); n != 0 {
+		t.Fatalf("host move queued %d interrupts for nine running minutes, want none", n)
+	}
+}
