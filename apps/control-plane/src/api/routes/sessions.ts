@@ -14,7 +14,7 @@
 import { z } from "zod";
 import { withOrg } from "../../db/client.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { json, notFound, parseBody } from "../http.ts";
+import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const text = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
@@ -36,6 +36,42 @@ function forward(method: "GET" | "POST", path: (ctx: RequestContext) => string, 
     const body = schema ? JSON.stringify(await parseBody(ctx.request, schema)) : "{}";
     return orchestrator(ctx.principal.organizationId, method, path(ctx), body, ctx.principal);
   };
+}
+
+/** forward, for a body that sets the session's links: refused first if two share a key (distinctKeys). */
+function forwardLinks(path: (ctx: RequestContext) => string, schema: typeof create | typeof links) {
+  return async (ctx: RequestContext): Promise<Response> => {
+    const body: { projects?: Array<{ projectId: string }> } = await parseBody(ctx.request, schema as z.ZodTypeAny);
+    await distinctKeys(ctx, (body.projects ?? []).map((p) => p.projectId));
+    return orchestrator(ctx.principal.organizationId, "POST", path(ctx), JSON.stringify(body), ctx.principal);
+  };
+}
+
+/**
+ * A session's projects must have distinct keys: its checkouts
+ * (repos/<KEY>/<name>), their names in the lux spec, and the projects its
+ * agent proposes work in are all told apart by key, and keys are only the
+ * slug's first letters (billing-api and billing-worker are both BILL). The
+ * links given are the session's whole set, so they are checked alone.
+ * Projects not found are left for the orchestrator to refuse.
+ */
+async function distinctKeys(ctx: RequestContext, ids: string[]): Promise<void> {
+  if (ids.length < 2) return;
+  const rows = await withOrg(ctx.principal.organizationId, ({ sql }) => sql`
+    SELECT id, name, upper(key_prefix) AS key FROM projects WHERE id = ANY(${sql.array(ids, "text")}::text[])`) as
+    Array<{ id: string; name: string; key: string }>;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const seen = new Map<string, { name: string }>();
+  for (const id of ids) {
+    const p = byId.get(id);
+    if (!p) continue;
+    const first = seen.get(p.key);
+    if (first) {
+      const [a, b] = [first.name, p.name].sort();
+      throw conflict(`${a} and ${b} both use the key ${p.key}; a session tells its projects apart by key, so link one of them.`);
+    }
+    seen.set(p.key, p);
+  }
 }
 
 const at = (suffix = "") => (ctx: RequestContext) => `/internal/sessions/${encodeURIComponent(ctx.params.id!)}${suffix}`;
@@ -68,10 +104,10 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
 
 export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms", forward("GET", () => "/internal/sessions"));
-  router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
+  router.post("/v1/brainstorms", forwardLinks(() => "/internal/sessions", create));
   router.get("/v1/brainstorms/:id", forward("GET", at()));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
-  router.post("/v1/brainstorms/:id/link", forward("POST", at("/link"), links));
+  router.post("/v1/brainstorms/:id/link", forwardLinks(at("/link"), links));
   router.post("/v1/brainstorms/:id/people", forward("POST", at("/people"), invite));
   router.post("/v1/brainstorms/:id/people/:person/role",
     forward("POST", (ctx) => `${at()(ctx)}/people/${encodeURIComponent(ctx.params.person!)}/role`, role));
