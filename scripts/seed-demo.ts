@@ -13,7 +13,7 @@
  */
 
 import { SQL } from "bun";
-import { newId } from "@dude/domain";
+import { deriveProjectKey, newId } from "@dude/domain";
 import { insertPerson } from "../apps/control-plane/src/api/auth.ts";
 import { closePool, setPool, withOrg } from "../apps/control-plane/src/db/client.ts";
 
@@ -68,9 +68,12 @@ try {
     for (const p of PEOPLE) made.push((await insertPerson(scope, p))!);
 
     const projectId = newId("project");
+    // As the API derives a key: the organisation is new, so this is WEB.
+    const taken = (await sql`SELECT key_prefix AS key FROM projects`).map((r: { key: string }) => r.key);
+    const key = deriveProjectKey("web", taken)!;
     await sql`
       INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, next_task_number)
-      VALUES (${projectId}, ${organizationId}, 'Website', 'web', 'WEB', 'The public website and its API',
+      VALUES (${projectId}, ${organizationId}, 'Website', 'web', ${key}, 'The public website and its API',
               '{}'::jsonb, ${TASKS.length + 1})`;
     const epicIds: string[] = [];
     for (const [position, title] of EPICS.entries()) {

@@ -184,6 +184,8 @@ export const projectSchema = z.object({
   organizationId: z.string(),
   name: z.string().min(1),
   slug: z.string().min(1),
+  /** The start of its tasks' keys (BILL-12), unique in its organisation; fixed once made. */
+  key: z.string().min(1),
   description: z.string().default(""),
   repositories: z.array(repositorySchema).default([]),
   /** Per-role model selection for this project. */

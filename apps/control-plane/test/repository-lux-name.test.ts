@@ -51,7 +51,7 @@ const call = (method: string, path: string, body: Record<string, unknown>) => ro
 }));
 const add = (projectId: string, name: string) =>
   call("POST", `/v1/projects/${projectId}/repositories`, { name, url: `https://github.com/acme/${name.toLowerCase()}.git` });
-const names = async (projectId: string) =>
+const names = async (projectId: string): Promise<string[]> =>
   (await owner`SELECT name FROM repositories WHERE project_id = ${projectId} ORDER BY name`).map((r: { name: string }) => r.name);
 
 async function refused(res: Response, message: string) {

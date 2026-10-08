@@ -524,7 +524,8 @@ func RecordProposal(ctx context.Context, tx pgx.Tx, ref RunRef, items []Proposal
 	return id, err
 }
 
-// taskKey matches a task's key as people write it (BL-58).
+// taskKey matches a task's key as people write it (BL-58): a project key
+// as PROJECT_KEY (@dude/domain) allows, digits included, then its number.
 var taskKey = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-([0-9]+)$`)
 
 // TaskKey is a task's key as TaskByKey reads it, written one way
