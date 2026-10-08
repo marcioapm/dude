@@ -25,6 +25,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -59,6 +60,8 @@ type Server struct {
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
 	RunID, Org, ProjectID, TaskID, Role, Status string
+	// A session's agent: its session, in place of a task and project.
+	SessionID string
 	// What the server lends a call: set on each, not part of who calls.
 	env env
 }
@@ -73,7 +76,7 @@ type env struct {
 }
 
 func (c Caller) run() delivery.RunRef {
-	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID}
+	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID, SessionID: c.SessionID}
 }
 
 // event is a ledger event by the calling agent, on its Run.
@@ -148,7 +151,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	out := []entry{}
-	for _, t := range tools {
+	for _, t := range allTools() {
 		if t.allowed(c.Role) {
 			out = append(out, entry{t.name, t.description})
 		}
@@ -161,8 +164,8 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 // tool this Run does not have.
 func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	c, _ := r.Context().Value(callerKey{}).(Caller)
-	t, ok := find(r.PathValue("name"))
-	if !ok || !t.allowed(c.Role) {
+	t, ok := find(r.PathValue("name"), c.Role)
+	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no tool " + r.PathValue("name") + " for this Run"})
 		return
 	}
@@ -204,8 +207,9 @@ var errUnknown = errors.New("unknown token")
 func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	var c Caller
 	var role *string
-	err := s.DB.Pool.QueryRow(ctx, `SELECT run_id, organization_id, project_id, task_id, role, status
-		FROM lookup_run_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.ProjectID, &c.TaskID, &role, &c.Status)
+	err := s.DB.Pool.QueryRow(ctx, `SELECT run_id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''),
+			COALESCE(session_id, ''), role, status
+		FROM lookup_run_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.ProjectID, &c.TaskID, &c.SessionID, &role, &c.Status)
 	if db.IsNotFound(err) {
 		return c, errUnknown
 	}
@@ -229,7 +233,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 		Instructions: "Tools for the work you are doing in dude, the software factory that started you: " +
 			"see and add to the project's work. What you create is marked as yours and waits for a person.",
 	})
-	for _, t := range tools {
+	for _, t := range allTools() {
 		if !t.allowed(c.Role) {
 			continue
 		}
@@ -256,9 +260,11 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 // does with JSON arguments, in the calling Run's organization.
 type tool struct {
 	name, description string
-	roles             []string // empty: every role
-	schema            any
-	run               func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
+	// empty: every role but a session's agent, whose tools are its own
+	// (brainstorm.go) and name it.
+	roles  []string
+	schema any
+	run    func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
 	// perRun: how many calls a Run may make in its lifetime; 0, no limit
 	// beyond the per-minute one.
 	perRun int
@@ -276,7 +282,7 @@ type tool struct {
 
 func (t tool) allowed(role string) bool {
 	if len(t.roles) == 0 {
-		return true
+		return role != delivery.RoleBrainstorm
 	}
 	for _, r := range t.roles {
 		if r == role {
@@ -292,17 +298,23 @@ func (t tool) allowed(role string) bool {
 // lists the tools afresh each session.)
 var renamed = map[string]string{"list_work": "list_tasks", "create_work_item": "create_task"}
 
-func find(name string) (tool, bool) {
+// find is the tool a role calls by name: a session's agent has its own
+// tools under the names others use.
+func find(name, role string) (tool, bool) {
 	if now, ok := renamed[name]; ok {
 		name = now
 	}
-	for _, t := range tools {
-		if t.name == name {
+	for _, t := range allTools() {
+		if t.name == name && t.allowed(role) {
 			return t, true
 		}
 	}
 	return tool{}, false
 }
+
+// allTools are every role's tools: the task agents', then the session
+// agent's.
+func allTools() []tool { return append(slices.Clone(tools), brainstormTools...) }
 
 // define makes a tool from a typed function: its input schema from In,
 // its arguments decoded strictly into In.

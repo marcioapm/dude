@@ -36,6 +36,9 @@ export const ID_PREFIXES = {
   image: "img",
   imageVersion: "imv",
   imageBuild: "imb",
+  /** A brainstorm session (an agent's sessions inside a Run keep "ses"). */
+  brainstorm: "ssn",
+  proposal: "prp",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	s.llmRoutes(mux)
+	s.sessionRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -356,7 +357,7 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
 	var kind string
 	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL, kind, COALESCE(role::text, '')
-		FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		FROM runs WHERE id = $1 AND session_id IS NULL FOR UPDATE`, runID).
 		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused, &kind, &ri.Role)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
@@ -591,7 +592,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		// before the delivery. A question's task and Run never change, so
 		// reading them unlocked is safe.
 		var taskID, role string
-		if err := tx.QueryRow(r.Context(), `SELECT q.task_id, COALESCE(r.role::text, '') FROM questions q
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(q.task_id, ''), COALESCE(r.role::text, '') FROM questions q
 			JOIN runs r ON r.id = q.run_id WHERE q.id = $1`, questionID).Scan(&taskID, &role); err != nil && !db.IsNotFound(err) {
 			return err
 		}
@@ -820,13 +821,16 @@ func errBody(code, message string) map[string]any {
 
 // artifactContent streams an artifact's bytes from lux, as the agent wrote
 // them. The artifact is looked up in the caller's organization, so an id
-// from another one is simply not found.
+// from another one is simply not found; a brainstorm session Run's only for
+// an accepted member of its session, as the person the backend names.
 func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org string) error {
 	var key, name, ctype, sum string
 	var size int64
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT storage_key, name, content_type, size_bytes, sha256 FROM artifacts WHERE id = $1`,
-			r.PathValue("id")).Scan(&key, &name, &ctype, &size, &sum)
+		return tx.QueryRow(r.Context(), `SELECT a.storage_key, a.name, a.content_type, a.size_bytes, a.sha256 FROM artifacts a
+			LEFT JOIN runs ar ON ar.id = a.run_id
+			WHERE a.id = $1 AND (ar.session_id IS NULL OR session_role(ar.session_id, $2) IS NOT NULL)`,
+			r.PathValue("id"), principalOf(r).Person).Scan(&key, &name, &ctype, &size, &sum)
 	}); err != nil {
 		return err
 	}

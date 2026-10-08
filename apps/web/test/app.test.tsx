@@ -137,3 +137,39 @@ describe("the first load with no place", () => {
     expect(window.location.hash).toBe(named);
   });
 });
+
+describe("the sessions list in a background tab", () => {
+  test("is not read while the page is hidden, and is read once when it is shown again", async () => {
+    let hidden = false;
+    const was = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    try {
+      class Counting extends FixtureClient {
+        reads = 0;
+        override sessions() {
+          this.reads++;
+          return super.sessions();
+        }
+      }
+      const client = new Counting("a");
+      await app(`#/project/${PROJECT.id}`, client);
+      await until(() => (client.reads >= 1 ? true : null), "the first read");
+      const first = client.reads;
+      hidden = true;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await settle(50);
+      expect(client.reads).toBe(first);
+      hidden = false;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await settle(50);
+      expect(client.reads).toBe(first + 1);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).hidden;
+      if (was) Object.defineProperty(Document.prototype, "hidden", was);
+    }
+  });
+});

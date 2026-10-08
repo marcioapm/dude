@@ -50,7 +50,7 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 	// or its container stopped on its own: it would never read the words.
 	// A finished turn not yet collected is not: as a person's steer, the
 	// words start its next turn.
-	err := tx.QueryRow(ctx, `SELECT r.task_id, r.kind, COALESCE(r.phase::text, ''), COALESCE(r.role::text, ''), r.status::text,
+	err := tx.QueryRow(ctx, `SELECT COALESCE(r.task_id, ''), r.kind, COALESCE(r.phase::text, ''), COALESCE(r.role::text, ''), r.status::text,
 			r.attempt = (SELECT max(k.attempt) FROM runs k WHERE k.task_id = r.task_id AND k.phase IS NOT NULL),
 			r.control = 'abort' OR r.push_request_id IS NOT NULL
 			  OR (COALESCE(r.lux_state, '') IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost') AND r.lux_stop_reason IS NULL

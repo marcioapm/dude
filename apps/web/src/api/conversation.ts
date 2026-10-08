@@ -77,6 +77,10 @@ export interface QuestionTurn {
    * escalation decided on the task's banner). Null while it may be answered.
    */
   closedAt: string | null;
+  /** Why it closed unanswered: decided on the banner, or withdrawn (its one recipient left the session). */
+  closedBy?: "decision" | "withdrawn";
+  /** In a brainstorm session: the one member it is put to (ask_person `to`); null for anyone who can chat. */
+  to: ActorRef | null;
 }
 
 /**
@@ -155,6 +159,11 @@ export interface HumanTurn {
   directiveId: string | null;
   /** The images sent with it, in order. */
   attachments: AttachmentInfo[];
+  /**
+   * In a brainstorm session: the question it waits behind (put to another
+   * member), so it goes after their answer. Null otherwise.
+   */
+  heldFor: string | null;
 }
 
 export type SteerLands = "next_step" | "next_turn";
@@ -622,13 +631,21 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
-      case EventTypes.ConductorBriefed: {
+      case EventTypes.ConductorBriefed:
+      case EventTypes.BrainstormBriefed: {
         // dude's note to a new conductor, which ends with the message that
         // started it (shown just before, as its person's turn).
         const text = typeof payload.text === "string" ? payload.text : "";
         state.briefed = true;
         if (!text.trim()) break;
         turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] });
+        break;
+      }
+
+      case EventTypes.BrainstormTold: {
+        // dude's line to a session's agent (who owns it now): dude's words, to the agent.
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (text.trim()) turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments: [] });
         break;
       }
 
@@ -646,6 +663,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           github,
           // A message handed on from an earlier conductor keeps its images.
           attachments: attachmentsOf(payload.attachments),
+          heldFor: typeof payload.heldFor === "string" ? payload.heldFor : null,
         };
         if (github?.login) turn.by = { id: `github:${github.login}`, name: `${github.login} (GitHub)` };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
@@ -775,6 +793,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           at: event.occurredAt,
           answeredAt: null,
           closedAt: null,
+          to: typeof payload.to === "string" && payload.to ? { id: payload.to, name: typeof payload.toName === "string" ? payload.toName : null } : null,
         };
         state.questionsById.set(turn.questionId, turn);
         turns.push(turn);
@@ -787,7 +806,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.QuestionClosed: {
         // Settled elsewhere: no answer will come, and none is asked for.
         const question = state.questionsById.get(String(payload.questionId ?? ""));
-        if (question && question.answeredAt === null) question.closedAt = event.occurredAt;
+        if (question && question.answeredAt === null) {
+          question.closedAt = event.occurredAt;
+          question.closedBy = payload.by === "withdrawn" ? "withdrawn" : "decision";
+        }
         break;
       }
 
@@ -1066,7 +1088,8 @@ function withoutQuestion(text: string): string {
  * which the transcript shows as Ana's own turn just before it.
  */
 function withoutMessage(briefing: string): string {
-  const at = briefing.search(/\n## [^\n]*'s message\n/);
+  // A brainstorm's briefing ends "## The first message", already its writer's turn.
+  const at = briefing.search(/\n## (?:[^\n]*'s message|The first message)\n/);
   return at < 0 ? briefing : briefing.slice(0, at).trimEnd();
 }
 
@@ -1115,7 +1138,7 @@ function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: str
   return {
     kind: "human", id: event.eventId, intent, by: humanActor(event), conductor: false, github: null, text, at: event.occurredAt, deliveredAt,
     acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
-    attachments: [],
+    attachments: [], heldFor: null,
   };
 }
 

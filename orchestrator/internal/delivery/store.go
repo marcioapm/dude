@@ -546,14 +546,23 @@ func TaskRepositories(ctx context.Context, tx pgx.Tx, taskID string) ([]Reposito
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[Repository])
 }
 
-// RunRef names the Run something happened on, for its ledger events.
-type RunRef struct{ Org, ProjectID, TaskID, RunID string }
+// RunRef names a Run and what it belongs to: a task (and its project), or
+// a session.
+type RunRef struct{ Org, ProjectID, TaskID, RunID, SessionID string }
 
 // Event is a ledger event on the Run, by the given actor, in the task's
-// correlation.
+// correlation (the session's, for a session's Run).
 func (r RunRef) Event(typ, actorType string, payload map[string]any) ledger.Event {
 	return ledger.Event{Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.RunID,
-		ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator, CorrelationID: r.TaskID, Payload: payload}
+		SessionID: r.SessionID, ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator,
+		CorrelationID: r.correlation(), Payload: payload}
+}
+
+func (r RunRef) correlation() string {
+	if r.TaskID == "" {
+		return r.SessionID
+	}
+	return r.TaskID
 }
 
 // openQuestion (SQL, over a Run aliased r): it has a question waiting for
@@ -600,7 +609,7 @@ func QueueDirective(ctx context.Context, tx pgx.Tx, r RunRef, d Directive) (stri
 		SELECT $1, $2, $3, $4, $5, $6, $7, $8, root.id, CASE WHEN root.id IS NULL THEN false END
 		FROM (SELECT 1) one LEFT JOIN root ON true
 		RETURNING created_at`,
-		id, r.Org, r.TaskID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
+		id, r.Org, db.Nullable(r.TaskID), r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
 	return id, createdAt, err
 }
 

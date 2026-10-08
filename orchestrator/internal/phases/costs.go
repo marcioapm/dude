@@ -66,7 +66,8 @@ func (c *Costs) Sweep(ctx context.Context) (int, error) {
 	if err := c.DB.InSystem(ctx, "lux-cost", func(tx pgx.Tx) error {
 		// Only Runs with a read still due have a next_at (060): an agent's Run
 		// on lux, not final, not past costPatience.
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, project_id, task_id, lux_run_id FROM runs
+		// A session's Run has no project or task: "" (ledger writes NULL).
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), lux_run_id FROM runs
 			WHERE lux_cost_next_at <= now() ORDER BY lux_cost_next_at LIMIT $1`, batch)
 		if err != nil {
 			return err

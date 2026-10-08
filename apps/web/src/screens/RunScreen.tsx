@@ -797,7 +797,7 @@ export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: Readonl
   return out;
 }
 
-function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
+export function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
   const out: Array<Turn | Turn[]> = [];
   for (const turn of turns) {
     if (turn.kind !== "tool" && turn.kind !== "thought") {
@@ -818,7 +818,7 @@ function namedActor(event: PersistedEvent, people: People): { name?: string } {
 }
 
 /** A live Run's queued steers: what each waits for, and sending one again (interrupting, or after a failure). */
-interface SteerActions {
+export interface SteerActions {
   wait: (turn: HumanTurn) => SteerWait;
   resend: (turn: HumanTurn, interrupt: boolean) => void;
 }
@@ -952,7 +952,7 @@ function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: st
   return `${who ? firstName(who) : "Someone"} · ${turn.intent} to ${agent} · ${at}`;
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
+export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages) {
   switch (turn.kind) {
     case "repositoryRequest": {
@@ -1008,8 +1008,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           askedAt={turn.at}
           answeredAt={turn.answeredAt}
           dismissed={ended && turn.answeredAt === null}
-          settledBy={turn.closedAt !== null ? "Decided on the banner" : undefined}
-          waitingOn={waitingOn}
+          settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
+          waitingOn={turn.to ? questionFor(turn.to, people) : waitingOn}
+          onlyThey={turn.to !== null}
         />
       );
     case "prompt":
@@ -1067,7 +1068,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           read={turn.read}
           readAfter={turn.after ? toolLabel(turn.after) : undefined}
           failed={turn.failed ?? undefined}
-          {...(wait ? { pendingReason: pendingReason(wait) } : {})}
+          {...(turn.heldFor && turn.deliveredAt === null && !turn.failed
+            ? { pendingReason: "Queued: goes after the answer the agent is waiting for." }
+            : wait ? { pendingReason: pendingReason(wait) } : {})}
           {...(interruptible && steer ? { onInterrupt: () => steer.resend(turn, true) } : {})}
           {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
           person={person}
@@ -1092,6 +1095,13 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         />
       );
   }
+}
+
+/** Whom a session's question waits on: none when it is put to you, else their first name. */
+function questionFor(to: { id: string; name: string | null }, people: People): string | undefined {
+  if (to.id === people.you) return undefined;
+  const name = actorName(to, people.names);
+  return name ? firstName(name) : "someone else";
 }
 
 /** "Aborted by Ana: wrong task" — who stopped it, and why, when known. */

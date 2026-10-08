@@ -84,7 +84,7 @@ type dueRun struct {
 func (a *Artifacts) Sweep(ctx context.Context) (int, error) {
 	var due []dueRun
 	if err := a.DB.InSystem(ctx, "artifacts", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, project_id, task_id, lux_run_id, status::text, artifacts_due_at,
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), lux_run_id, status::text, artifacts_due_at,
 				artifacts_due_at < now() - make_interval(secs => $1)
 			FROM runs WHERE artifacts_due_at IS NOT NULL AND artifacts_next_at <= now()
 			ORDER BY artifacts_next_at LIMIT 50`, artifactsPatience.Seconds())

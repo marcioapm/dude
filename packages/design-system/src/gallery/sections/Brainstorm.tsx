@@ -1,0 +1,100 @@
+import { useState } from "react";
+import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
+import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { SidebarSessions } from "../../components/Sidebar.tsx";
+import { SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
+import { people } from "../navFixtures.ts";
+
+const P = people;
+
+/** The card as Ana sees it: Márcio's edit stays for him; one item filed already. */
+const ITEMS: ProposalCardItem[] = [
+  { kind: "epic", title: "Usage metering, watch-only", detail: "Count experiment runs per org per day; charge nothing yet.",
+    project: { key: "BL", name: "billing" }, canFile: true },
+  { kind: "task", child: true, title: "Dedupe experiment runs on run id in the rollup",
+    detail: "The meter's 24h key isn't enough: retries can come days later.", project: { key: "BL", name: "billing" }, canFile: true },
+  { kind: "task", child: true, title: "Usage panel shows a cost estimate per kind", detail: "Estimate only, at list price; labelled as such.",
+    project: { key: "WC", name: "web-console" }, canFile: true, filed: { by: "Ana Ribeiro", key: "WC-240" } },
+  { kind: "edit", title: "Edit BL-58 · Daily per-org usage rollup", tag: "Márcio's · not started", taskKey: "BL-58",
+    before: "meter_daily(org, kind, day, count), backfilled from events.",
+    after: "meter_daily(org, kind, day, count), backfilled from events, counting each run id once.",
+    canFile: false, why: "Only Márcio can file this: it's his task" },
+  { kind: "comment", title: "Comment on WC-214 · Checkout v2", tag: "Ana's", taskKey: "WC-214",
+    detail: "“Invoice for annual plans assumes the plan step owns the method list; v2 should keep it there.”", canFile: true },
+];
+
+function Card({ readOnly }: { readonly readOnly?: boolean }) {
+  const [selected, setSelected] = useState<Set<number>>(() => new Set([0, 1, 3, 4]));
+  return (
+    <ProposalCard items={ITEMS} selected={selected} filingAs="Ana" readOnly={readOnly}
+      onToggle={(i) => setSelected((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
+      onFile={() => undefined} />
+  );
+}
+
+export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
+  return (
+    <Section id="brainstorm" title="Brainstorm sessions"
+      intro="A conversation with an agent that belongs to its members, not a task. It reads the linked projects and proposes work; a member files it with a click, as themselves.">
+      <Block id="bs-proposal" title="ProposalCard"
+        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. A reader sees the card and files nothing. Nothing on it names the session.">
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>Ana, who can chat</Label>
+            <Card />
+            <Label>a reader</Label>
+            <Card readOnly />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="bs-row" title="SessionRow / SharedMark"
+        note="A session in the list: what it filed, the projects it reads, how it is. Shared ones carry the shared glyph, and the owner's face when it is someone else.">
+        <Panes mode={mode}>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            <SessionRow title="Usage-based billing" summary="Filed 1 epic, 4 tasks · edited BL-58" state="Talking" age="2m ago"
+              projects={[{ key: "WC", name: "web-console", repositories: 2 }, { key: "BL", name: "billing", repositories: 1 }]}
+              shared={{ owner: P["marcio"] }} onOpen={() => undefined} />
+            <SessionRow title="Q4 cleanup ideas" summary="Nothing filed yet" state="Parked" age="3 days ago" projects={[]} onOpen={() => undefined} />
+          </ul>
+          <SharedMark />
+        </Panes>
+      </Block>
+      <Block id="bs-sidebar" title="SidebarSessions"
+        note="Above Projects in the sidebar: only sessions you are in, then New session.">
+        <Panes mode={mode}>
+          <div style={{ width: 280 }}>
+            <SidebarSessions selected="s2" onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
+              sessions={[{ id: "s1", title: "Meter v2 notes" }, { id: "s2", title: "Usage-based billing", shared: true, owner: P["marcio"] }]} />
+          </div>
+        </Panes>
+      </Block>
+      <Block id="bs-rail" title="SessionPeople / LinkedProjects / Capabilities"
+        note="The session's rail: its people (here: has it open now), what it reads, and what it can and cannot do.">
+        <Panes mode={mode}>
+          <div style={{ width: 300 }}>
+            <SessionRail>
+              <SessionRailBlock label="People">
+                <SessionPeople members={[
+                  { person: P["marcio"]!, role: "owner", open: true, you: true },
+                  { person: P["ana"]!, role: "chat", open: true },
+                  { person: P["tom"]!, role: "read" },
+                  { person: P["lin"]!, role: "chat", invited: true },
+                ]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Linked">
+                <LinkedProjects projects={[
+                  { key: "WC", name: "web-console", repositories: [{ name: "web", defaultBranch: "main" }, { name: "api", defaultBranch: "main" }] },
+                  { key: "BL", name: "billing", repositories: [] },
+                ]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="It can">
+                <Capabilities can={["Read linked code, tasks, PRs, findings", "Propose epics and tasks · you file them"]}
+                  cannot={["Change code, push, start or steer work", "Touch projects you didn't link"]} />
+              </SessionRailBlock>
+            </SessionRail>
+          </div>
+        </Panes>
+      </Block>
+    </Section>
+  );
+}
