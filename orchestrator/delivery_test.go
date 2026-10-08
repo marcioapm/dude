@@ -272,6 +272,9 @@ func (w *world) pump() {
 			w.t.Fatal(err)
 		}
 	}
+	if _, err := w.syncer.RetireCompleted(ctx); err != nil {
+		w.t.Fatal(err)
+	}
 	if _, err := w.artifacts.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
 	}
@@ -974,10 +977,25 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 	if len(changed) != 1 || changed[0] != "FACTORY.md" {
 		t.Errorf("changed paths in target = %v", changed)
 	}
-	// A finished phase's lux Run is stopped, not cancelled: its workspace and
-	// session are kept.
-	if r := w.lux.Runs()[0]; r.Stopped != 1 || r.Cancelled {
-		t.Errorf("lux run stopped=%d cancelled=%v", r.Stopped, r.Cancelled)
+	// A finished phase's lux Run is stopped, so its exit is collected, then
+	// terminated: nothing resumes a completed phase, and lux would keep it.
+	w.until("the finished phase's lux run to be terminated", func() bool {
+		r := w.lux.Runs()[0]
+		return r.Stopped == 1 && r.Cancelled
+	})
+	// Stopped first: a cancel first would end it before its exit is collected.
+	r := w.lux.Runs()[0]
+	var ends []string
+	for _, c := range w.lux.CallsOf(r.ID) {
+		if c == "stop" || c == "cancel" {
+			ends = append(ends, c)
+		}
+	}
+	if !slices.Equal(ends, []string{"stop", "cancel"}) {
+		t.Errorf("the finished phase's lux run was asked %v; want stop, then cancel", ends)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID); n != 1 {
+		t.Errorf("the finished phase's Run is not recorded as terminated in lux")
 	}
 }
 

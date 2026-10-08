@@ -835,7 +835,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		// of this start was applied (kept), the applied lux_state stands
 		// over the answer; an end applied leaves the preview parked.
 		const kept = `lux_start_event > $5`
-		const ended = `(` + kept + ` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
+		const ended = `(` + kept + ` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated'))`
 		var resumed bool
 		err := tx.QueryRow(ctx, `UPDATE runs SET
 			lux_state = CASE WHEN `+kept+` THEN lux_state ELSE $4 END,
@@ -889,11 +889,12 @@ func (p *Previews) startPending(ctx context.Context, r previewRun) error {
 }
 
 // cancel ends the lux Run of a preview a person stopped. Cancelled, not
-// stopped: nothing about a finished preview is worth keeping. A lost one
-// too: lux can resume a lost Run, so it holds a snapshot until cancelled.
+// stopped: nothing about a finished preview is worth keeping. Every one lux
+// has not ended for good: lux keeps a stopped, failed, lost or succeeded
+// Run to resume, with its storage, until it is terminated.
 func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 	p.unfollow(r.ID)
-	if !lux.Terminal(r.LuxState) || r.LuxState == "stopped" || r.LuxState == "lost" {
+	if !lux.Terminated(r.LuxState) {
 		if err := p.Lux.Cancel(ctx, r.LuxRunID); err != nil {
 			if le, ok := lux.AsError(err); !ok || le.Retryable() {
 				return err
@@ -901,7 +902,8 @@ func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 		}
 	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', lux_state = 'cancelled' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel',
+			lux_state = CASE WHEN lux_state IN ('cancelled', 'terminated') THEN lux_state ELSE 'cancelled' END WHERE id = $1`, r.ID)
 		return err
 	})
 }

@@ -7,6 +7,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,10 @@ func TestRestartRunReplacesTheRunInItsSlot(t *testing.T) {
 		t.Errorf("the delivery waits on %s", pending)
 	}
 	w.until("the new reviewer on lux", func() bool { return w.luxRunOf(fresh) != "" })
+	// Nothing resumes the Run it replaced: its lux Run is terminated.
+	w.until("the replaced reviewer terminated in lux", func() bool {
+		return slices.Contains(w.lux.CallsOf(w.luxRunOf(stuck)), "cancel")
+	})
 	if p := w.promptOf(fresh); !strings.Contains(p, "Restarted by the conductor: Read the worker yourself") {
 		t.Errorf("the new reviewer is not told why:\n%s", p)
 	}

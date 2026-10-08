@@ -540,9 +540,11 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 				p.Log.Warn("a preview's Run failed to start; submitting a new run", "run", r.ID, "luxRun", r.LuxRunID,
 					"state", lr.State, "startFailures", r.StartFailures)
 				cancel = true
-			case "stopped":
+			case "stopped", "succeeded":
+				// lux resumes a succeeded Run as a stopped one; a lux from
+				// before that refuses (409), and resumeWoken replaces it.
 				return p.resumeWoken(ctx, r, lr)
-			case "succeeded", "cancelled":
+			case "cancelled", "terminated":
 				// Never runs again: a new one below.
 			default:
 				// On its way up or running already: its servers come with it.
@@ -675,9 +677,10 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		}
 	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		// A Run lux will not resume: a new one now.
+		// A Run lux will not resume: a new one now, this one terminated so
+		// lux drops whatever it kept of it.
 		p.Log.Warn("lux refused to resume a preview; submitting a new run", "run", r.ID, "error", le.Message)
-		return p.replaceWoken(ctx, r, false)
+		return p.replaceWoken(ctx, r, true)
 	}
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
@@ -1005,7 +1008,7 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 // end applied then is not acknowledged: the wake stays wanted, released.
 func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string, started bool) error {
 	const kept = `(CASE WHEN $3 THEN lux_start_event > $5 ELSE lux_after_event > $7 END)`
-	const keptEnd = `(NOT $3 AND lux_after_event > $7 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
+	const keptEnd = `(NOT $3 AND lux_after_event > $7 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated'))`
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET
 			wake_wanted_at = CASE WHEN `+keptEnd+` THEN wake_wanted_at END,
@@ -1013,7 +1016,7 @@ func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string,
 			next_attempt_at = CASE WHEN `+keptEnd+` THEN now() END,
 			lux_state = CASE WHEN `+kept+` THEN lux_state WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
 			status = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running' THEN 'running'::run_status
-				WHEN `+kept+` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled') THEN status
+				WHEN `+kept+` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated') THEN status
 				WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
 			active_since = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running'
 				THEN COALESCE(active_since, now()) ELSE active_since END,

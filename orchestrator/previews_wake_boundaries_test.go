@@ -46,12 +46,14 @@ func (a *afterAttach) AttachServer(ctx context.Context, serverID, runID string) 
 // acknowledgement. The end stands: the preview is not shown serving and the
 // wake stays wanted. The next sweep resumes a Run that ran and can run again
 // (failed, lost, stopped), counting no failed start, and replaces one that
-// never runs again (cancelled); either then serves. lux's succeeded is not
-// covered: the fake never ends a preview's Run that way.
+// never runs again (terminated, or cancelled from a lux before the rename);
+// either then serves. A Run lux ended succeeded is covered by
+// TestASucceededPreviewRunIsResumedWhereLuxCan.
 func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
-	for _, end := range []string{"failed", "lost", "stopped", "cancelled"} {
+	for _, end := range []string{"failed", "lost", "stopped", "terminated", "cancelled"} {
 		t.Run(end, func(t *testing.T) {
 			w := newWorld(t)
+			w.lux.CancelledState = end == "cancelled"
 			w.wakeable()
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			_, runID := w.declare()
@@ -70,7 +72,7 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 					if err := luxc.Stop(context.Background(), r.ID); err != nil {
 						t.Error(err)
 					}
-				case "cancelled":
+				case "terminated", "cancelled":
 					if err := luxc.Cancel(context.Background(), r.ID); err != nil {
 						t.Error(err)
 					}
@@ -90,7 +92,7 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				t.Fatalf("the attach's answer was written over the end applied after it:\n%s", w.preview(runID))
 			}
 			w.sweepAgain(runID)
-			if end == "cancelled" {
+			if end == "terminated" || end == "cancelled" {
 				w.untilPreview(runID, "a new Run running", func() bool {
 					return len(w.luxRuns()) == 2 &&
 						w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
