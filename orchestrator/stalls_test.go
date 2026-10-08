@@ -824,6 +824,17 @@ func (w *world) reviewersSilent(task string, n int) []string {
 	return ids
 }
 
+func (w *world) conductedSilentReview() (string, []string) {
+	w.t.Helper()
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	return task, runs
+}
+
 // silentFor back-dates when a Run's agent last did anything: ago.
 func (w *world) silentFor(runID string, ago time.Duration) {
 	mustExec(w.t, w.owner, `UPDATE runs SET agent_active_at = now() - make_interval(secs => $2) WHERE id = $1`, runID, ago.Seconds())
@@ -841,12 +852,7 @@ func (w *world) reasonsOf(runID string) string {
 // other reviewer, active, is not reported.
 func TestASilentReviewerIsReported(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	task, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.lux.SetUsage(w.luxRunOf(id), lux.Usage{CPUSeconds: 2})
 	w.silentFor(id, 29*time.Minute)
@@ -1008,12 +1014,7 @@ func TestARunWithAnOpenCallIsNeverSilent(t *testing.T) {
 // again at 30 minutes, its facts changed.
 func TestASilentRunThatComesBackIsNotToldAgainUntilSilentAgain(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.silentFor(id, 31*time.Minute)
 	w.sweep()
@@ -1332,12 +1333,7 @@ func TestASilentRunOfAnyPhaseIsReported(t *testing.T) {
 // reported.
 func TestASilentConductedRunIsReportedJustPastItsWindow(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.silentFor(id, 30*time.Minute+10*time.Second)
 	w.sweep()
@@ -1430,12 +1426,7 @@ func TestAMovedWriterKeepsItsRunningTimeButNotItsWait(t *testing.T) {
 // again, and reported once 10 more silent minutes pass.
 func TestAMovedRunsSilenceKeepsItsRunningTimeButNotItsWait(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	release := w.movedAfter(id, 40*time.Minute)
 	w.silentFor(id, 60*time.Minute)
@@ -1460,12 +1451,7 @@ func TestAMovedRunsSilenceKeepsItsRunningTimeButNotItsWait(t *testing.T) {
 // window 30 minutes after it, and reported.
 func TestActivityBeforeAMovedRunRunsAgainCountsFromItsArrival(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	release := w.movedAfter(id, 40*time.Minute)
 	w.silentFor(id, 0)
@@ -1487,12 +1473,7 @@ func TestActivityBeforeAMovedRunRunsAgainCountsFromItsArrival(t *testing.T) {
 // a change of facts that would tell it again before 60.
 func TestReviewAMoveDoesNotChangeSilentFacts(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.silentFor(id, 2*time.Hour)
 	w.sweep()
@@ -1523,12 +1504,7 @@ func TestReviewAMoveDoesNotChangeSilentFacts(t *testing.T) {
 // move is no change of facts, and it is not told again before 60 minutes.
 func TestASilentRunMovedOnItsOwnDepartureIsNotToldAgain(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.silentFor(id, 2*time.Hour)
 	w.sweep()
@@ -1554,12 +1530,7 @@ func TestASilentRunMovedOnItsOwnDepartureIsNotToldAgain(t *testing.T) {
 // the report, it is told again.
 func TestAMovedRunSilentAgainSinceItsReportIsToldAgain(t *testing.T) {
 	w := conducting(t)
-	w.quickDiffs()
-	w.silentReviews()
-	task := w.task()
-	w.conductedReview(task)
-	runs := w.reviewersSilent(task, 2)
-	w.diffsSettled(runs)
+	_, runs := w.conductedSilentReview()
 	id := runs[0]
 	w.silentFor(id, 2*time.Hour)
 	w.sweep()
