@@ -202,6 +202,28 @@ describe("ImageHistory", () => {
     await act(async () => host!.querySelector<HTMLButtonElement>("[data-version='2']")!.click());
     expect(again()).toBeUndefined();
   });
+
+  test("each version's flip is against the next older one not cancelled", async () => {
+    const C = (id: string, n: number, state: ImageHistoryVersion["state"], can: boolean) => ({ ...V(id, n, state, "FROM a\n"), canRunContainers: can });
+    await mount(<ImageHistory publishedId="v1" versions={[
+      C("v4", 4, "published", false), C("v3", 3, "cancelled", false), C("v2", 2, "superseded", true), C("v1", 1, "superseded", false)]} />);
+    const flags = [...host!.querySelectorAll("[data-version]")].map((b) => [b.getAttribute("data-version"), b.querySelector("[data-testid='version-flag']")?.textContent?.trim() ?? ""]);
+    expect(flags).toEqual([["4", "Can run containers turned off"], ["3", "Can run containers turned off"], ["2", "Can run containers turned on"], ["1", ""]]);
+  });
+
+  test("a long history reads each version a bounded number of times, not once per row", async () => {
+    const n = 2000;
+    const list = Array.from({ length: n }, (_, i) => ({ ...V(`v${n - i}`, n - i, i % 7 === 3 ? "cancelled" : "superseded", "FROM a\n"), canRunContainers: i % 2 === 0 }));
+    let reads = 0;
+    const counted = new Proxy(list, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    await mount(<ImageHistory versions={counted} publishedId={`v${n}`} />);
+    expect(reads).toBeLessThan(20 * n);
+  });
 });
 
 describe("CodeEditor", () => {

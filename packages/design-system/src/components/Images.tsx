@@ -214,6 +214,21 @@ function flipped(v: ImageHistoryVersion, before: ImageHistoryVersion | undefined
 }
 
 /**
+ * Each version's predecessor: the next older one not cancelled, in one
+ * pass from the oldest.
+ */
+function predecessors(versions: ReadonlyArray<ImageHistoryVersion>): Array<ImageHistoryVersion | undefined> {
+  const out = new Array<ImageHistoryVersion | undefined>(versions.length);
+  let older: ImageHistoryVersion | undefined;
+  for (let i = versions.length - 1; i >= 0; i--) {
+    const v = versions[i]!;
+    out[i] = older;
+    if (v.state !== "cancelled") older = v;
+  }
+  return out;
+}
+
+/**
  * Every version of an image, newest first — failed ones and the draft too —
  * and the selected one's Containerfile against the one before it or
  * against the published one. A built version that is not published can be
@@ -225,7 +240,8 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
   const index = Math.max(0, versions.findIndex((v) => v.id === selected));
   const version = versions[index];
   const published = versions.find((v) => v.id === publishedId);
-  const base = against === "published" ? published : versions.slice(index + 1).find((v) => v.state !== "cancelled");
+  const before = useMemo(() => predecessors(versions), [versions]);
+  const base = against === "published" ? published : before[index];
   const diff = useMemo(() => (version ? lineDiff(base?.containerfile ?? "", version.containerfile) : null), [version, base]);
   if (!version || !diff) return <p className={styles["muted"]}>No versions yet.</p>;
   const canRepublish = onRepublish && version.id !== publishedId && (version.state === "superseded" || version.state === "published");
@@ -240,9 +256,9 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
   return (
     <div className={styles["history"]}>
       <ol className={styles["versions"]} aria-label="Versions">
-        {versions.map((v) => {
+        {versions.map((v, i) => {
           const badge = v.id === publishedId ? VERSION_BADGE.published : v.state === "superseded" ? null : VERSION_BADGE[v.state];
-          const flip = flipped(v, versions.slice(versions.indexOf(v) + 1).find((p) => p.state !== "cancelled"));
+          const flip = flipped(v, before[i]);
           return (
             <li key={v.id}>
               <button
