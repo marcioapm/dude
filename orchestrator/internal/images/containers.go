@@ -19,7 +19,8 @@ import (
 // The container check: a version marked "Can run containers" is checked,
 // once its dude layer is on, for what lux's nested containers need of an
 // image (lux docs/runspec.md, "Nested containers"): an engine (podman, or
-// rootless Docker), fuse-overlayfs, newuidmap and newgidmap able to gain
+// rootless Docker: dockerd-rootless with dockerd, RootlessKit and
+// slirp4netns), fuse-overlayfs, newuidmap and newgidmap able to gain
 // CAP_SETUID and CAP_SETGID, and /etc/subuid and /etc/subgid entries for
 // the workload user, agent. Missing any, the build fails.
 
@@ -33,7 +34,11 @@ const CheckCommand = "containers-check"
 type Found struct {
 	// Paths, "" for none; versions as the engine prints them.
 	Podman, PodmanVersion string `json:",omitempty"`
+	// Docker is the rootless launcher (dockerd-rootless[.sh]); it runs
+	// only with Dockerd, Rootlesskit and Slirp4netns beside it.
 	Docker, DockerVersion string `json:",omitempty"`
+	Dockerd, Rootlesskit  string `json:",omitempty"`
+	Slirp4netns           string `json:",omitempty"`
 	FuseOverlayfs         string `json:",omitempty"`
 	Newuidmap, Newgidmap  Mapper
 	// agent's lines in /etc/subuid and /etc/subgid, as written: by its
@@ -78,7 +83,24 @@ type Mapper struct {
 
 func (m Mapper) able() bool { return m.Path != "" && (m.FileCap || m.Setuid) }
 
-func (f Found) engine() bool { return f.Podman != "" || f.Docker != "" }
+// dockerMissing are the parts rootless Docker lacks besides its launcher.
+func (f Found) dockerMissing() []string {
+	var out []string
+	for _, p := range []struct{ name, path string }{{"dockerd", f.Dockerd}, {"rootlesskit", f.Rootlesskit}, {"slirp4netns", f.Slirp4netns}} {
+		if p.path == "" {
+			out = append(out, p.name)
+		}
+	}
+	return out
+}
+
+func (f Found) docker() bool { return f.Docker != "" && len(f.dockerMissing()) == 0 }
+
+func (f Found) engine() bool { return f.Podman != "" || f.docker() }
+
+// partialDocker is a rootless Docker launcher without the rest of it, in
+// an image with no podman: what is missing is Docker's parts.
+func (f Found) partialDocker() bool { return f.Podman == "" && f.Docker != "" && !f.docker() }
 
 // Passed is whether the image can run containers.
 func (f Found) Passed() bool {
@@ -109,7 +131,10 @@ func (f Found) Detail() string {
 		return f.engineName() + ", fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent"
 	}
 	var missing []string
-	if !f.engine() {
+	switch {
+	case f.partialDocker():
+		missing = append(missing, andList(f.dockerMissing())+" for rootless Docker")
+	case !f.engine():
 		missing = append(missing, "podman or Docker")
 	}
 	if f.FuseOverlayfs == "" {
@@ -143,7 +168,7 @@ func (f Found) Detail() string {
 // rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."
 func (f Found) Sentence() string {
 	var absent []string
-	if !f.engine() {
+	if !f.engine() && !f.partialDocker() {
 		absent = append(absent, "no podman or rootless Docker")
 	}
 	if f.FuseOverlayfs == "" {
@@ -166,6 +191,9 @@ func (f Found) Sentence() string {
 		absent = append(absent, "no /etc/subgid entry for agent")
 	}
 	var clauses []string
+	if f.partialDocker() {
+		clauses = append(clauses, "rootless Docker has no "+orList(f.dockerMissing()))
+	}
 	if len(absent) > 0 {
 		clauses = append(clauses, "the image has "+andList(absent))
 	}
@@ -189,6 +217,13 @@ func dedupe(list []string) []string {
 		}
 	}
 	return out
+}
+
+func orList(items []string) string {
+	if len(items) > 1 {
+		return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
+	}
+	return strings.Join(items, "")
 }
 
 func andList(items []string) string {
@@ -232,8 +267,12 @@ func (f Found) LogLines() []string {
 		}
 		return strings.Join(lines, ", ")
 	}
+	docker := or(f.Docker, f.DockerVersion)
+	if f.Docker != "" && !f.docker() {
+		docker += ", without " + andList(f.dockerMissing())
+	}
 	return []string{
-		"check  engine  podman: " + or(f.Podman, f.PodmanVersion) + " · docker: " + or(f.Docker, f.DockerVersion),
+		"check  engine  podman: " + or(f.Podman, f.PodmanVersion) + " · docker: " + docker,
 		"check  fuse-overlayfs  " + or(f.FuseOverlayfs, ""),
 		"check  newuidmap  " + mapper(f.Newuidmap, "cap_setuid"),
 		"check  newgidmap  " + mapper(f.Newgidmap, "cap_setgid"),
@@ -268,9 +307,12 @@ func ContainersCheck(root string) Found {
 		f.PodmanVersion = version(f.Podman)
 	}
 	f.Docker = look("dockerd-rootless", "dockerd-rootless.sh")
-	if f.Docker != "" && root == "/" {
-		if d := look("dockerd"); d != "" {
-			f.DockerVersion = version(d)
+	if f.Docker != "" {
+		f.Dockerd = look("dockerd")
+		f.Rootlesskit = look("rootlesskit")
+		f.Slirp4netns = look("slirp4netns")
+		if f.Dockerd != "" && root == "/" {
+			f.DockerVersion = version(f.Dockerd)
 		}
 	}
 	f.FuseOverlayfs = look("fuse-overlayfs")
