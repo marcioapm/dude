@@ -1468,6 +1468,71 @@ func TestActivityBeforeAMovedRunRunsAgainCountsFromItsArrival(t *testing.T) {
 	}
 }
 
+// A conducted reviewer reported as silent and silent since: 31 running
+// minutes after the report it is not told again, its facts unchanged. Nor
+// after a move: reported 71 minutes ago, 40 of them waiting for a host, it
+// has been running 31 minutes since, silent throughout, and a move is not
+// a change of facts that would tell it again before 60.
+func TestReviewAMoveDoesNotChangeSilentFacts(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 2*time.Hour)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("initial reports %d, want 1", n)
+	}
+	w.reportedAgo(id, 31*time.Minute)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("unchanged silence without a move: %d reports, want 1", n)
+	}
+	w.reportedAgo(id, 71*time.Minute)
+	w.runningAgain(id, w.movedAfter(id, 40*time.Minute))
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("unchanged silence after 31 running minutes since report: %d reports, want 1 until 60 minutes", n)
+	}
+	// Still the same silence at 60 running minutes: told again.
+	w.reportedAgo(id, 60*time.Minute+10*time.Second)
+	w.sweep()
+	if n := w.stalls(id); n != 2 {
+		t.Fatalf("unchanged silence 60 running minutes after its report: %d reports, want 2", n)
+	}
+}
+
+// A conducted reviewer reported as silent, active again after its report
+// and silent since, then moved with a 40-minute wait: its new silence is a
+// change of facts the move keeps, and 31 running minutes into it, 55 after
+// the report, it is told again.
+func TestAMovedRunSilentAgainSinceItsReportIsToldAgain(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 2*time.Hour)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("initial reports %d, want 1", n)
+	}
+	w.reportedAgo(id, 95*time.Minute)
+	w.silentFor(id, 71*time.Minute)
+	w.runningAgain(id, w.movedAfter(id, 40*time.Minute))
+	w.sweep()
+	if n := w.stalls(id); n != 2 {
+		t.Fatalf("silent again for 31 running minutes since activity after its report: %d reports, want 2", n)
+	}
+}
+
 // A writer reported for its unchanged files, then moved by lux: still
 // stalled once it runs again, as its files have not changed. Reported 10
 // minutes after they last did, and moved 40 minutes later, so the move's
