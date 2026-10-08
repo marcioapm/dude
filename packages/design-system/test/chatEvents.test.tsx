@@ -120,6 +120,15 @@ describe("ChatProgress motion", () => {
 });
 
 describe("ChatNotice", () => {
+  test("a stopped turn carries an error glyph and kind", () => {
+    const html = renderToStaticMarkup(
+      <ChatNotice kind="stopped" by="dude"
+        text="Stopped Brainstorm's turn: bash was open for 10 min." at="2026-10-08T10:00:00Z" />,
+    );
+    expect(html).toContain('data-kind="stopped"');
+    expect(html).toContain('data-icon="warning"');
+    expect(html).toContain("Stopped Brainstorm&#x27;s turn");
+  });
   test("a note in the transcript's margin, not a message", () => {
     const html = renderToStaticMarkup(
       <ChatNotice kind="parked" text="Parked while it waits for you." at="2026-09-25T10:00:00Z" />,
