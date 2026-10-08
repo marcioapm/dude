@@ -31,7 +31,7 @@ import (
 // parameter: it is the predicate of the partial index events_asks_idx
 // (migration 026), which the planner uses only when the query says the
 // same.
-const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge')"
+const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled')"
 
 // Notifier sends Web Push for new asks.
 type Notifier struct {
@@ -316,6 +316,14 @@ func messageFor(a ask) (Message, bool) {
 	case delivery.EvReadyToMerge:
 		msg.Title = strings.TrimSpace(a.Task + " is ready to merge")
 		msg.Body = "Approved, with its checks passing. Merging is yours."
+	case delivery.EvRunStalled:
+		// A conductor's task: the conductor is told, not the owner.
+		if conducted, _ := p["conducted"].(bool); conducted {
+			return msg, false
+		}
+		msg.Title = who + " has made no progress"
+		msg.Body = str("text")
+		msg.URL = "#/task/" + a.TaskID
 	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {

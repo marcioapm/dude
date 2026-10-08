@@ -56,6 +56,14 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Fixer");
     case "test_failed":
       return failed("Tester");
+    case "review_failed": {
+      const category = typeof d.category === "string" && d.category ? `${d.category} ` : "";
+      return {
+        short: `A ${category}reviewer failed`,
+        sentence: `The ${category}reviewer failed${error === "." ? "." : `${error}.`} The round is not complete without it: try it again, or go on without it.`,
+        runId,
+      };
+    }
     case "pr_fix_failed":
       return { ...failed("Fixer"), sentence: `The fixer answering the pull request's feedback failed${error}` };
     case "pr_loop_exhausted": {

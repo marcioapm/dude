@@ -116,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	}))
 	s.githubRoutes(mux)
 	s.recoverRoutes(mux)
+	s.stallRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	s.llmRoutes(mux)

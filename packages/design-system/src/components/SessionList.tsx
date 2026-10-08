@@ -28,7 +28,7 @@ export interface SessionItemProps extends Omit<HTMLAttributes<HTMLLIElement>, "t
   readonly onOpen: () => void;
 }
 
-export function SessionItem({ avatar, title, detail, trailing, current, onOpen, className, ...rest }: SessionItemProps) {
+export function SessionItem({ avatar, title, detail, trailing, current, onOpen, className, children, ...rest }: SessionItemProps) {
   return (
     <li className={className} {...rest}>
       <button type="button" className={cx(styles["item"], current && styles["current"])} aria-current={current ? "true" : undefined} onClick={onOpen}>
@@ -39,6 +39,7 @@ export function SessionItem({ avatar, title, detail, trailing, current, onOpen, 
         </span>
         {trailing ? <span className={styles["trailing"]}>{trailing}</span> : null}
       </button>
+      {children}
     </li>
   );
 }

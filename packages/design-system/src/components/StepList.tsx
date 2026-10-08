@@ -49,7 +49,7 @@ export type StepRowProps = StepRowBase &
   );
 
 /** One step: a button that opens it, or a link out. */
-export function StepRow({ step, avatar, label, note, status, meta, metaTitle, duration, below, onOpen, href, className, ...rest }: StepRowProps) {
+export function StepRow({ step, avatar, label, note, status, meta, metaTitle, duration, below, onOpen, href, className, children, ...rest }: StepRowProps) {
   const inner = (
     <>
       {step !== undefined ? <span className={cx(styles["step"], "ds-mono")}>{step}</span> : null}
@@ -78,6 +78,7 @@ export function StepRow({ step, avatar, label, note, status, meta, metaTitle, du
           {inner}
         </button>
       )}
+      {children}
     </li>
   );
 }

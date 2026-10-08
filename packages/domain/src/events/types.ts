@@ -177,6 +177,25 @@ export const EventTypes = {
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
   /**
+   * A live phase Run made no progress for its window: a tool call open the
+   * whole of it, its agent silent the whole of it (no output, no tool
+   * call), or (a Run that changes code) no change to its files.
+   * Payload: `{ stall: RunStall, conducted, text? }`; `text`, the report
+   * in words, on a plain delivery, where it is its owner's (notified, and
+   * the task's banner). The Run reads as stalled until what it was
+   * reported for changes (run_stalled).
+   */
+  RunStalled: "run.stalled",
+  /** The task's owner left a stalled Run as it is: it is not reported again. Payload: `{}`. */
+  RunStallLeft: "run.stall_left",
+  /**
+   * A phase Run was stopped and a fresh one put in its slot. On the old
+   * Run. Payload: `{ from, to, note, phase, category?, tier?, by? }`:
+   * `by: "conductor"` for the conductor's restart_run (the actor is its
+   * Run), absent for a person's.
+   */
+  RunRestarted: "run.restarted",
+  /**
    * A Run's checkout changed: its diff against the commit it started from,
    * read live or left by the beforeStop hook as it stopped. Payload: a
    * summary with no lines (`RunDiffSummary`); the lines are
@@ -319,9 +338,10 @@ export const EventTypes = {
   /**
    * dude woke a task's conductor with a note listing why. Payload:
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
-   * (decision, escalation, question, safety, steer_read, steer_failed,
-   * pr_merged, pr_closed); `started` when no conductor was live and the
-   * note briefed a new one.
+   * (decision, escalation, question, steer_read, steer_failed, pr_merged,
+   * pr_closed, published, publish_refused, publish_stalled, checkout,
+   * stalled; safety in older notes); `started` when no conductor was live
+   * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
 

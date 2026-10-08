@@ -41,11 +41,21 @@ export const ALL_AGENT_ROLES = agentRoleSchema.options;
 export const EFFORTS = ["low", "medium", "high", "max"] as const;
 export const effortSchema = z.enum(EFFORTS);
 export type Effort = z.infer<typeof effortSchema>;
-/** Running time allowed per session, in minutes: up to a week. */
-export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
+/**
+ * How long a phase Run may go without progress before its owner is told,
+ * in minutes: from half an hour up to a week, 2 hours when unset. Runs are
+ * stopped at 4 hours whatever this says (the deployment's agent.timeout).
+ */
+export const TIME_LIMIT_MIN_MINUTES = 30;
+export const DEFAULT_TIME_LIMIT_MINUTES = 120;
+export const timeLimitMinutesSchema = z.number().int().min(TIME_LIMIT_MIN_MINUTES).max(10_080);
+/** A stored limit as it is read: one saved below the minimum, when it was lower, is the minimum. */
+export function clampTimeLimit(minutes: number): number {
+  return Math.max(minutes, TIME_LIMIT_MIN_MINUTES);
+}
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck", "fake/stall", "fake/silent"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 
@@ -74,7 +84,7 @@ export const agentModelConfigSchema = z.object({
   context: z.string().max(20_000).optional(),
   /** How hard the model thinks; unset leaves it to the model. */
   effort: effortSchema.optional(),
-  /** Running time allowed per session, in minutes. */
+  /** How long a Run may go without progress before its owner is told, in minutes. */
   timeLimitMinutes: timeLimitMinutesSchema.optional(),
   /** The machine size its sessions run on (an organization's size id); unset is the default size. */
   machineSize: z.string().min(1).optional(),
@@ -564,6 +574,23 @@ export const runSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),
+  /**
+   * While it makes no progress, as dude last reported it (run.stalled):
+   * when, the report in words, and whether its owner was told (a plain
+   * delivery; a conductor's task tells the conductor) and left it as it
+   * is. Null once it makes progress or ends.
+   */
+  stalled: z
+    .object({
+      at: z.string().datetime({ offset: true }),
+      text: z.string(),
+      owner: z.boolean(),
+      left: z.boolean(),
+    })
+    .nullable()
+    .default(null),
+  /** The Run that replaced it when it was restarted; null for none. */
+  replacedBy: z.string().nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
 

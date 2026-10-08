@@ -15,6 +15,7 @@
  */
 
 import {
+  clampTimeLimit,
   deliveryPolicySchema,
   EventTypes,
   newId,
@@ -199,6 +200,9 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
       }
       return { value: null as never, source: "organization" as SettingSource };
     };
+    /** A time limit as it is read: one stored below today's minimum is the minimum. */
+    const timeLimit = (s: { value: number | null; source: SettingSource }) =>
+      s.value === null ? s : { ...s, value: clampTimeLimit(s.value) };
     /**
      * The size, by the one rule (resolveMachineSize): null when it is the
      * default's. With what the organization says under a project's, and
@@ -248,7 +252,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
           {
             tier: tier(role),
             effort: field(role, "effort"),
-            timeLimitMinutes: field(role, "timeLimitMinutes"),
+            timeLimitMinutes: timeLimit(field(role, "timeLimitMinutes")),
             machineSize: machine(role),
             image: image(role),
             enabled: enabledBy ? delivery[enabledBy] : null,

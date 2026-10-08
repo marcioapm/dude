@@ -25,6 +25,14 @@ describe("escalationWords", () => {
     });
   });
 
+  test("a failed reviewer names its category, and says the round is not complete", () => {
+    expect(escalationWords({ reason: "review_failed", detail: { runId: "run_r", category: "frontend", error: "timeout" }, at })).toEqual({
+      short: "A frontend reviewer failed",
+      sentence: "The frontend reviewer failed: timeout. The round is not complete without it: try it again, or go on without it.",
+      runId: "run_r",
+    });
+  });
+
   test("no changes, and a reason it has no words for, still read as sentences", () => {
     expect(escalationWords({ reason: "no_changes", detail: { runId: "run_1" }, at }).short).toBe("No changes made");
     expect(escalationWords({ reason: "brand_new", detail: null, at })).toEqual({

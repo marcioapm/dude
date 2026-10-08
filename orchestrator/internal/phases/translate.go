@@ -144,9 +144,13 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEvent int64) error {
 	u := t.usage
 	open := slices.Sorted(maps.Keys(t.openCalls))
+	// Each open call keeps the time it was first seen open
+	// (open_tool_calls_at): what "open for how long" is measured from.
 	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
+		open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, COALESCE(open_tool_calls_at->c, to_jsonb(now())))
+			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13)
@@ -176,6 +180,15 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 	return nil
 }
 
+// backFromAway (SQL, over runs) is a stall clock column moved on by the
+// time the Run was away from running (left_running_at), capped at now();
+// NULL stays NULL (LEAST alone would make it now()), and a Run never away
+// keeps it.
+func backFromAway(col string) string {
+	return `CASE WHEN ` + col + ` IS NULL OR left_running_at IS NULL THEN ` + col +
+		` ELSE LEAST(` + col + ` + (now() - left_running_at), now()) END`
+}
+
 // luxEvent handles lux's own lifecycle events.
 func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	var d map[string]any
@@ -187,11 +200,42 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A Run lux is moving to another host stops on the way, and is
 		// resumed by lux itself: recorded as resuming, not over.
 		state := lux.Recorded(str("state"), str("reason"))
+		// The stall clocks count only time running. Leaving running stamps
+		// left_running_at; the next entry into running moves each clock on
+		// by the time away, capped at now, so a move between hosts keeps
+		// the running time before it and drops its wait. The clocks: no
+		// change in files (files_changed_at), the agent's last activity
+		// (agent_active_at), and the last report (stall_reported_at, so
+		// run_stalled still compares like with like). Open calls are not
+		// moved: the new placement's first idle clears them (activity).
+		// A first start, never away, dates its files now.
+		// A silent report's facts end in its silence's start (stallFacts):
+		// when that is the silence the clocks move on, it moves with them,
+		// so a move is not a change of facts. Another silence stays put.
+		var facts, since *string
+		if state == "running" {
+			if err := tx.QueryRow(ctx, `SELECT r.stall_fingerprint, extract(epoch FROM `+silentSince+`)::text
+				FROM runs r WHERE r.id = $1 AND r.left_running_at IS NOT NULL`, t.run.ID).Scan(&facts, &since); err != nil && err != pgx.ErrNoRows {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
+			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
+				ELSE files_changed_at END,
+			agent_active_at = CASE WHEN $2 = 'running' THEN `+backFromAway("agent_active_at")+` ELSE agent_active_at END,
+			stall_reported_at = CASE WHEN $2 = 'running' THEN `+backFromAway("stall_reported_at")+` ELSE stall_reported_at END,
+			left_running_at = CASE WHEN $2 = 'running' THEN NULL
+				WHEN lux_state = 'running' THEN now() ELSE left_running_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
+		}
+		if facts != nil && since != nil && strings.HasSuffix(*facts, "|"+*since) {
+			if _, err := tx.Exec(ctx, `UPDATE runs r SET stall_fingerprint = $2 || extract(epoch FROM `+silentSince+`)::text
+				WHERE r.id = $1`, t.run.ID, strings.TrimSuffix(*facts, *since)); err != nil {
+				return err
+			}
 		}
 		if state == "running" {
 			t.resumeRunning(ctx, tx, s, f.Epoch)
@@ -258,20 +302,29 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 // ended: the container stopped without dude asking — the agent crashed,
 // timed out, or its host died. A phase whose turn was already done is
 // finished by the sweep, and one dude stopped is dude's business; any other
-// has failed.
+// has failed. One lux stopped at its time limit is not kept: its running
+// time is spent, so a resume would be stopped again at once.
 func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
 	if reason == "" {
 		reason = state
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = true
+	why, event := "the agent's run ended before finishing its task: "+reason, reason
+	if reason == luxTimeout {
+		why = "lux stopped it at its time limit: " + cmp.Or(s.Agent.Timeout, DefaultTimeout) + " of running"
+		event = why
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
-		t.run.ID, "the agent's run ended before finishing its task: "+reason)
+		t.run.ID, why, reason != luxTimeout)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	return s.failedTx(ctx, tx, t.run, reason)
+	return s.failedTx(ctx, tx, t.run, event)
 }
+
+// luxTimeout is the reason lux gives a Run it failed past its spec's timeout.
+const luxTimeout = "timeout"
 
 // shimEvent handles what lux's shim reports about the agent. These come in
 // the record stream, in order with the agent's own messages — unlike lux's

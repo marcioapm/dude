@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,10 +41,9 @@ type AgentConfig struct {
 	// (DUDE_AGENT_NESTED_CONTAINERS). lux places such Runs only on hosts
 	// offering nested containers, so it is off unless its hosts do.
 	NestedContainers bool
-	// A limit on a Run's running time (DUDE_AGENT_TIMEOUT), for an operator
-	// who wants one; none by default. Agents work for days, and one waiting
-	// on a person is parked, not timed out: lux counts only time spent
-	// running, and a Run that names no timeout has none (lux d748aa5).
+	// The most running time lux gives a phase Run (DUDE_AGENT_TIMEOUT,
+	// DefaultTimeout when unset): past it, lux stops the Run and it fails.
+	// lux counts only time spent running, so a parked Run is not timed.
 	Timeout string
 	// Where agents reach dude's own tools (agenttools), as they see it; ""
 	// gives them none. Must not be the lux host or lux's own address: lux
@@ -58,6 +58,9 @@ type AgentConfig struct {
 	// DUDE_TOOLS_SERVICE=off for a lux without it.
 	ToolsService bool
 }
+
+// DefaultTimeout is a phase Run's hard limit when none is configured.
+const DefaultTimeout = "4h"
 
 // LoadAgentConfig reads the agent configuration from the resolved settings.
 func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
@@ -116,11 +119,9 @@ type specInput struct {
 	// The model the Run's tier requests, as the proxy names it, and the
 	// tier's name (recorded on the Run and as a label).
 	Model, ModelTier string
-	// The role's reasoning effort, "" for the model's own; and its running
-	// time per session in minutes, 0 for none of its own.
-	Effort           string
-	TimeLimitMinutes int
-	Prompt           string
+	// The role's reasoning effort, "" for the model's own.
+	Effort string
+	Prompt string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
@@ -262,12 +263,12 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			{Name: "workspace", Path: workspaceDir, Kind: "state"},
 			{Name: "home", Path: agentHome, Kind: "state"},
 		},
-		Timeout: c.Timeout,
+		Timeout: cmp.Or(c.Timeout, DefaultTimeout),
 	}
-	// A role's own limit is the organization's or project's choice, and
-	// wins over the operator's blanket one.
-	if in.TimeLimitMinutes > 0 {
-		spec.Timeout = fmt.Sprintf("%dm", in.TimeLimitMinutes)
+	// The conductor parks while idle, and its running time adds up across
+	// the whole task: the hard limit is for phase Runs only.
+	if in.Phase == "" {
+		spec.Timeout = ""
 	}
 	if in.SessionID != "" {
 		delete(spec.Labels, "dude.task")

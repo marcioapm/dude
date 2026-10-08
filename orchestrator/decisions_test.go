@@ -862,61 +862,6 @@ func TestAConductorMidTurnHearsItsReasonsAfter(t *testing.T) {
 	w.wokenWith(task, "while busy")
 }
 
-// The one safety net: a conductor asleep long with a Run of its own still
-// in flight is woken once, however long it stays so.
-func TestASleepingConductorIsWokenOnceForARunInFlight(t *testing.T) {
-	w := conducting(t)
-	w.syncer.SafetyAfter = 30 * time.Minute
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return scripted(spec)
-	}
-	task := w.task()
-	w.talk(task)
-	id, _, _ := w.conductor(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("the implementer running", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
-	})
-	asleep := func(d time.Duration) {
-		mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - make_interval(secs => $2) WHERE id = $1`, id, d.Seconds())
-		mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = LEAST(created_at, now() - interval '1 minute') WHERE task_id = $1`, task)
-	}
-	asleep(10 * time.Minute)
-	for range 3 {
-		w.sweep()
-	}
-	if n := len(w.woken(task)); n != 0 {
-		t.Fatalf("woken before the safety net's time")
-	}
-	asleep(time.Hour)
-	w.sweep() // records the reason
-	asleep(time.Hour)
-	w.sweep() // delivers it
-	note := w.wokenWith(task, "Still in flight")
-	if !strings.Contains(note, "implement Run run_") {
-		t.Errorf("note: %q", note)
-	}
-	// Asleep as long again, the same Run in flight: no second note, however
-	// often it is re-aged and swept (each sweep's reasons aged before the next).
-	for range 3 {
-		asleep(2 * time.Hour)
-		w.sweep()
-	}
-	// Whatever those sweeps recorded is delivered now: aged, with the
-	// safety net out of reach so it records nothing more.
-	w.syncer.SafetyAfter = 1000 * time.Hour
-	asleep(2 * time.Hour)
-	w.sweep()
-	if n := len(w.woken(task)); n != 1 {
-		t.Errorf("the safety net woke it %d times (%d safety reasons)", n,
-			w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'safety'`, task))
-	}
-}
-
 // A wake note lux fails before the conductor read it gives its reasons
 // back: the next sweep tells the conductor again. A note the conductor
 // read is never told twice, even if a failure is reported after.

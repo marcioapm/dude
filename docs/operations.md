@@ -460,7 +460,7 @@ does not refuse to start.
 | `embeddings.model` | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | orchestrator | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
 | `embeddings.dimensions` | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | orchestrator | The index's size: only 768 is accepted, another is a migration. |
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
-| `agent.timeout` | `DUDE_AGENT_TIMEOUT` | none | orchestrator | A limit on a Run's running time, passed to lux. |
+| `agent.timeout` | `DUDE_AGENT_TIMEOUT` | `4h` | orchestrator | The most running time lux gives a phase Run (its `timeout`, running time only: parked time does not count); past it lux stops it and it fails. The conductor gets none. |
 | `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | Hosts agents may reach besides `llm.url`'s host; `*` turns egress filtering off. With neither this nor `llm.url`, egress is unrestricted. |
 | `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | Agents may run containers themselves (rootless Docker or Podman in the Run), for test suites that start their own services. Sets lux's `sandbox.nestedContainers` on every agent Run, so lux places them only on hosts whose runner offers nested containers: with none, Runs wait for one. The agent image must carry the engine. Preview servers are unaffected. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
@@ -526,6 +526,11 @@ With `DUDE_EMBEDDINGS_URL` and `DUDE_EMBEDDINGS_KEY` in its environment,
 to end: a query sharing no word with a memory finds it by meaning.
 
 ### Agent image contract
+
+A runtime image must provide `ps` (the `procps` package on Debian). dude
+reads a stalled Run's processes with `ps -eo pid,ppid,etime,pcpu,args` in
+its container. An image without it still works, but its stall reports
+cannot list processes and report that they could not be read.
 
 dude gives every real agent Run these, and nothing else about its model:
 

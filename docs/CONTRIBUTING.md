@@ -237,8 +237,9 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
     a person approved.
 
   A person's own pause always wins. The chat shows each park and resume
-  (`run.parked`, `run.unparked`). A Run has **no wall-clock limit**: dude
-  sends no timeout, and lux counts a set one as running time only.
+  (`run.parked`, `run.unparked`). A phase Run has a **hard limit of
+  running time**: dude sends lux `timeout` (`agent.timeout`, 4h), lux
+  counts running time only, and a Run past it fails. The conductor has none.
 - **Asks die with their Run.** Questions and repository requests still open
   when a Run ends are cancelled (triggers). Answering one returns a 409 that
   says so. Design: [`design/agent-tools.md`](design/agent-tools.md).
