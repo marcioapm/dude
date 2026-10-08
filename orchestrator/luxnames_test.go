@@ -3,9 +3,13 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -129,6 +133,72 @@ func TestASessionWhoseProjectsHaveDistinctKeysStarts(t *testing.T) {
 	}
 	if !slices.Equal(paths, []string{"/workspace/repos/BL/api", "/workspace/repos/WC/api"}) {
 		t.Errorf("checked out at %v", paths)
+	}
+}
+
+// A task's Run names each of its project's repositories by lux_name, and
+// no two can share one: the project's repositories are unique by it
+// (migration 091), so whatever names a project holds, its Run's spec has
+// distinct names and checkout paths, and lux takes it. Each name below is
+// tried with its own rewritten name beside it; the database refuses
+// exactly the ones that would share a checkout with one it holds.
+func TestATaskRunsSpecNamesAreDistinctWhateverItsProjectsRepositoriesAreCalled(t *testing.T) {
+	w := newWorld(t)
+	var tried []string
+	for _, n := range []string{"Target", "TARGET", "target.api", "Target.API", "target-api", "Web", "web", ".", "_x", "-x",
+		"Ü-ß", strings.Repeat("A", 40), strings.Repeat("a", 33)} {
+		tried = append(tried, n, lux.SpecName(n))
+	}
+	held := map[string]string{"target": "target"} // lux name → the repository holding it
+	wi := w.task()
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
+		w.org, wi, w.repoID)
+	for i, name := range tried {
+		id := fmt.Sprintf("repo_%d_%s", i, w.org)
+		_, err := w.owner.Exec(context.Background(), `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+			VALUES ($1, $2, $3, $4, 'git://127.0.0.1/acme/target.git', 'main')`, id, w.org, w.project, name)
+		other, clash := held[lux.SpecName(name)]
+		// The same name twice is the older (project_id, name) key's to refuse.
+		want := "repositories_lux_name_idx"
+		if other == name {
+			want = "repositories_project_id_name_key"
+		}
+		var pgErr *pgconn.PgError
+		switch {
+		case clash && !(errors.As(err, &pgErr) && pgErr.ConstraintName == want):
+			t.Errorf("%q is checked out as %s, as %q is, and was not refused: %v", name, lux.SpecName(name), other, err)
+		case !clash && err != nil:
+			t.Errorf("%q refused: %v", name, err)
+		case !clash:
+			held[lux.SpecName(name)] = name
+			mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'read')`,
+				w.org, wi, id)
+		}
+	}
+	w.deliver(wi)
+	var spec lux.Spec
+	w.until("the implementer accepted by lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			if err := json.Unmarshal(r.Spec, &spec); err == nil && spec.Labels["dude.phase"] == "implement" {
+				return true
+			}
+		}
+		if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n > 0 {
+			var why string
+			_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1 AND status = 'failed'`, wi).Scan(&why)
+			t.Fatalf("the implementer failed: %s", why)
+		}
+		return false
+	})
+	names, paths := map[string]bool{}, map[string]bool{}
+	for _, r := range spec.Git.Repositories {
+		if names[r.Name] || paths[r.Path] || !lux.NameRe.MatchString(r.Name) {
+			t.Errorf("repository %s at %s: invalid, or named or placed twice", r.Name, r.Path)
+		}
+		names[r.Name], paths[r.Path] = true, true
+	}
+	if len(names) != len(held) {
+		t.Errorf("%d repositories in the spec, want the %d the project holds", len(names), len(held))
 	}
 }
 

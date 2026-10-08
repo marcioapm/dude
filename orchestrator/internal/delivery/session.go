@@ -117,7 +117,12 @@ type SessionRepo struct {
 
 // SpecName is the repository's name in the lux spec: <key>-<name>, unique
 // within the Run since names are unique only within a project, made one
-// lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL).
+// lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL). Keys are
+// upper case, so it is always rewritten and always carries the hash of
+// <key>-<name>; with a session's keys distinct (SameKey) and names unique
+// per project, two of its repositories share a spec name only if their
+// 32-bit hash suffixes and truncated prefixes collide. Nothing else guards
+// against that.
 func (r SessionRepo) SpecName() string { return lux.SpecName(r.Key + "-" + r.Name) }
 
 // SessionSpecNameSQL is SpecName in SQL, over projects p and repositories

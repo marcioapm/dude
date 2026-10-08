@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_lux_name.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_lux_name.sql", "091_repository_lux_name_unique.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -279,6 +279,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "088_session_filings_idx.sql",
       "089_session_functions_parallel.sql",
       "090_lux_name.sql",
+      "091_repository_lux_name_unique.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -290,6 +291,58 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
     expect(await due("2030-01-01T00:00:00Z")).toEqual(["refused", "waiting_a", "waiting_b"]);
     const [embedded] = await sql`SELECT attempts, next_attempt_at::text AS next FROM search_documents WHERE source_id = 'embedded'`;
     expect(embedded).toEqual({ attempts: 0, next: "2020-01-01 00:00:00+00" });
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+/** A database with every migration before `version` applied, as a release before it left it. */
+async function migratedBefore(version: string): Promise<{ url: string; sql: SQL }> {
+  const url = await createDatabase();
+  const sql = new SQL(url);
+  await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
+    checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
+  for (const file of (await listMigrationFiles()).filter((f) => f.version < version)) {
+    const contents = await file.contents();
+    const record = (q: SQL) => q`INSERT INTO schema_migrations (version, name, checksum)
+      VALUES (${file.version}, ${file.name}, ${createHash("sha256").update(contents).digest("hex")})`;
+    if (outsideTransaction(contents)) {
+      await sql.unsafe(contents);
+      await record(sql);
+      continue;
+    }
+    await sql.begin(async (tx) => {
+      await tx.unsafe(contents);
+      await record(tx);
+    });
+  }
+  return { url, sql };
+}
+
+test("091 refuses to apply over two repositories of a project checked out under one name, naming them", async () => {
+  const { url, sql } = await migratedBefore("091");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'a', 'a')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'A', 'a', 'A'), ('prj_b', 'org_a', 'B', 'b', 'B')`;
+    // "Web" is checked out as web-29751047, the name of the other; prj_b's "Web" is another project's.
+    await sql`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+      ('repo_1', 'org_a', 'prj_a', 'Web', 'git://x/1'), ('repo_2', 'org_a', 'prj_a', 'web-29751047', 'git://x/2'),
+      ('repo_3', 'org_a', 'prj_b', 'Web', 'git://x/3')`;
+    await expect(migrate(url, { log: () => {} })).rejects.toThrow(
+      "repositories would share a checkout: project prj_a: 'Web' and 'web-29751047' are both checked out as web-29751047; rename one of each, then migrate again");
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("091");
+
+    // Renamed: it applies, and the index refuses the same pair from then on.
+    await sql`UPDATE repositories SET name = 'web-app' WHERE id = 'repo_2'`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["091_repository_lux_name_unique.sql"]);
+    const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
+    expect(await refusal(async () => await sql`UPDATE repositories SET name = 'web-29751047' WHERE id = 'repo_2'`))
+      .toContain("repositories_lux_name_idx");
+    expect(await refusal(async () => await sql`INSERT INTO repositories (id, organization_id, project_id, name, url)
+      VALUES ('repo_4', 'org_a', 'prj_a', 'web-29751047', 'git://x/4')`)).toContain("repositories_lux_name_idx");
+    // Per project: prj_b's "Web", the same checkout name as prj_a's, stands.
+    expect((await sql`SELECT id FROM repositories WHERE lux_name(name) = 'web-29751047' ORDER BY id`).map((r: { id: string }) => r.id))
+      .toEqual(["repo_1", "repo_3"]);
   } finally {
     await sql.end();
   }
@@ -323,7 +376,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_lux_name.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_lux_name.sql", "091_repository_lux_name_unique.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },

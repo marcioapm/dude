@@ -67,6 +67,24 @@ const addRepositoryInput = z.object({
 });
 const updateRepositoryInput = z.object(repositoryFields).partial();
 
+/**
+ * Another of the project's repositories its Runs would check out under the
+ * same name as `name` (lux_name, migration 090): a name lux refuses is
+ * rewritten, and can land on another repository's own ("Web" is
+ * web-29751047). The unique index (migration 091) is the backstop; this
+ * says which. Null when there is none.
+ */
+export async function sameCheckout(scope: OrgScope, projectId: string, name: string, except: string | null) {
+  const rows = (await scope.sql`
+    SELECT name, lux_name(${name}) AS checkout FROM repositories
+    WHERE project_id = ${projectId} AND lux_name(name) = lux_name(${name}) AND id IS DISTINCT FROM ${except}
+    LIMIT 1`) as Array<{ name: string; checkout: string }>;
+  return rows[0] ?? null;
+}
+
+export const sameCheckoutMessage = (name: string, other: { name: string; checkout: string }) =>
+  `${name} would be checked out as ${other.checkout}, which ${other.name} already is; rename one of them.`;
+
 async function addRepository(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, addRepositoryInput);
   const projectId = ctx.params.id!;
@@ -76,6 +94,8 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
     if ((await scope.sql`SELECT 1 FROM repositories WHERE project_id = ${projectId} AND name = ${input.name}`).length > 0) {
       return { taken: true as const };
     }
+    const other = await sameCheckout(scope, projectId, input.name, null);
+    if (other) return { sameCheckout: other };
     const rows = (await scope.sql`
       INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust)
       VALUES (${newId("repository")}, ${ctx.principal.organizationId}, ${projectId}, ${input.name}, ${input.url},
@@ -86,6 +106,7 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
   });
   if ("missing" in result) throw notFound(`project ${projectId} not found`);
   if ("taken" in result) throw conflict(`the project already has a repository named "${input.name}"`);
+  if ("sameCheckout" in result) throw conflict(sameCheckoutMessage(input.name, result.sameCheckout));
   await registerRepositoryWebhook(ctx, result.repository.id as string);
   return json(result.repository, 201);
 }
@@ -118,6 +139,8 @@ async function updateRepository(ctx: RequestContext): Promise<Response> {
       const taken = await scope.sql`
         SELECT 1 FROM repositories WHERE project_id = ${current[0].projectId} AND name = ${input.name} AND id <> ${id}`;
       if (taken.length > 0) return { taken: true as const };
+      const other = await sameCheckout(scope, current[0].projectId, input.name, id);
+      if (other) return { sameCheckout: other };
     }
     const rows = (await scope.sql`
       UPDATE repositories SET
@@ -133,6 +156,7 @@ async function updateRepository(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`repository ${id} not found`);
   if ("busy" in result) throw conflict("work is being delivered to this repository; wait for it or abort it first");
   if ("taken" in result) throw conflict(`the project already has a repository named "${input.name}"`);
+  if ("sameCheckout" in result) throw conflict(sameCheckoutMessage(input.name!, result.sameCheckout));
   return json(result.repository);
 }
 

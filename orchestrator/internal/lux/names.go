@@ -27,8 +27,11 @@ const nameHashLen = 8
 // the first 8 hex digits of name's SHA-256. The suffix is on every rewritten
 // name, not only a long one, because lowercasing and mapping are lossy
 // ("Web" and "web", "a.b" and "a-b") and a name must stay unique within a
-// Run whatever else the Run holds. Stable: the SQL function lux_name
-// (migration 090) computes the same, for queries over runs.lux_repositories.
+// Run whatever else the Run holds. The suffix does not keep a rewritten
+// name off another's unchanged one ("Web" is "web-29751047", a valid name
+// itself): a project's repositories are unique by it (migration 091). Stable:
+// the SQL function lux_name (migration 090) computes the same, for queries
+// over runs.lux_repositories.
 func SpecName(name string) string {
 	if NameRe.MatchString(name) {
 		return name
