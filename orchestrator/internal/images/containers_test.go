@@ -151,3 +151,43 @@ func TestAVersionProbeThatHangsIsBounded(t *testing.T) {
 		t.Fatal("version still waiting after 10s")
 	}
 }
+
+// Each thing the check needs, taken alone out of an image that has all of
+// them, fails it with its own words.
+func TestEachThingTheCheckNeedsIsNeededOnItsOwn(t *testing.T) {
+	ids := []string{"agent:1:999", "agent:1001:64535"}
+	complete := Found{Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
+		Newuidmap: Mapper{Path: "/usr/bin/newuidmap", FileCap: true}, Newgidmap: Mapper{Path: "/usr/bin/newgidmap", FileCap: true},
+		Subuid: ids, Subgid: ids}
+	if !complete.Passed() {
+		t.Fatalf("the complete image fails: %s", complete.Sentence())
+	}
+	for _, c := range []struct {
+		name, detail, sentence string
+		drop                   func(*Found)
+	}{
+		{"no engine", "Missing: podman or Docker", "Can't run containers: the image has no podman or rootless Docker.", func(f *Found) { f.Podman, f.PodmanVersion = "", "" }},
+		{"no fuse-overlayfs", "Missing: fuse-overlayfs", "Can't run containers: the image has no fuse-overlayfs.", func(f *Found) { f.FuseOverlayfs = "" }},
+		{"no newuidmap", "Missing: newuidmap", "Can't run containers: the image has no newuidmap.", func(f *Found) { f.Newuidmap = Mapper{} }},
+		{"no newgidmap", "Missing: newgidmap", "Can't run containers: the image has no newgidmap.", func(f *Found) { f.Newgidmap = Mapper{} }},
+		{"newuidmap without its capability", "Missing: cap_setuid on newuidmap", "Can't run containers: newuidmap has no cap_setuid file capability.", func(f *Found) { f.Newuidmap.FileCap = false }},
+		{"newgidmap without its capability", "Missing: cap_setgid on newgidmap", "Can't run containers: newgidmap has no cap_setgid file capability.", func(f *Found) { f.Newgidmap.FileCap = false }},
+		{"no subuid", "Missing: subuid for agent", "Can't run containers: the image has no /etc/subuid entry for agent.", func(f *Found) { f.Subuid = nil }},
+		{"no subgid", "Missing: subgid for agent", "Can't run containers: the image has no /etc/subgid entry for agent.", func(f *Found) { f.Subgid = nil }},
+		{"a subuid range from id 0", "Missing: subuid within 65536 ids", "Can't run containers: agent's subordinate ids agent:0:999 are outside the 65536 a Run has.", func(f *Found) { f.Subuid = []string{"agent:0:999", "agent:1001:64535"} }},
+		{"a subgid range of none", "Missing: subuid within 65536 ids", "Can't run containers: agent's subordinate ids agent:1:0 are outside the 65536 a Run has.", func(f *Found) { f.Subgid = []string{"agent:1:0"} }},
+		{"a range one past the Run's ids", "Missing: subuid within 65536 ids", "Can't run containers: agent's subordinate ids agent:1001:64536 are outside the 65536 a Run has.", func(f *Found) { f.Subuid = []string{"agent:1:999", "agent:1001:64536"} }},
+	} {
+		f := complete
+		c.drop(&f)
+		if f.Passed() || f.Detail() != c.detail || f.Sentence() != c.sentence {
+			t.Errorf("%s: passed %v\n detail %q, want %q\n sentence %q, want %q", c.name, f.Passed(), f.Detail(), c.detail, f.Sentence(), c.sentence)
+		}
+	}
+	// The ranges' bounds: from id 1, to the Run's last id, pass.
+	edge := complete
+	edge.Subuid, edge.Subgid = []string{"agent:1:65535"}, []string{"agent:65535:1"}
+	if !edge.Passed() {
+		t.Errorf("ranges ending at id 65535 fail: %s", edge.Sentence())
+	}
+}

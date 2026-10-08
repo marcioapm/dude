@@ -524,6 +524,31 @@ func between(s, start, end string) string {
 	return ""
 }
 
+// Rootless Docker, as Alpine packages it, can run containers; without
+// RootlessKit its launcher alone cannot.
+func TestPodmanChecksAFinishedRootlessDockerImage(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	const docker = "FROM docker.io/library/alpine:3\n" +
+		"RUN apk add --no-cache git docker docker-rootless-extras slirp4netns fuse-overlayfs shadow-uidmap libcap-setcap" +
+		" && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap\n"
+	var log bytes.Buffer
+	found, err := c.CheckContainers(context.Background(), localFinish(t, docker), &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if !found.Passed() || !strings.HasPrefix(found.Detail(), "rootless Docker ") {
+		t.Errorf("rootless Docker: %s", found.Sentence())
+	}
+	found, err = c.CheckContainers(context.Background(), localFinish(t, docker+"RUN rm /usr/bin/rootlesskit\n"), &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Can't run containers: rootless Docker has no rootlesskit."; found.Passed() || found.Sentence() != want {
+		t.Errorf("without rootlesskit: %q", found.Sentence())
+	}
+}
+
 // TestPodmanFinishOnAnImageWithoutAShellSaysWhatItNeeds, with no registry.
 func TestPodmanLocalFinishWithoutAShellSaysWhatItNeeds(t *testing.T) {
 	c := localPodman(t)
