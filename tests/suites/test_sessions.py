@@ -411,6 +411,14 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     expect(composer).to_be_focused()
     # A session has no task: its composer says who it writes to.
     expect(composer).to_have_attribute("placeholder", "Message the brainstorm…")
+    # The first message, to the scripted agent through the fake lux: the reply names the untitled
+    # session (never an empty task), and once the turn is over nothing is still thinking.
+    composer.fill("where would metering live?")
+    composer.press("Enter")
+    reply = page.get_by_text('In the session "New session". You asked:')
+    expect(reply).to_be_visible(timeout=60_000)
+    expect(page.get_by_text('Briefed on ""')).to_have_count(0)
+    expect(page.get_by_test_id("session-screen").locator("[data-activity]")).to_have_count(0, timeout=15_000)
     session = page.url.split("#/sessions/")[1]
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
     expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")

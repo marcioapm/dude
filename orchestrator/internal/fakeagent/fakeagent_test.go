@@ -32,3 +32,23 @@ func TestTheScriptedReplyQuotesTheSessionsTitle(t *testing.T) {
 		t.Errorf("conductor's next reply: %q", got)
 	}
 }
+
+// Every way a session's briefing opens (delivery.sessionBriefing) — named
+// by its agent, named by a member, not named yet — is a session's: the reply
+// quotes its title, or says it has none, and never an empty task.
+func TestTheScriptedReplyKnowsEverySessionsBriefing(t *testing.T) {
+	rest := " You think with its members about their projects: read, ask, propose.\n\n## The first message\n\nMárcio: where?\n\n## How you work\n\nRead."
+	for lead, want := range map[string]string{
+		`Brainstorm, this is the session "Billing", as you named it.`:                         `In the session "Billing". You asked: "Márcio: where?"`,
+		`Brainstorm, this is the session "Billing v2", as a member named it: keep that name.`: `In the session "Billing v2". You asked: "Márcio: where?"`,
+		`Brainstorm, this is a new session, not named yet.`:                                   `In the session "New session". You asked: "Márcio: where?"`,
+	} {
+		script := ConductorScript(lead + rest)
+		if !strings.Contains(script, "echo "+want) || strings.Contains(script, "Briefed on") {
+			t.Errorf("%s\n  reply %q\n  want %q", lead, script[strings.LastIndex(script, "echo "):], want)
+		}
+		if got := ConductorTurn(script, "Ana: and retries?"); !strings.HasPrefix(got, "In the session ") {
+			t.Errorf("%s: next reply %q", lead, got)
+		}
+	}
+}
