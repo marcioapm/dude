@@ -655,24 +655,22 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Agent sessions (live work on a task)
 
 An agent session is one agent's work inside a task's Run (`agent_sessions`
-in the code). It is not a brainstorm session (`sessions`), which belongs to
-its members, not a task: those are under *Brainstorm sessions*. The
-components here keep their names (`SessionList`, `SessionHeader`,
-`SessionRail`, …); in this section they show agent sessions.
+in the code). A brainstorm session (`sessions`) belongs to its members,
+not a task; see *Brainstorm sessions*. Components keep their names
+(`SessionList`, `SessionHeader`, `SessionRail`, …) but show agent sessions
+here.
 
-- A task's agent sessions and the one open share its page: the task's
-  **Sessions** tab is its agent sessions down the left (`SessionList`,
-  newest first, the open one `current`) and the open agent session beside
-  them. There is no separate page for one: a link to an agent session
-  (`#/session/<id>`) opens its task on that tab with it open, so the
-  task's people, pull requests and findings stay one tab away while you
-  watch an agent. Only an agent session whose task cannot be learned
-  stands on its own, and says the way to its task when it ends.
-- The open agent session is `SessionHeader` (whose agent, for whom, its model,
-  status, cost, tokens and elapsed, Pause / Abort, and the terminal where
-  the rail is not — on every view, so the
-  numbers never depend on the rail being there), then **one bar**: a
-  `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
+- The task's **Sessions** tab puts its agent sessions on the left
+  (`SessionList`, newest first, the open one `current`) and the open one
+  beside them. A link (`#/session/<id>`) opens it on that tab, not a
+  separate page: the task's people, pull requests and findings stay one
+  tab away while you watch an agent. Only a session whose task cannot be
+  learned stands alone; when it ends, it says the way to its task.
+- `SessionHeader` heads the open agent session on every view: whose agent,
+  for whom, model, status, cost, tokens, elapsed, Pause / Abort, and the
+  terminal where the rail is absent. The numbers never depend on the rail.
+  Then **one bar**: a `Segmented` switch at the density's control size
+  between **Conversation**, **Changes** and **Events**
   (debugging, last), and on Changes the diff's own controls after it
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
