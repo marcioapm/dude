@@ -120,3 +120,23 @@ func TestEachEntryIntoRunningMovesTheClocksOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenCallClocksExcludeHostMoveTime(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status = 'running', lux_state = 'resuming', left_running_at = now() - interval '30 minutes',
+		open_tool_calls = ARRAY['old', 'recent'],
+		open_tool_calls_at = jsonb_build_object('old', now() - interval '39 minutes', 'recent', now() - interval '1 minute')
+		WHERE id = $1`, w.run.ID)
+	w.follow(running(2))
+	old, recent := w.clock("(open_tool_calls_at->>'old')::timestamptz"), w.clock("(open_tool_calls_at->>'recent')::timestamptz")
+	if old == nil || time.Since(*old) < 8*time.Minute || time.Since(*old) > 10*time.Minute {
+		t.Fatalf("old call clock = %v, want 9 running minutes ago", old)
+	}
+	if recent == nil || time.Since(*recent) > time.Minute {
+		t.Fatalf("recent call clock = %v, want clamped at arrival", recent)
+	}
+	w.follow(running(2))
+	if again := w.clock("(open_tool_calls_at->>'old')::timestamptz"); again == nil || !again.Equal(*old) {
+		t.Fatalf("repeated running shifted open call from %v to %v", old, again)
+	}
+}

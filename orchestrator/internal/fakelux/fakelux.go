@@ -650,6 +650,10 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		tools = []string{"bash"}
 	}
 	var open [][3]string
+	if str("dude.model") == fakeagent.StallModel && str("dude.phase") == fakeagent.Brainstorm {
+		step.Hang = true
+		open = [][3]string{fakeagent.StallCall}
+	}
 	if m := str("dude.model"); (m == fakeagent.StallModel || m == fakeagent.SilentModel) && str("dude.phase") == "review" {
 		// The task's first reviewer hangs, in its open call or silent;
 		// later ones review. Decide is called with s.mu held.
@@ -1241,7 +1245,7 @@ func (s *Server) turn(run *Run) {
 			s.callTool(run, c[0], c[1])
 		}
 	}
-	if b.Hang && !run.woken {
+	if b.Hang && !run.woken && (first || !b.Conductor || len(b.OpenCalls) == 0) {
 		if first {
 			for i, c := range b.OpenCalls {
 				var input any
