@@ -68,6 +68,7 @@ func TestBrainstormStuckCallsInterruptOnce(t *testing.T) {
 		{"overdue", "", 11 * time.Minute, 1},
 		{"young", "", 9 * time.Minute, 0},
 		{"parked", "status = 'paused', dude_pause = 'session',", 11 * time.Minute, 0},
+		{"pause_requested", "control = 'pause_graceful',", 11 * time.Minute, 0},
 		{"done", "turn_done_at = now(),", 11 * time.Minute, 0},
 		{"phase", "phase = 'review',", 11 * time.Minute, 0},
 		{"conductor", "role = 'conductor',", 11 * time.Minute, 0},
