@@ -80,11 +80,14 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	if got, want := fake.Cancelled(), []string{"lux_run_aborted", "lux_run_done", "lux_run_failed", "lux_run_lost", "lux_run_succeeded"}; !slices.Equal(got, want) {
 		t.Errorf("cancelled %v, want %v", got, want)
 	}
-	for id, want := range map[string]string{"run_done": "completed/cancel", "run_aborted": "completed/cancel",
-		"run_lost": "completed/cancel", "run_live": "paused/pause", "run_failed": "completed/cancel",
-		"run_succeeded": "completed/cancel", "run_terminated": "completed/cancel"} {
+	// dude's own cancel records lux's state as cancelled; a Run lux already
+	// called terminated keeps that name.
+	for id, want := range map[string]string{"run_done": "completed/cancel/cancelled", "run_aborted": "completed/cancel/cancelled",
+		"run_lost": "completed/cancel/cancelled", "run_live": "paused/pause/stopped", "run_failed": "completed/cancel/cancelled",
+		"run_succeeded": "completed/cancel/cancelled", "run_terminated": "completed/cancel/terminated"} {
 		var got string
-		if err := owner.QueryRow(ctx, `SELECT status::text || '/' || COALESCE(lux_stop_reason, '') FROM runs WHERE id = $1`, id).Scan(&got); err != nil {
+		if err := owner.QueryRow(ctx, `SELECT status::text || '/' || COALESCE(lux_stop_reason, '') || '/' || COALESCE(lux_state, '')
+			FROM runs WHERE id = $1`, id).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
