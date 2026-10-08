@@ -48,3 +48,25 @@ func ParseEgressRule(a string) (EgressRule, bool) {
 	}
 	return EgressRule{Host: a}, true
 }
+
+// Allows reports whether a Run on this network may look name up, as lux's
+// resolver decides: unrestricted, the name itself listed, or one or more
+// labels under a listed wildcard's domain (never the domain itself).
+// Case-insensitive; a trailing dot is ignored.
+func (n *Network) Allows(name string) bool {
+	if n == nil {
+		return false
+	}
+	if n.Unrestricted {
+		return true
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	for _, r := range n.Egress {
+		rule := strings.ToLower(r.Host)
+		if rule == name && rule != "" ||
+			ValidWildcard(rule) && strings.HasSuffix(name, rule[1:]) && len(name) > len(rule)-1 && hostnamePattern.MatchString(name) {
+			return true
+		}
+	}
+	return false
+}

@@ -42,3 +42,12 @@ CREATE POLICY tenant_isolation ON agent_egress_refusals
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE ON agent_egress_refusals TO dude_app;
+
+-- The scripted agent's fake/lookup (its implementer looks names up, which
+-- lux allows or refuses by the Run's network) is a test model a tier may
+-- request.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/command',
+                   'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

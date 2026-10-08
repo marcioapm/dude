@@ -28,6 +28,9 @@ func TestASubmitWithANameLuxWouldRefuseIsRefused(t *testing.T) {
 			}
 		}
 	}
+	egress := func(rules ...lux.EgressRule) func(*lux.Spec) {
+		return func(s *lux.Spec) { s.Network = &lux.Network{Egress: rules} }
+	}
 	for _, c := range []struct {
 		name string
 		edit func(*lux.Spec)
@@ -47,6 +50,17 @@ func TestASubmitWithANameLuxWouldRefuseIsRefused(t *testing.T) {
 			`invalid spec: workload.services[0]: invalid name "Dude" (lowercase, digits, - and _)`},
 		{"a server", func(s *lux.Spec) { s.Workload.Servers = []lux.ServerInput{{Name: "web-", Port: 3000}} },
 			`invalid spec: workload.servers[0]: invalid name "web-" (1-30 of a-z, 0-9 and -, starting with a letter, not ending in -)`},
+		// Egress as lux#68 takes it: a wildcard is the whole first label
+		// before a domain of two labels or more, and nothing after it.
+		{"a wildcard", egress(lux.EgressRule{Host: "*.github.com"}, lux.EgressRule{Host: "pypi.org"}, lux.EgressRule{CIDR: "10.0.0.0/8"}), ""},
+		{"a wildcard over a top-level domain", egress(lux.EgressRule{Host: "pypi.org"}, lux.EgressRule{Host: "*.com"}),
+			`invalid spec: network.egress[1]: a wildcard is "*." then a domain of at least two labels, e.g. *.example.com`},
+		{"a wildcard inside", egress(lux.EgressRule{Host: "a.*.example.com"}),
+			`invalid spec: network.egress[0]: a wildcard is "*." then a domain of at least two labels, e.g. *.example.com`},
+		{"a wildcard with a port", egress(lux.EgressRule{Host: "*.example.com:443"}),
+			`invalid spec: network.egress[0]: a wildcard is a domain only, without a port or path`},
+		{"a rule with both", egress(lux.EgressRule{Host: "a.com", CIDR: "10.0.0.0/8"}),
+			`invalid spec: network.egress[0]: exactly one of host or cidr`},
 	} {
 		spec := base()
 		c.edit(&spec)

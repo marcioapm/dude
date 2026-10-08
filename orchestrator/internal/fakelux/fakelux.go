@@ -99,6 +99,15 @@ type Behaviour struct {
 	// [title, kind, raw input as JSON]. They stay open, as a call that
 	// never settles does.
 	OpenCalls [][3]string
+	// Names the agent looks up in its first turn, before its tools: each
+	// distinct one is a dns event, as lux's resolver records it.
+	Lookups []Lookup
+}
+
+// Lookup is a name the agent looks up, and whether lux lets it resolve.
+type Lookup struct {
+	Name    string
+	Allowed bool
 }
 
 // Exec answers for `ps` in a Run's container: the fake has no processes,
@@ -118,6 +127,8 @@ type Run struct {
 	Epoch     int
 	SessionID string
 	Inputs    []string
+	// Names its agent looked up: lux records each once (lookUp).
+	looked map[string]bool
 	// Some repository got a commit from a push.
 	Pushed bool
 	// dude tools the agent called: "tool status".
@@ -672,8 +683,18 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 			}
 		}
 	}
+	// Its lookups are decided by the Run's own network, as lux's resolver
+	// decides them.
+	var network *lux.Network
+	if raw, err := json.Marshal(spec["network"]); err == nil {
+		_ = json.Unmarshal(raw, &network)
+	}
+	var lookups []Lookup
+	for _, name := range step.Lookups {
+		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
+	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+	return Behaviour{Lookups: lookups, Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
 		Publish: published, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
@@ -1222,6 +1243,9 @@ func (s *Server) turn(run *Run) {
 	for _, chunk := range chunks(b.Thought, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
+	if len(run.Inputs) == 0 {
+		s.lookUp(run, b.Lookups)
+	}
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
 		input := map[string]any{"cmd": tool}
@@ -1328,6 +1352,26 @@ func (s *Server) turn(run *Run) {
 		return
 	}
 	s.deliverQueued(run)
+}
+
+// lookUp records each distinct name as lux's resolver does (lux
+// internal/runner/network.go): a dns event, allowed or not, with the
+// addresses it answered. Callers hold s.mu.
+func (s *Server) lookUp(run *Run, lookups []Lookup) {
+	for _, l := range lookups {
+		if run.looked == nil {
+			run.looked = map[string]bool{}
+		}
+		if run.looked[l.Name] {
+			continue
+		}
+		run.looked[l.Name] = true
+		answers := []string{}
+		if l.Allowed {
+			answers = []string{"192.0.2.10"}
+		}
+		s.luxEvent(run, "dns", map[string]any{"name": l.Name, "allowed": l.Allowed, "answers": answers})
+	}
 }
 
 // conductorAsked is what a scripted conductor's input asks of it, as

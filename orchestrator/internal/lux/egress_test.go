@@ -25,3 +25,24 @@ func TestAnEgressEntryIsTheRuleLuxTakes(t *testing.T) {
 		}
 	}
 }
+
+// Whether a Run's network lets it look a name up, as lux's resolver
+// decides: unrestricted, the name listed, or under a listed wildcard (not
+// its apex). Addresses and ranges admit no name.
+func TestANetworkAllowsANameAsLuxDoes(t *testing.T) {
+	n := &Network{Egress: []EgressRule{{Host: "pypi.org"}, {Host: "*.github.com"}, {CIDR: "10.0.0.0/8"}}}
+	for name, want := range map[string]bool{
+		"pypi.org": true, "PyPI.org.": true, "api.github.com": true, "a.b.github.com": true,
+		"github.com": false, "evilgithub.com": false, "files.pythonhosted.org": false, "10.0.0.1": false,
+	} {
+		if got := n.Allows(name); got != want {
+			t.Errorf("Allows(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if !(&Network{Unrestricted: true}).Allows("anything.example") {
+		t.Error("an unrestricted network refused a name")
+	}
+	if (*Network)(nil).Allows("pypi.org") || (&Network{}).Allows("pypi.org") {
+		t.Error("no rules allowed a name")
+	}
+}
