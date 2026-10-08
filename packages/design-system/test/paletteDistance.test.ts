@@ -127,14 +127,17 @@ describe("role colour pair distance (OKLab ΔE×100, Machado 2009 at severity 1.
     // Needs-you is drawn in the attention fg (text), mark (dot, diamond) and
     // solid (the filled pill): a role must stand clear of all three.
     test(`${mode}: no role colour is within ΔE ${ATTENTION_FLOOR} of the attention fg, mark or solid (normal vision)`, () => {
-      const failures = AGENT_ROLE_NAMES.flatMap((r) => {
+      const failures: string[] = [];
+      for (const r of AGENT_ROLE_NAMES) {
         const fg = roleColors[mode][r].fg;
-        return (["fg", "mark", "solid"] as const).flatMap((slot) => {
+        for (const slot of ["fg", "mark", "solid"] as const) {
           const target = tones[mode].attention[slot];
           const d = deltaE(fg, target, "normal");
-          return d < ATTENTION_FLOOR ? [`${mode} ${r} ${fg} vs attention ${slot} ${target}: normal ${fmt(d)}`] : [];
-        });
-      });
+          if (d < ATTENTION_FLOOR) {
+            failures.push(`${mode} ${r} ${fg} vs attention ${slot} ${target}: normal ${fmt(d)}`);
+          }
+        }
+      }
       expect(failures).toEqual([]);
     });
   }
