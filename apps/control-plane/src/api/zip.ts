@@ -26,6 +26,12 @@ const LIMIT = 0xffffffff;
 // Bit 3: sizes and CRC follow the data. Bit 11: the name is UTF-8.
 const FLAGS = 0x0808;
 
+// What the writer uses of an entry body's reader; Bun's and the DOM's reader types differ elsewhere.
+interface EntryReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array | undefined }>;
+  cancel(reason?: unknown): Promise<void>;
+}
+
 function dosTime(d: Date): { time: number; date: number } {
   const year = Math.max(1980, d.getFullYear());
   return {
@@ -59,7 +65,7 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
   // The entry whose body is being read, between pulls.
   let current: {
     name: string; encoded: Uint8Array; time: number; date: number; headerOffset: number;
-    reader: ReadableStreamDefaultReader<Uint8Array> | null; crc: number; size: number;
+    reader: EntryReader | null; crc: number; size: number;
   } | null = null;
 
   return new ReadableStream<Uint8Array>({
@@ -103,7 +109,7 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
 
       if (current?.reader) {
         const { done, value } = await current.reader.read();
-        if (done) return finish();
+        if (done || !value) return finish();
         current.crc = crc32(value, current.crc);
         current.size += value.length;
         push(value);
