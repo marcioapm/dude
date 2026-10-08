@@ -1611,12 +1611,11 @@ const retireBatch = 100
 // RetireCompleted terminates the lux Run of every completed phase Run,
 // conductor and session agent: nothing in dude resumes one (only a failed
 // or aborted Run is kept, and a conductor's or session's next message
-// starts another), and lux
-// keeps a stopped or succeeded Run, and its storage, for 90 days. finish
-// stops it rather than terminating it so its exit is collected as any
-// stop's is; it is terminated once the artifacts sweep has collected that
-// exit (artifacts_due_at cleared). Its own loop, apart from Sweep: a slow
-// lux holds this one, never the live Runs. Returns how many it retired.
+// starts another), and lux keeps a stopped or succeeded Run, and its
+// storage, for 90 days. finish stops it so its exit is collected; it is
+// terminated once the artifacts sweep has collected that exit
+// (artifacts_due_at cleared). Its own loop, apart from Sweep: a slow lux
+// holds this one, never the live Runs. Returns how many it retired.
 func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 	type done struct{ ID, Org, LuxRunID string }
 	var todo []done
@@ -1631,42 +1630,35 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	// A few at a time; the first retryable error (lux unhealthy) ends the
-	// batch, so an outage costs a few calls per pass, not retireBatch.
-	var mu sync.Mutex
-	var errs []error
+	// 8 at a time; the first retryable error (lux unhealthy) dispatches no
+	// more, so an outage costs a few calls per pass, not retireBatch.
+	errs := make([]error, len(todo))
 	var retired atomic.Int64
 	var halted atomic.Bool
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 8)
-	for _, d := range todo {
+	for i, d := range todo {
 		slots <- struct{}{}
 		if halted.Load() {
-			<-slots
 			break
 		}
-		wg.Add(1)
-		go func() {
-			defer func() { <-slots; wg.Done() }()
+		wg.Go(func() {
+			defer func() { <-slots }()
 			err := s.Lux.Cancel(ctx, d.LuxRunID)
-			// A refusal (unknown, already terminated) is as good as done.
 			if le, ok := lux.AsError(err); err != nil && (!ok || le.Retryable()) {
 				halted.Store(true)
-			} else {
-				err = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-					_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
-					return err
-				})
-				if err == nil {
-					retired.Add(1)
-				}
+				errs[i] = err
+				return
 			}
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+			// A refusal (unknown, already terminated) is as good as done.
+			errs[i] = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
+				return err
+			})
+			if errs[i] == nil {
+				retired.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return int(retired.Load()), errors.Join(errs...)
