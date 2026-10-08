@@ -252,6 +252,11 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+			// Every other case as a lux before terminated, which says cancelled.
+			want := "terminated"
+			if c.at == 2 {
+				fake.CancelledState, want = true, "cancelled"
+			}
 			fake.StartAfter = 500 * time.Millisecond
 			client, run := submitGeneric(t, fake, "k-"+c.name)
 			if c.at < 0 {
@@ -269,8 +274,8 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.State != "cancelled" {
-				t.Errorf("state %s after the start delay, want cancelled", got.State)
+			if got.State != want {
+				t.Errorf("state %s after the start delay, want %s", got.State, want)
 			}
 			if len(got.Placements) != len(ended.Placements) {
 				t.Fatalf("placements %d after it ended, %d when it did", len(got.Placements), len(ended.Placements))

@@ -348,7 +348,7 @@ def lux_ended(status: str) -> tuple[str, ...]:
     """The lux states that end a dude Run of this status. lux's failed and
     succeeded are final; dude cancels nothing in them. Stopped is resumable,
     so it ends only a completed Run, which dude stops on purpose."""
-    ended = ("cancelled", "succeeded", "failed")
+    ended = ("cancelled", "terminated", "succeeded", "failed")
     return ended + ("stopped",) if status == "completed" else ended
 
 

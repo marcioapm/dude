@@ -454,10 +454,20 @@ func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 	}
 }
 
-// A kept Run an operator cancelled in lux is not offered to resume, and
-// one resumed all the same fails rather than waiting for ever.
+// A kept Run an operator ended in lux is not offered to resume, and one
+// resumed all the same fails rather than waiting for ever: whether lux
+// calls the end terminated, or cancelled as before the rename.
 func TestARunCancelledInLuxIsNotResumed(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		t.Run(map[bool]string{false: "terminated", true: "cancelled"}[old], func(t *testing.T) {
+			runCancelledInLux(t, old)
+		})
+	}
+}
+
+func runCancelledInLux(t *testing.T, cancelledState bool) {
 	w := newWorld(t)
+	w.lux.CancelledState = cancelledState
 	wi, runID := w.aborted()
 	w.lux.CancelInLux(w.lux.Runs()[0].ID)
 	// Resumed before dude heard of the cancel: lux refuses, and it fails.

@@ -393,7 +393,7 @@ const sweepBatch = 1000
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
 	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
 		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
-		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost'))))`
+		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
 
 // due is what one sweep takes up: every live Run, not the oldest N — a Run
 // with nothing to do still needs its stream followed, and a paused, idle
@@ -1559,7 +1559,7 @@ func pushRequest(r phaseRun) string {
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
-	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
+	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && !lux.Terminated(r.LuxState) && r.LuxState != "succeeded" {
 		err = s.keep(ctx, r)
 	} else {
 		// Not worth keeping, its time is up, or lux has nothing left to resume.
@@ -1589,7 +1589,7 @@ func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
 
 // cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
-	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
+	if r.LuxRunID != "" && !lux.Terminated(r.LuxState) && r.LuxState != "succeeded" && r.LuxState != "failed" {
 		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
 			return err
 		}
@@ -1673,7 +1673,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// Already resuming (an earlier attempt got through and its answer
 		// was lost: lux's stream reports how it went) — or not resumable at
 		// all, cancelled or finished in lux, which fails it.
-		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (cur.State == "cancelled" || cur.State == "succeeded") {
+		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (lux.Terminated(cur.State) || cur.State == "succeeded") {
 			refused()
 			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)
 		}

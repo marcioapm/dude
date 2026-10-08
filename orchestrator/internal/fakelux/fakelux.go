@@ -539,6 +539,9 @@ type Server struct {
 	// NoSyncModes is a lux from before sync modes: a sync or resume naming
 	// fast-forward or fetch is refused with a 409.
 	NoSyncModes bool
+	// CancelledState is a lux from before the rename: a Run ended for good
+	// is "cancelled". By default it is "terminated", as lux reports now.
+	CancelledState bool
 	// HoldPushes is a lux that accepts a push and never reports it: no
 	// git.push follows, until ReleasePushes.
 	HoldPushes bool
@@ -752,6 +755,14 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 	return done
 }
 
+// ended is the state of a Run ended for good, by this lux's name for it.
+func (s *Server) ended() string {
+	if s.CancelledState {
+		return "cancelled"
+	}
+	return "terminated"
+}
+
 // CancelInLux cancels a Run as an operator would in lux itself: nothing of
 // it is left to resume.
 func (s *Server) CancelInLux(id string) {
@@ -759,7 +770,7 @@ func (s *Server) CancelInLux(id string) {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.Cancelled = true
-		s.setState(run, "cancelled")
+		s.setState(run, s.ended())
 	}
 }
 
@@ -1416,7 +1427,7 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		s.exited(run)
 		s.placementEnded(run, state, reason)
 	}
-	if state == "succeeded" || state == "cancelled" {
+	if state == "succeeded" || lux.Terminated(state) {
 		// Never runs again: its owner servers are detached, as lux does.
 		defer s.ownerRunEnded(run)
 	}
@@ -2044,8 +2055,8 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	run.Calls = append(run.Calls, "cancel")
 	run.Cancelled = true
 	s.beforeStop(run)
-	if run.State != "cancelled" {
-		s.setState(run, "cancelled")
+	if !lux.Terminated(run.State) {
+		s.setState(run, s.ended())
 	}
 	writeJSON(w, 202, s.view(run))
 }
@@ -2083,7 +2094,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		writeJSON(w, 202, view)
 		return
-	case "cancelled", "succeeded":
+	case "cancelled", "terminated", "succeeded":
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
 		return

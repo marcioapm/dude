@@ -138,10 +138,16 @@ const (
 // Terminal says whether lux will report nothing more without a resume.
 func Terminal(state string) bool {
 	switch state {
-	case "stopped", "succeeded", "failed", "cancelled", "lost":
+	case "stopped", "succeeded", "failed", "cancelled", "terminated", "lost":
 		return true
 	}
 	return false
+}
+
+// Terminated says lux has ended the Run for good: nothing of it is left to
+// resume. lux before the rename reports "cancelled", lux after "terminated".
+func Terminated(state string) bool {
+	return state == "cancelled" || state == "terminated"
 }
 
 // Moved says a Run lux stopped for this reason is moving host, not
@@ -691,6 +697,7 @@ func (c *HTTPClient) Stop(ctx context.Context, runID string) error {
 }
 
 func (c *HTTPClient) Cancel(ctx context.Context, runID string) error {
+	// /cancel, not /terminate: every lux takes it (a deprecated alias of /terminate since terminate exists).
 	return c.do(ctx, "POST", "/v1/runs/"+runID+"/cancel", nil, nil, nil)
 }
 
