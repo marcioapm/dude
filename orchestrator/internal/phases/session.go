@@ -73,7 +73,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name), ReadOnly: true})
 	}
 	in.RunID, in.OrganizationID, in.SessionID, in.Role = r.ID, r.Org, r.SessionID, role
-	in.Model, in.ModelTier, in.Effort = tier.Model, tier.Name, settings.Effort
+	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 	if m, ok := sizes.ForRole(role, nil, orgModels); ok {
 		in.Machine = &m
 	}
