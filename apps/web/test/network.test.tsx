@@ -11,6 +11,7 @@ import type { SettingsPatch, SettingsResponse } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { byLabel, byRole } from "../../../packages/design-system/test/queries.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
+import { hostMatchers, refusedHostIn } from "../src/networkRefused.tsx";
 import { PROJECT, RUN_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
@@ -218,5 +219,37 @@ describe("in a Run", () => {
     const container = await run(client);
     const note = await until(() => container.querySelector("[data-testid=network-refused]"), "the note");
     expect([...note.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Settings"]);
+  });
+
+  test("a host allowed is still Allowed when the Run is opened again: the project's list says so", async () => {
+    const client = refusedRun();
+    const first = await run(client);
+    const note = await until(() => first.querySelector("[data-testid=network-refused]"), "the note");
+    await click(byRole(note as HTMLElement, "button", "Allow for web-console"));
+    await until(() => first.querySelector("[data-testid=network-allowed]"), "Allowed");
+    for (const unmount of mounted.splice(0)) await unmount();
+    localStorage.setItem(RUN_KEY, "refused");
+    const again = await run(client);
+    await until(() => again.querySelector("[data-testid=network-allowed]"), "Allowed, on opening the Run again");
+    expect(again.querySelector("[data-testid=network-allow]")).toBeNull();
+  });
+});
+
+describe("which refused host a call's output names", () => {
+  const out = (head: string) => ({ output: { head } });
+  const name = (head: string, hosts: string[]) => refusedHostIn(out(head), hostMatchers(hosts));
+
+  test("a host only as a whole name, not inside a longer one", () => {
+    expect(name("fetch https://github.com/acme/api.git: dns error", ["github.com"])).toBe("github.com");
+    expect(name("resolving github.com.", ["github.com"])).toBe("github.com");
+    for (const other of ["GET https://api.github.com/repos", "notgithub.com", "github.com.internal", "github.community", "a-github.com"]) {
+      expect([other, name(other, ["github.com"])]).toEqual([other, null]);
+    }
+  });
+
+  test("the most specific of the hosts it names", () => {
+    const both = "fetching https://github.com/acme/api: Could not resolve host: api.github.com";
+    expect(name(both, ["github.com", "api.github.com"])).toBe("api.github.com");
+    expect(name("Could not resolve host: github.com", ["github.com", "api.github.com"])).toBe("github.com");
   });
 });
