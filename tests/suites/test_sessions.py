@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 
 import requests
@@ -246,6 +247,67 @@ def test_a_shared_session_signs_every_message_and_a_question_to_one_member_waits
     assert "e2e user: also, cost estimates?" in after[1], after
     answer = query(owner_dsn, "SELECT answer, answered_by_person FROM questions WHERE id = %s", (question["id"],))
     assert answer == [{"answer": "Experiment runs only", "answered_by_person": ana["id"]}]
+
+
+# lux's rule for a spec's repository names (lux internal/spec/spec.go volumeRe).
+LUX_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def test_a_session_linking_a_project_lux_would_refuse_by_name_starts(client: ApiClient, env, owner_dsn: str,
+                                                                      fake_github: FakeGitHub):
+    _scripted_brainstorm(client)
+    # An uppercase key (BILL) and a repository name past lux's 32 characters: <key>-<name> breaks lux's rule twice.
+    name = "Billing-API.payments-ledger-service"
+    repo = fake_github.add_repository("billing-api-ledger")
+    project = client.create_project(name="billing", slug=f"bill-{int.from_bytes(os.urandom(3)):08d}",
+                                    repositories=[{"name": name, "url": repo.clone_url, "defaultBranch": "main"}])
+    project = client.get(f"/v1/projects/{project['id']}").json()
+    assert query(owner_dsn, "SELECT key_prefix FROM projects WHERE id = %s", (project["id"],)) == [{"key_prefix": "BILL"}]
+    session = client.post("/v1/brainstorms", {"title": "Billing", "projects": [
+        {"projectId": project["id"], "repositoryIds": [project["repositories"][0]["id"]]}]}).json()["id"]
+    run = client.post(f"/v1/brainstorms/{session}/chat", {"text": "where does metering go?"}).json()["runId"]
+
+    # The fake lux refuses a name real lux would; the agent starts and answers.
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered: lux refused its spec?")
+    # The scripted agent quotes the session's title: a session has no task to quote.
+    assert _said(client, session)[0].startswith('In the session "Billing". You asked:'), _said(client, session)
+    row = query(owner_dsn, "SELECT status::text AS status, lux_repositories FROM runs WHERE id = %s", (run,))[0]
+    assert row["status"] != "failed"
+    [held] = row["lux_repositories"]
+    assert LUX_NAME.match(held) and held.startswith("bill-billing-api-"), held
+    # Checked out where the agent is told, by the project's key and the repository's own name.
+    briefing = query(owner_dsn, "SELECT prompt FROM runs WHERE id = %s", (run,))[0]["prompt"]
+    assert f"/workspace/repos/BILL/{name}" in briefing
+
+
+def test_billing_api_and_billing_worker_get_distinct_keys_and_one_session_reads_both(client: ApiClient, owner_dsn: str,
+                                                                                      fake_github: FakeGitHub):
+    _scripted_brainstorm(client)
+    # Each holds a repository named api; their slugs both start with "billing".
+    suffix = int.from_bytes(os.urandom(3))
+    api, worker = (client.create_project(name=n, slug=f"{s}-{suffix:08d}",
+                                         repositories=[{"name": "api", "url": fake_github.clone_url, "defaultBranch": "main"}])
+                   for n, s in (("Billing API", "billing-api"), ("Billing Worker", "billing-worker")))
+    # The first takes the slug's first letters; the second, the next free key: its words' initials and letters.
+    assert (api["key"], worker["key"]) == ("BILL", "BWOR")
+    assert client.post("/v1/projects", {"name": "Billing Ledger", "slug": f"billing-ledger-{suffix:08d}", "key": "bill"}).json() == {
+        "error": {"code": "conflict", "message": "BILL is already the key of Billing API; pick another", "details": {"suggestion": "BLED"}}}
+
+    link = lambda p: {"projectId": p["id"], "repositoryIds": [p["repositories"][0]["id"]]}  # noqa: E731
+    resp = client.post("/v1/brainstorms", {"title": "Billing", "projects": [link(api), link(worker)]})
+    assert resp.status_code == 201, resp.text
+    session = resp.json()["id"]
+    assert sorted(p["key"] for p in client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]) == ["BILL", "BWOR"]
+    run = client.post(f"/v1/brainstorms/{session}/chat", {"text": "where does metering go?"}).json()["runId"]
+
+    wait_until(lambda: _said(client, session), timeout=60, message="the session's agent never answered")
+    assert _said(client, session)[0].startswith('In the session "Billing". You asked:'), _said(client, session)
+    row = query(owner_dsn, "SELECT status::text AS status, lux_repositories FROM runs WHERE id = %s", (run,))[0]
+    assert row["status"] != "failed"
+    held = row["lux_repositories"]
+    assert len(held) == 2 and len(set(held)) == 2 and all(LUX_NAME.match(h) for h in held), held
+    briefing = query(owner_dsn, "SELECT prompt FROM runs WHERE id = %s", (run,))[0]["prompt"]
+    assert "/workspace/repos/BILL/api" in briefing and "/workspace/repos/BWOR/api" in briefing
 
 
 def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient, env):

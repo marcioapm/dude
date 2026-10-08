@@ -33,6 +33,7 @@ export const PROJECT: ProjectDetail = {
   organizationId: ORG.id,
   name: "web-console",
   slug: "web-console",
+  key: "WEBC",
   description: "",
   repositories: [
     { id: "repo_wc", projectId: "p_webconsole", name: "web-console", url: "https://github.com/example/web-console.git", defaultBranch: "main", trust: "trusted_internal" },

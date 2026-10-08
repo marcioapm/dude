@@ -365,10 +365,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 	if len(midOperation) > 0 {
 		return s.refusePublish(ctx, p, strings.Join(midOperation, "; "))
 	}
-	byName := map[string]delivery.Repository{}
-	for _, repo := range repos {
-		byName[repo.Name] = repo
-	}
+	byName := repositoriesBySpecName(repos)
 	gh, err := s.Forges.For(ctx, p.Org)
 	if err != nil {
 		return err
@@ -386,7 +383,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		case !known:
 			return s.refusePublish(ctx, p, fmt.Sprintf("lux pushed %s, which this task does not name", res.Repo))
 		case res.Status != "pushed" && res.Status != "up-to-date":
-			return s.refusePublish(ctx, p, fmt.Sprintf("the push of %s failed: %s", res.Repo, res.Error))
+			return s.refusePublish(ctx, p, fmt.Sprintf("the push of %s failed: %s", repo.Name, res.Error))
 		case res.Commit == "":
 			continue
 		}
@@ -396,7 +393,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		}
 		// Measured against the task branch's head, or the default branch
 		// where the task has none yet.
-		from, base := target.Heads[res.Repo], target.Heads[res.Repo]
+		from, base := target.Heads[repo.Name], target.Heads[repo.Name]
 		if from == "" {
 			from = repo.DefaultBranch
 		}
@@ -405,7 +402,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 			if !forgeRefused(err) {
 				return errPublishTransient{err}
 			}
-			return s.refusePublish(ctx, p, fmt.Sprintf("comparing %s with the task branch failed: %v", res.Repo, err))
+			return s.refusePublish(ctx, p, fmt.Sprintf("comparing %s with the task branch failed: %v", repo.Name, err))
 		}
 		if cmp.BehindBy > 0 {
 			return s.refusePublish(ctx, p, fmt.Sprintf(delivery.RefusedBehind, target.Branch))
@@ -415,7 +412,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		}
 		lines += cmp.Lines()
 		files += len(cmp.Files)
-		moves[res.Repo] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
+		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
 			ChangedPaths: db.NonNil(cmp.Paths()), Lines: cmp.Lines(), Status: delivery.MovePending}
 	}
 	if len(moves) == 0 {
