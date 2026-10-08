@@ -656,7 +656,7 @@ func (s *Syncer) handOverUnheardBrainstorms(ctx context.Context) error {
 // a library image waits, still pending, until its image has the current
 // dude layer, and fails before lux if it cannot have it.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
-	image, got, err := s.image(ctx, r)
+	image, got, nested, err := s.image(ctx, r)
 	var waiting images.Waiting
 	var refused images.Refused
 	switch {
@@ -667,7 +667,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, machine, sent, err := s.spec(ctx, r, nil, image)
+	spec, machine, sent, err := s.spec(ctx, r, nil, chosenImage{image, nested})
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -739,10 +739,12 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 // image is the image a Run starts in: the first library image its role,
 // its project or its organization names, finished with the current dude
 // layer (images.Choose: Waiting while it is not, Refused when it cannot
-// be), else the project's typed image, else DUDE_AGENT_IMAGE.
-func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImage, error) {
+// be), else the project's typed image, else DUDE_AGENT_IMAGE; and whether
+// a Run on it may start containers (images.Site.Containers).
+func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImage, bool, error) {
 	var ref string
 	var got *images.RunImage
+	var nested bool
 	var outcome error
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var site images.Site
@@ -763,13 +765,21 @@ func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImag
 		site.Role = images.RoleImage(delivery.PromptRoleFor(r.Phase, r.Role), projectModels, orgModels, known)
 		site.Fallback = s.Agent.DefaultImage
 		ref, got, err = images.Choose(ctx, tx, site, s.Agent.Layer, r.ID, r.ImageBuildID)
+		nested = site.Containers(got, s.Agent.NestedContainers)
 		err, outcome = images.Settle(err)
 		return err
 	})
 	if err == nil {
 		err = outcome
 	}
-	return ref, got, err
+	return ref, got, nested, err
+}
+
+// chosenImage is the image a submit starts a Run on, and whether the Run
+// may start containers in it.
+type chosenImage struct {
+	Ref    string
+	Nested bool
 }
 
 // ImagePoll is how soon a Run (or a preview) waiting for its image looks
@@ -809,7 +819,7 @@ const EvImagePreparing = "run.image_preparing"
 // organization has none); submit records it, a resume does not. And the
 // task's images in the order the prompt numbers them, read in the same
 // transaction as its text: submit sends exactly these.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, []delivery.SentAttachment, error) {
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, *delivery.Machine, []delivery.SentAttachment, error) {
 	if r.brainstorm() {
 		spec, machine, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, machine, nil, err
@@ -927,8 +937,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
-	in.Image = image
+	in.Image, in.NestedContainers = image.Ref, image.Nested
 	if stored != nil {
+		// lux keeps the rest of the stored spec, sandbox included: a
+		// resume sends only its secrets, input and repositories.
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
@@ -1637,7 +1649,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, _, err := s.spec(ctx, r, &lr.Spec, "")
+	spec, _, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}

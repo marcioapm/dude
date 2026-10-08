@@ -64,12 +64,15 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 	}
 }
 
-// Unset Runs must not wait for a host offering nested containers.
-func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
+// A Run whose image cannot run containers must not wait for a host
+// offering them; the operator's fallback flag alone does not ask either:
+// the image the Run resolved decides (images.Site.Containers).
+func TestNestedContainersAreAskedForOnlyWhenTheImageCan(t *testing.T) {
 	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
 		for _, set := range []bool{false, true} {
 			c, in := goldenInput(model)
-			c.NestedContainers = set
+			c.NestedContainers = !set
+			in.NestedContainers = set
 			b, err := json.Marshal(buildSpec(c, in))
 			if err != nil {
 				t.Fatal(err)
