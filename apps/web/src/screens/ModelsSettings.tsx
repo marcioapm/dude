@@ -10,6 +10,7 @@ import {
   FlowSteps,
   NameChips,
   ProjectAvatar,
+  SettingsDisclosure,
   SettingsHeader,
   SettingsMeta,
   SettingsSection,
@@ -31,12 +32,14 @@ import {
   Table,
   TBody,
   Td,
+  Textarea,
   Th,
   THead,
   Tr,
 } from "@dude/design-system/primitives";
 import {
   TIER_DESCRIPTION_MAX,
+  TIER_EFFORTS,
   TIER_MODEL_MAX,
   TIER_NAME_MAX,
   type ModelTestResult,
@@ -45,15 +48,16 @@ import {
   type ModelTierUse,
   type ModelTierWithUse,
   type ProxyModels,
+  type TierEffort,
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import {
-  effortsWords,
   proxyKnows,
   testResultWords,
   tierDraftOf,
   tierDraftProblems,
+  tierEffortLabel,
   tierInput,
   tierMark,
   tierUsedByWords,
@@ -162,6 +166,7 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
             <Tr>
               <Th>Tier</Th>
               <Th>Requests</Th>
+              <Th>Effort</Th>
               <Th hideWhenNarrow>Changed</Th>
               <Th hideWhenNarrow>Used by</Th>
               {canEdit ? <Th align="right" width="48px"><span className="ds-sr-only">Actions</span></Th> : null}
@@ -188,7 +193,7 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
   );
 }
 
-/** A tier's row: its mark and name, the model it requests, who changed it, who uses it, and an admin's menu. */
+/** A tier's row: its mark and name, the model it requests, its effort, who changed it, who uses it, and an admin's menu. */
 function TierRow({ tier: t, canEdit, only, onEdit, onRemove }: {
   tier: ModelTierWithUse;
   canEdit: boolean;
@@ -206,6 +211,7 @@ function TierRow({ tier: t, canEdit, only, onEdit, onRemove }: {
       ) : (
         <Td fit data-model-cell data-unset><span className="tierUnset">Not set</span></Td>
       )}
+      <Td fit muted={!t.effort} data-effort-cell>{tierEffortLabel(t.effort)}</Td>
       <Td fit muted hideWhenNarrow>
         {t.updatedBy ? `${t.updatedBy.name.split(" ")[0]} · ` : ""}{formatTimestamp(t.updatedAt, "relative")}
       </Td>
@@ -284,7 +290,14 @@ function UpgradeNotes({ tiers, onDone }: { tiers: ModelTiersResponse; onDone: ()
 // Adding, changing and testing a tier
 // ---------------------------------------------------------------------------
 
-type TestState = { model: string; results: ModelTestResult[] } | "sending" | { error: string } | null;
+type TestState = { model: string; result: ModelTestResult } | "sending" | { error: string } | null;
+
+/** The effort picker's value for the model's default (null). */
+const DEFAULT_EFFORT = "__default__";
+const EFFORT_OPTIONS = [
+  { value: DEFAULT_EFFORT, label: tierEffortLabel(null) },
+  ...TIER_EFFORTS.map((e) => ({ value: e, label: tierEffortLabel(e) })),
+];
 
 function submitLabel(existing: boolean, unlisted: boolean): string {
   if (existing) return unlisted ? "Save anyway" : "Save";
@@ -309,13 +322,15 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
   const listed = proxy && !proxy.problem ? proxy.models : null;
   const known = model ? proxyKnows(model, listed) : null;
   const users = existing?.usedBy ?? [];
-  const efforts = effortsWords(users);
   const valid = Object.keys(problems).length === 0;
+  const testable = Boolean(model) && !problems.model && !problems.options && !problems.headers;
 
   const sendTest = () => {
-    if (!model || problems.model) return;
+    if (!testable) return;
+    const input = tierInput(draft);
     setTest("sending");
-    client.testModel(model, existing?.id ?? null).then(setTest, (err: unknown) => setTest({ error: errorText(err) }));
+    client.testModel({ model, effort: input.effort, options: input.options, headers: input.headers })
+      .then(setTest, (err: unknown) => setTest({ error: errorText(err) }));
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (testNow) sendTest(); }, []);
@@ -324,10 +339,10 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
   return (
     <FormDialog open onOpenChange={(open) => !open && onClose()} size="md"
       title={existing ? existing.name : "Add a tier"}
-      description={existing ? `The model every agent on ${existing.name} requests from the proxy.` : "A kind of work agents can be given. Pick it in Agents or a project."}
+      description={existing ? `The model every agent on ${existing.name} requests from the proxy, and how hard it thinks.` : "A kind of work agents can be given. Pick it in Agents or a project."}
       submitLabel={submit} submitTestId="model-tier-save" canSubmit={!busy && valid} problem={problem}
       footerStart={
-        <Button size="sm" variant="quiet" leadingIcon="check" onClick={sendTest} disabled={!model || Boolean(problems.model) || test === "sending"}
+        <Button size="sm" variant="quiet" leadingIcon="check" onClick={sendTest} disabled={!testable || test === "sending"}
           data-testid="model-tier-test">
           {test === "sending" ? "Sending…" : "Send a test message"}
         </Button>
@@ -339,7 +354,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
       }, undefined, existing ? `${draft.name.trim()} saved` : `${draft.name.trim()} added`)}>
       {existing && users.length ? (
         <Callout tone="info" data-testid="model-tier-users">
-          On {existing.name} now: <b>{users.map(tierUseName).join(", ")}</b>{efforts ? `, at effort ${efforts}` : ""}. They move from their next session;
+          On {existing.name} now: <b>{users.map(tierUseName).join(", ")}</b>. They move from their next session;
           running sessions finish on {existing.model ? <code>{existing.model}</code> : "what they started with"}.
         </Callout>
       ) : null}
@@ -367,25 +382,34 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
           — send a test message to see what it answers.
         </Callout>
       ) : null}
-      <TestOutcome test={test} users={users} />
+      <Select label="Reasoning effort" aria-label="Reasoning effort" data-testid="model-tier-effort"
+        value={draft.effort ?? DEFAULT_EFFORT} options={EFFORT_OPTIONS}
+        onValueChange={(v) => set("effort", v === DEFAULT_EFFORT ? null : (v as TierEffort))}
+        hint="None turns thinking off, so the chat shows none." />
+      <SettingsDisclosure summary="Advanced: OpenCode model options and request headers">
+        <FormStack>
+          <Textarea label="OpenCode model options" mono rows={3} value={draft.options} placeholder={"{\"effort\": \"xhigh\"}"}
+            onChange={(e) => set("options", e.target.value)} data-testid="model-tier-options"
+            hint="A JSON object merged over what the effort sets; its keys win. Keys the provider does not know are dropped without a word."
+            error={problems.options} />
+          <Textarea label="Request headers" mono rows={2} value={draft.headers} placeholder={"{\"X-Team\": \"platform\"}"}
+            onChange={(e) => set("headers", e.target.value)} data-testid="model-tier-headers"
+            hint="A JSON object of header names to values, sent on every request." error={problems.headers} />
+        </FormStack>
+      </SettingsDisclosure>
+      <TestOutcome test={test} />
     </FormDialog>
   );
 }
 
-function TestOutcome({ test, users }: { test: TestState; users: readonly ModelTierUse[] }) {
+function TestOutcome({ test }: { test: TestState }) {
   if (!test || test === "sending") return null;
   if ("error" in test) return <Callout tone="danger" data-testid="model-tier-test-result">{test.error}</Callout>;
+  const r = test.result;
   return (
-    <FormStack>
-      {test.results.map((r, i) => {
-        const who = users.filter((u) => r.efforts.includes(u.effort ?? null)).map(tierUseName);
-        return (
-          <Callout key={i} tone={r.ok ? "success" : "danger"} data-testid="model-tier-test-result" data-ok={r.ok}>
-            <code>{test.model}</code> {testResultWords(r)}{r.ok && who.length ? ` (${who.join(", ")})` : ""}.
-          </Callout>
-        );
-      })}
-    </FormStack>
+    <Callout tone={r.ok ? "success" : "danger"} data-testid="model-tier-test-result" data-ok={r.ok}>
+      <code>{test.model}</code> {testResultWords(r)}.
+    </Callout>
   );
 }
 

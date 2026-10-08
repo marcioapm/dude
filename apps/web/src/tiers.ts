@@ -1,8 +1,8 @@
 /**
  * What the model screens compute from tiers: each tier's mark, the words
- * for who uses one and at which effort, whether a name is one the proxy
- * lists, a test message's result as a line, and the upgrade's notes. Pure,
- * so the rules are tested apart from the screens.
+ * for who uses one, what it requests, whether a name is one the proxy
+ * lists, a tier dialog's draft, a test message's result as a line, and the
+ * upgrade's notes. Pure, so the rules are tested apart from the screens.
  */
 
 import {
@@ -12,11 +12,11 @@ import {
   type ModelTierInput,
   type ModelTierUpgradeNote,
   type ModelTierUse,
+  type TierEffort,
 } from "@dude/domain";
 import type { IconName } from "@dude/design-system";
 import type { TierTone } from "@dude/design-system/components";
 import { roleLabel } from "./machines.ts";
-import { effortLabel } from "./settings.ts";
 
 /** A tier's mark: the seeded tiers have their own; any other the sparkle. */
 export function tierMark(tier: Pick<ModelTier, "name">): { icon: IconName; tone: TierTone } {
@@ -58,62 +58,81 @@ export function tierUseWhere(use: ModelTierUse, orgName: string): string {
   return use.kind === "project" ? "project override" : `${orgName}’s setting`;
 }
 
-/** The efforts a tier's agents use, distinct, in words: "high", "high and low"; null when none sets one. */
-export function effortsWords(uses: readonly ModelTierUse[]): string | null {
-  if (!uses.some((u) => u.effort)) return null;
-  const efforts = [...new Set(uses.map((u) => u.effort))];
-  return efforts.map((e) => (e === null ? "the model’s default" : effortLabel(e).toLowerCase())).join(" and ");
-}
-
 /** Whether the proxy lists a name; unknown (null) while its list could not be read. */
 export function proxyKnows(name: string, listed: readonly string[] | null): boolean | null {
   if (listed === null) return null;
   return listed.includes(name.trim());
 }
 
-/** A tier dialog's fields as typed. */
+/** A tier's effort as people read it: "High", "Model’s default". */
+export function tierEffortLabel(effort: TierEffort | null): string {
+  return effort ? effort[0]!.toUpperCase() + effort.slice(1) : "Model’s default";
+}
+
+/** A tier dialog's fields as typed: options and headers as the JSON text in their fields. */
 export interface TierDraft {
   name: string;
   description: string;
   model: string;
+  effort: TierEffort | null;
+  options: string;
+  headers: string;
 }
+
+const jsonText = (v: unknown) => (v === null || v === undefined ? "" : JSON.stringify(v, null, 2));
 
 export function tierDraftOf(tier: ModelTier | null): TierDraft {
-  return tier ? { name: tier.name, description: tier.description, model: tier.model ?? "" } : { name: "", description: "", model: "" };
+  return tier
+    ? { name: tier.name, description: tier.description, model: tier.model ?? "", effort: tier.effort ?? null,
+        options: jsonText(tier.options), headers: jsonText(tier.headers) }
+    : { name: "", description: "", model: "", effort: null, options: "", headers: "" };
 }
 
-/** The draft as the API takes it: an empty model is "not set". */
+/** A JSON field's text as a value: empty is null; anything that is not a JSON object is `invalid`. */
+function parseObject(text: string): { value: Record<string, unknown> | null } | { invalid: true } {
+  if (!text.trim()) return { value: null };
+  try {
+    const v: unknown = JSON.parse(text);
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? { value: v as Record<string, unknown> } : { invalid: true };
+  } catch {
+    return { invalid: true };
+  }
+}
+
+const NOT_AN_OBJECT = "A JSON object, like {\"key\": \"value\"}";
+
+/** The draft as the API takes it: an empty model is "not set", an empty JSON field none. Unparsable JSON is sent as it would be refused. */
 export function tierInput(d: TierDraft): ModelTierInput {
   const model = d.model.trim();
-  return { name: d.name.trim(), description: d.description.trim(), model: model === "" ? null : model };
+  const options = parseObject(d.options);
+  const headers = parseObject(d.headers);
+  return {
+    name: d.name.trim(), description: d.description.trim(), model: model === "" ? null : model, effort: d.effort,
+    options: "invalid" in options ? null : options.value,
+    headers: "invalid" in headers ? null : (headers.value as Record<string, string> | null),
+  };
 }
 
 /** Each field's problem, in the schema's words; none when the draft is a tier. */
 export function tierDraftProblems(d: TierDraft): Partial<Record<keyof TierDraft, string>> {
-  const parsed = modelTierInputSchema.safeParse(tierInput(d));
   const out: Partial<Record<keyof TierDraft, string>> = {};
+  if ("invalid" in parseObject(d.options)) out.options = NOT_AN_OBJECT;
+  if ("invalid" in parseObject(d.headers)) out.headers = NOT_AN_OBJECT;
+  const parsed = modelTierInputSchema.safeParse(tierInput(d));
   if (parsed.success) return out;
   for (const issue of parsed.error.issues) out[issue.path[0] as keyof TierDraft] ??= issue.message;
   return out;
 }
 
 /**
- * A test message's result, as a line: "answered (efforts high, max) in 1.2 s",
- * "answered with no effort in 0.8 s", or the proxy's own words. One request
- * stands for every effort that goes out alike, and the line says what was
- * sent when that is none of them ("effort max, sent as high"); a Claude
- * model is sent none, as the agent sends it, and the line says so.
+ * A test message's result, as a line: "answered in 1.2 s", or the proxy's
+ * own words, with the reasoning settings that went on the wire after it.
  */
 export function testResultWords(r: ModelTestResult): string {
-  const asked = r.efforts.map((e) => e ?? "none");
-  const unsent = r.sent === null && r.efforts.some((e) => e !== null) ? "; sent without an effort, as the agent sends it" : "";
-  const sentAs = r.sent !== null && !r.efforts.includes(r.sent) ? `, sent as ${r.sent}` : "";
-  const at = r.efforts.every((e) => e === null)
-    ? "with no effort"
-    : `(${asked.length > 1 ? "efforts" : "effort"} ${asked.join(", ")}${sentAs}${unsent})`;
-  if (r.ok) return `answered ${at} in ${(r.latencyMs / 1000).toFixed(1)} s`;
-  if (r.status === null) return `${at}: ${r.error ?? "no answer"}`;
-  return `${at}: the proxy answered ${r.status}${r.error ? ` — ${r.error}` : ""}`;
+  const sent = Object.keys(r.sent).length ? ` (sent ${JSON.stringify(r.sent)})` : "";
+  if (r.ok) return `answered in ${(r.latencyMs / 1000).toFixed(1)} s${sent}`;
+  if (r.status === null) return `${r.error ?? "no answer"}${sent}`;
+  return `the proxy answered ${r.status}${r.error ? ` — ${r.error}` : ""}${sent}`;
 }
 
 /** One line of the upgrade banner: the roles it covers, and a project's override named as `who`. */

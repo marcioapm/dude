@@ -33,15 +33,6 @@ export type AgentRole = z.infer<typeof agentRoleSchema>;
 export const ALL_AGENT_ROLES = agentRoleSchema.options;
 
 /**
- * Model binding for one role. `harness` is optional so a project can
- * express "any harness that satisfies the capabilities" and let policy
- * pick — plan §45 capability negotiation.
- */
-/** How hard a model thinks. */
-export const EFFORTS = ["low", "medium", "high", "max"] as const;
-export const effortSchema = z.enum(EFFORTS);
-export type Effort = z.infer<typeof effortSchema>;
-/**
  * How long a phase Run may go without progress before its owner is told,
  * in minutes: from half an hour up to a week, 2 hours when unset. Runs are
  * stopped at 4 hours whatever this says (the deployment's agent.timeout).
@@ -58,12 +49,19 @@ export function clampTimeLimit(minutes: number): number {
 export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/command", "fake/stuck", "fake/stall", "fake/silent"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
+/** What a settings change that still names a role's effort is told. */
+export const ROLE_EFFORT_REMOVED = "reasoning effort is the model tier's (set it in Models), not the role's";
 
+/**
+ * Model binding for one role. `harness` is optional so a project can
+ * express "any harness that satisfies the capabilities" and let policy
+ * pick — plan §45 capability negotiation.
+ */
 export const agentModelConfigSchema = z.object({
   /**
    * The model tier its sessions run on (an organization's tier id).
-   * Optional at each layer: a project that changes only a role's effort
-   * keeps its organization's tier (resolveTier, field by field).
+   * Optional at each layer: a project that changes only a role's time
+   * limit keeps its organization's tier (resolveTier, field by field).
    */
   tier: z.string().min(1).max(100).optional(),
   model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
@@ -82,8 +80,6 @@ export const agentModelConfigSchema = z.object({
    * spend context on every turn to say nothing.
    */
   context: z.string().max(20_000).optional(),
-  /** How hard the model thinks; unset leaves it to the model. */
-  effort: effortSchema.optional(),
   /** How long a Run may go without progress before its owner is told, in minutes. */
   timeLimitMinutes: timeLimitMinutesSchema.optional(),
   /** The machine size its sessions run on (an organization's size id); unset is the default size. */
@@ -496,6 +492,8 @@ export const runSchema = z.object({
   model: z.string().nullable().default(null),
   /** The tier's name then; null for a Run from before tiers. */
   modelTier: z.string().nullable().default(null),
+  /** The tier's reasoning effort then; null for the model's default. */
+  effort: z.string().nullable().default(null),
   /**
    * Why dude paused it itself, and so what takes it up again: "person" —
    * parked while it waits for an answer or a decision, which resumes it;
@@ -648,7 +646,7 @@ export type Session = z.infer<typeof sessionSchema>;
 
 /**
  * Resolve the model config for a role: project → organization → default,
- * field by field, so a project that sets only a role's effort keeps its
+ * field by field, so a project that sets only a role's time limit keeps its
  * organization's model. Returns null when no layer configures the role.
  */
 export function resolveAgentModel(

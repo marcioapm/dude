@@ -2,7 +2,7 @@
  * Settings: the organization's defaults, and each project's overrides.
  *
  * Two things are configured this way: how each agent role runs (model
- * tier, reasoning effort, time limit, machine, whether it runs at all, and its prompt) and
+ * tier, time limit, machine, whether it runs at all, and its prompt) and
  * how work is delivered. The organization's live on its row
  * (default_agent_models, delivery_policy), a project's on its own
  * (agent_models, delivery_policy) — and a project stores only what it
@@ -251,7 +251,6 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
           role,
           {
             tier: tier(role),
-            effort: field(role, "effort"),
             timeLimitMinutes: timeLimit(field(role, "timeLimitMinutes")),
             machineSize: machine(role),
             image: image(role),

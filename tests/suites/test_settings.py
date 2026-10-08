@@ -20,21 +20,21 @@ from helpers import ApiClient, execute, query, wait_until
 
 def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: ApiClient, project: dict):
     review, review2 = client.tier_for("org-review"), client.tier_for("org-review-2")
-    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"tier": review, "effort": "high"}}})
+    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"tier": review, "timeLimitMinutes": 60}}})
     assert org.status_code == 200, org.text
     assert org.json()["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization"}
 
     # The project follows it until it says otherwise.
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()
     assert settings["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization", "organization": review}
-    assert settings["roles"]["reviewer"]["effort"] == {"value": "high", "source": "organization"}
+    assert settings["roles"]["reviewer"]["timeLimitMinutes"] == {"value": 60, "source": "organization"}
 
     # An override of one field leaves the others inherited.
-    changed = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"effort": "low"}}}).json()
-    assert changed["roles"]["reviewer"]["effort"] == {"value": "low", "source": "project"}
+    changed = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"timeLimitMinutes": 45}}}).json()
+    assert changed["roles"]["reviewer"]["timeLimitMinutes"] == {"value": 45, "source": "project"}
     assert changed["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization", "organization": review}
     # Stored as an override only.
-    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"effort": "low"}
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"timeLimitMinutes": 45}
 
     # The organization's later change still reaches what the project did not override.
     client.patch("/v1/settings/organization", {"roles": {"reviewer": {"tier": review2}}})
@@ -43,8 +43,8 @@ def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: A
 
     # Reset is a delete: the value is the organization's again, and the
     # project stores nothing for the role.
-    reset = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"effort": None}}}).json()
-    assert reset["roles"]["reviewer"]["effort"] == {"value": "high", "source": "organization"}
+    reset = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"timeLimitMinutes": None}}}).json()
+    assert reset["roles"]["reviewer"]["timeLimitMinutes"] == {"value": 60, "source": "organization"}
     assert "reviewer" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"]
 
 
@@ -86,7 +86,8 @@ def test_delivery_is_the_factorys_then_the_organizations_then_the_projects(clien
                         {"roles": {"implementer": {"enabled": False}}}).status_code == 400
     # Values are checked as the delivery would read them.
     assert client.patch("/v1/settings/organization", {"delivery": {"maxReviewIterations": 0}}).status_code == 400
-    assert client.patch("/v1/settings/organization", {"roles": {"reviewer": {"effort": "extreme"}}}).status_code == 400
+    # A role names no effort: that is its tier's.
+    assert client.patch("/v1/settings/organization", {"roles": {"reviewer": {"effort": "high"}}}).status_code == 400
 
 
 def test_a_prompt_is_saved_kept_in_history_and_restored(client: ApiClient):
@@ -294,7 +295,7 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
 def test_a_project_shows_inherited_and_overridden_values_and_resets_them(
     page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
 ):
-    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"effort": "high"}}})
+    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"timeLimitMinutes": 60}}})
     _sign_in(page, web_url, org["api_key"])
 
     # From the project's menu in the sidebar.
@@ -306,22 +307,24 @@ def test_a_project_shows_inherited_and_overridden_values_and_resets_them(
     # Everything follows the organization until it is changed here.
     expect(settings.locator("[data-source='project']")).to_have_count(0)
     expect(settings.locator("[data-source='organization']").first).to_contain_text("From ")
+    # A role has no effort of its own: that is its tier's.
+    expect(settings.get_by_label("Reasoning effort")).to_have_count(0)
 
-    settings.get_by_label("Reasoning effort").click()
-    page.get_by_role("option", name="Low").click()
-    expect(toast(page, "Effort saved")).to_be_visible()
+    settings.get_by_label("Time limit without progress").click()
+    page.get_by_role("option", name="45 min").click()
+    expect(toast(page, "Time limit saved")).to_be_visible()
     overridden = settings.locator("[data-source='project']")
     expect(overridden).to_have_count(1)
     expect(overridden).to_contain_text("Overridden")
-    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["effort"] == \
-        {"value": "low", "source": "project"}
+    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["timeLimitMinutes"] == \
+        {"value": 45, "source": "project"}
     expect(page.locator("[data-settings-nav='reviewer']")).to_contain_text("changed")
 
     # Reset: the organization's value again.
     overridden.get_by_role("button", name="Reset").click()
     expect(settings.locator("[data-source='project']")).to_have_count(0)
-    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["effort"] == \
-        {"value": "high", "source": "organization"}
+    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["timeLimitMinutes"] == \
+        {"value": 60, "source": "organization"}
 
     # A project's own prompt: added to the organization's.
     settings.get_by_role("group", name="Prompt").get_by_role("button", name="Add to").click()
@@ -655,27 +658,44 @@ def test_an_admin_adds_a_tier_and_changes_one_and_the_role_page_follows(
     expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(r"^Models\s*4$"))
     assert _tiers(client)["Cheap"]["description"] == "Bulk, low-stakes work at the lowest price."
 
-    # Change what Coder requests, and the implementer's page says so.
+    # Change what Coder requests and how hard it thinks, and the implementer's page says so.
     models.get_by_role("button", name="Actions for Coder").click()
     page.get_by_role("menuitem", name="Change model…").click()
     dialog = page.get_by_role("dialog")
     expect(dialog.get_by_test_id("model-tier-users")).to_contain_text("On Coder now: Implementer, Fixer.")
     dialog.get_by_label("Model to request", exact=True).fill("claude-opus-5-5")
+    effort = dialog.get_by_label("Reasoning effort")
+    expect(effort).to_have_text(re.compile(r"^Medium"))
+    expect(dialog).to_contain_text("None turns thinking off, so the chat shows none.")
+    effort.click()
+    page.get_by_role("option", name="Max", exact=True).click()
+    # The advanced fields take JSON objects only, as the API does.
+    dialog.get_by_text("Advanced: OpenCode model options and request headers").click()
+    headers = dialog.get_by_label("Request headers")
+    headers.fill('{"X Team": "dude"}')
+    expect(dialog).to_contain_text("Header names are letters, digits")
+    expect(dialog.get_by_test_id("model-tier-save")).to_be_disabled()
+    headers.fill('{"X-Team": "dude"}')
+    dialog.get_by_label("OpenCode model options").fill('{"sendReasoning": true}')
     dialog.get_by_test_id("model-tier-save").click()
     expect(toast(page, "Coder saved")).to_be_visible()
     expect(models.locator("[data-tier='Coder'] [data-model-cell]")).to_have_text("claude-opus-5-5")
+    expect(models.locator("[data-tier='Coder'] [data-effort-cell]")).to_have_text("Max")
+    expect(models.locator("[data-tier='Fast'] [data-effort-cell]")).to_have_text("Model’s default")
+    coder = _tiers(client)["Coder"]
+    assert (coder["effort"], coder["options"], coder["headers"]) == ("max", {"sendReasoning": True}, {"X-Team": "dude"})
 
     page.goto(f"{web_url}#/org/settings/implementer")
     settings = page.get_by_test_id("org-settings")
     tier = settings.get_by_test_id("role-tier")
     expect(tier).to_contain_text("Coder")
-    expect(settings).to_contain_text("Requests claude-opus-5-5")
-    expect(settings).to_contain_text("The proxy drops it for models that don’t reason")
-    # Picking another tier: the implementer now requests Cheap's model.
+    expect(settings.get_by_test_id("role-tier-requests")).to_have_text("Requests claude-opus-5-5 · max")
+    expect(settings.get_by_label("Reasoning effort")).to_have_count(0)
+    # Picking another tier: the implementer now requests Cheap's model, at the model's default.
     tier.click()
     page.get_by_role("option").filter(has_text=re.compile(r"^Cheap")).click()
     expect(toast(page, "Model saved")).to_be_visible()
-    expect(settings).to_contain_text("Requests gpt-5.6-luna")
+    expect(settings.get_by_test_id("role-tier-requests")).to_have_text("Requests gpt-5.6-luna · model’s default")
     assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["tier"]["value"] == _tiers(client)["Cheap"]["id"]
     assert console_errors == []
 
@@ -715,7 +735,7 @@ def test_removing_a_tier_in_use_moves_what_named_it(
     page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
 ):
     tiers = _tiers(client)
-    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"tier": tiers["Fast"]["id"], "effort": "low"}}})
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"tier": tiers["Fast"]["id"], "timeLimitMinutes": 45}}})
     client.patch("/v1/settings/organization", {"roles": {"simplifier": {"tier": tiers["Fast"]["id"]}}})
     _sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/org/settings/models")
@@ -739,7 +759,7 @@ def test_removing_a_tier_in_use_moves_what_named_it(
     expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(rf"^Models\s*{count - 1}$"))
     coder = tiers["Coder"]["id"]
     assert client.get("/v1/settings/organization").json()["roles"]["simplifier"]["tier"]["value"] == coder
-    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"tier": coder, "effort": "low"}
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"tier": coder, "timeLimitMinutes": 45}
 
     # One nothing uses goes on a plain confirm.
     assert client.post("/v1/models/tiers", {"name": "Spare"}).status_code == 201

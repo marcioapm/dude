@@ -1535,7 +1535,8 @@ MarkdownCheatsheet.
 - **NameChips** — suggestions under a field that takes any name, mono, the
   chosen one on the info tint; say in words that they are suggestions.
 - **TierChip / TierTip** — the model in an agent session's header: the tier, then
-  the model it requested in mono. Its tooltip says that is what dude asked
+  the model it requested in mono, then the effort it asked for (secondary
+  ink, only when set). Its tooltip says that is what dude asked
   for when the agent session started; never what the proxy served.
 - **UsedBy** — who uses something: small faces (agents' tiles, projects'
   squares), then the words.

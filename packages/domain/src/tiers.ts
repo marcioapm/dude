@@ -4,19 +4,27 @@ import { TEST_HARNESS_MODELS, type AgentModels } from "./hierarchy.ts";
 /**
  * Model tiers: what an agent runs on. A tier is the organization's,
  * changed by its admins, and names the one model dude requests from the
- * LLM proxy for it, exactly as the proxy names it. Every agent role names a
+ * LLM proxy for it, exactly as the proxy names it, how hard it thinks, and
+ * any extra settings its agent is requested with. Every agent role names a
  * tier in its settings (org default, project override, field by field like
- * its effort); no role names a model. What the proxy then serves — that
- * model, or a fallback from its own config — dude does not see.
+ * its machine); no role names a model or an effort. What the proxy then
+ * serves — that model, or a fallback from its own config — dude does not see.
  *
- * The database holds the same bounds (migration 069).
+ * The database holds the same bounds (migrations 069 and 096).
  */
 
 export const TIER_NAME_MAX = 24;
 export const TIER_DESCRIPTION_MAX = 80;
 export const TIER_MODEL_MAX = 200;
+/** The most a tier's options, or its headers, may take as JSON, in bytes. */
+export const TIER_JSON_MAX = 4096;
 
 export const TIER_MODEL_MESSAGE = "The model as the proxy names it: no spaces or slashes, at most 200 characters";
+
+/** How hard a tier's model thinks; null is the model's default. none turns thinking off. */
+export const TIER_EFFORTS = ["none", "low", "medium", "high", "max"] as const;
+export const tierEffortSchema = z.enum(TIER_EFFORTS);
+export type TierEffort = z.infer<typeof tierEffortSchema>;
 
 /** A model name a tier can request: the proxy's name, or one of the scripted agent's test models. */
 export function isTierModel(value: string): boolean {
@@ -26,6 +34,39 @@ export function isTierModel(value: string): boolean {
 
 export const tierModelSchema = z.string().refine(isTierModel, TIER_MODEL_MESSAGE);
 
+/**
+ * A JSON value's size as Postgres renders jsonb as text (", " and ": "
+ * between items), which is what the table's CHECK measures.
+ */
+function jsonbText(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(jsonbText).join(", ")}]`;
+  if (typeof v === "object" && v !== null) {
+    return `{${Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${jsonbText(x)}`).join(", ")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+const jsonBytes = (v: unknown) => new TextEncoder().encode(jsonbText(v)).length;
+/** An HTTP header name (RFC 9110 token). */
+export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+const TOO_BIG = `At most ${TIER_JSON_MAX} bytes as JSON`;
+const HEADER_NAME_MESSAGE = "Header names are letters, digits and !#$%&'*+.^_`|~-";
+const HEADER_VALUE_MESSAGE = "A header's value is one line";
+/** What the options and headers fields are refused with, said back as they are. */
+export const TIER_JSON_MESSAGES = [TOO_BIG, HEADER_NAME_MESSAGE, HEADER_VALUE_MESSAGE] as const;
+
+/** Extra OpenCode model options: a JSON object, at most TIER_JSON_MAX bytes. */
+export const tierOptionsSchema = z
+  .record(z.unknown())
+  .refine((v) => jsonBytes(v) <= TIER_JSON_MAX, TOO_BIG);
+
+/** Extra request headers: header names to one-line string values, at most TIER_JSON_MAX bytes. */
+export const tierHeadersSchema = z
+  .record(z.string())
+  .refine((h) => Object.keys(h).every((k) => HEADER_NAME.test(k)), HEADER_NAME_MESSAGE)
+  .refine((h) => Object.values(h).every((v) => !/[\r\n]/u.test(v)), HEADER_VALUE_MESSAGE)
+  .refine((h) => jsonBytes(h) <= TIER_JSON_MAX, TOO_BIG);
+
 /** A tier as an admin writes it (`POST /v1/models/tiers`, `PUT /v1/models/tiers/:id`). */
 export const modelTierInputSchema = z
   .object({
@@ -33,6 +74,11 @@ export const modelTierInputSchema = z
     description: z.string().trim().max(TIER_DESCRIPTION_MAX, `At most ${TIER_DESCRIPTION_MAX} characters`).default(""),
     /** null: not set yet; a Run on the tier fails until it is. */
     model: tierModelSchema.nullable().default(null),
+    /** null: the model's default. */
+    effort: tierEffortSchema.nullable().default(null),
+    /** Merged over what the effort makes; the tier's keys win. */
+    options: tierOptionsSchema.nullable().default(null),
+    headers: tierHeadersSchema.nullable().default(null),
   })
   .strict();
 export type ModelTierInput = z.infer<typeof modelTierInputSchema>;
@@ -43,6 +89,9 @@ export interface ModelTier {
   name: string;
   description: string;
   model: string | null;
+  effort: TierEffort | null;
+  options: Record<string, unknown> | null;
+  headers: Record<string, string> | null;
   position: number;
   updatedAt: string;
   updatedBy: { id: string; name: string } | null;
@@ -55,8 +104,6 @@ export interface ModelTierUse {
   project: { id: string; name: string; imageUrl: string | null } | null;
   /** The fixer with no tier of its own, taking the implementer's. */
   inherited?: boolean;
-  /** The role's reasoning effort, resolved; null leaves it to the model. */
-  effort: string | null;
 }
 
 export interface ModelTierWithUse extends ModelTier {
@@ -92,26 +139,26 @@ export const removeModelTierSchema = z.object({ replacement: z.string().min(1).n
 export const reorderModelTiersSchema = z.object({ ids: z.array(z.string().min(1)).min(1) }).strict();
 
 /**
- * `POST /v1/models/test`: a model to try, for the tier being edited (null:
- * a new one). It is tried at each effort the tier's agents use, or once
- * without an effort when none do.
+ * `POST /v1/models/test`: a tier's model and settings as the dialog has
+ * them (saved or not), sent once as its agent would send them.
  */
 export const testModelSchema = z
   .object({
     model: tierModelSchema,
-    tierId: z.string().min(1).nullable().default(null),
+    effort: tierEffortSchema.nullable().default(null),
+    options: tierOptionsSchema.nullable().default(null),
+    headers: tierHeadersSchema.nullable().default(null),
   })
   .strict();
+export type ModelTestInput = z.input<typeof testModelSchema>;
 
-/**
- * One request to the proxy, as the orchestrator reports it: the efforts it
- * stands for (the agent sends the same request for each), and what it sent.
- */
+/** The test message's request to the proxy, as the orchestrator reports it. */
 export interface ModelTestResult {
-  /** The efforts asked for that this request covers; null: no effort. */
-  efforts: Array<string | null>;
-  /** The effort on the wire; null: sent without one (always, for a Claude model). */
-  sent: string | null;
+  /**
+   * The tier's reasoning settings as they went on the wire: Anthropic's
+   * `thinking` and `output_config`, or the Responses API's `reasoning`.
+   */
+  sent: Record<string, unknown>;
   ok: boolean;
   latencyMs: number;
   /** The proxy's HTTP status; null when no answer came (timeout, unreachable). */
@@ -141,8 +188,8 @@ function roleChain(role: string): string[] {
   return role === "fixer" ? ["fixer", "implementer"] : [role];
 }
 
-function roleField(layer: AgentModels | null | undefined, role: string, field: "tier" | "effort"): string | undefined {
-  return (layer as Record<string, Partial<Record<"tier" | "effort", string>>> | null | undefined)?.[role]?.[field];
+function roleField(layer: AgentModels | null | undefined, role: string, field: "tier"): string | undefined {
+  return (layer as Record<string, Partial<Record<"tier", string>>> | null | undefined)?.[role]?.[field];
 }
 
 /**
@@ -166,20 +213,6 @@ export function resolveTier(
     }
   }
   return { tierId: null, from: null };
-}
-
-/**
- * A role's reasoning effort over the same layers, field by field (the
- * fixer then the implementer's), as the orchestrator's ResolveRole has it.
- */
-export function resolveEffort(role: string, layers: RoleLayers): string | null {
-  for (const r of roleChain(role)) {
-    for (const layer of [layers.project, layers.organization]) {
-      const effort = roleField(layer, r, "effort");
-      if (effort) return effort;
-    }
-  }
-  return null;
 }
 
 /**

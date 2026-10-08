@@ -16,14 +16,10 @@ export function timeLimitLabel(minutes: number | null): string {
   return Number.isInteger(h) ? `${h} ${h === 1 ? "hour" : "hours"}` : `${minutes} min`;
 }
 
-export function effortLabel(effort: string | null): string {
-  return effort ? effort[0]!.toUpperCase() + effort.slice(1) : "Model’s default";
-}
-
 /** Whether a project changes anything about a role: a setting, or its prompt. */
 export function roleChanged(role: RoleSettings): boolean {
   return (
-    [role.tier, role.effort, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
+    [role.tier, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
     (role.prompt.project !== undefined && role.prompt.project.mode !== "inherit")
   );
 }

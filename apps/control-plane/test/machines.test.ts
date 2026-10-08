@@ -435,12 +435,12 @@ describe("removing a size in use", () => {
   test("moves everything that named it to the replacement, in one go", async () => {
     const half = await byName("Half");
     const large = await byName("Large");
-    await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { machineSize: half.id, effort: "low" } } });
+    await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { machineSize: half.id, timeLimitMinutes: 45 } } });
     const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${half.id}`, { replacement: large.id });
     expect(res.status).toBe(200);
     expect((await body(res)).sizes.map((s: Json) => s.name)).not.toContain("Half");
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
-    expect(org.default_agent_models.simplifier).toEqual({ machineSize: large.id, effort: "low", tier: expect.any(String) });
+    expect(org.default_agent_models.simplifier).toEqual({ machineSize: large.id, timeLimitMinutes: 45, tier: expect.any(String) });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models.reviewer).toEqual({ machineSize: large.id });
     expect(p.preview_settings.machineSize).toBe(large.id);
@@ -458,7 +458,7 @@ describe("removing a size in use", () => {
     const small = (await byName("Small")).id;
     expect(Object.fromEntries(sizesNamed)).toEqual({ conductor: { tier: expect.any(String), machineSize: small },
       brainstorm: { tier: expect.any(String), machineSize: small } });
-    expect(org.default_agent_models.simplifier).toEqual({ effort: "low", tier: expect.any(String) });
+    expect(org.default_agent_models.simplifier).toEqual({ timeLimitMinutes: 45, tier: expect.any(String) });
     const [p] = await owner`SELECT agent_models, preview_settings FROM projects WHERE id = ${PROJECT}`;
     expect(p.agent_models).toEqual({});
     expect(p.preview_settings.machineSize).toBeUndefined();

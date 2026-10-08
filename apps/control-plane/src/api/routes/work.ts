@@ -54,7 +54,7 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
   task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", conductor_run_id AS "conductorRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
-  branch, harness, model, model_tier AS "modelTier", dude_pause AS "dudePause", machine, image,
+  branch, harness, model, model_tier AS "modelTier", effort, dude_pause AS "dudePause", machine, image,
   -- Waiting for its image: the job it waits on is still queued or running,
   -- and it has no lux Run yet (a phase Run pending, a woken preview paused).
   (SELECT json_build_object('buildId', b.id, 'state', b.state, 'kind', b.kind, 'imageName', i.name, 'version', v.number,

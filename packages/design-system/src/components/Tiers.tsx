@@ -87,21 +87,26 @@ export interface TierChipProps {
   readonly tier?: string | null | undefined;
   /** The model asked for, mono and strong. */
   readonly model: string;
+  /** The reasoning effort asked for, after the model; none at the model's default. */
+  readonly effort?: string | null | undefined;
   readonly tooltip?: ReactNode;
   readonly "data-testid"?: string | undefined;
 }
 
 /**
  * What a session asked for, in its header: the tier, then the model it
- * requested. A button only so the tooltip opens on focus.
+ * requested, then its effort when it asked for one. A button only so the
+ * tooltip opens on focus.
  */
-export function TierChip({ tier, model, tooltip, "data-testid": testId }: TierChipProps) {
+export function TierChip({ tier, model, effort, tooltip, "data-testid": testId }: TierChipProps) {
+  const requests = effort ? `${model} at effort ${effort}` : model;
   const chip = (
     <button type="button" className={styles["chip"]} data-testid={testId}
-      aria-label={tier ? `Model: ${tier}, requests ${model}` : `Model: ${model}`}>
+      aria-label={tier ? `Model: ${tier}, requests ${requests}` : `Model: ${requests}`}>
       <Icon name="sparkle" size={12} className={styles["chipIcon"]} />
       {tier ? <span className={cx(styles["chipTier"], "ds-cap")}>{tier} ·</span> : null}
       <span className={cx(styles["chipModel"], "ds-mono")}>{model}</span>
+      {effort ? <span className={styles["chipEffort"]}>· {effort}</span> : null}
     </button>
   );
   return tooltip ? <Tooltip content={tooltip} side="bottom" keepOnPress>{chip}</Tooltip> : chip;

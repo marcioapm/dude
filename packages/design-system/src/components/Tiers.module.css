@@ -149,6 +149,10 @@
   font-weight: var(--ds-weight-semibold);
   color: var(--ds-color-text-strong);
 }
+.chipEffort {
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
 
 .tip {
   display: flex;

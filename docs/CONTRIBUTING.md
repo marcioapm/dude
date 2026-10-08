@@ -117,7 +117,7 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
   from) and, for reviews, `category`. `internal/phases/spec.go` turns it into
-  a lux RunSpec: image, adapter, prompt, model and effort (inline OpenCode
+  a lux RunSpec: image, adapter, prompt, model and its tier's effort (inline OpenCode
   config in `OPENCODE_CONFIG_CONTENT`), the LLM's URL and key (`DUDE_LLM_URL`
   env, `DUDE_LLM_KEY` env secret), repository at `base_ref`, egress to the
   LLM's host, and the agent's home as a state volume so a resume keeps the
@@ -134,9 +134,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   [`design/machine-sizes.md`](design/machine-sizes.md).
 - **Every agent runs on a model tier, never a model.** The organisation's
   tiers (`model_tiers`) are named by each role's settings; a tier names the
-  model dude requests from the LLM proxy. The spec declares that model under
-  `llm-anthropic` (`claude-*`) or `llm-openai` in `OPENCODE_CONFIG_CONTENT`,
-  and `runs.model_tier` / `runs.model` keep what was requested. A role on no
+  model dude requests from the LLM proxy and its reasoning effort. The spec
+  declares that model under `llm-anthropic` (`claude-*`) or `llm-openai`
+  in `OPENCODE_CONFIG_CONTENT`, with the tier's effort as model options,
+  and `runs.model_tier` / `runs.model` / `runs.effort` keep what was
+  requested. A role on no
   tier, or on one with no model, fails its Run saying so. Design:
   [`design/model-tiers.md`](design/model-tiers.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
