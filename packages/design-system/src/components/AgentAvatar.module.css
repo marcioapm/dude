@@ -46,13 +46,22 @@
   border-radius: var(--ds-radius-face-agent);
 }
 
-/* Roles. Shape channel: each role has its own glyph; the conductor is
-   additionally round, so it reads as "the parent" even in monochrome. */
+/* Roles. Shape channel: each role has its own glyph; the conversation
+   agents (conductor, brainstorm) are additionally round, so they read as
+   "the one you talk to" even in monochrome. The brainstorm's tokens hold
+   the conductor's colour; its glyph tells the two apart. */
 .conductor {
   --role-fg: var(--ds-role-conductor-fg);
   --role-bg: var(--ds-role-conductor-bg);
   --role-solid: var(--ds-role-conductor-solid);
   --role-on-solid: var(--ds-role-conductor-on-solid);
+  border-radius: var(--ds-radius-full);
+}
+.brainstorm {
+  --role-fg: var(--ds-role-brainstorm-fg);
+  --role-bg: var(--ds-role-brainstorm-bg);
+  --role-solid: var(--ds-role-brainstorm-solid);
+  --role-on-solid: var(--ds-role-brainstorm-on-solid);
   border-radius: var(--ds-radius-full);
 }
 .investigator {
