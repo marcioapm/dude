@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -391,6 +392,78 @@ func TestPodmanChecksAFinishedImageCanRunContainers(t *testing.T) {
 	}
 	if want := "Can't run containers: the image has no podman or rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."; found.Passed() || found.Sentence() != want {
 		t.Errorf("sentence = %q", found.Sentence())
+	}
+}
+
+// expiring is a context whose deadline passes when expire is called.
+type expiring struct {
+	context.Context
+	done chan struct{}
+}
+
+func (e *expiring) Done() <-chan struct{} { return e.done }
+func (e *expiring) Err() error {
+	select {
+	case <-e.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (e *expiring) expire() { close(e.done) }
+
+// A check stopped while it runs, by the job's time limit or the builder
+// stopping, leaves no container behind: here the image's /etc/subuid is a
+// FIFO nothing writes, so the check blocks reading it until it is stopped.
+func TestPodmanACancelledCheckLeavesNoContainer(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	image := fmt.Sprintf("localhost/dude-test-hang:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/alpine:3\nRUN echo agent:x:1000:1000::/home/agent:/bin/sh >> /etc/passwd && mkfifo /etc/subuid\n", image)
+	running := func() string {
+		out, _ := exec.Command("podman", "ps", "--filter", "ancestor="+image, "--filter", "status=running", "--format", "{{.Names}}").Output()
+		return strings.TrimSpace(string(out))
+	}
+	// A podman client deaf to SIGTERM is killed once WaitDelay passes,
+	// and its container outlives it: only the removal after it stops it.
+	deaf := filepath.Join(t.TempDir(), "podman")
+	if err := os.WriteFile(deaf, []byte("#!/bin/sh\ntrap '' TERM\npodman \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, how := range []string{"timeout", "shutdown", "a client deaf to SIGTERM"} {
+		t.Run(how, func(t *testing.T) {
+			c := c
+			if how == "a client deaf to SIGTERM" {
+				c.Bin = deaf
+			}
+			parent, cancel := context.WithCancel(context.Background())
+			ctx, stop := context.Context(parent), cancel
+			if how == "timeout" {
+				e := &expiring{Context: parent, done: make(chan struct{})}
+				ctx, stop = e, e.expire
+			}
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.CheckContainers(ctx, image, &bytes.Buffer{})
+				done <- err
+			}()
+			var name string
+			for deadline := time.Now().Add(60 * time.Second); name == "" && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+				name = running()
+			}
+			if name == "" {
+				t.Fatal("the check's container never ran")
+			}
+			stop()
+			if err := <-done; err == nil {
+				t.Fatal("a stopped check returned no error")
+			}
+			if exec.Command("podman", "container", "exists", name).Run() == nil {
+				t.Errorf("container %s is left after the check returned", name)
+				_ = exec.Command("podman", "rm", "-f", "-t", "0", name).Run()
+			}
+		})
 	}
 }
 
