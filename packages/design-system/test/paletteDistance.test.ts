@@ -152,4 +152,24 @@ describe("the distance itself", () => {
       expect(Math.abs(red[1]), `${v} red loses most of its a*`).toBeLessThan(Math.abs(redNormal[1]) / 3);
     }
   });
+
+  // Expected values below come from an independent calculation (generic
+  // matrix code, Ottosson's published linear-sRGB→LMS coefficients), not
+  // from these helpers; 2 decimals absorbs the ~4e-8 coefficient rounding.
+  test("sRGB decodes on both sides of the 0.04045 knee", () => {
+    expect(linearRgb("#0a0a0a")[0]).toBeCloseTo(0.003035269835488375, 12);
+    expect(linearRgb("#0b0b0b")[0]).toBeCloseTo(0.003346535763899161, 12);
+  });
+
+  test("protan and deutan are the right matrices: an orange is a pinned, different distance from grey in each", () => {
+    expect(deltaE("#e07020", "#808080", "protan")).toBeCloseTo(12.011007, 2);
+    expect(deltaE("#e07020", "#808080", "deutan")).toBeCloseTo(15.531374, 2);
+  });
+
+  test("simulated channels outside [0, 1] are clipped: pure blue against black", () => {
+    // Blue simulates to linear RGB (−0.205, 0.099, 1.052) protan and
+    // (−0.228, 0.047, 0.969) deutan; unclipped it would be 62.67 / 130.49.
+    expect(deltaE("#0000ff", "#000000", "protan")).toBeCloseTo(59.699417, 2);
+    expect(deltaE("#0000ff", "#000000", "deutan")).toBeCloseTo(56.706183, 2);
+  });
 });
