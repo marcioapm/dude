@@ -42,6 +42,24 @@ class WaitClient extends FixtureClient {
   }
 }
 
+/**
+ * A WaitClient whose next read, once `holdNext` is set, takes its answer when it
+ * starts and returns it only on `release()`: lux's state can change meanwhile.
+ */
+class HeldClient extends WaitClient {
+  holdNext = false;
+  release: () => void = () => {
+    throw new Error("no read held");
+  };
+  override async runServers(runId = RUN_ID): Promise<TaskServers> {
+    const hold = this.holdNext;
+    this.holdNext = false;
+    const answer = await super.runServers(runId);
+    if (hold) await new Promise<void>((r) => (this.release = r));
+    return answer;
+  }
+}
+
 type Props = { runId: string; status: RunStatus; waitAsk: number };
 
 /** The hook and the callout as the Run page puts them together. */
@@ -120,6 +138,40 @@ describe("useRunServers: why a Run waits", () => {
     await act(async () => drive!({ runId: "run_1", status: "running", waitAsk: 1 }));
     await until(() => callout(page), "the wait on a running Run being moved");
     expect(client.reads).toEqual(["run_1", "run_1"]);
+  });
+
+  /** A running Run whose terminal is known and which waits; its next read is held once started. */
+  async function heldRead() {
+    const client = new HeldClient();
+    client.reasons.set("run_1", NESTED);
+    const page = await harness(client, { runId: "run_1", status: "running", waitAsk: 0 });
+    await until(() => callout(page), "the wait, the terminal known");
+    client.holdNext = true;
+    await act(async () => drive!({ runId: "run_1", status: "running", waitAsk: 1 }));
+    await until(() => (client.reads.length === 2 ? true : null), "the held read started");
+    return { client, page };
+  }
+
+  test("lux's state changing during a read, the terminal known: one follow-up reads the new state", async () => {
+    const { client, page } = await heldRead();
+    client.reasons.set("run_1", null);
+    await act(async () => drive!({ runId: "run_1", status: "running", waitAsk: 2 }));
+    expect(client.reads.length).toBe(2);
+    await act(async () => client.release());
+    await until(() => page.querySelector("[data-testid=placed]"), "the wait gone after the follow-up");
+    expect(callout(page)).toBeNull();
+    expect(client.reads).toEqual(["run_1", "run_1", "run_1"]);
+  });
+
+  test("a burst of lux's state changes during a read: exactly one follow-up", async () => {
+    const { client, page } = await heldRead();
+    client.reasons.set("run_1", null);
+    for (const waitAsk of [2, 3, 4, 5]) await act(async () => drive!({ runId: "run_1", status: "running", waitAsk }));
+    expect(client.reads.length).toBe(2);
+    await act(async () => client.release());
+    await until(() => page.querySelector("[data-testid=placed]"), "the wait gone after the follow-up");
+    await settle(100);
+    expect(client.reads).toEqual(["run_1", "run_1", "run_1"]);
   });
 
   test("any other reason of lux's is shown as lux wrote it, with one period", async () => {
