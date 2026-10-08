@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheCheckSaysWhatIsMissingInOneSentence(t *testing.T) {
@@ -126,5 +127,27 @@ func TestTheCheckCountsTheLinesOfTheFirstNameForAgentsUid(t *testing.T) {
 		if got := strings.Join(ContainersCheck(root).Subuid, ","); got != c.want {
 			t.Errorf("%s: subuid = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// An engine's --version that leaves a child holding its output is cut off
+// at versionTimeout, child and all.
+func TestAVersionProbeThatHangsIsBounded(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 60 &\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer func(d time.Duration) { versionTimeout = d }(versionTimeout)
+	versionTimeout = 200 * time.Millisecond
+	done := make(chan string, 1)
+	start := time.Now()
+	go func() { done <- version(bin) }()
+	select {
+	case got := <-done:
+		if got != "" || time.Since(start) > 3*time.Second {
+			t.Errorf("version = %q after %s", got, time.Since(start))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("version still waiting after 10s")
 	}
 }

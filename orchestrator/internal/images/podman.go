@@ -3,6 +3,8 @@ package images
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,15 +158,21 @@ func (c CLI) Remove(ctx context.Context, tag string, log io.Writer) error {
 
 // CheckContainers runs Self's CheckCommand in image, as root, offline,
 // under the build's memory limit, with nothing of the host but Self.
+// Cancelled (a timeout, the builder stopping), podman is asked to stop
+// first, and the container is removed whatever happened: a killed podman
+// client leaves its container running.
 func (c CLI) CheckContainers(ctx context.Context, image string, log io.Writer) (Found, error) {
 	if c.Self == "" {
 		return Found{}, errors.New("the builder cannot check containers: it does not know its own executable")
 	}
+	name := "dude-check-" + randomHex(8)
+	defer c.removeContainer(ctx, name, log)
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, c.bin(), "run", "--rm", "--pull=never", "--network=none", "--user=0:0",
+	cmd := exec.CommandContext(ctx, c.bin(), "run", "--rm", "--name", name, "--pull=never", "--network=none", "--user=0:0",
 		"--security-opt=label=disable", "--memory", c.Limits.Memory,
 		"--volume", c.Self+":/.dude-check:ro", "--entrypoint", "/.dude-check", image, CheckCommand)
 	cmd.Stdout, cmd.Stderr = &out, log
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
@@ -173,6 +181,25 @@ func (c CLI) CheckContainers(ctx context.Context, image string, log io.Writer) (
 		return Found{}, fmt.Errorf("the container check could not run in the image: %w", err)
 	}
 	return parseFound(out.Bytes())
+}
+
+// checkRemoveTimeout bounds removing a check's container, on a context of
+// its own: the job's may be done.
+const checkRemoveTimeout = 30 * time.Second
+
+func (c CLI) removeContainer(ctx context.Context, name string, log io.Writer) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkRemoveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(rctx, c.bin(), "rm", "--force", "--ignore", "--time", "0", name)
+	cmd.Stdout, cmd.Stderr = io.Discard, log
+	cmd.WaitDelay = 5 * time.Second
+	_ = cmd.Run()
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (c CLI) Controllers(ctx context.Context) ([]string, error) {

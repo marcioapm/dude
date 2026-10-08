@@ -343,10 +343,20 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// versionTimeout bounds an engine's --version, run from the image.
+var versionTimeout = 10 * time.Second
+
+// version is bin --version's output. A probe past versionTimeout is killed
+// with its whole process group, so a child left holding stdout cannot keep
+// Output waiting.
 func version(bin string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, bin, "--version").Output()
+	cmd := exec.CommandContext(ctx, bin, "--version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
 }
 
