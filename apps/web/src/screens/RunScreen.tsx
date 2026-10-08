@@ -47,7 +47,8 @@ import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, 
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
-import { useWaitingReason, WaitingForHost } from "../waiting.tsx";
+import { WaitingForHost } from "../waiting.tsx";
+import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
@@ -222,10 +223,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // it is read from the Run's servers. Until it is known, a servers.changed
   // (lux took the Run) or a stream that came back asks again.
   const askAgain = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
-  const { url: terminalUrl, memoryLimit } = useTerminalUrl(client, runId, run?.status === "running", askAgain);
   // lux has no host for the Run yet (a first placement, a resume, a move):
-  // why, as lux says it. Asked while the Run is live; the answer is the gate.
-  const waitingReason = useWaitingReason(client, runId, run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false, askAgain);
+  // why, as lux says it, asked again when lux's state changes. The answer,
+  // not dude's status, is what shows the wait.
+  const waitAsk = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged &&
+    (e.payload as { change?: unknown } | null)?.change === "state")?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
+  const { terminalUrl, memoryLimit, waitingReason } = useRunServers(client, runId, run?.status, askAgain, waitAsk);
 
   useEffect(() => {
     if (!taskId) return;
@@ -1185,72 +1188,6 @@ export function PreviewRunNote({ openServers }: { openServers?: (() => void) | u
       </span>
     </Callout>
   );
-}
-
-/**
- * The Run's lux terminal URL, read from its servers when it is running and
- * kept: it names the lux Run, which a resume keeps. Until known, read again
- * whenever `askAgain` moves. Null until known.
- *
- * One read at a time per client and Run: an `askAgain` during a read is
- * folded into one follow-up after it, and the read out still lands. Only a
- * new client or Run, or unmounting, discards an answer.
- */
-function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askAgain: number): { url: string | null; memoryLimit: number | null } {
-  const [url, setUrl] = useState<{ runId: string; url: string; memoryLimit: number | null } | null>(null);
-  const known = url?.runId === runId ? url.url : null;
-  const reader = useRef<TerminalReader | null>(null);
-  useEffect(() => {
-    const r = new TerminalReader(client, runId, (found, memoryLimit) => setUrl({ runId, url: found, memoryLimit }));
-    reader.current = r;
-    return () => {
-      r.dead = true;
-    };
-  }, [client, runId]);
-  useEffect(() => {
-    const r = reader.current;
-    if (!r) return;
-    r.wanted = running && !known;
-    if (r.wanted) r.ask();
-  }, [client, runId, running, known, askAgain]);
-  return { url: known, memoryLimit: url?.runId === runId ? url.memoryLimit : null };
-}
-
-class TerminalReader {
-  dead = false;
-  /** Running and the URL still unknown: a follow-up is only read while this holds. */
-  wanted = false;
-  private inFlight = false;
-  private again = false;
-  constructor(
-    private readonly client: ApiClient,
-    private readonly runId: string,
-    /** The terminal's URL, and the memory limit lux gave the container when it says (read in the same answer). */
-    private readonly found: (url: string, memoryLimit: number | null) => void,
-  ) {}
-
-  ask(): void {
-    if (this.dead) return;
-    if (this.inFlight) {
-      this.again = true;
-      return;
-    }
-    this.inFlight = true;
-    this.again = false;
-    this.client
-      .runServers(this.runId)
-      .then((s) => {
-        const url = s.run?.terminalUrl;
-        if (!this.dead && url) {
-          this.wanted = false;
-          this.found(url, s.run?.memoryLimit ?? null);
-        }
-      }, () => undefined)
-      .finally(() => {
-        this.inFlight = false;
-        if (this.again && this.wanted) this.ask();
-      });
-  }
 }
 
 /**
