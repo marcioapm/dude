@@ -12,7 +12,7 @@ import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
-import type { RecoverAction, Run } from "../src/api/client.ts";
+import type { RecoverAction, Run, TaskDetail } from "../src/api/client.ts";
 import type { PersistedEvent } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -52,13 +52,19 @@ const openTab = (page: HTMLElement, name: string) => act(async () => {
   tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
 });
 
+async function restartWith(client: FixtureClient, id: string, replacement: Partial<Run>, status?: TaskDetail["status"]) {
+  const { runId } = await client.restart(id, "Read the files yourself.");
+  const original = await client.getTask(TASK_ID);
+  const task = { ...original, status: status ?? original.status,
+    runs: original.runs.map((r) => r.id === runId ? { ...r, ...replacement } : r) };
+  client.getTask = async () => task;
+  return { runId, task };
+}
+
 describe("a stopped task", () => {
   test("a restarted Run is not the recovery stop when its replacement is still running", async () => {
     const client = new FixtureClient("a");
-    const { runId } = await client.restart(RUN_ID, "Read the files yourself.");
-    const task = await client.getTask(TASK_ID);
-    client.getTask = async () => ({ ...task, status: "aborted", runs: task.runs.map((r): Run => r.id === runId
-      ? { ...r, status: "running", endedAt: null } : r) });
+    await restartWith(client, RUN_ID, { status: "running", endedAt: null }, "aborted");
     const page = await taskPage(client);
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
     expect(notice.textContent).toContain("Delivery stopped");
@@ -68,13 +74,10 @@ describe("a stopped task", () => {
   for (const status of ["aborted", "failed"] as const) {
     test(`a restarted Run is not the recovery stop when its replacement is ${status}`, async () => {
       const client = new FixtureClient("a");
-      const { runId } = await client.restart(RUN_ID, "Read the files yourself.");
-      const task = await client.getTask(TASK_ID);
-      const events = await client.events({ taskId: TASK_ID });
       const endedAt = new Date(Date.now() - 1000).toISOString();
-      client.getTask = async () => ({ ...task, status, runs: task.runs.map((r) => r.id === runId
-        ? { ...r, status, endedAt, error: status === "failed" ? "replacement host lost" : null }
-        : r) });
+      const { runId } = await restartWith(client, RUN_ID,
+        { status, endedAt, error: status === "failed" ? "replacement host lost" : null }, status);
+      const events = await client.events({ taskId: TASK_ID });
       client.events = async () => ({ ...events, events: [...events.events, {
         ...events.events[0]!, cursor: 20_000, eventId: "evt_replacement_stop", eventType: `run.${status}`,
         runId, occurredAt: endedAt, actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" },
@@ -195,11 +198,8 @@ describe("a task started over", () => {
 
   test("an earlier attempt stopped at its failed replacement, not the restarted Run", async () => {
     const client = restarted();
-    const { runId } = await client.restart("run_a1_fix", "Read the files yourself.");
-    const task = await client.getTask(TASK_ID);
     const endedAt = new Date(Date.now() - 1000).toISOString();
-    client.getTask = async () => ({ ...task, runs: task.runs.map((r): Run => r.id === runId
-      ? { ...r, status: "failed", endedAt, error: "replacement host lost" } : r) });
+    await restartWith(client, "run_a1_fix", { status: "failed", endedAt, error: "replacement host lost" });
     const page = await onAttempt1(client);
     expect(picker(page)?.textContent).toContain("FailedAttempt 1");
     const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the set-aside notice");
@@ -209,11 +209,9 @@ describe("a task started over", () => {
 
   test("an earlier attempt has no stopped-at attribution when its restarted Run's replacement is still running", async () => {
     const client = restarted();
-    const { runId } = await client.restart("run_a1_fix", "Read the files yourself.");
-    const task = await client.getTask(TASK_ID);
+    const { runId, task } = await restartWith(client, "run_a1_fix", { status: "running", endedAt: null });
     client.getTask = async () => ({ ...task, runs: task.runs
-      .filter((r) => r.attempt !== 1 || r.id === "run_a1_fix" || r.id === runId)
-      .map((r): Run => r.id === runId ? { ...r, status: "running", endedAt: null } : r) });
+      .filter((r) => r.attempt !== 1 || r.id === "run_a1_fix" || r.id === runId) });
     const page = await onAttempt1(client);
     const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the set-aside notice");
     expect(bar.textContent).not.toContain("stopped at Fix");
