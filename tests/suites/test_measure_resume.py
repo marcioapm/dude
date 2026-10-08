@@ -160,7 +160,8 @@ def test_cleanup_stops_the_workflows_then_aborts_every_run_still_going_and_waits
     assert not c.logged_with("could not"), c.logged
 
 
-def test_a_failed_run_lux_failed_has_ended_at_once(monkeypatch):
+def test_a_run_lux_failed_or_succeeded_is_not_waited_on(monkeypatch):
+    # Nothing of it runs; dude terminates it later, which cleanup need not see.
     c = Cleanup(monkeypatch, rows={"run_f": ("failed", "lrun_f"), "run_x": ("aborted", "lrun_x")},
                 states={"lrun_f": ["failed"], "lrun_x": ["succeeded"]}, listings=[["run_f", "run_x"]])
     c.cycler.abort_all(timeout=0)
