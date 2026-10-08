@@ -100,7 +100,7 @@ test("a project's key is fixed: PATCH with key or key_prefix answers 200 and lea
     expect(res.status).toBe(200);
     expect(((await res.json()) as { key: string }).key).toBe("PAY2");
   }
-  expect(await owner`SELECT name, slug, key_prefix FROM projects WHERE id = ${project!.id}`)
+  expect([...await owner`SELECT name, slug, key_prefix FROM projects WHERE id = ${project!.id}`])
     .toEqual([{ name: "Payments Renamed", slug: "payments", key_prefix: "PAY2" }]);
 });
 
@@ -125,10 +125,11 @@ async function bothReadThenInsert(requests: () => Array<Promise<Response>>): Pro
     const pending = Promise.all(requests());
     const deadline = Date.now() + 15_000;
     for (;;) {
-      const [{ waiting }] = (await owner`
+      const [row] = (await owner`
         SELECT count(*)::int AS waiting FROM pg_stat_activity
         WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'advisory'
           AND query LIKE '%INSERT INTO projects%'`) as Array<{ waiting: number }>;
+      const waiting = row?.waiting ?? 0;
       if (waiting >= 2) break;
       if (Date.now() > deadline) throw new Error(`only ${waiting} of 2 project inserts reached the barrier in 15 s`);
       await Bun.sleep(20);
