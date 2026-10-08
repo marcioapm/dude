@@ -20,6 +20,7 @@ export interface ChatTranscriptSession {
    * narrowing to SessionStatus would force callers to mistranslate it.
    */
   readonly status: Status;
+  readonly statusLabel?: string | undefined;
   readonly model?: string | undefined;
   /** "WI-2481 · Add retry with backoff…" — enough to know what you are looking at. */
   readonly title?: string | undefined;
@@ -219,7 +220,7 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
             </code>
           ) : null}
           <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
-          <StatusBadge status={session.status} size="sm" />
+          <StatusBadge status={session.status} label={session.statusLabel} size="sm" />
         </div>
         <div className={styles["headerSub"]}>
           {session.subtitle ?? (

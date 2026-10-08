@@ -104,8 +104,9 @@ dimensions = 768                                         # DUDE_EMBEDDINGS_DIMEN
 [agent]
 # Image for agents when a project names none: the operator's own, by digest.
 image = "localhost/dude-runtime:dev"                     # DUDE_AGENT_IMAGE
-# A limit on a Run's running time, passed to lux; unset, none.
-# timeout = "48h"                                        # DUDE_AGENT_TIMEOUT
+# The most running time lux gives a phase Run before it stops it and the
+# Run fails; the conductor has none.
+timeout = "4h"                                           # DUDE_AGENT_TIMEOUT
 # Hosts agents may reach besides llm.url's host; "*" turns filtering off.
 # egress = ["pypi.org", "registry.npmjs.org"]            # DUDE_AGENT_EGRESS
 # Let agents run containers (docker/podman in the Run). Needs lux hosts

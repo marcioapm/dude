@@ -244,6 +244,10 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 	changed := false
 	err = in(ctx, org, func(tx pgx.Tx) error {
 		var at time.Time
+		var existed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_diffs WHERE run_id = $1)`, runID).Scan(&existed); err != nil {
+			return err
+		}
 		// A final diff identical to the live one only marks it final.
 		err := tx.QueryRow(ctx, `INSERT INTO run_diffs (run_id, organization_id, base, files, checksum, final, epoch)
 			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
@@ -260,6 +264,14 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 			return err
 		}
 		changed = true
+		// A new checksum is the Run's files changing: progress, for the
+		// no-progress check (stalls.go). The first read of a checkout the
+		// agent has not touched is where it started, not a change.
+		if !final && (existed || len(diff.Files) > 0) {
+			if _, err := tx.Exec(ctx, `UPDATE runs SET files_changed_at = now() WHERE id = $1`, runID); err != nil {
+				return err
+			}
+		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{
 			Type: EvDiffUpdated, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,

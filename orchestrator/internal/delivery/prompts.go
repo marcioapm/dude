@@ -51,6 +51,8 @@ type PromptInput struct {
 	TaskBranch string
 	// What the task's conductor asked of this Run, when it started it.
 	ConductorNote string
+	// Why this Run replaces one restarted in its step (RestartRunTx).
+	RestartNote string
 	// The images the Run is given with its prompt, in the order lux gets
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
@@ -327,9 +329,11 @@ var builtinInstructions = map[string][]string{
 			"then decide. Plan with the person before anything is built. Whenever you and the person settle something " +
 			"the task's text does not say — the scope, an approach, a criterion — write it into the task (update_task) " +
 			"before you start the implementer, so its prompt has it. Then start phases (start_phase), triage findings " +
-			"(fix some, dismiss others with a reason, or ask), and before the pull request always ask the person " +
-			"(decide ask_person), saying what ran and what was not verified; open it (decide open_pull_request) only " +
-			"when they answered Open or Draft. Past the policy's bounds, or for what only a person may decide, ask.",
+			"(fix some, dismiss others with a reason, or ask). After a review round with nothing left to fix, decide next: " +
+			"dude runs any remaining policy phases before the pull-request decision, and they may change the code. Ask the pull-request " +
+			"question (decide ask_person) only when dude wakes you at the decision before the pull request, saying " +
+			"what ran and what was not verified. Open it (decide open_pull_request) only when the person answered Open " +
+			"or Draft to that question, at the code it will open. Past the policy's bounds, or for what only a person may decide, ask.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
 			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
@@ -337,7 +341,17 @@ var builtinInstructions = map[string][]string{
 			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
 			"reads your words at its next step. Start another phase only once the Run has ended. Interrupt only when " +
-			"its current work is wasted.",
+			"its current work is wasted. Steer keeps the agent's context; restart_run starts over: a fresh Run in the " +
+			"same step, from the task's head, its uncommitted work lost.",
+		"dude tells you when a Run of yours has made no progress for 30 minutes: a tool call open all that time, " +
+			"its agent silent all that time (no output, no tool call), or an implementer, fixer or simplifier whose " +
+			"files did not change. The report is facts, not a verdict: its " +
+			"open calls, its processes, its CPU and network, and what it did. A long test suite with a live process " +
+			"and CPU is usually fine to leave. An open call with no process and no CPU or network is usually stuck: " +
+			"restart it. A silent agent with no CPU or network is usually hung waiting on its model: restart it. " +
+			"An agent with many reads and no edits for 30 minutes is usually looping: steer it first. " +
+			"Leaving it is fine: you are told again only if nothing changes, after 60 minutes, and every Run is " +
+			"stopped at its time limit.",
 		"Someone who writes @dude on one of the task's pull requests reaches you as a Chat message from a GitHub " +
 			"person, naming the pull request and the comment. It is a question or an instruction, not a hand-over: it " +
 			"changes nothing about who decides. Answer it on the pull request (reply_on_pull_request, in reply to that " +
@@ -443,12 +457,13 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, " +
 	"open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying " +
 	"why, when it is not yours to take. decide_escalation decides an escalation the owner handed you with a free " +
-	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides. " +
+	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides; " +
+	"restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier). " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
 	"publish takes what you committed in your checkout to the task branch, while you decide. " +
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
-	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
+	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
 	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A`, " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 
@@ -601,6 +616,9 @@ func Prompt(phase string, in PromptInput) string {
 
 	if n := strings.TrimSpace(in.ConductorNote); n != "" {
 		add("## From the task's conductor\n\nThe conductor, who plans this task with its people, started this Run and asks:\n\n" + n)
+	}
+	if n := strings.TrimSpace(in.RestartNote); n != "" {
+		add("## Restarted\n\n" + n)
 	}
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)

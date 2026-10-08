@@ -450,6 +450,10 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
                 deliveredAt={null} failed="the run finished before the agent read it" />
             </>} />
             <ChatNotice kind="notice" by="El Duderino" text="Pull request #88: approved by Tiago, checks passing." at={at(900_000)} />
+            <Label>a Run restarted in its place: the conductor's restart_run, or a person's Restart on the task's banner</Label>
+            <ChatNotice kind="restart" by="Conductor" text="The conductor restarted the frontend Run, starting over: Read the worker yourself; do not use the task tool." at={at(950_000)} />
+            <ChatNotice kind="restart" by="El Duderino" text="A person restarted the implement Run on another tier, starting over." at={at(960_000)} />
+            <ChatNotice kind="stopped" by="El Duderino" text="Stopped Brainstorm's turn: bash was open for 10 min." at={at(970_000)} />
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <DeciderLine decider="conductor" waiting="whether to open the pull request" action={<Button variant="quiet">Let Deliver finish it</Button>} />
               <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b></>} onSubmit={() => undefined} />

@@ -78,6 +78,20 @@ var LiveEdits = map[string]string{
 // judges every fix of it "still": a review loop that gets stuck.
 const StuckModel = "fake/stuck"
 
+// StallModel's first reviewer of a task hangs inside an open tool call
+// that never settles — OpenCode's task sub-agent, as on run 2 — while every
+// later one reviews as the scripted one does: a Run to restart.
+const StallModel = "fake/stall"
+
+// StallCall is StallModel's open call: [title, kind, raw input as JSON].
+var StallCall = [3]string{"task", "other", `{"description":"Review worker state behavior","prompt":"Read the worker and check its state"}`}
+
+// SilentModel's first reviewer of a task starts its turn, plans and reads,
+// then says and does nothing more, with no tool call open — a model call
+// that never answers, as on run 3 — while every later one reviews as the
+// scripted one does.
+const SilentModel = "fake/silent"
+
 // StillVerdict is StuckModel's reviewer's judgement of its earlier finding.
 const StillVerdict = "```yaml\nverdicts:\n  F1: still\n```\n"
 

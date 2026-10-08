@@ -11,6 +11,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // The conductor's read tools: what the delivery workflow recorded about the
@@ -333,6 +334,38 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 		out["lands"] = lands
 	}
 	return out, nil
+}
+
+type restartRunIn struct {
+	Run  string `json:"run" jsonschema:"the phase Run to restart (run_…): one of this task's that the delivery waits on, still live"`
+	Note string `json:"note" jsonschema:"why, and what to do differently: told to the new Run"`
+	Tier string `json:"tier,omitempty" jsonschema:"a model tier of the organization's (its id or name) to run the new Run on; none keeps the role's"`
+}
+
+// restartRun is restart_run: a fresh Run in the stuck one's slot. Under the
+// Chat lock, as steer's check is, then the task's lock order.
+func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[string]any, error) {
+	if err := delivery.LockChat(ctx, tx, c.TaskID); err != nil {
+		return nil, err
+	}
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+delivery.LiveConductor+`
+		AND NOT COALESCE(`+delivery.Ending+`, false))`, c.RunID, c.TaskID).Scan(&live); err != nil {
+		return nil, err
+	}
+	if !live {
+		return nil, refuse("you are no longer this task's conductor: another took over from you. Restart nothing")
+	}
+	id, err := delivery.RestartRunTx(ctx, tx, c.Org, c.TaskID, delivery.Restart{RunID: strings.TrimSpace(in.Run), Note: in.Note,
+		Tier: strings.TrimSpace(in.Tier), Actor: delivery.Writer{ActorType: ledger.ActorAgent, ActorID: c.RunID}, Conductor: c.RunID})
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	return map[string]any{"restarted": in.Run, "run": id,
+		"next": "The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision."}, nil
 }
 
 type replyIn struct {

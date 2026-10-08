@@ -31,7 +31,7 @@
     {"name": "embeddings.model", "env": "DUDE_EMBEDDINGS_MODEL", "kind": "string", "use": "orchestrator", "default": "gemini-embedding-2", "secret": false},
     {"name": "embeddings.dimensions", "env": "DUDE_EMBEDDINGS_DIMENSIONS", "kind": "int", "use": "orchestrator", "default": "768", "secret": false},
     {"name": "agent.image", "env": "DUDE_AGENT_IMAGE", "kind": "string", "use": "orchestrator", "default": "localhost/dude-runtime:dev", "secret": false},
-    {"name": "agent.timeout", "env": "DUDE_AGENT_TIMEOUT", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
+    {"name": "agent.timeout", "env": "DUDE_AGENT_TIMEOUT", "kind": "string", "use": "orchestrator", "default": "4h", "secret": false},
     {"name": "agent.egress", "env": "DUDE_AGENT_EGRESS", "kind": "list", "use": "orchestrator", "default": "", "secret": false},
     {"name": "agent.nested_containers", "env": "DUDE_AGENT_NESTED_CONTAINERS", "kind": "bool", "use": "orchestrator", "default": "false", "secret": false},
     {"name": "registry.auth", "env": "DUDE_REGISTRY_AUTH", "kind": "string", "use": "orchestrator", "default": "none", "secret": false},

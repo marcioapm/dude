@@ -4,13 +4,13 @@
  * Pure, so the rules are tested apart from the screens.
  */
 
-import type { DeliverySettings, FullDeliveryPolicy, RoleSettings } from "@dude/domain";
+import { DEFAULT_TIME_LIMIT_MINUTES, type DeliverySettings, type FullDeliveryPolicy, type RoleSettings } from "@dude/domain";
 
-/** Time limits a person picks from, in minutes; null is none of the role's own. */
-export const TIME_LIMITS: ReadonlyArray<number | null> = [null, 15, 20, 30, 45, 60, 120, 240, 480];
+/** No-progress limits a person picks from, in minutes; null is the default (DEFAULT_TIME_LIMIT_MINUTES). */
+export const TIME_LIMITS: ReadonlyArray<number | null> = [null, 30, 45, 60, 90, 120, 180, 240, 480];
 
 export function timeLimitLabel(minutes: number | null): string {
-  if (minutes === null) return "No limit";
+  if (minutes === null) return `${timeLimitLabel(DEFAULT_TIME_LIMIT_MINUTES)} (default)`;
   if (minutes < 60) return `${minutes} min`;
   const h = minutes / 60;
   return Number.isInteger(h) ? `${h} ${h === 1 ? "hour" : "hours"}` : `${minutes} min`;
