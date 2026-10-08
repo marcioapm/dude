@@ -146,4 +146,17 @@ describe("a build of a version that can run containers", () => {
       ["Check containers", "failed", "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap"],
       ["Not published", "todo", "Not pushed · v4 is still live"]]);
   });
+  test("pushing after a passed check: the check is done, the push current", () => {
+    const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
+    expect(buildStages({ ...base, state: "running", stage: "pushing", containersCheck: { passed: true, detail } }, limits, 2).map((s) => [s.label, s.state])).toEqual([
+      ["Waiting", "done"], ["Built", "done"], ["Check containers", "done"], ["Pushed and published", "current"]]);
+  });
+  test("a push failing after a passed check: the check stays done, publication fails", () => {
+    const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
+    const stages = buildStages({ ...base, state: "failed", stage: null, error: "pushing to the registry failed: 502 Bad Gateway",
+      containersCheck: { passed: true, detail } }, limits, 2);
+    expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
+      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check containers", "done", detail],
+      ["Not published", "failed", "pushing to the registry failed: 502 Bad Gateway"]]);
+  });
 });

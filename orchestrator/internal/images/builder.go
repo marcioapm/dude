@@ -601,6 +601,8 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 		if err := b.checkContainers(ctx, j, tag, p, timings); err != nil {
 			return "", err
 		}
+		// The check is done: the page shows the push as the next stage.
+		p.setStage("pushing")
 	}
 	start = time.Now()
 	digest, err := b.Podman.Push(ctx, tag, p)
