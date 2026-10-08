@@ -194,6 +194,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>
       <ScreenHeader
+        fillTitle
         title={<SessionTitle title={session.title} untitled={UNTITLED_SESSION} maxLength={200}
           onRename={reader ? undefined : rename} />}
         meta={<>

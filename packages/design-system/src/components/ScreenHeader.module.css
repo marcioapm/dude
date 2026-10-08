@@ -26,6 +26,21 @@
 .spacer {
   flex: 1;
 }
+/* A title that may shrink: one line, the title as wide as its words while
+   they fit, then taking what the meta and actions leave, cut by its own
+   words rather than wrapped to a line of its own. */
+.fill {
+  flex-wrap: nowrap;
+}
+.titleFill {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+}
+.fill .meta,
+.fill .actions {
+  flex-shrink: 0;
+}
 .actions {
   display: inline-flex;
   flex-wrap: wrap;

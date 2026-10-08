@@ -383,17 +383,32 @@ def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(cl
     assert not [e for e in otto_client.events(limit=1000) if e["eventType"] == "session.renamed" and e["sessionId"] == session]
 
 
+def _title_uncut(page: Page) -> None:
+    """The session's name in its header is shown whole: its box is at least as wide as its words need."""
+    fits = page.get_by_test_id("session-title").evaluate("""el => {
+        const words = el.querySelector('[data-title-words]') ?? el.firstElementChild;
+        const range = document.createRange();
+        range.selectNodeContents(words);
+        return {box: el.getBoundingClientRect().width, need: range.getBoundingClientRect().width,
+                cut: words.scrollWidth > words.clientWidth, text: words.textContent};
+    }""")
+    assert not fits["cut"] and fits["box"] > fits["need"], fits
+
+
 @pytest.mark.ui
 def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_renames_it(
         client: ApiClient, page: Page, web_url: str, org: dict):
     _scripted_brainstorm(client)
+    page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"], at="#/sessions")
     page.get_by_test_id("sessions").get_by_test_id("new-session").click()
     expect(page.get_by_test_id("session-screen")).to_be_visible(timeout=15_000)
     # No dialog: the session exists, untitled, and the composer has the focus.
     expect(page.get_by_role("dialog")).to_have_count(0)
     expect(page.get_by_test_id("session-title")).to_have_text("New session")
-    expect(page.get_by_test_id("session-composer").locator("textarea")).to_be_focused()
+    _title_uncut(page)
+    composer = page.get_by_test_id("session-composer").locator("textarea")
+    expect(composer).to_be_focused()
     session = page.url.split("#/sessions/")[1]
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
     expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")
@@ -407,6 +422,7 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     page.get_by_test_id("session-title-input").fill("Billing v2")
     page.keyboard.press("Enter")
     expect(page.get_by_test_id("session-title")).to_have_text("Billing v2")
+    _title_uncut(page)
     expect(page.locator('[data-kind="renamed"]')).to_contain_text("renamed it “Billing v2”", timeout=15_000)
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Billing v2"
     # The tab never carries the name.

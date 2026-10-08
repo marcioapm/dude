@@ -7,6 +7,12 @@ export interface ScreenHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "ti
   readonly lead?: ReactNode;
   /** The screen's name. Omit when the breadcrumb says it. */
   readonly title?: ReactNode;
+  /**
+   * The title may shrink below its words (a `SessionTitle`, which cuts its
+   * own words with an ellipsis), on one line with the meta and actions:
+   * as wide as its words while they fit.
+   */
+  readonly fillTitle?: boolean | undefined;
   /** After the title, muted: what it is, its figures. */
   readonly meta?: ReactNode;
   /** At the right: the screen's actions, one primary at most. */
@@ -18,11 +24,11 @@ export interface ScreenHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "ti
  * figures, and what can be done. On the surface, no rule under it: the
  * content below starts on the same shade.
  */
-export function ScreenHeader({ lead, title, meta, actions, className, children, ...rest }: ScreenHeaderProps) {
+export function ScreenHeader({ lead, title, fillTitle, meta, actions, className, children, ...rest }: ScreenHeaderProps) {
   return (
-    <header className={cx(styles["root"], className)} {...rest}>
+    <header className={cx(styles["root"], fillTitle && styles["fill"], className)} {...rest}>
       {lead}
-      {title !== undefined ? <h1 className={styles["title"]}>{title}</h1> : null}
+      {title !== undefined ? <h1 className={cx(styles["title"], fillTitle && styles["titleFill"])}>{title}</h1> : null}
       {meta !== undefined ? <span className={styles["meta"]}>{meta}</span> : null}
       <span className={styles["spacer"]} />
       {actions !== undefined ? <span className={styles["actions"]}>{actions}</span> : null}

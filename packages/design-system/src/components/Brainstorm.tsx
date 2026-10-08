@@ -36,12 +36,14 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const shown = title ?? untitled;
-  const words = <span className={cx(styles["titleWords"], title === null && styles["untitled"])} data-untitled={title === null || undefined}>{shown}</span>;
+  // The whole name in the tooltip, for when the line cuts it.
+  const words = <span className={cx(styles["titleWords"], title === null && styles["untitled"])} data-title-words=""
+    title={shown} data-untitled={title === null || undefined}>{shown}</span>;
   if (!onRename) return <span className={styles["title"]} data-testid="session-title">{words}</span>;
   if (!editing) {
     return (
       <button type="button" className={cx(styles["title"], styles["titleEdit"])} data-testid="session-title"
-        aria-label={`Rename “${shown}”`} title="Rename" onClick={() => {
+        aria-label={`Rename “${shown}”`} onClick={() => {
           setDraft(title ?? "");
           setEditing(true);
         }}>
@@ -68,6 +70,8 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
   };
   return (
     <input className={styles["titleInput"]} aria-label="Session name" data-testid="session-title-input" autoFocus
+      // As wide as the name being typed (and the placeholder's room), up to the header's line.
+      size={Math.max(draft.length, untitled.length) + 2}
       value={draft} maxLength={maxLength} disabled={busy} placeholder={untitled}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => !busy && setEditing(false)}
