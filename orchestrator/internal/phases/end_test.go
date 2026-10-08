@@ -35,18 +35,23 @@ func (c *callLux) setPass(gated bool, await int) {
 	}
 }
 
-func (c *callLux) record(call string) error {
+// onCallLux makes the world's lux a callLux refusing with errs.
+func (w *resumeWorld) onCallLux(errs map[string]error) *callLux {
+	fake := &callLux{err: errs}
+	w.s.Lux = fake
+	return fake
+}
+
+func (c *callLux) Stop(_ context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.calls = append(c.calls, call)
+	c.calls = append(c.calls, "stop "+id)
 	return nil
 }
 
-func (c *callLux) Stop(_ context.Context, id string) error { return c.record("stop " + id) }
-
 func (c *callLux) Cancel(_ context.Context, id string) error {
-	_ = c.record("cancel " + id)
 	c.mu.Lock()
+	c.calls = append(c.calls, "cancel "+id)
 	gate, once, await := c.gate, c.once, c.await
 	c.mu.Unlock()
 	err := c.err[id]
@@ -77,11 +82,9 @@ func endedRun(t *testing.T, w *resumeWorld, status, luxState string, keep bool) 
 	t.Helper()
 	w.exec(`UPDATE runs SET status = $2::text::run_status, lux_state = $3, keep = $4, lux_stop_reason = NULL,
 		kept_until = NULL, ended_at = now() WHERE id = $1`, w.run.ID, status, luxState, keep)
-	fake := &callLux{}
-	w.s.Lux = fake
 	r := w.run
 	r.Status, r.LuxState, r.Keep, r.LuxStopReason = status, luxState, keep, ""
-	return r, fake
+	return r, w.onCallLux(nil)
 }
 
 func (w *resumeWorld) stopReason() string {
@@ -165,10 +168,10 @@ func TestAnEndedRunNotKeptIsCancelledInLux(t *testing.T) {
 // a branch preview's (ended by the preview loop) are left alone.
 func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	w := newResumeWorld(t)
-	fake := &callLux{}
-	w.s.Lux = fake
-	w.exec(`UPDATE runs SET status = 'completed', lux_state = 'stopped', lux_stop_reason = 'complete', ended_at = now(),
-		artifacts_due_at = NULL WHERE id = $1`, w.run.ID)
+	fake := w.onCallLux(nil)
+	// The status change sets artifacts_due_at (017's trigger); an insert does not.
+	w.exec(`UPDATE runs SET status = 'completed', lux_state = 'stopped', lux_stop_reason = 'complete', ended_at = now() WHERE id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = $1`, w.run.ID)
 	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state,
 			lux_stop_reason, ended_at)
 		VALUES ('run_due', $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'completed', 'lrun_due', 'stopped', 'complete', now()),
@@ -178,11 +181,9 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	w.exec(`UPDATE runs SET role = 'conductor', kind = 'agent' WHERE id = 'run_conductor'`)
 	// Still collecting run_due's exit; run_kept is failed, not completed.
 	w.exec(`UPDATE runs SET artifacts_due_at = now() WHERE id = 'run_due'`)
-	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id IN ($1, 'run_kept', 'run_conductor')`, w.run.ID)
 	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_p'||$1, $1, 'prj_'||$1, 2, 'T', 'G')`, w.run.Org)
 	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status, lux_run_id, lux_state, ended_at)
 		VALUES ('run_preview', $1, 'prj_'||$1, 'wi_p'||$1, 1, 'preview', 'completed', 'lrun_preview', 'stopped', now())`, w.run.Org)
-	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_preview'`)
 	// A session with an ended agent Run and a parked one (paused), seeded as
 	// the sessions tests do: its one owner is checked at commit.
 	w.exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_'||$1, $1, 'C')`, w.run.Org)
@@ -195,7 +196,6 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 			lux_stop_reason, ended_at)
 		VALUES ('run_session', $1, 'sess_'||$1, 1, 'completed', 'agent', 'brainstorm', 'lrun_session', 'succeeded', 'complete', now()),
 		       ('run_parked', $1, 'sess_'||$1, 2, 'paused', 'agent', 'brainstorm', 'lrun_parked', 'stopped', 'pause', NULL)`, w.run.Org)
-	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id IN ('run_session', 'run_parked')`)
 
 	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 3 {
 		t.Fatalf("retired %d, %v; want 3", n, err)
@@ -237,15 +237,13 @@ func TestARetireLuxRefusesIsDoneOrAskedAgain(t *testing.T) {
 			VALUES ($2, $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'completed', 'l'||$2, 'stopped', 'complete',
 				now() - make_interval(secs => $3))`, w.run.Org, id, 100-i)
 	}
-	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE organization_id = $1`, w.run.Org)
 	dialErr := errors.New("dial tcp: connection refused")
-	fake := &callLux{err: map[string]error{
+	fake := w.onCallLux(map[string]error{
 		"lr503": &lux.Error{Status: 503, Code: "unavailable"},
 		"lr404": &lux.Error{Status: 404, Code: "not_found"},
 		"lr409": &lux.Error{Status: 409, Code: "not_cancellable"},
 		"lh7":   dialErr,
-	}}
-	w.s.Lux = fake
+	})
 	terminated := func() []string {
 		t.Helper()
 		var got []string
