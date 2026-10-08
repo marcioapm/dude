@@ -5,6 +5,7 @@ import { RowMenu, RowMenuTrigger, focusIsFree, rowMenuOpeners, type RowMenuItem 
 import { statusSpec } from "../tokens/status.ts";
 import {
   ancestorKeys,
+  currentPullRequest,
   flattenNav,
   liveSessions,
   navKey,
@@ -398,7 +399,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const working = live.find((s) => s.status === "running");
     const people = wi.people ?? [];
     const agents = ownerAgents(wi, working);
-    const pr = wi.pullRequests?.[0];
+    const pr = currentPullRequest(wi);
     return (
       <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}>
         {chevron}
