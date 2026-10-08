@@ -511,9 +511,11 @@ func TestAStartThatRunsResetsTheBudget(t *testing.T) {
 		t.Fatalf("start = %d %v", code, out)
 	}
 	w.open(web)
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 0 AND error IS NULL`, runID); n != 1 {
-		t.Fatalf("a start that ran kept the failures:\n%s", w.preview(runID))
-	}
+	// The reset comes with lux's `running` event, which the feed follower
+	// may not have applied yet when open returns.
+	w.untilPreview(runID, "a start that ran to clear the failures", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 0 AND error IS NULL`, runID) == 1
+	})
 	ran := w.luxRuns()[3]
 	w.lux.Idle(web)
 	w.until("parked", func() bool {

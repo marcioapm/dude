@@ -287,6 +287,35 @@ describe("the Chat tab", () => {
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")?.disabled).toBe(false);
   });
 
+  test("a live conductor whose turn ended shows nothing thinking: the turn's totals and its end clear it", async () => {
+    const agent = { type: "agent", id: CONDUCTOR } as const;
+    const turn = (closed: boolean) => {
+      const events = conductorEvents().slice(0, 4);
+      events.push(
+        ev("agent.tool.called", { tool: "bash", callId: "c9" }, agent),
+        ev("agent.tool.completed", { tool: "bash", callId: "c9", status: "completed" }, agent),
+        ev("agent.model.request.completed", { tokens: { input: 10, output: 5 } }, agent),
+      );
+      if (closed) {
+        events.push(
+          ev("agent.message", { text: "8s: Tiago asked for it on the PR." }, agent),
+          ev("agent.model.request.completed", { turn: true, tokens: { input: 12, output: 7 } }, agent),
+          ev("agent.session.stopped", { reason: "turn_complete" }, agent),
+        );
+      }
+      return events;
+    };
+    // Mid-turn, between model requests: thinking.
+    const working = await chatPage(new ChatClient({ status: "running" }, turn(false)));
+    await until(() => working.querySelector("[data-testid=task-chat] [data-activity=thinking]"), "thinking mid-turn");
+    // The turn over, the Run still running: nothing thinking.
+    const done = await chatPage(new ChatClient({ status: "running" }, turn(true)));
+    await until(() => done.querySelectorAll("[data-testid=conductor-turn]").length >= 1 ? true : null, "the answer");
+    await settle();
+    // A count, not toBeNull: bun's toBeNull passes a happy-dom element.
+    expect(done.querySelectorAll("[data-testid=task-chat] [data-activity]").length).toBe(0);
+  });
+
   test("a parked conductor still takes a message: the composer is open, and Enter sends it to the task's Chat", async () => {
     // Its ledger ends at the park: nothing has woken it.
     const parkedAt = conductorEvents().findIndex((e) => e.eventType === "run.parked");

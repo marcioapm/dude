@@ -467,7 +467,8 @@ func TestFiledWorkCarriesNoTraceOfTheSession(t *testing.T) {
 // The spec a session's agent is submitted with: Small, its organisation's
 // Thinker, its image by the chain role → organisation default →
 // DUDE_AGENT_IMAGE (it has no project), and every linked repository at
-// repos/<key>/<name>, named <key>-<name>, push:false, with no push branch.
+// repos/<key>/<name>, named <key>-<name> as lux takes it (SpecName),
+// push:false, with no push branch.
 // With nothing linked, no repositories at all.
 func TestWhatASessionsAgentIsSubmittedWith(t *testing.T) {
 	small := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 10 << 30}
@@ -496,7 +497,7 @@ func TestWhatASessionsAgentIsSubmittedWith(t *testing.T) {
 	if spec.Git == nil || spec.Git.Push != nil || len(spec.Git.Repositories) != 2 {
 		t.Fatalf("git %+v, want two repositories and no push branch", spec.Git)
 	}
-	want := map[string]string{"BL-target": "/workspace/repos/BL/target", "WC-web": "/workspace/repos/WC/web"}
+	want := map[string]string{lux.SpecName("BL-target"): "/workspace/repos/BL/target", lux.SpecName("WC-web"): "/workspace/repos/WC/web"}
 	for _, r := range spec.Git.Repositories {
 		if want[r.Name] != r.Path || r.Push == nil || *r.Push {
 			t.Errorf("repository %s at %s push %v", r.Name, r.Path, r.Push)
@@ -737,7 +738,7 @@ func TestLinkingARepositoryAddsItByResume(t *testing.T) {
 		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
 		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
 	s.until("the web checkout", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND 'WC-web' = ANY (lux_repositories) AND status = 'running'`, run) == 1
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND $2 = ANY (lux_repositories) AND status = 'running'`, run, lux.SpecName("WC-web")) == 1
 	})
 	v := s.luxRun(run)
 	if v.resumed == 0 {
@@ -745,7 +746,7 @@ func TestLinkingARepositoryAddsItByResume(t *testing.T) {
 	}
 	var added *lux.Repository
 	for _, r := range v.spec.Git.Repositories {
-		if r.Name == "WC-web" {
+		if r.Name == lux.SpecName("WC-web") {
 			added = &r
 		}
 	}

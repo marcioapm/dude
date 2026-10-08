@@ -978,6 +978,8 @@ def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, cl
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")
+    # Prefilled as dude would derive it from the slug.
+    expect(page.get_by_test_id("project-key")).to_have_value("PAYM")
     page.get_by_test_id("project-repository").fill("https://github.com/acme/payments-api.git")
     page.get_by_test_id("project-create").click()
 
@@ -985,7 +987,7 @@ def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, cl
     expect(page.get_by_test_id("project-settings")).to_be_visible()
     expect(page.get_by_role("cell", name="payments-api", exact=True)).to_be_visible()
     project = client.get("/v1/projects").json()["projects"][0]
-    assert (project["name"], project["slug"]) == ("Payments API", "payments-api")
+    assert (project["name"], project["slug"], project["key"]) == ("Payments API", "payments-api", "PAYM")
     assert console_errors == []
 
 

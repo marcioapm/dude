@@ -15,14 +15,14 @@ import (
 
 // A session's agent (role brainstorm), as the syncer runs it: no task, its
 // session's linked repositories each at repos/<project key>/<name>, named
-// <key>-<name> in the spec, never pushed, and no push branch at all.
+// SessionRepo.SpecName in the spec, never pushed, and no push branch at all.
 
 // sessionRepoMissing (SQL, over runs r): a repository linked to the Run's
 // session that its lux Run does not hold yet — brought by a resume.
 const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
-	JOIN repositories repo ON repo.id = sr.repository_id JOIN projects sp ON sp.id = repo.project_id
+	JOIN repositories repo ON repo.id = sr.repository_id JOIN projects p ON p.id = repo.project_id
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
-	WHERE sr.session_id = r.session_id AND NOT ((sp.key_prefix || '-' || repo.name) = ANY (r.lux_repositories)))`
+	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
 func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
 	var in specInput

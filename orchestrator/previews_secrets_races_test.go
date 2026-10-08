@@ -219,7 +219,7 @@ func TestAPreviewStoppedWhileItsReplacementSubmitsCancelsTheNewRun(t *testing.T)
 	})
 	// Recorded on the stopped row only for the sweep to cancel it.
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'
-		AND (lux_run_id IS NULL OR (lux_state = 'cancelled' AND lux_stop_reason = 'cancel'))`, runID); n != 1 {
+		AND (lux_run_id IS NULL OR (lux_state IN ('cancelled', 'terminated') AND lux_stop_reason = 'cancel'))`, runID); n != 1 {
 		t.Errorf("the stopped preview holds the Run submitted after its stop as other than cancelled:\n%s", w.preview(runID))
 	}
 }

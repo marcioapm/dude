@@ -245,13 +245,19 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 		name string
 		// when, in fifths of the start, the Run is cancelled
 		at int
+		// a lux from before terminated, which says cancelled
+		old bool
 	}{
-		{"cancelled before a host", 0},
-		{"cancelled once placed", 2},
-		{"resumed, then cancelled while resuming", -1},
+		{"cancelled before a host", 0, false},
+		{"cancelled once placed", 2, true},
+		{"resumed, then cancelled while resuming", -1, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+			want := "terminated"
+			if c.old {
+				fake.CancelledState, want = true, "cancelled"
+			}
 			fake.StartAfter = 500 * time.Millisecond
 			client, run := submitGeneric(t, fake, "k-"+c.name)
 			if c.at < 0 {
@@ -269,8 +275,8 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.State != "cancelled" {
-				t.Errorf("state %s after the start delay, want cancelled", got.State)
+			if got.State != want {
+				t.Errorf("state %s after the start delay, want %s", got.State, want)
 			}
 			if len(got.Placements) != len(ended.Placements) {
 				t.Fatalf("placements %d after it ended, %d when it did", len(got.Placements), len(ended.Placements))
