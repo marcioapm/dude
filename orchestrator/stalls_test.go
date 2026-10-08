@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -784,6 +785,56 @@ func TestF6UpgradeHungCallProbe(t *testing.T) {
 		t.Errorf("the report names no call: %v", stall)
 	} else if calls, _ := json.Marshal(stall["calls"]); !strings.Contains(string(calls), `"openSecs":108`) {
 		t.Errorf("the call is not open since its ledger event, 3 hours: %s", calls)
+	}
+}
+
+func TestF6UpgradePreservesExistingSessionRuns(t *testing.T) {
+	owner, apply := dbtest.Upgrade(t, "090")
+	org := dbtest.Org(t, owner)
+	mustExec(t, owner, `INSERT INTO people (id, organization_id, name) VALUES ('per_upgrade', $1, 'Owner')`, org)
+	for _, state := range []string{"running", "paused"} {
+		session := "ssn_upgrade_" + state
+		tx, err := owner.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(context.Background(), `INSERT INTO sessions (id, organization_id, title, created_by)
+			VALUES ($1, $2, 'Existing session', 'per_upgrade')`, session, org); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(context.Background(), `INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+			VALUES ($1, 'per_upgrade', $2, 'owner', now())`, session, org); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, owner, `INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status, lux_state,
+			dude_pause, started_at, agent_active_at, turn_done_at)
+			VALUES ($1, $2, $3, 1, 'brainstorm', 'agent', $4::run_status,
+				CASE WHEN $4 = 'running' THEN 'running' ELSE 'stopped' END,
+				CASE WHEN $4 = 'paused' THEN 'session' END,
+				now() - interval '5 hours', now() - interval '5 hours',
+				CASE WHEN $4 = 'paused' THEN now() - interval '4 hours' END)`, "run_upgrade_"+state, org, session, state)
+	}
+	apply()
+	for _, state := range []string{"running", "paused"} {
+		var intact, stalled bool
+		if err := owner.QueryRow(context.Background(), `SELECT
+			organization_id = $2 AND session_id = $3 AND task_id IS NULL AND project_id IS NULL
+			AND phase IS NULL AND role = 'brainstorm' AND kind = 'agent' AND attempt = 1
+			AND status = $4::run_status AND started_at < now() - interval '4 hours'
+			AND agent_active_at < now() - interval '4 hours'
+			AND (CASE WHEN $4 = 'paused' THEN dude_pause = 'session' AND lux_state = 'stopped' AND turn_done_at IS NOT NULL
+				ELSE dude_pause IS NULL AND lux_state = 'running' AND turn_done_at IS NULL END),
+			run_stalled(runs) FROM runs WHERE id = $1`, "run_upgrade_"+state, org, "ssn_upgrade_"+state, state).
+			Scan(&intact, &stalled); err != nil {
+			t.Fatal(err)
+		}
+		if !intact || stalled {
+			t.Errorf("%s session Run: intact %v, stalled %v", state, intact, stalled)
+		}
 	}
 }
 
