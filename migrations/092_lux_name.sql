@@ -1,4 +1,4 @@
--- 090_lux_name.sql — a repository's name in a lux spec, as SQL reads it.
+-- 092_lux_name.sql — a repository's name in a lux spec, as SQL reads it.
 --
 -- lux takes a spec's repository names only as ^[a-z0-9][a-z0-9_-]{0,31}$.
 -- A session's agent checks each linked repository out under the name

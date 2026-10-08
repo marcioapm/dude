@@ -9,7 +9,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// lux_name (migration 090), which queries over runs.lux_repositories use,
+// lux_name (migration 092), which queries over runs.lux_repositories use,
 // names every repository as lux.SpecName does, which the spec is built with:
 // the literal empty string, and pairs whose mapped prefixes are the same
 // (told apart only by the hash suffix) included.

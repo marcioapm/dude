@@ -1,4 +1,4 @@
--- 092_project_key_unique.sql — one project per key in an organisation.
+-- 094_project_key_unique.sql — one project per key in an organisation.
 --
 -- A task's key is its project's key and a number (BILL-12), and people,
 -- agents and a session's checkouts (repos/<KEY>/<name>) name a project by

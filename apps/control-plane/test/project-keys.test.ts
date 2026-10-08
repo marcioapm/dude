@@ -1,5 +1,5 @@
 /**
- * A project's key is unique in its organisation (migration 092). Creating a
+ * A project's key is unique in its organisation (migration 094). Creating a
  * project takes an optional key: one another project has is refused with
  * 409 and a free suggestion; none given, dude derives the first free one of
  * projectKeyCandidates (@dude/domain). Two creates racing for one key get a
