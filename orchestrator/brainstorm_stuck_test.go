@@ -120,6 +120,36 @@ func TestBrainstormStuckCallsInterruptOnce(t *testing.T) {
 	}
 }
 
+func TestBrainstormOldestOpenCallDeterminesTheInterrupt(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, OpenCalls: [][3]string{taskCall, {"bash", "echo young", `{}`}}}
+	}
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	var run string
+	s.until("both open brainstorm calls", func() bool {
+		run, _ = s.brainstorm(id)
+		return run != "" && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'
+			AND (SELECT count(*) FROM jsonb_object_keys(open_tool_calls_at)) = 2`, run) == 1
+	})
+	mustExec(t, s.owner, `UPDATE runs SET open_tool_calls_at = jsonb_build_object(
+		'open_0', now() - interval '11 minutes', 'open_1', now() - interval '1 minute') WHERE id = $1`, run)
+	s.sweep()
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND interrupt AND scope = 'turn'`, run); n != 1 {
+		t.Fatalf("mixed-age interrupts = %d, want 1", n)
+	}
+	var tool string
+	var openSecs float64
+	if err := s.owner.QueryRow(context.Background(), `SELECT payload->>'tool', (payload->>'openSecs')::float8
+		FROM events WHERE run_id = $1 AND event_type = 'session.turn_stopped'`, run).Scan(&tool, &openSecs); err != nil {
+		t.Fatal(err)
+	}
+	if tool != "task" || openSecs < 660 || openSecs > 665 {
+		t.Fatalf("oldest call notice: tool = %q, openSecs = %v, want task and about 660", tool, openSecs)
+	}
+}
+
 func TestConcurrentSweepsInterruptAStuckBrainstormOnce(t *testing.T) {
 	s := newSessionWorld(t)
 	s.lux.Decide = func(map[string]any) fakelux.Behaviour {
