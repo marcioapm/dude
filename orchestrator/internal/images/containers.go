@@ -41,9 +41,9 @@ type Found struct {
 	Slirp4netns           string `json:",omitempty"`
 	FuseOverlayfs         string `json:",omitempty"`
 	Newuidmap, Newgidmap  Mapper
-	// agent's lines in /etc/subuid and /etc/subgid, as written: by its
-	// name, its uid, or the name passwd gives its uid first, as newuidmap
-	// matches them. Empty for none (or no agent user).
+	// agent's lines in /etc/subuid and /etc/subgid, as written: by the
+	// name passwd gives its uid first, or by the uid (agentOwners). Empty
+	// for none (or no agent user).
 	Subuid, Subgid []string `json:",omitempty"`
 }
 
@@ -372,10 +372,11 @@ func mapper(root, path string, capBit uint) Mapper {
 	return m
 }
 
-// agentOwners are the names a subordinate id line for agent may have:
-// agent, its uid, and the first passwd name for that uid (node on node
-// images), which is the name podman and newuidmap look agent up by. None
-// without an agent user.
+// agentOwners are the owners a subordinate id line must name to be the
+// workload's: the first passwd name for agent's uid (node on node images,
+// agent otherwise) and the uid itself. podman and RootlessKit look the
+// caller up by uid and match only those two, so an agent line behind
+// another name is not used. None without an agent user.
 func agentOwners(root string) []string {
 	raw, err := os.ReadFile(filepath.Join(root, "etc/passwd"))
 	if err != nil {
@@ -395,16 +396,12 @@ func agentOwners(root string) []string {
 	if uid == "" {
 		return nil
 	}
-	owners := []string{"agent", uid}
 	for _, e := range entries {
 		if e[2] == uid {
-			if !contains(owners, e[0]) {
-				owners = append(owners, e[0])
-			}
-			break
+			return []string{e[0], uid}
 		}
 	}
-	return owners
+	return nil
 }
 
 // idLines are a subuid or subgid file's entries for any of owners.
