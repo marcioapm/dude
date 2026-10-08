@@ -333,8 +333,8 @@ mode.
    index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`) and run
    `dude-migrate` again.
    A migration that adds a uniqueness rule checks the data first and stops,
-   naming what breaks it, before anything changes: 093 for two repositories
-   of a project checked out under one name (rename one), 094 for two
+   naming what breaks it, before anything changes: 094 for two repositories
+   of a project checked out under one name (rename one), 095 for two
    projects of an organisation under one key, ignoring case (`UPDATE
    projects SET key_prefix = '<another>' WHERE id = '<one of them>'`, as the
    owner). Fix each pair it lists and run `dude-migrate` again.

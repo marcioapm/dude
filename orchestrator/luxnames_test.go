@@ -124,7 +124,7 @@ func TestTwoLinkedProjectsAlwaysGetDistinctSpecNamesAndPaths(t *testing.T) {
 
 // A task's Run names each of its project's repositories by lux_name, and
 // no two can share one: the project's repositories are unique by it
-// (migration 093), so whatever names a project holds, its Run's spec has
+// (migration 094), so whatever names a project holds, its Run's spec has
 // distinct names and checkout paths, and lux takes it. Each name below is
 // tried with its own rewritten name beside it; the database refuses
 // exactly the ones that would share a checkout with one it holds.

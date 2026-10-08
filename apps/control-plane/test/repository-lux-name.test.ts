@@ -1,6 +1,6 @@
 /**
  * A project's repositories are checked out by their Runs under lux_name
- * (migration 092), which rewrites a name lux refuses and can land on another
+ * (migration 093), which rewrites a name lux refuses and can land on another
  * repository's own ("Web" is web-29751047). Adding, renaming or creating a
  * project with a repository whose checkout name another of the project's
  * already has is refused with 409 naming both, and changes nothing; the
