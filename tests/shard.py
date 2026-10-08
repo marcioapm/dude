@@ -4,8 +4,8 @@ A shard is a set of whole suite files: a suite's session fixtures (the web
 app, the gallery) start once per shard that has it, and every shard gets its
 own environment from run_tests.py.
 
-Refresh the recorded durations from JUnit reports covering every suite, e.g.
-one per shard (each run is shorter than the whole suite in one go):
+Refresh the recorded durations from JUnit reports that together cover every
+suite, e.g. one per shard (each run is shorter than the whole suite at once):
 
     uv run python run_tests.py --shard 1/6 --junitxml=/tmp/dude-e2e-1.xml
     ...
@@ -87,5 +87,8 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit("usage: shard.py JUNIT_XML...  (writes .suite-seconds.json)")
     measured = seconds_from_junits([Path(a) for a in sys.argv[1:]])
+    # A suite in no report ran no test (the lux-only contract suites under
+    # `-m "not lux"`): it costs a shard nothing, not DEFAULT_SECONDS.
+    measured = dict(sorted({**{s: 0.0 for s in all_suites()}, **measured}.items()))
     SUITE_SECONDS_FILE.write_text(json.dumps(measured, indent=2) + "\n")
     print(f"{len(measured)} suites, {sum(measured.values()):.0f}s, written to {SUITE_SECONDS_FILE}")
