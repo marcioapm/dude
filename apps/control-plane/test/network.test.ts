@@ -213,6 +213,20 @@ describe("names refused recently", () => {
     expect((await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused`))).refused).toEqual([]);
   });
 
+  test("Allow that would take the project's list past 200 hosts is refused, and changes nothing", async () => {
+    const [{ agent_egress: before }] = await owner`SELECT agent_egress FROM projects WHERE id = ${PROJECT}`;
+    const full = Array.from({ length: 199 }, (_, i) => `h${i}.example.com`);
+    await owner`UPDATE projects SET agent_egress = ${owner.array(full, "text")}::text[] WHERE id = ${PROJECT}`;
+    try {
+      const res = await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["a.example.com", "b.example.com"] });
+      expect(res.status).toBe(400);
+      const [{ agent_egress: after }] = await owner`SELECT agent_egress FROM projects WHERE id = ${PROJECT}`;
+      expect(after).toEqual(full);
+    } finally {
+      await owner`UPDATE projects SET agent_egress = ${owner.array(before, "text")}::text[] WHERE id = ${PROJECT}`;
+    }
+  });
+
   test("another organisation reads none of them, nor the project", async () => {
     expect((await call(otherKey, "GET", `/v1/projects/${PROJECT}/network/refused`)).status).toBe(404);
     expect((await call(otherKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["x.example.com"] })).status).toBe(404);

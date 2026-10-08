@@ -37,16 +37,17 @@ func goldenInput(model string) (AgentConfig, specInput) {
 // shows up here as a diff to read, not as a silent change on the wire.
 func TestTheSpecIsTheGoldenOne(t *testing.T) {
 	for name, model := range map[string]string{"opencode": "claude-opus-5-5", "scripted": "fake/scripted", "registry": "claude-opus-5-5",
-		"network": "claude-opus-5-5"} {
+		"network": "claude-opus-5-5", "scripted-network": "fake/scripted"} {
 		t.Run(name, func(t *testing.T) {
 			c, in := goldenInput(model)
 			if name == "registry" {
 				in.Registry = &RegistryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
 			}
-			if name == "network" {
+			if name == "network" || name == "scripted-network" {
 				// The operator's floor, then the Run's own list: a host, a
 				// wildcard, an address, a range, and one the operator
-				// already has.
+				// already has. The scripted agent stands in for one that
+				// reaches them, with no model to reach.
 				c.Egress = []string{"mirror.internal"}
 				in.Egress = []string{"pypi.org", "*.github.com", "10.0.0.5", "10.60.0.0/16", "mirror.internal"}
 			}

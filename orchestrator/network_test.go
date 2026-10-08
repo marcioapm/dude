@@ -80,3 +80,27 @@ func TestAnOrganisationsAnywhereIsUnrestricted(t *testing.T) {
 		t.Errorf("network = %+v, recorded %+v, want unrestricted", sent, recorded)
 	}
 }
+
+// A session's agent reaches its organisation's list and its model, and no
+// project's list: a session spans projects.
+func TestASessionReachesItsOrganisationsList(t *testing.T) {
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	s.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}' WHERE id = $1`, s.org)
+	mustExec(t, s.owner, `UPDATE projects SET agent_egress = '{registry.npmjs.org}' WHERE id = $1`, s.project)
+	session := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": "which mirror?"})
+	var v *luxRunView
+	s.until("the session's agent to be submitted", func() bool {
+		id, _ := s.brainstorm(session)
+		v = s.luxRun(id)
+		return v != nil
+	})
+	if v.spec.Network == nil {
+		t.Fatal("no network")
+	}
+	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+		t.Errorf("egress = %v, want %v", got, want)
+	}
+}

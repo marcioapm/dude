@@ -92,8 +92,9 @@ def test_a_refused_lookup_is_listed_and_allow_clears_it(env, client: ApiClient, 
     client.patch("/v1/settings/organization", {"network": {"egress": ["*.github.com"]}})
     _implementer_on(client, forge_project, "fake/lookup")
     run, _ = _first_spec(env, client, forge_project, owner_dsn)
-    refused = wait_until(lambda: [e["payload"] for e in client.events(runId=run["id"]) if e["eventType"] == "agent.network.refused"],
-                         timeout=60, message="nothing refused")
+    # Both names, which the follow loop may commit in separate batches.
+    refused = wait_until(lambda: (p := [e["payload"] for e in client.events(runId=run["id"]) if e["eventType"] == "agent.network.refused"])
+                         and len(p) >= 2 and p, timeout=60, message="not both names refused")
     assert sorted(p["name"] for p in refused) == ["files.pythonhosted.org", "registry.npmjs.org"]
     assert all(p["role"] == "implementer" for p in refused)
 
