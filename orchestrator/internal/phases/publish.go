@@ -365,11 +365,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 	if len(midOperation) > 0 {
 		return s.refusePublish(ctx, p, strings.Join(midOperation, "; "))
 	}
-	// By the name lux reports (lux.SpecName); the task's is repo.Name.
-	byName := map[string]delivery.Repository{}
-	for _, repo := range repos {
-		byName[lux.SpecName(repo.Name)] = repo
-	}
+	byName := repositoriesBySpecName(repos)
 	gh, err := s.Forges.For(ctx, p.Org)
 	if err != nil {
 		return err
