@@ -238,6 +238,8 @@ def test_a_session_linking_a_project_lux_would_refuse_by_name_starts(client: Api
 
     # The fake lux refuses a name real lux would; the agent starts and answers.
     wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered: lux refused its spec?")
+    # The scripted agent quotes the session's title: a session has no task to quote.
+    assert _said(client, session)[0].startswith('In the session "Billing". You asked:'), _said(client, session)
     row = query(owner_dsn, "SELECT status::text AS status, lux_repositories FROM runs WHERE id = %s", (run,))[0]
     assert row["status"] != "failed"
     [held] = row["lux_repositories"]
