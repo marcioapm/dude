@@ -57,7 +57,7 @@ behind all of these, reached when something looks off.
    duration and timestamp is tabular. Costs, tokens and durations each have
    exactly one formatter, so a value in a tile and the same value in a table
    never disagree.
-5. **`awaiting_human` is the only loud thing.** It is the single state where
+5. **`awaiting_input` is the only loud thing.** It is the single state where
    the system is blocked on a person. It alone defaults to a solid fill with a
    slow expanding ring. Nothing else may be promoted to solid; if it were, the
    signal would be gone.
@@ -227,7 +227,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   something is paused; **success** = finished well; **danger** = finished badly.
 - `aborted` is neutral, not danger. An operator stopping a run is a decision,
   not a failure, and must not look like one in a list of failures.
-- Only `awaiting_human` / `waiting_on_human` are solid by default. Do not
+- Only `awaiting_input` ("Needs you") is solid by default. Do not
   override `emphasis` to solid for anything else.
 - In dense lists (trees, kanban cards) use `variant="dot"`: shape still carries
   meaning (hollow = pending, round = active, square = terminal, diamond =
@@ -1280,7 +1280,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 | Do | Don't |
 |---|---|
-| `<StatusBadge status="awaiting_human" />` | `<Badge tone="attention">Blocked</Badge>` |
+| `<StatusBadge status="awaiting_input" />` | `<Badge tone="attention">Blocked</Badge>` |
 | `<CostDisplay usd={run.costUsd} budgetUsd={run.budgetUsd} />` | `${run.costUsd.toFixed(2)}` |
 | `<Td align="right" mono><Duration ms={ms} /></Td>` | `<Td>{ms / 1000}s</Td>` |
 | `<AgentAvatar role="reviewer" name="reviewer-2" />` | a coloured circle with an initial |
