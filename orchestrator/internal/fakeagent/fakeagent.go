@@ -223,6 +223,8 @@ func localScript(name, args string) string {
 		return fmt.Sprintf("write %s %s\n", in.Path, strings.ReplaceAll(in.Content, "\n", " "))
 	case LocalCommit:
 		return "commit " + in.Message + "\n"
+	case LocalArtifact:
+		return fmt.Sprintf("write %s/%s %s\n", PublishedDir, in.Path, strings.ReplaceAll(in.Content, "\n", " "))
 	}
 	return ""
 }
@@ -236,17 +238,21 @@ const ConductorCallPrefix = "tool: "
 // The scripted conductor's own work in its checkout, named as tools in a
 // message (ConductorCalls) but done in the container rather than called
 // on dude: write {"path","content"} writes a file in its first
-// repository, commit {"message"} commits everything there, and git
-// {"args"} runs git there (the fake lux only).
+// repository, commit {"message"} commits everything there, git
+// {"args"} runs git there (the fake lux only), and artifact
+// {"path","content"} publishes a file for people into $LUX_ARTIFACTS.
 const (
-	LocalWrite  = "write"
-	LocalCommit = "commit"
-	LocalGit    = "git"
+	LocalWrite    = "write"
+	LocalCommit   = "commit"
+	LocalGit      = "git"
+	LocalArtifact = "artifact"
 )
 
 // Local says whether a call is the scripted conductor's own work in its
-// checkout rather than one of dude's tools.
-func Local(name string) bool { return name == LocalWrite || name == LocalCommit || name == LocalGit }
+// container rather than one of dude's tools.
+func Local(name string) bool {
+	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+}
 
 // ConductorCalls are the tool calls an input asks the scripted conductor
 // for, in order: each line "tool: NAME {json}" ([name, JSON arguments]).

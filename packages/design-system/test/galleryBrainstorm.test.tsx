@@ -33,7 +33,7 @@ const FRAMES = ["comfortable dark", "comfortable light", "compact dark", "compac
 test("every Brainstorm block renders in dark and light, comfortable and compact", async () => {
   const el = await mount();
   const blocks = [...el.querySelectorAll("section#brainstorm [id^='bs-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-rail"]);
+  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-rail", "bs-files"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll("[data-theme][data-density]")];
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);
@@ -41,7 +41,6 @@ test("every Brainstorm block renders in dark and light, comfortable and compact"
   }
 });
 
-// `awaiting_input` is the vocabulary's needs-you state ("Needs you", solid).
 test("SessionTitle: untitled reads New session, muted; one who can chat renames in place, Enter saves and Escape cancels; a reader cannot", async () => {
   const el = await mount();
   const pane = el.querySelector("#bs-title [data-theme]")!;
@@ -74,6 +73,18 @@ test("SessionTitle: untitled reads New session, muted; one who can chat renames 
   const notices = [...pane.querySelectorAll("[data-kind='renamed']")].map((n) => n.textContent);
   expect(notices[0]).toContain("Brainstorm: Named it “Usage-based billing”");
   expect(notices[1]).toContain("Ana renamed it “Billing v2”");
+});
+
+test("PublishedFiles: each file by its own name and kind, a version mark when published again, the rest as N more", async () => {
+  const el = await mount();
+  const pane = el.querySelector("#bs-files [data-theme]")!;
+  const [full, capped] = [...pane.querySelectorAll("[data-testid='published-files']")];
+  const names = [...full!.querySelectorAll("button")].map((b) => [b.getAttribute("data-name"), b.getAttribute("title"), b.textContent]);
+  expect(names[0]).toEqual(["design/metering.md", "design/metering.md", "metering.mdv3"]);
+  expect(names[1]).toEqual(["usage-by-kind.csv", "usage-by-kind.csv", "usage-by-kind.csv"]);
+  expect(full!.querySelectorAll("svg").length).toBe(4);
+  expect(capped!.querySelectorAll("button")).toHaveLength(2);
+  expect(capped!.textContent).toContain("1 more");
 });
 
 // `awaiting_input` is the vocabulary's needs-you state ("Needs you", solid).

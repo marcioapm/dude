@@ -14,12 +14,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard,
+  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
   ScreenHeader, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
-import { ApiError, type ApiClient } from "../api/client.ts";
+import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
+import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type Turn } from "../api/conversation.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
@@ -95,6 +96,19 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
 
   const { events } = useEventStream({ client, sessionId });
   const status = (detail?.session.run?.status ?? undefined) as RunStatus | undefined;
+
+  // What its agent published: read on opening, and again as each new one is recorded.
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const published = useMemo(() => events.filter((e) => e.eventType === EventTypes.ArtifactCreated).length, [events]);
+  useEffect(() => {
+    let current = true;
+    void client.listSessionArtifacts(sessionId).then((r) => current && setArtifacts(r.artifacts), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [client, sessionId, published]);
+  const files = useMemo(() => filesOf(artifacts), [artifacts]);
   const projection = useRef(emptyProjection());
   const projected = useRef(sessionId);
   const conversation = useMemo(() => {
@@ -230,6 +244,20 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                 {session.projects.length > 0 ? <LinkedProjects projects={session.projects} />
                   : <span className="muted">Nothing linked: it reads only what the organisation remembers.</span>}
               </SessionRailBlock>
+              <SessionRailBlock data-testid="session-files" label={<span className="sessionRailHead">
+                <span>Files{files.length > 0 ? <> <span className="ds-tnum runCount" data-testid="session-files-count">{files.length}</span></> : null}</span>
+                {files.length > 1 ? (
+                  <Button size="sm" variant="quiet" data-testid="session-files-zip" onClick={() => void client.sessionArtifactsZip(sessionId)
+                    .then((b) => save(b, "session-files.zip"), (err: unknown) => setProblem(`Could not download them: ${errorText(err)}`))}>
+                    Download all
+                  </Button>
+                ) : null}
+              </span>}>
+                {files.length > 0 ? (
+                  <PublishedFiles files={files.map((f) => ({ name: f.name, contentType: f.versions[0]!.contentType, versions: f.versions.length }))}
+                    onOpen={setViewing} />
+                ) : <span className="muted">Nothing published yet: documents it writes for you appear here.</span>}
+              </SessionRailBlock>
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
@@ -242,6 +270,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
         </div>
         {problem ? <Callout tone="danger" data-testid="session-problem">{problem}</Callout> : null}
       </div>
+      <ArtifactViewer client={client} files={files} open={viewing} onOpenChange={setViewing} />
       {isOwner ? (
         <>
           <ShareDialog client={client} detail={detail} open={dialog === "share"} onClose={() => setDialog(null)}

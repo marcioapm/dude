@@ -216,6 +216,36 @@ test("a session Run's artifact downloads for its members alone, and nobody else'
   }
 });
 
+test("a session's files are listed and zipped for its members alone; anyone else is told the session does not exist", async () => {
+  for (const member of [marcio, joao]) {
+    const res = await call(member, "GET", `/v1/artifacts?sessionId=${SESSION}`);
+    expect(res.status).toBe(200);
+    const { artifacts } = await res.json() as { artifacts: Array<{ id: string; name: string; sessionId: string; runId: string; role: string }> };
+    expect(artifacts.map((a) => [a.id, a.name, a.sessionId, a.runId, a.role])).toEqual([[ARTIFACT, "plan.md", SESSION, RUN, "brainstorm"]]);
+    forwarded.length = 0;
+    const zip = await call(member, "GET", `/v1/brainstorms/${SESSION}/artifacts.zip`);
+    expect(zip.status).toBe(200);
+    expect(zip.headers.get("content-disposition")).toBe('attachment; filename="session-files.zip"');
+    const bytes = new Uint8Array(await zip.arrayBuffer());
+    expect(new TextDecoder().decode(bytes)).toContain(BYTES);
+    expect(forwarded.map((f) => [f.path, f.person])).toEqual([[`/internal/artifacts/${ARTIFACT}/content`, member.personId]]);
+  }
+  for (const [name, who] of outsiders) {
+    forwarded.length = 0;
+    for (const path of [`/v1/artifacts?sessionId=${SESSION}`, `/v1/brainstorms/${SESSION}/artifacts.zip`]) {
+      const res = await call(who, "GET", path);
+      const body = await res.text();
+      expect([name, path, res.status]).toEqual([name, path, 404]);
+      expect(body).not.toContain("plan.md");
+      expect(body).not.toContain(BYTES);
+    }
+    expect(forwarded).toEqual([]);
+  }
+  // Both, or neither, is a mistake rather than a way around the check.
+  expect((await call(outsider, "GET", `/v1/artifacts?sessionId=${SESSION}&taskId=wi_x`)).status).toBe(400);
+  expect((await call(marcio, "GET", "/v1/artifacts")).status).toBe(400);
+});
+
 test("a session Run's controls, answers and servers go only to the orchestrator, which refuses them as not a task's Run", async () => {
   // These change what runs: the control plane forwards them as the person,
   // and the orchestrator's run routes find no task Run by that id (they

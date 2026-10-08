@@ -168,6 +168,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["bs-row", "SessionRow / SharedMark"],
       ["bs-sidebar", "SidebarSessions"],
       ["bs-rail", "SessionPeople / LinkedProjects"],
+      ["bs-files", "PublishedFiles"],
     ],
   ],
   [

@@ -362,9 +362,10 @@ test("095 keeps every titled session's name as a person's, and lets a new one st
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_old', 'org_n', 'Usage-based billing')`;
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_session_names.sql"]);
-    expect(await sql`SELECT title, titled_by FROM sessions WHERE id = 'ssn_old'`).toEqual([{ title: "Usage-based billing", titled_by: "person" }]);
+    const titled = async (id: string) => [...await sql`SELECT title, titled_by FROM sessions WHERE id = ${id}`];
+    expect(await titled("ssn_old")).toEqual([{ title: "Usage-based billing", titled_by: "person" }]);
     await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_new', 'org_n', NULL, NULL)`;
-    expect(await sql`SELECT title, titled_by FROM sessions WHERE id = 'ssn_new'`).toEqual([{ title: null, titled_by: null }]);
+    expect(await titled("ssn_new")).toEqual([{ title: null, titled_by: null }]);
     // A title is never blank, and is never said to be someone's while there is none.
     for (const [title, by] of [["  ", "person"], [null, "agent"], ["Named", null]] as const) {
       const outcome = await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_bad', 'org_n', ${title}, ${by})`

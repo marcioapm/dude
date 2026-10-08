@@ -466,3 +466,16 @@ def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page:
     gallery_page.keyboard.press("Enter")
     expect(titles.nth(1)).to_have_text("Billing v2")
     assert console_errors == []
+
+
+def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, console_errors: list):
+    """PublishedFiles: the rail's Files, each by its own name with the folder in its tooltip, then N more."""
+    gallery_page.get_by_role("link", name="PublishedFiles", exact=True).click()
+    pane = gallery_page.locator("#bs-files [data-theme]").first
+    lists = pane.get_by_test_id("published-files")
+    first = lists.nth(0).locator('[data-name="design/metering.md"]')
+    expect(first).to_contain_text("metering.md")
+    expect(first).to_have_attribute("title", "design/metering.md")
+    expect(first).to_contain_text("v3")
+    expect(lists.nth(1)).to_contain_text("1 more")
+    assert console_errors == []
