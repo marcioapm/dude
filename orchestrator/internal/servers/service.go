@@ -274,7 +274,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 			v.LuxState = luxRun.State
 			v.Host = nonEmpty(luxRun.Host)
 			v.MemoryLimit = luxRun.MemoryLimit()
-			if Waiting(luxRun.State) {
+			if lux.Waiting(luxRun.State) {
 				v.WaitingReason = nonEmpty(luxRun.StateReason)
 			}
 		} else {
@@ -299,16 +299,6 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 	}
 	out.Moved = moved(out.Servers, luxRun)
 	return out
-}
-
-// Waiting is a lux state in which a Run has no host yet and lux's
-// stateReason says why it waits.
-func Waiting(luxState string) bool {
-	switch luxState {
-	case "submitted", "provisioning", "resuming":
-		return true
-	}
-	return false
 }
 
 // phaseLabel names a phase's agent as the app does (SETTINGS_ROLE_LABEL).

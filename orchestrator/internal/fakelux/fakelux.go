@@ -812,6 +812,26 @@ func (s *Server) Lose(id string) {
 	}
 }
 
+// Wait has a Run wait for a host with reason, as lux's scheduler does when
+// its pool asks a provider for one: state provisioning, with the reason.
+func (s *Server) Wait(id, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setStateWith(run, "provisioning", reason)
+	}
+}
+
+// Place assigns a waiting Run a host, as lux's scheduler does: state
+// scheduled, with no reason. The fake starts nothing on it.
+func (s *Server) Place(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setState(run, "scheduled")
+	}
+}
+
 // Crash ends a Run's agent as a dead container would.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()

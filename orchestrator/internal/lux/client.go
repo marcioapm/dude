@@ -134,6 +134,16 @@ func Terminal(state string) bool {
 	return false
 }
 
+// Waiting is a state in which a Run has no host yet and lux's stateReason
+// says why it waits.
+func Waiting(state string) bool {
+	switch state {
+	case "submitted", "provisioning", "resuming":
+		return true
+	}
+	return false
+}
+
 // Moved says a Run lux stopped for this reason is moving host, not
 // stopping: lux resumes it elsewhere on its own (a drain, a preemption, an
 // operator's migrate), and reports "stopped" on the way.

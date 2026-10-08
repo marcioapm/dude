@@ -9,6 +9,7 @@ package orchestrator_test
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -258,5 +259,57 @@ func TestASessionAndAConductorAskForContainersAsTheirImageSays(t *testing.T) {
 			}
 			keepsEngines(t, spec, false)
 		})
+	}
+}
+
+// servers.changed is what has a watching Run page read why its Run waits
+// again: lux's state events while it waits for a host, and the one that
+// ends the wait, each bring one, with the reason they leave.
+func TestAnAgentRunsWaitForAHostReachesItsPage(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	w.canRunContainers(w.libraryImage("img_podman", "agents-podman", true), true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_podman' WHERE id = $1`, w.project)
+	w.lux.NoNestedHost = true
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	runID := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
+	luxID := w.luxRunOf(runID)
+	changes := func() int {
+		n, _ := strconv.Atoi(w.str(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'servers.changed'`, runID))
+		return n
+	}
+	reason := func() *string {
+		code, body := w.get("/internal/runs/"+runID+"/servers", w.org)
+		if code != 200 {
+			t.Fatalf("servers: %d %s", code, body)
+		}
+		var view struct {
+			Run struct {
+				WaitingReason *string `json:"waitingReason"`
+			} `json:"run"`
+		}
+		_ = json.Unmarshal([]byte(body), &view)
+		return view.Run.WaitingReason
+	}
+	for _, step := range []struct {
+		name string
+		do   func()
+		want string
+	}{
+		{"none to a reason", func() { w.lux.Wait(luxID, "waiting for capacity: 1 host in its pool does not support nested containers") },
+			"waiting for capacity: 1 host in its pool does not support nested containers"},
+		{"a reason to another", func() { w.lux.Wait(luxID, "waiting for capacity: 2 hosts in its pool do not support nested containers") },
+			"waiting for capacity: 2 hosts in its pool do not support nested containers"},
+		{"a reason to none", func() { w.lux.Place(luxID) }, ""},
+	} {
+		before := changes()
+		step.do()
+		w.until(step.name+": servers.changed", func() bool { return changes() > before })
+		got := reason()
+		if (step.want == "" && got != nil) || (step.want != "" && (got == nil || *got != step.want)) {
+			t.Errorf("%s: waitingReason = %v, want %q", step.name, got, step.want)
+		}
 	}
 }
