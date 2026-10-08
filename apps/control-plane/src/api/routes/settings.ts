@@ -193,7 +193,7 @@ function projectMode(v: VersionRow | undefined): ProjectPromptMode {
  * when any says anywhere, or when nothing is listed anywhere and there is
  * no model to restrict to. A project's own list or mode is its override.
  */
-export function network(layers: Layers, defaults: { operator: string[]; always: string[]; model: string | null }): NetworkSettings {
+export function network(layers: Layers, defaults: NetworkDefaults): NetworkSettings {
   const { org, project } = layers;
   const own = project ? project.agentEgress : org.agentEgress;
   const runs = project?.agentEgressMode === "only" ? project.agentEgress : [...org.agentEgress, ...(project?.agentEgress ?? [])];
