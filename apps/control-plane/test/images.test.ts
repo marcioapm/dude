@@ -501,3 +501,68 @@ describe("a Run waiting for its image", () => {
     expect((await runOf("run_img_prev")).preparingImage).toBeNull();
   });
 });
+
+describe("can run containers", () => {
+  const PODMAN = "FROM debian:bookworm-slim\nRUN apt-get install -y git podman fuse-overlayfs uidmap\n";
+
+  test("is saved with the draft, and a new image starts with it off", async () => {
+    const created = await body(await call(adminKey, "POST", "/v1/images", { name: "agents-podman", containerfile: PODMAN }));
+    ids.podman = created.image.id;
+    expect(created.versions[0]).toMatchObject({ state: "draft", canRunContainers: false });
+    const on = await body(await call(adminKey, "PUT", `/v1/images/${ids.podman}/draft`, { containerfile: PODMAN, canRunContainers: true }));
+    expect(on.versions[0].canRunContainers).toBe(true);
+    // A save that does not name it keeps the draft's own.
+    const kept = await body(await call(adminKey, "PUT", `/v1/images/${ids.podman}/draft`, { containerfile: PODMAN + "RUN true\n" }));
+    expect(kept.versions[0].canRunContainers).toBe(true);
+  });
+
+  test("each numbered version keeps its own; the image, the picker and builds show the published one's", async () => {
+    const v1 = await body(await call(adminKey, "POST", `/v1/images/${ids.podman}/build`));
+    expect(v1.image.builds[0]).toMatchObject({ canRunContainers: true, containersCheck: null });
+    await built(v1.versionId);
+    let out = await image(ids.podman!);
+    expect(out.image.published).toMatchObject({ number: 1, canRunContainers: true });
+    let picker = await body(await call(memberKey, "GET", "/v1/images/picker"));
+    expect(picker.images.find((i: Json) => i.name === "agents-podman").canRunContainers).toBe(true);
+    // v2 turns it off; v1 still can.
+    await call(adminKey, "PUT", `/v1/images/${ids.podman}/draft`, { containerfile: PODMAN, canRunContainers: false });
+    const v2 = await body(await call(adminKey, "POST", `/v1/images/${ids.podman}/build`));
+    await built(v2.versionId);
+    out = await image(ids.podman!);
+    expect(out.versions.map((v: Json) => [v.number, v.canRunContainers])).toEqual([[2, false], [1, true]]);
+    expect(out.image.published.canRunContainers).toBe(false);
+    picker = await body(await call(memberKey, "GET", "/v1/images/picker"));
+    expect(picker.images.find((i: Json) => i.name === "agents-podman").canRunContainers).toBe(false);
+    // Publishing v1 again brings its value back.
+    await call(adminKey, "POST", `/v1/images/${ids.podman}/versions/${v1.versionId}/publish`);
+    expect((await image(ids.podman!)).image.published).toMatchObject({ number: 1, canRunContainers: true });
+  });
+
+  test("a new draft starts from the published version's value", async () => {
+    const draft = await body(await call(adminKey, "PUT", `/v1/images/${ids.podman}/draft`, { containerfile: PODMAN + "RUN echo 3\n" }));
+    expect(draft.versions[0]).toMatchObject({ state: "draft", canRunContainers: true });
+    await call(adminKey, "DELETE", `/v1/images/${ids.podman}/draft`);
+  });
+
+  test("a new image FROM image:<x> starts from x's published value; a FROM of one that cannot does not", async () => {
+    const child = await body(await call(adminKey, "POST", "/v1/images", { name: "abs-preview", containerfile: "FROM image:agents-podman\nRUN true\n" }));
+    expect(child.versions[0].canRunContainers).toBe(true);
+    const plain = await body(await call(adminKey, "POST", "/v1/images", { name: "plain-child", containerfile: "FROM image:acme-base\n" }));
+    expect(plain.versions[0].canRunContainers).toBe(false);
+    // Named on create, it wins.
+    const named = await body(await call(adminKey, "POST", "/v1/images", { name: "named-off", containerfile: "FROM image:agents-podman\n", canRunContainers: false }));
+    expect(named.versions[0].canRunContainers).toBe(false);
+  });
+
+  test("a base rebuild keeps the child's published value", async () => {
+    const child = (await body(await call(adminKey, "GET", "/v1/images"))).images.find((i: Json) => i.name === "abs-preview");
+    const v1 = await body(await call(adminKey, "POST", `/v1/images/${child.id}/build`));
+    await built(v1.versionId);
+    await call(adminKey, "PUT", `/v1/images/${ids.podman}/draft`, { containerfile: PODMAN + "RUN echo 4\n" });
+    const base = await body(await call(adminKey, "POST", `/v1/images/${ids.podman}/build`));
+    const rebuilds = await built(base.versionId);
+    expect(rebuilds.map((r) => r.image_name)).toEqual(["abs-preview"]);
+    const [v] = await owner`SELECT can_run_containers FROM image_versions WHERE id = ${rebuilds[0]!.version_id}`;
+    expect(v.can_run_containers).toBe(true);
+  });
+});
