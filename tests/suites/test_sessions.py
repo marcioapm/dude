@@ -249,37 +249,34 @@ def test_a_session_linking_a_project_lux_would_refuse_by_name_starts(client: Api
     assert f"/workspace/repos/BILL/{name}" in briefing
 
 
-def test_a_session_refuses_two_projects_under_one_key_and_links_distinct_ones(client: ApiClient, owner_dsn: str,
-                                                                               fake_github: FakeGitHub):
-    # billing-api and billing-worker both get the key BILL; each holds a repository named api.
+def test_billing_api_and_billing_worker_get_distinct_keys_and_one_session_reads_both(client: ApiClient, owner_dsn: str,
+                                                                                      fake_github: FakeGitHub):
+    _scripted_brainstorm(client)
+    # Each holds a repository named api; their slugs both start with "billing".
     suffix = int.from_bytes(os.urandom(3))
-    api, worker, web = (client.create_project(name=n, slug=f"{s}-{suffix:08d}",
-                                              repositories=[{"name": "api", "url": fake_github.clone_url, "defaultBranch": "main"}])
-                        for n, s in (("Billing API", "billing-api"), ("Billing Worker", "billing-worker"), ("Web Console", "webc")))
-    keys = query(owner_dsn, "SELECT key_prefix FROM projects WHERE id = ANY(%s) ORDER BY name", ([api["id"], worker["id"], web["id"]],))
-    assert [k["key_prefix"] for k in keys] == ["BILL", "BILL", "WEBC"]
+    api, worker = (client.create_project(name=n, slug=f"{s}-{suffix:08d}",
+                                         repositories=[{"name": "api", "url": fake_github.clone_url, "defaultBranch": "main"}])
+                   for n, s in (("Billing API", "billing-api"), ("Billing Worker", "billing-worker")))
+    # The first takes the slug's first letters; the second, the next free key: its words' initials and letters.
+    assert (api["key"], worker["key"]) == ("BILL", "BWOR")
+    assert client.post("/v1/projects", {"name": "Billing Ledger", "slug": f"billing-ledger-{suffix:08d}", "key": "bill"}).json() == {
+        "error": {"code": "conflict", "message": "BILL is already the key of Billing API; pick another", "details": {"suggestion": "BLED"}}}
+
     link = lambda p: {"projectId": p["id"], "repositoryIds": [p["repositories"][0]["id"]]}  # noqa: E731
-    message = "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them."
-
-    # Refused at creation: no session is made.
-    before = query(owner_dsn, "SELECT count(*) AS n FROM sessions")[0]["n"]
     resp = client.post("/v1/brainstorms", {"title": "Billing", "projects": [link(api), link(worker)]})
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["error"]["message"] == message
-    assert query(owner_dsn, "SELECT count(*) AS n FROM sessions")[0]["n"] == before
+    assert resp.status_code == 201, resp.text
+    session = resp.json()["id"]
+    assert sorted(p["key"] for p in client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]) == ["BILL", "BWOR"]
+    run = client.post(f"/v1/brainstorms/{session}/chat", {"text": "where does metering go?"}).json()["runId"]
 
-    # Refused when linked later: what it reads stays as it was.
-    session = client.post("/v1/brainstorms", {"title": "Billing", "projects": [link(api)]}).json()["id"]
-    resp = client.post(f"/v1/brainstorms/{session}/link", {"projects": [link(api), link(worker)]})
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["error"]["message"] == message
-    assert [p["id"] for p in client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]] == [api["id"]]
-
-    # A project under another key links.
-    resp = client.post(f"/v1/brainstorms/{session}/link", {"projects": [link(api), link(web)]})
-    assert resp.status_code == 200, resp.text
-    linked = client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]
-    assert sorted(p["key"] for p in linked) == ["BILL", "WEBC"]
+    wait_until(lambda: _said(client, session), timeout=60, message="the session's agent never answered")
+    assert _said(client, session)[0].startswith('In the session "Billing". You asked:'), _said(client, session)
+    row = query(owner_dsn, "SELECT status::text AS status, lux_repositories FROM runs WHERE id = %s", (run,))[0]
+    assert row["status"] != "failed"
+    held = row["lux_repositories"]
+    assert len(held) == 2 and len(set(held)) == 2 and all(LUX_NAME.match(h) for h in held), held
+    briefing = query(owner_dsn, "SELECT prompt FROM runs WHERE id = %s", (run,))[0]["prompt"]
+    assert "/workspace/repos/BILL/api" in briefing and "/workspace/repos/BWOR/api" in briefing
 
 
 def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient, env):

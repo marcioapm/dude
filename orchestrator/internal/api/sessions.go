@@ -688,8 +688,9 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID string, linked []string, facts fileFacts,
 	item delivery.ProposalItem, f delivery.Filer) (key, taskID, epicID string, err error) {
 	projectOf := func(k string) (string, error) {
+		// At most one: keys are unique in the organisation (projects_key_idx).
 		var id string
-		err := tx.QueryRow(ctx, `SELECT id FROM projects WHERE upper(key_prefix) = upper($1) AND id = ANY($2) LIMIT 1`, k, linked).Scan(&id)
+		err := tx.QueryRow(ctx, `SELECT id FROM projects WHERE upper(key_prefix) = upper($1) AND id = ANY($2)`, k, linked).Scan(&id)
 		return id, err
 	}
 	switch item.Kind {

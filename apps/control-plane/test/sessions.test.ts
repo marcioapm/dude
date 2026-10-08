@@ -161,30 +161,6 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded).toEqual([]);
 });
 
-test("a session's projects must have distinct keys: two under one key are refused, never forwarded, and distinct keys link", async () => {
-  await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES
-    ('prj_bapi', ${ORG}, 'Billing API', 'billing-api', 'BILL'),
-    ('prj_bwrk', ${ORG}, 'Billing Worker', 'billing-worker', 'BILL'),
-    ('prj_web', ${ORG}, 'Web Console', 'web-console', 'WEBC')
-    ON CONFLICT DO NOTHING`;
-  const both = [{ projectId: "prj_bwrk", repositoryIds: [] }, { projectId: "prj_bapi", repositoryIds: [] }];
-  const message = "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them.";
-  for (const [path, body] of [
-    ["/v1/brainstorms", { title: "Billing", projects: both }],
-    [`/v1/brainstorms/${SESSION}/link`, { projects: both }],
-  ] as const) {
-    forwarded.length = 0;
-    const res = await call(marcio, "POST", path, body);
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: { message: string } }).error.message).toBe(message);
-    expect(forwarded).toEqual([]);
-  }
-  forwarded.length = 0;
-  const distinct = [{ projectId: "prj_bapi", repositoryIds: [] }, { projectId: "prj_web", repositoryIds: [] }];
-  expect((await call(marcio, "POST", `/v1/brainstorms/${SESSION}/link`, { projects: distinct })).status).toBe(200);
-  expect(forwarded.map((f) => [f.path, f.body])).toEqual([[`/internal/sessions/${SESSION}/link`, { projects: distinct }]]);
-});
-
 test("a session's Run, its events, questions, directives and agent sessions are its accepted members' alone", async () => {
   for (const [, who] of outsiders) {
     for (const path of [`/v1/runs/${RUN}`, `/v1/runs/${RUN}/diff`, `/v1/sessions/${AGENT_SESSION}`]) {
