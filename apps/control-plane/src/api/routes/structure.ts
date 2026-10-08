@@ -70,9 +70,9 @@ const updateRepositoryInput = z.object(repositoryFields).partial();
 
 /**
  * Another of the project's repositories its Runs would check out under the
- * same name as `name` (lux_name, migration 090): a name lux refuses is
+ * same name as `name` (lux_name, migration 092): a name lux refuses is
  * rewritten, and can land on another repository's own ("Web" is
- * web-29751047). The unique index (migration 091) is the backstop; this
+ * web-29751047). The unique index (migration 093) is the backstop; this
  * says which. Null when there is none.
  */
 export async function sameCheckout(scope: OrgScope, projectId: string, name: string, except: string | null) {

@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "090_lux_name.sql", "091_repository_lux_name_unique.sql", "092_project_key_unique.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_lux_name.sql", "093_repository_lux_name_unique.sql", "094_project_key_unique.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -280,9 +280,9 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "089_session_functions_parallel.sql",
       "090_stalled_runs.sql",
       "091_brainstorm_stuck_turn.sql",
-      "090_lux_name.sql",
-      "091_repository_lux_name_unique.sql",
-      "092_project_key_unique.sql",
+      "092_lux_name.sql",
+      "093_repository_lux_name_unique.sql",
+      "094_project_key_unique.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -322,8 +322,8 @@ async function migratedBefore(version: string): Promise<{ url: string; sql: SQL 
   return { url, sql };
 }
 
-test("091 refuses to apply over two repositories of a project checked out under one name, naming them", async () => {
-  const { url, sql } = await migratedBefore("091");
+test("093 refuses to apply over two repositories of a project checked out under one name, naming them", async () => {
+  const { url, sql } = await migratedBefore("093");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'a', 'a')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'A', 'a', 'A'), ('prj_b', 'org_a', 'B', 'b', 'B')`;
@@ -333,11 +333,11 @@ test("091 refuses to apply over two repositories of a project checked out under 
       ('repo_3', 'org_a', 'prj_b', 'Web', 'git://x/3')`;
     await expect(migrate(url, { log: () => {} })).rejects.toThrow(
       "repositories would share a checkout: project prj_a: 'Web' and 'web-29751047' are both checked out as web-29751047; rename one of each, then migrate again");
-    expect((await recorded(url)).map((m) => m.version)).not.toContain("091");
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("093");
 
     // Renamed: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE repositories SET name = 'web-app' WHERE id = 'repo_2'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["091_repository_lux_name_unique.sql", "092_project_key_unique.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["093_repository_lux_name_unique.sql", "094_project_key_unique.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE repositories SET name = 'web-29751047' WHERE id = 'repo_2'`))
       .toContain("repositories_lux_name_idx");
@@ -351,8 +351,8 @@ test("091 refuses to apply over two repositories of a project checked out under 
   }
 }, 120_000);
 
-test("092 refuses to apply over two projects of an organisation under one key, ignoring case, naming them", async () => {
-  const { url, sql } = await migratedBefore("092");
+test("094 refuses to apply over two projects of an organisation under one key, ignoring case, naming them", async () => {
+  const { url, sql } = await migratedBefore("094");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Beta', 'beta')`;
     // BILL twice in org_a (one lower-cased); BILL in org_b too, which is another organisation's.
@@ -361,11 +361,11 @@ test("092 refuses to apply over two projects of an organisation under one key, i
       ('prj_web', 'org_a', 'Web', 'web', 'WEB'), ('prj_other', 'org_b', 'Billing', 'billing', 'BILL')`;
     await expect(migrate(url, { log: () => {} })).rejects.toThrow(
       "projects would share a key: organization 'Acme' (org_a): 'Billing API' (prj_api) and 'Billing Worker' (prj_worker) both have the key BILL; give one of each another key_prefix, then migrate again");
-    expect((await recorded(url)).map((m) => m.version)).not.toContain("092");
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("094");
 
     // Given another key: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE projects SET key_prefix = 'BW' WHERE id = 'prj_worker'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["092_project_key_unique.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["094_project_key_unique.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE projects SET key_prefix = 'Bill' WHERE id = 'prj_worker'`))
       .toContain("projects_key_idx");
@@ -406,7 +406,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "090_lux_name.sql", "091_repository_lux_name_unique.sql", "092_project_key_unique.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_lux_name.sql", "093_repository_lux_name_unique.sql", "094_project_key_unique.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },

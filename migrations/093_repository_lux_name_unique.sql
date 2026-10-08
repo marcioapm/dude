@@ -1,7 +1,7 @@
--- 091_repository_lux_name_unique.sql — one checkout name per project.
+-- 093_repository_lux_name_unique.sql — one checkout name per project.
 --
 -- A task's Run checks its project's repositories out under lux_name(name)
--- (migration 090), at repos/<lux name>. lux_name keeps a name lux already
+-- (migration 092), at repos/<lux name>. lux_name keeps a name lux already
 -- takes and rewrites any other with a hash suffix, so a rewritten name can
 -- equal another repository's unchanged one: "Web" is "web-29751047", and so
 -- is a repository named "web-29751047". Both in one Run, lux refuses it as a

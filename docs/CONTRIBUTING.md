@@ -79,7 +79,7 @@ UI.
 project (`BILL-12`). People, agents and a brainstorm session's checkouts
 (`repos/<KEY>/<name>`) name a project by its key alone, so **a project's key
 is unique in its organisation**, ignoring case (`projects_key_idx`,
-migration 092). It is 2 to 6 letters or digits starting with a letter
+migration 094). It is 2 to 6 letters or digits starting with a letter
 (`PROJECT_KEY` in `packages/domain/src/projectKeys.ts`), chosen when the
 project is made and fixed after; no route changes it. Creating a project
 with a key another has is a 409 that names the holder and suggests a free
