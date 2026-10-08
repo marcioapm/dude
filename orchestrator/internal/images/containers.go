@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -212,7 +213,7 @@ func (f Found) Sentence() string {
 func dedupe(list []string) []string {
 	var out []string
 	for _, s := range list {
-		if !contains(out, s) {
+		if !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
@@ -327,20 +328,11 @@ func ContainersCheck(root string) Found {
 func searchPath() []string {
 	dirs := filepath.SplitList(os.Getenv("PATH"))
 	for _, d := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
-		if !contains(dirs, d) {
+		if !slices.Contains(dirs, d) {
 			dirs = append(dirs, d)
 		}
 	}
 	return dirs
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // versionTimeout bounds an engine's --version, run from the image.
@@ -426,7 +418,7 @@ func idLines(path string, owners []string) []string {
 	var out []string
 	for _, l := range strings.Split(string(raw), "\n") {
 		parts := strings.Split(strings.TrimSpace(l), ":")
-		if len(parts) != 3 || !contains(owners, parts[0]) {
+		if len(parts) != 3 || !slices.Contains(owners, parts[0]) {
 			continue
 		}
 		if _, err := strconv.ParseUint(parts[1], 10, 32); err != nil {
