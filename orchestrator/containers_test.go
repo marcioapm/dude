@@ -7,6 +7,8 @@ package orchestrator_test
 // keeps it in the Run's stored spec for every resume.
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -145,5 +147,58 @@ func keepsEngines(t *testing.T, spec lux.Spec, want bool) {
 	env := spec.Env["XDG_DATA_HOME"] == "/home/agent/.local/share"
 	if has != want || env != want {
 		t.Errorf("engine store volume %v, XDG_DATA_HOME %v; want %v (volumes %+v)", has, env, want, spec.Volumes)
+	}
+}
+
+// A Run lux cannot place says why on its servers' view, which the task's
+// Servers tab and the Run page read: lux's stateReason while it waits.
+func TestARunWaitingForAHostThatCanRunContainersSaysWhy(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	podman := w.libraryImage("img_podman", "abs-preview", true)
+	w.canRunContainers(podman, true)
+	mustExec(t, w.owner, `UPDATE projects SET preview_image_id = 'img_podman' WHERE id = $1`, w.project)
+	w.lux.NoNestedHost = true
+	task, runID := w.startPreview()
+	w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
+	var view struct {
+		Run struct {
+			LuxState      string  `json:"luxState"`
+			PreviewStage  *string `json:"previewStage"`
+			WaitingReason *string `json:"waitingReason"`
+		} `json:"run"`
+	}
+	for _, path := range []string{"/internal/tasks/" + task + "/servers", "/internal/runs/" + runID + "/servers"} {
+		code, body := w.get(path, w.org)
+		if code != 200 {
+			t.Fatalf("%s: %d %s", path, code, body)
+		}
+		if err := json.Unmarshal([]byte(body), &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Run.WaitingReason == nil || *view.Run.WaitingReason != "waiting for capacity: 1 host in its pool does not support nested containers" {
+			t.Errorf("%s: waitingReason = %v (lux %s)", path, view.Run.WaitingReason, view.Run.LuxState)
+		}
+		if view.Run.PreviewStage == nil || *view.Run.PreviewStage != "scheduling" {
+			t.Errorf("%s: stage = %v", path, view.Run.PreviewStage)
+		}
+	}
+}
+
+// Once it has a host, or has ended with a reason of lux's, there is no
+// wait to show.
+func TestARunNotWaitingForAHostHasNoWaitingReason(t *testing.T) {
+	w := newWorld(t)
+	task, runID := w.startPreview()
+	w.until("the preview to run", func() bool { return len(w.luxRuns()) == 1 && w.lux.State(w.luxRuns()[0].ID) == "running" })
+	_, body := w.get("/internal/tasks/"+task+"/servers", w.org)
+	if !strings.Contains(body, `"waitingReason":null`) {
+		t.Errorf("running: servers = %s", body)
+	}
+	// lux's reason for a Run lost with its host is no wait.
+	w.lux.Lose(w.luxRuns()[0].ID)
+	_, body = w.get("/internal/runs/"+runID+"/servers", w.org)
+	if !strings.Contains(body, `"luxState":"lost"`) || !strings.Contains(body, `"waitingReason":null`) {
+		t.Errorf("lost: servers = %s", body)
 	}
 }
