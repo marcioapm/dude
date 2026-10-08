@@ -1469,7 +1469,10 @@ func TestActivityBeforeAMovedRunRunsAgainCountsFromItsArrival(t *testing.T) {
 }
 
 // A writer reported for its unchanged files, then moved by lux: still
-// stalled once it runs again, as its files have not changed.
+// stalled once it runs again, as its files have not changed. Reported 10
+// minutes after they last did, and moved 40 minutes later, so the move's
+// wait carries its files' date past the report unless the report moves
+// with it.
 func TestAMovedWritersFilesReportStillStands(t *testing.T) {
 	w := newWorld(t)
 	id := w.hangingImplementer()
@@ -1480,6 +1483,7 @@ func TestAMovedWritersFilesReportStillStands(t *testing.T) {
 	if n := w.stalls(id); n != 1 || !stalled() {
 		t.Fatalf("%d reports, stalled %v: want 1, true", n, stalled())
 	}
+	w.reportedAgo(id, 2*time.Hour+50*time.Minute)
 	w.runningAgain(id, w.movedAfter(id, 40*time.Minute))
 	w.silentFor(id, 0)
 	if !stalled() {
