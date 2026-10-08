@@ -175,7 +175,13 @@ def test_turning_it_off_where_previews_run_it_says_new_previews_cannot(
     expect(page.get_by_test_id("containers-changed")).to_have_text("Can run containers turned off")
     expect(page.get_by_test_id("containers-off-warning")).to_have_count(0)
     # A project whose previews pick no image run its runtime image: agents-podman now warns too.
-    client.create_project(name="tools", slug=f"tools-{os.urandom(3).hex()}", runtimeImageId=lib["podman"])
+    tools = client.create_project(name="tools", slug=f"tools-{os.urandom(3).hex()}", runtimeImageId=lib["podman"])
+    page.reload()
+    page.get_by_role("checkbox", name="Can run containers", exact=True).click()
+    expect(page.get_by_test_id("containers-off-warning")).to_have_text(OFF_WARNING)
+    # tools picking no image at all runs the org default: agents-podman as the default warns too.
+    assert client.patch(f"/v1/projects/{tools['id']}", {"runtimeImageId": None}).status_code == 200
+    assert client.post(f"/v1/images/default/{lib['podman']}").status_code == 200
     page.reload()
     page.get_by_role("checkbox", name="Can run containers", exact=True).click()
     expect(page.get_by_test_id("containers-off-warning")).to_have_text(OFF_WARNING)
