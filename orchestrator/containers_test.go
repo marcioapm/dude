@@ -40,6 +40,9 @@ func TestAnAgentRunAsksForContainersWhenItsLibraryImageCan(t *testing.T) {
 	if nested(w.specOf("review")) {
 		t.Errorf("the reviewer on acme-base asked for nested containers")
 	}
+	// An agent Run keeps no engine store: its containers are the work of
+	// one session, and its home is a state volume already (images never are).
+	keepsEngines(t, *w.specOf("implement"), false)
 	if got := w.runImage(wi, "implement"); !got.CanRunContainers {
 		t.Errorf("runs.image = %+v, want canRunContainers", got)
 	}
@@ -86,9 +89,11 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 		mustExec(t, w.owner, `UPDATE projects SET preview_image_id = 'img_podman' WHERE id = $1`, w.project)
 		_, runID := w.startPreview()
 		w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
-		if !nested(ptr(submitted(t, w.luxRuns()[0]))) {
+		spec := submitted(t, w.luxRuns()[0])
+		if !nested(&spec) {
 			t.Errorf("the preview did not ask for nested containers")
 		}
+		keepsEngines(t, spec, true)
 		if got := w.str(`SELECT image->>'canRunContainers' FROM runs WHERE id = $1`, runID); got != "true" {
 			t.Errorf("runs.image canRunContainers = %s", got)
 		}
@@ -104,9 +109,11 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 		_, runID := w.declare()
 		w.lux.RequestServer(w.serverID(runID, "web"), "/")
 		w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
-		if !nested(ptr(submitted(t, w.luxRuns()[0]))) {
+		spec := submitted(t, w.luxRuns()[0])
+		if !nested(&spec) {
 			t.Errorf("the woken preview did not ask for nested containers")
 		}
+		keepsEngines(t, spec, true)
 	})
 	t.Run("on the fallback, as the operator says", func(t *testing.T) {
 		for _, flag := range []bool{false, true} {
@@ -115,9 +122,28 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 			mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
 			w.startPreview()
 			w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
-			if got := nested(ptr(submitted(t, w.luxRuns()[0]))); got != flag {
+			spec := submitted(t, w.luxRuns()[0])
+			if got := nested(&spec); got != flag {
 				t.Errorf("flag %v: nested = %v", flag, got)
 			}
+			keepsEngines(t, spec, flag)
 		}
 	})
+}
+
+// keepsEngines: a preview that can run containers keeps the engines' store
+// on a state volume over $XDG_DATA_HOME, set in its env, so its containers
+// survive sleep; any other Run has neither.
+func keepsEngines(t *testing.T, spec lux.Spec, want bool) {
+	t.Helper()
+	var has bool
+	for _, v := range spec.Volumes {
+		if v.Path == "/home/agent/.local/share" {
+			has = v.Kind == "state"
+		}
+	}
+	env := spec.Env["XDG_DATA_HOME"] == "/home/agent/.local/share"
+	if has != want || env != want {
+		t.Errorf("engine store volume %v, XDG_DATA_HOME %v; want %v (volumes %+v)", has, env, want, spec.Volumes)
+	}
 }
