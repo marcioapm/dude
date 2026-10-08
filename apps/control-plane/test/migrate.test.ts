@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -285,6 +285,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "094_repository_lux_name_unique.sql",
       "095_project_key_unique.sql",
       "096_session_names.sql",
+      "097_session_names_validate.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -339,7 +340,7 @@ test("094 refuses to apply over two repositories of a project checked out under 
 
     // Renamed: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE repositories SET name = 'web-app' WHERE id = 'repo_2'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE repositories SET name = 'web-29751047' WHERE id = 'repo_2'`))
       .toContain("repositories_lux_name_idx");
@@ -367,7 +368,7 @@ test("095 refuses to apply over two projects of an organisation under one key, i
 
     // Given another key: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE projects SET key_prefix = 'BW' WHERE id = 'prj_worker'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_project_key_unique.sql", "096_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE projects SET key_prefix = 'Bill' WHERE id = 'prj_worker'`))
       .toContain("projects_key_idx");
@@ -408,7 +409,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },
@@ -444,17 +445,97 @@ test("096 keeps every titled session's name as a person's, and lets a new one st
     }
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_old', 'org_n', 'Usage-based billing')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql", "097_session_names_validate.sql"]);
+    // 097 leaves every check 096 added validated, as if made with the table.
+    const checks = await sql`SELECT conname, convalidated FROM pg_constraint
+      WHERE conrelid = 'sessions'::regclass AND contype = 'c' ORDER BY conname`;
+    expect([...checks]).toEqual([
+      { conname: "sessions_title_check", convalidated: true },
+      { conname: "sessions_titled_by_check", convalidated: true },
+      { conname: "sessions_titled_check", convalidated: true },
+    ]);
     const titled = async (id: string) => [...await sql`SELECT title, titled_by FROM sessions WHERE id = ${id}`];
     expect(await titled("ssn_old")).toEqual([{ title: "Usage-based billing", titled_by: "person" }]);
     await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_new', 'org_n', NULL, NULL)`;
     expect(await titled("ssn_new")).toEqual([{ title: null, titled_by: null }]);
     // A title is never blank, and is never said to be someone's while there is none.
-    for (const [title, by] of [["  ", "person"], [null, "agent"], ["Named", null]] as const) {
+    for (const [title, by] of [["  ", "person"], [null, "agent"], ["Named", null], ["Named", "bot"]] as const) {
       const outcome = await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_bad', 'org_n', ${title}, ${by})`
         .then(() => "inserted", (e: Error) => e.message);
       expect([title, by, outcome]).toEqual([title, by, expect.stringContaining("violates check constraint")]);
     }
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+test("096 holds its exclusive lock on sessions for no scan: an indexed read waits only for its catalog changes", async () => {
+  const { url, sql } = await migratedBefore("096");
+  const reader = new SQL(url);
+  const observer = new SQL(url);
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
+    await sql`INSERT INTO sessions (id, organization_id, title)
+      SELECT 'ssn_' || i, 'org_n', 'Usage-based billing for experiment runs ' || i FROM generate_series(1, 500000) i`;
+    await sql`ANALYZE sessions`;
+    const file = (await listMigrationFiles()).find((f) => f.version === "096")!;
+    const contents = await file.contents();
+    // As the runner applies it: the whole file in one transaction.
+    let done = false;
+    const began = performance.now();
+    const applied = sql.begin(async (tx) => {
+      await tx.unsafe(contents);
+    }).then(() => {
+      done = true;
+      return performance.now() - began;
+    });
+    // Wait until the migration holds its lock, or has already let it go.
+    let locked = false;
+    while (!done && !locked) {
+      locked = (await observer`SELECT 1 FROM pg_locks
+        WHERE relation = 'sessions'::regclass AND mode = 'AccessExclusiveLock' AND granted`).length > 0;
+    }
+    const asked = performance.now();
+    expect([...await reader`SELECT title FROM sessions WHERE id = 'ssn_1'`]).toEqual([{ title: "Usage-based billing for experiment runs 1" }]);
+    const waited = performance.now() - asked;
+    const held = await applied;
+    // Validating the checks under this lock held such a read 330-370 ms on 500k rows on a laptop; 096's catalog changes alone, ~10 ms.
+    expect(waited, `the read waited ${Math.round(waited)} ms; 096 took ${Math.round(held)} ms`).toBeLessThan(100);
+    // Nothing was scanned: the checks are there, still to be validated by 097.
+    expect((await sql`SELECT bool_or(convalidated) AS any FROM pg_constraint
+      WHERE conrelid = 'sessions'::regclass AND contype = 'c'`)[0].any).toBe(false);
+  } finally {
+    await reader.end();
+    await observer.end();
+    await sql.end();
+  }
+}, 120_000);
+
+test("097 refuses a session row that breaks 096's checks, naming the check, and applies once it is fixed", async () => {
+  const { url, sql } = await migratedBefore("096");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
+    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_ok', 'org_n', 'Billing')`;
+    const file096 = (await listMigrationFiles()).find((f) => f.version === "096")!;
+    const contents = await file096.contents();
+    await sql.begin(async (tx) => {
+      await tx.unsafe(contents);
+      await tx`INSERT INTO schema_migrations (version, name, checksum)
+        VALUES (${file096.version}, ${file096.name}, ${createHash("sha256").update(contents).digest("hex")})`;
+    });
+    // A row the NOT VALID check never saw: written while it was not there, as by a process that bypassed it.
+    await sql`ALTER TABLE sessions DROP CONSTRAINT sessions_titled_check`;
+    await sql`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_bad', 'org_n', 'Named', NULL)`;
+    await sql`ALTER TABLE sessions ADD CONSTRAINT sessions_titled_check CHECK ((title IS NULL) = (titled_by IS NULL)) NOT VALID`;
+
+    await expect(migrate(url, { log: () => {} })).rejects.toThrow(
+      `check constraint "sessions_titled_check" of relation "sessions" is violated by some row`);
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("097");
+
+    await sql`UPDATE sessions SET titled_by = 'person' WHERE id = 'ssn_bad'`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["097_session_names_validate.sql"]);
+    expect([...await sql`SELECT conname FROM pg_constraint
+      WHERE conrelid = 'sessions'::regclass AND contype = 'c' AND NOT convalidated`]).toEqual([]);
   } finally {
     await sql.end();
   }
