@@ -54,7 +54,8 @@ export function useRunServers(client: ApiClient, runId: string, status: RunStatu
     if (!r) return;
     r.terminalWanted = running && !known;
     const key = `${status}:${waitAsk}`;
-    if (placing && waitAsked.current !== key) r.waitWanted = true;
+    if (!placing) r.waitWanted = false;
+    else if (waitAsked.current !== key) r.waitWanted = true;
     waitAsked.current = key;
     if (r.terminalWanted || r.waitWanted) r.ask();
   }, [client, runId, status, running, placing, known, askAgain, waitAsk]);
