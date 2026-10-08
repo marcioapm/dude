@@ -14,6 +14,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 // Under bun test a CSS module maps to {}: keep each class name as written.
+// Bun 1.4.2 cannot scope or restore module mocks (mock.restore() leaves them installed).
+// Safe today: no other test imports these maps directly or relies on their empty exports.
 const asWritten = () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) });
 mock.module("../src/components/AgentAvatar.module.css", asWritten);
 mock.module("../src/components/Brainstorm.module.css", asWritten);
