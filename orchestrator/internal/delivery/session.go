@@ -153,6 +153,26 @@ func SessionProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]Linked
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[LinkedProject])
 }
 
+// SameKey says why a session's linked projects cannot run, "" when they
+// can: two of them share a key. Its checkouts (repos/<key>/<name>), their
+// spec names and the projects its agent proposes work in are told apart by
+// key alone, so two projects under one key would share a checkout or read
+// each other's. The control plane refuses such links; this is the guard
+// for any that reach a spec anyway.
+func SameKey(projects []LinkedProject) string {
+	seen := map[string]string{}
+	for _, p := range projects {
+		key := strings.ToUpper(p.Key)
+		if first, ok := seen[key]; ok {
+			a, b := min(first, p.Name), max(first, p.Name)
+			return fmt.Sprintf("%s and %s both use the key %s; a session tells its projects apart by key, so link one of them.",
+				a, b, key)
+		}
+		seen[key] = p.Name
+	}
+	return ""
+}
+
 // HeldBack (SQL, over directives d): a message held while the agent waits
 // for one member's answer (ask_person with to): it goes with the answer,
 // not as it, so it is not sent while that question is open.

@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -75,6 +76,59 @@ func TestASessionLinkingAnyProjectGetsAValidSpec(t *testing.T) {
 	}
 	if _, status := s.brainstorm(id); status == "failed" {
 		t.Errorf("the session's agent failed")
+	}
+}
+
+// A session whose linked projects share a key — two "api" repositories
+// under BILL would be one spec name and one checkout path — never reaches
+// lux: its agent fails before submit, saying which projects and which key.
+// The control plane refuses such links; this is the orchestrator's guard
+// for any that get past it.
+func TestASessionWhoseProjectsShareAKeyIsRefusedBeforeSubmit(t *testing.T) {
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, `UPDATE projects SET key_prefix = 'BILL', name = 'Billing API' WHERE id = $1`, s.project)
+	mustExec(t, s.owner, `UPDATE projects SET key_prefix = 'bill', name = 'Billing Worker' WHERE id = $1`, s.webProject)
+	mustExec(t, s.owner, `UPDATE repositories SET name = 'api' WHERE id = ANY($1)`, []string{s.repoID, s.webRepo})
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Billing", "projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})["id"].(string)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "where does metering go?"})
+	var run string
+	s.until("the session's agent to fail", func() bool {
+		var status string
+		run, status = s.brainstorm(id)
+		return status == "failed"
+	})
+	want := "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them."
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND error = $2 AND lux_run_id IS NULL`, run, want); n != 1 {
+		var why string
+		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, run).Scan(&why)
+		t.Errorf("failed with %q, want %q and no lux Run", why, want)
+	}
+	if v := s.luxRun(run); v != nil {
+		t.Errorf("submitted to lux: %+v", v.spec.Git)
+	}
+}
+
+// A session linking two projects with distinct keys starts, each project's
+// checkout under its own key.
+func TestASessionWhoseProjectsHaveDistinctKeysStarts(t *testing.T) {
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, `UPDATE repositories SET name = 'api' WHERE id = ANY($1)`, []string{s.repoID, s.webRepo})
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Billing", "projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})["id"].(string)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "where does metering go?"})
+	v := s.luxRun(s.started(id))
+	if v == nil || v.spec.Git == nil {
+		t.Fatalf("spec %+v", v)
+	}
+	var paths []string
+	for _, r := range v.spec.Git.Repositories {
+		paths = append(paths, r.Path)
+	}
+	if !slices.Equal(paths, []string{"/workspace/repos/BL/api", "/workspace/repos/WC/api"}) {
+		t.Errorf("checked out at %v", paths)
 	}
 }
 

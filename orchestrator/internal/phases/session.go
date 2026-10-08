@@ -24,6 +24,12 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
 	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
+// errSameKey: two of the session's linked projects share a key
+// (delivery.SameKey); the Run fails with it as it is, before lux is asked.
+type errSameKey string
+
+func (e errSameKey) Error() string { return string(e) }
+
 func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
 	var in specInput
 	var orgModels json.RawMessage
@@ -55,6 +61,13 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		}
 		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, "", role); err != nil {
 			return err
+		}
+		projects, err := delivery.SessionProjects(ctx, tx, r.SessionID)
+		if err != nil {
+			return err
+		}
+		if why := delivery.SameKey(projects); why != "" {
+			return errSameKey(why)
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err

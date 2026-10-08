@@ -249,6 +249,39 @@ def test_a_session_linking_a_project_lux_would_refuse_by_name_starts(client: Api
     assert f"/workspace/repos/BILL/{name}" in briefing
 
 
+def test_a_session_refuses_two_projects_under_one_key_and_links_distinct_ones(client: ApiClient, owner_dsn: str,
+                                                                               fake_github: FakeGitHub):
+    # billing-api and billing-worker both get the key BILL; each holds a repository named api.
+    suffix = int.from_bytes(os.urandom(3))
+    api, worker, web = (client.create_project(name=n, slug=f"{s}-{suffix:08d}",
+                                              repositories=[{"name": "api", "url": fake_github.clone_url, "defaultBranch": "main"}])
+                        for n, s in (("Billing API", "billing-api"), ("Billing Worker", "billing-worker"), ("Web Console", "webc")))
+    keys = query(owner_dsn, "SELECT key_prefix FROM projects WHERE id = ANY(%s) ORDER BY name", ([api["id"], worker["id"], web["id"]],))
+    assert [k["key_prefix"] for k in keys] == ["BILL", "BILL", "WEBC"]
+    link = lambda p: {"projectId": p["id"], "repositoryIds": [p["repositories"][0]["id"]]}  # noqa: E731
+    message = "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them."
+
+    # Refused at creation: no session is made.
+    before = query(owner_dsn, "SELECT count(*) AS n FROM sessions")[0]["n"]
+    resp = client.post("/v1/brainstorms", {"title": "Billing", "projects": [link(api), link(worker)]})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["message"] == message
+    assert query(owner_dsn, "SELECT count(*) AS n FROM sessions")[0]["n"] == before
+
+    # Refused when linked later: what it reads stays as it was.
+    session = client.post("/v1/brainstorms", {"title": "Billing", "projects": [link(api)]}).json()["id"]
+    resp = client.post(f"/v1/brainstorms/{session}/link", {"projects": [link(api), link(worker)]})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["message"] == message
+    assert [p["id"] for p in client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]] == [api["id"]]
+
+    # A project under another key links.
+    resp = client.post(f"/v1/brainstorms/{session}/link", {"projects": [link(api), link(web)]})
+    assert resp.status_code == 200, resp.text
+    linked = client.get(f"/v1/brainstorms/{session}").json()["session"]["projects"]
+    assert sorted(p["key"] for p in linked) == ["BILL", "WEBC"]
+
+
 def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient, env):
     _scripted_brainstorm(client)
     ana, ana_client = _person(client, env, "Ana Nunes")

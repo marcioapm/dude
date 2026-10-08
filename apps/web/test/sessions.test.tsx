@@ -152,6 +152,25 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelectorAll("[data-testid=session-screen] [data-activity]").length).toBe(0);
   });
 
+  test("a link the API refuses as two projects under one key says so in full in the dialog, which stays open", async () => {
+    const message = "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them.";
+    const client = new SessionClient(detail("owner"));
+    const { ApiError } = await import("../src/api/client.ts");
+    const links: unknown[] = [];
+    client.linkSession = (_id, projects) => {
+      links.push(projects);
+      return Promise.reject(new ApiError(409, "conflict", message));
+    };
+    const page = await sessionPage(client);
+    await click(await until(() => page.querySelector("[data-testid=link-open]"), "Link"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the link dialog");
+    await click(dialog.querySelector("[data-testid=link-save]")!);
+    const refused = await until(() => dialog.querySelector("[data-testid=link-refused]"), "the refusal");
+    expect(refused.textContent).toBe(message);
+    expect(links.length).toBe(1);
+    expect(document.querySelector("[role=dialog]")).toBe(dialog);
+  });
+
   test("a message goes to the session's chat", async () => {
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);

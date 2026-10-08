@@ -10,7 +10,7 @@ import { firstName } from "@dude/design-system";
 import { PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
 import { Button, Callout, Checkbox, ChoiceList, Dialog, Select } from "@dude/design-system/primitives";
 import type { SessionDetail, SessionLink, SessionMemberView } from "@dude/domain";
-import type { ApiClient, Repository } from "../api/client.ts";
+import { ApiError, type ApiClient, type Repository } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople } from "../people.tsx";
 
@@ -42,10 +42,14 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave, ti
   const [repos, setRepos] = useState<Map<string, Repository[]>>(new Map());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // A refusal of the picks themselves (two projects under one key): the
+  // whole sentence, over the list it is about, not the footer's one line.
+  const [refused, setRefused] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     setPicked(new Map(linked.map((p) => [p.id, new Set(p.repositories.map((r) => r.id))])));
     setProblem(null);
+    setRefused(null);
   }, [open, linked]);
   const want = [...picked.keys()].filter((id) => !repos.has(id)).join(",");
   useEffect(() => {
@@ -72,11 +76,13 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave, ti
   const save = async () => {
     setBusy(true);
     setProblem(null);
+    setRefused(null);
     try {
       await onSave([...picked].map(([projectId, ids]) => ({ projectId, repositoryIds: [...ids] })));
       onClose();
     } catch (err) {
-      setProblem(errorText(err));
+      if (err instanceof ApiError && err.status === 409) setRefused(err.message);
+      else setProblem(errorText(err));
     } finally {
       setBusy(false);
     }
@@ -90,6 +96,7 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave, ti
         <Button variant="primary" disabled={busy} onClick={() => void save()} data-testid="link-save">{saveLabel}</Button>
       </>}>
       {lead}
+      {refused ? <Callout tone="danger" data-testid="link-refused">{refused}</Callout> : null}
       <ul className="sessionLinkList" data-testid="link-projects">
         {projects.map((p) => (
           <li key={p.id}>
