@@ -445,6 +445,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   reads as needs-you.
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+  A session has no task, so its composer's placeholder is its own,
+  "Message the brainstorm…", never the task Chat's "Ask about this task…";
+  an answer keeps "Type your answer…".
 - **The same bar as an agent session**, under the header: a `Segmented`
   switch between **Conversation** and **Events** (with its count), from
   the same parts as the Run screen's. There is no Changes: a session

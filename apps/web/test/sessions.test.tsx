@@ -204,6 +204,11 @@ describe("a brainstorm session's page", () => {
   });
 
   test("a message goes to the session's chat", async () => {
+    const placeholder = async (d: SessionDetail) =>
+      (await sessionPage(new SessionClient(d))).querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!.placeholder;
+    // A session has no task: its composer says who it writes to, not the task Chat's words.
+    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm…");
+    expect(await placeholder(detail("owner"))).not.toContain("task");
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);
     await write(page, "also, can the panel show cost estimates?");
@@ -235,6 +240,7 @@ describe("a brainstorm session's page", () => {
     ]);
     const page = await sessionPage(mine);
     const form = await until(() => page.querySelector("[data-testid=session-screen] form[data-mode=answer]"), "the answer composer");
+    expect(form.querySelector("textarea")!.placeholder).toBe("Type your answer…");
     const chip = [...form.querySelectorAll("button")].find((b) => b.textContent === "Experiment runs only")!;
     await click(chip);
     await settle();
