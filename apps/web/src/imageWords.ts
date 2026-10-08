@@ -68,7 +68,7 @@ export function usedByWords(uses: readonly ImageUse[], orgName: string): string 
  * A build's stages for BuildStages: waiting, building (and finishing),
  * for a version that can run containers checking it can, then pushed and
  * published. A failed check fails its own cell, and the build before it
- * is done.
+ * is done; a passed check stays done when the push after it fails.
  */
 export function buildStages(
   b: Pick<ImageBuild, "state" | "stage" | "kind" | "error"> & Partial<Pick<ImageBuild, "canRunContainers" | "containersCheck">>,
@@ -115,6 +115,14 @@ export function buildStages(
       { id: "build", label: finish ? "Dude layer built" : "Built", detail: spec, state: "done" },
       { id: "check", label: "Check containers", detail: b.containersCheck.detail, state: "failed" },
       { id: "done", label: finish ? "Dude layer not added" : "Not published", detail: `Not pushed · ${live}`, state: "todo" },
+    ];
+  }
+  if (b.containersCheck?.passed) {
+    return [
+      { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+      { id: "build", label: finish ? "Dude layer built" : "Built", detail: spec, state: "done" },
+      { id: "check", label: "Check containers", detail: b.containersCheck.detail, state: "done" },
+      { id: "done", label: b.state === "cancelled" ? "Cancelled" : finish ? "Dude layer not added" : "Not published", detail: b.error ?? live, state: "failed" },
     ];
   }
   return [

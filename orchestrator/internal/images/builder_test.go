@@ -39,6 +39,8 @@ type fakePodman struct {
 	block   chan struct{}
 	// Closed, when set, once a build is blocked on block.
 	blocked chan struct{}
+	// The job's stage at each push, in order.
+	pushStages []string
 }
 
 func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]string, log io.Writer) error {
@@ -74,6 +76,12 @@ func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]st
 }
 
 func (f *fakePodman) Push(_ context.Context, tag string, log io.Writer) (string, error) {
+	if p, ok := log.(*progress); ok {
+		_, stage := p.full()
+		f.mu.Lock()
+		f.pushStages = append(f.pushStages, stage)
+		f.mu.Unlock()
+	}
 	if f.fail != nil {
 		if out, err := f.fail("push", tag, ""); err != nil {
 			fmt.Fprint(log, out)
@@ -752,5 +760,30 @@ func TestAFinishOfAVersionThatCanRunContainersIsCheckedToo(t *testing.T) {
 	}
 	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_p1'`); got != "published" {
 		t.Errorf("version = %s", got)
+	}
+}
+
+// The final's push, once its check passed, is the pushing stage; when it
+// fails the passed check stays saved beside the push's failure.
+func TestAPassedCheckIsDoneWhileTheFinalIsPushedAndAfterItsPushFails(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	build := f.queue("img_p", "imv_p1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	final := FinalTag(repo, "imv_p1", layer)
+	f.podman.fail = func(op, tag, _ string) (string, error) {
+		if op == "push" && tag == final {
+			return "Error: pushing " + tag + ": 502 Bad Gateway\n", errors.New("exit status 125")
+		}
+		return "", nil
+	}
+	f.once()
+	if got := strings.Join(f.podman.pushStages, " "); got != "pushing pushing" {
+		t.Errorf("stages at each push = %q, want the user image's and the final's both pushing", got)
+	}
+	got := f.row(`SELECT state, error, containers_check->>'passed' FROM image_builds WHERE id = $1`, build)
+	if got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "pushing to the registry failed: ") || got[2] != "true" {
+		t.Errorf("build = %v", got)
 	}
 }
