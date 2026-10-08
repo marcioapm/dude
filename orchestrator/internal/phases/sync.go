@@ -1555,9 +1555,9 @@ func pushRequest(r phaseRun) string {
 // (runs.keep) is stopped and kept until kept_until, its workspace and the
 // agent's conversation with it; then, or straight away for any other, it is
 // cancelled. A succeeded lux Run is kept as a stopped one is: lux resumes
-// it (a lux from before refuses, and the resume fails it). A conductor is
-// never kept: nothing resumes an ended one, and the next message starts
-// another.
+// it (a lux from before refuses, and the resume fails it). A conductor or
+// session agent is never kept: nothing resumes an ended one, and the next
+// message starts another.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
@@ -1608,9 +1608,10 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 // retireBatch bounds how many completed Runs one pass terminates in lux.
 const retireBatch = 100
 
-// RetireCompleted terminates the lux Run of every completed phase Run and
-// ended conductor: nothing in dude resumes one (only a failed or aborted
-// Run is kept, and a conductor's next message starts another), and lux
+// RetireCompleted terminates the lux Run of every completed phase Run,
+// conductor and session agent: nothing in dude resumes one (only a failed
+// or aborted Run is kept, and a conductor's or session's next message
+// starts another), and lux
 // keeps a stopped or succeeded Run, and its storage, for 90 days. finish
 // stops it rather than terminating it so its exit is collected as any
 // stop's is; it is terminated once the artifacts sweep has collected that
