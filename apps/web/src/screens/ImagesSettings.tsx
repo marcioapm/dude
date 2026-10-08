@@ -503,7 +503,7 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
           {previewsLose ? (
             <p className="imageContainersHint" id={`${fieldId}-warning`} data-testid="containers-off-warning">
               <Icon name="warning" size={12} />
-              New previews of this image can’t run containers. Previews already running keep theirs until they start a fresh run.
+              New previews of this image can’t run containers. Existing ones keep theirs until they start a fresh run.
             </p>
           ) : null}
         </div>

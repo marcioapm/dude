@@ -95,7 +95,7 @@ def test_a_preview_on_an_image_that_can_keeps_its_engine_store(client: ApiClient
 # ---------------------------------------------------------------------------
 
 
-OFF_WARNING = "New previews of this image can’t run containers. Previews already running keep theirs until they start a fresh run."
+OFF_WARNING = "New previews of this image can’t run containers. Existing ones keep theirs until they start a fresh run."
 
 
 def _library(client: ApiClient, dsn: str) -> dict:
