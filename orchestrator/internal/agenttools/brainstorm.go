@@ -40,8 +40,8 @@ var brainstormTools = []tool{
 	define("search_memory", "Search what is known in a linked project — memories, tasks, epics — and the "+
 		"organisation's own memories, by words and by meaning, best first.", brainstorms, sessionSearchMemory).before(embedQuery),
 	define("get_memory", "Read one memory in full, by the id search_memory gave.", brainstorms, sessionGetMemory),
-	define("remember", "Save something worth knowing next time, for a linked project (or, scope organization, for "+
-		"everyone): a fact that holds, a procedure that works, a trap and its way around. Search first.",
+	define("remember", "Save something worth knowing next time, for this session: only its members and its agent "+
+		"will find it. A fact that holds, a procedure that works, a trap and its way around. Search first.",
 		brainstorms, sessionRemember).limit(remembersPerRun),
 	define("propose", "Put work on the session's proposal card, for a member to file with a click, as themselves: "+
 		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task. "+
