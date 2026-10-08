@@ -7,6 +7,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,4 +70,6 @@ func TestARunLuxTimesOutFailsAndEscalates(t *testing.T) {
 	if got := w.escalationReason(wi); got != "implement_failed" {
 		t.Errorf("escalated for %q, want implement_failed", got)
 	}
+	// Not kept, so nothing resumes it: its failed lux Run is terminated.
+	w.until("the timed-out lux Run terminated", func() bool { return slices.Contains(w.lux.CallsOf(luxID), "cancel") })
 }
