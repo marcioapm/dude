@@ -129,7 +129,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     }
     for (const e of events) {
       const text = sessionNotice(e, people);
-      if (text) out.push({ id: e.eventId, at: e.occurredAt, node: <ChatNotice key={e.eventId} kind="notice" by={dudeName(sessionId)} text={text} at={e.occurredAt} data-testid="session-notice" /> });
+      if (text) out.push({ id: e.eventId, at: e.occurredAt, node: <ChatNotice key={e.eventId}
+        kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : "notice"}
+        by={dudeName(sessionId)} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
     return out.sort((a, b) => a.at.localeCompare(b.at));
   }, [detail, events, people, client, sessionId, linkedKeys, load]);
@@ -251,6 +253,8 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
   const name = (id: unknown) => (typeof id === "string" ? people.names.get(id) ?? "someone" : "someone");
   const by = name(e.actor?.id);
   switch (e.eventType) {
+    case EventTypes.BrainstormTurnStopped:
+      return `Stopped Brainstorm's turn: ${typeof p.tool === "string" ? p.tool : "tool"} was open for 10\u00a0min.`;
     case EventTypes.BrainstormShared: {
       const who = Array.isArray(p.people) ? p.people.map(name) : [];
       if (p.role === "owner") return `${by} asked ${who.join(", ")} to take the session over.`;

@@ -6,6 +6,13 @@
  * consumed by the Python E2E suite.
  */
 
+export interface BrainstormTurnStopped {
+  readonly runId: string;
+  readonly tool: string;
+  readonly openSecs: number;
+  readonly directiveId: string;
+}
+
 export const EventTypes = {
   // Project lifecycle
   ProjectCreated: "project.created",
@@ -78,6 +85,8 @@ export const EventTypes = {
   BrainstormBriefed: "session.briefed",
   /** dude told the session's agent something (who owns it now). Payload: `{ text, directiveId }`. */
   BrainstormTold: "session.told",
+  /** dude interrupted a turn with an overdue open call. Payload: `BrainstormTurnStopped`. */
+  BrainstormTurnStopped: "session.turn_stopped",
   /**
    * A member has the session open, or no longer. Live only, never in the
    * ledger, and only to the session's members. Payload: `{ personId, open }`.
