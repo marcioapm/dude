@@ -260,6 +260,10 @@ func (p *Previews) imageOutcome(ctx context.Context, r previewRun, err error, wa
 	return false, err
 }
 
+// EngineStore is where a preview that can run containers keeps podman's
+// and Docker's images, containers and data across sleep.
+const EngineStore = "/home/agent/.local/share"
+
 // previewRef is one repository of a preview, at the ref it previews.
 type previewRef struct{ Name, URL, Ref string }
 
@@ -440,6 +444,14 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	phases.MachineSpec(machine, &spec)
 	if nested {
 		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+		// lux puts each engine's store on an ephemeral volume under
+		// $XDG_DATA_HOME, so a sleeping preview would wake to rebuild every
+		// container; a state volume over $XDG_DATA_HOME keeps them both
+		// (lux runspec "Nested containers"). Set in env so lux and the
+		// engines agree on it whatever HOME passwd gives the image's uid:
+		// library images and DUDE_AGENT_IMAGE run as agent, home /home/agent.
+		spec.Env = map[string]string{"XDG_DATA_HOME": EngineStore}
+		spec.Volumes = append(spec.Volumes, lux.Volume{Name: "engines", Path: EngineStore, Kind: "state"})
 	}
 	return spec, branch, machine, got, nil
 }
