@@ -8,6 +8,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -48,27 +49,50 @@ func (a *afterAttach) AttachServer(ctx context.Context, serverID, runID string) 
 // (failed, lost, stopped), counting no failed start, and replaces one that
 // never runs again (terminated, or cancelled from a lux before the rename);
 // either then serves. A Run lux ended succeeded is covered by
-// TestASucceededPreviewRunIsResumedWhereLuxCan.
+// TestASucceededPreviewRunIsResumedWhereLuxCan. "refused" is a stopped Run
+// whose resume lux refuses (409 not_resumable): replaced as well.
+//
+// The preview's library image publishes a new version, with a new digest
+// and the other "Can run containers", while the Run is up. A resumed Run
+// keeps the image and sandbox it started with; a replacement resolves the
+// current version and asks lux for nested containers, and an engine store,
+// only as that version says.
 func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
-	for _, end := range []string{"failed", "lost", "stopped", "terminated", "cancelled"} {
+	const nextFinal = "registry.test/dude/custom@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	for _, end := range []string{"failed", "lost", "stopped", "terminated", "cancelled", "refused"} {
 		t.Run(end, func(t *testing.T) {
 			w := newWorld(t)
 			w.lux.CancelledState = end == "cancelled"
+			// cancelled turns the flag on; every other row turns it off.
+			before := end != "cancelled"
 			w.wakeable()
+			w.useLayer(imageLayer)
+			w.canRunContainers(w.libraryImage("img_preview", "abs-preview", true), before)
+			mustExec(t, w.owner, `UPDATE projects SET preview_image_id = 'img_preview' WHERE id = $1`, w.project)
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			_, runID := w.declare()
 			web := w.serverID(runID, "web")
 			w.open(web)
 			w.running(runID, "web")
 			r := w.luxRuns()[0]
+			if first := submitted(t, r); nested(&first) != before {
+				t.Fatalf("the first Run: nested %v, want %v", nested(&first), before)
+			}
+			w.publishNext("img_preview", nextFinal, !before)
 			luxc := w.previews.Lux
-			w.previews.Lux = &afterAttach{Client: luxc, then: func() {
+			resumer, state := luxc, end
+			if end == "refused" {
+				resumer = &countingLux{Client: luxc, refuseResume: &lux.Error{Status: 409, Code: "not_resumable",
+					Message: "run cannot be resumed"}}
+				state = "stopped"
+			}
+			w.previews.Lux = &afterAttach{Client: resumer, then: func() {
 				switch end {
 				case "failed":
 					w.lux.Crash(r.ID)
 				case "lost":
 					w.lux.Lose(r.ID)
-				case "stopped":
+				case "stopped", "refused":
 					if err := luxc.Stop(context.Background(), r.ID); err != nil {
 						t.Error(err)
 					}
@@ -78,7 +102,7 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 					}
 				}
 				waitFor(t, "the follower to apply the end", func() bool {
-					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = $2`, runID, end) == 1
+					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = $2`, runID, state) == 1
 				})
 			}}
 			// A wake outstanding for a Run that is up: its acknowledgement was
@@ -88,18 +112,33 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				t.Fatal(err)
 			}
 			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = $2
-				AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL`, runID, end); n != 1 {
+				AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL`, runID, state); n != 1 {
 				t.Fatalf("the attach's answer was written over the end applied after it:\n%s", w.preview(runID))
 			}
 			w.sweepAgain(runID)
-			if end == "terminated" || end == "cancelled" {
+			image := func() (can, ref string) {
+				return w.str(`SELECT coalesce(image->>'canRunContainers', 'false') FROM runs WHERE id = $1`, runID),
+					w.str(`SELECT image->>'ref' FROM runs WHERE id = $1`, runID)
+			}
+			if end == "terminated" || end == "cancelled" || end == "refused" {
 				w.untilPreview(runID, "a new Run running", func() bool {
 					return len(w.luxRuns()) == 2 &&
 						w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 				})
 				w.open(web)
 				if r.Resumed != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
-					t.Fatalf("the cancelled Run: resumed %d, calls %v; want replaced\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+					t.Fatalf("the ended Run: resumed %d, calls %v; want replaced\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+				}
+				replacement := submitted(t, w.luxRuns()[1])
+				if nested(&replacement) != !before {
+					t.Errorf("the replacement: nested %v, want the current version's %v", nested(&replacement), !before)
+				}
+				keepsEngines(t, replacement, !before)
+				if replacement.Image.Ref != nextFinal {
+					t.Errorf("the replacement runs %s, want the current version's %s", replacement.Image.Ref, nextFinal)
+				}
+				if can, ref := image(); can != fmt.Sprint(!before) || ref != nextFinal {
+					t.Errorf("runs.image canRunContainers %s ref %s, want %v %s", can, ref, !before, nextFinal)
 				}
 				return
 			}
@@ -111,8 +150,30 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
 				t.Fatalf("%d lux runs, calls %v; want the Run that ran resumed\n%s", n, w.lux.CallsOf(r.ID), w.preview(runID))
 			}
+			// Resumed: lux's stored spec and the recorded image are the first's.
+			kept := submitted(t, r)
+			if nested(&kept) != before || kept.Image.Ref != finalRef {
+				t.Errorf("the resumed Run: nested %v on %s, want %v on %s", nested(&kept), kept.Image.Ref, before, finalRef)
+			}
+			keepsEngines(t, kept, before)
+			if can, ref := image(); can != fmt.Sprint(before) || ref != finalRef {
+				t.Errorf("runs.image canRunContainers %s ref %s, want %v %s", can, ref, before, finalRef)
+			}
 		})
 	}
+}
+
+// publishNext publishes version 2 of image, finished with imageLayer as
+// final, its "Can run containers" can; version 1 is superseded.
+func (w *world) publishNext(image, final string, can bool) {
+	w.t.Helper()
+	next := "imv_" + image + "_2"
+	mustExec(w.t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state, user_ref, can_run_containers)
+		VALUES ($1, $2, $3, 2, 'FROM debian', 'published', $4, $5)`, next, w.org, image, userRef, can)
+	mustExec(w.t, w.owner, `UPDATE image_versions SET state = 'superseded' WHERE image_id = $1 AND id <> $2`, image, next)
+	mustExec(w.t, w.owner, `UPDATE images SET published_version_id = $2 WHERE id = $1`, image, next)
+	mustExec(w.t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, $2, $3, $4)`,
+		w.org, next, imageLayer, final)
 }
 
 // slowReplay is lux whose output stream from the start of a Run's records
