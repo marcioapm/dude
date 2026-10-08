@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { CodeEditor, type CodeCompletion, type CodeDiagnostic } from "../../components/CodeEditor.tsx";
 import { CanRunContainersBadge, ImagePicker, ImageMark, type ImageChoiceView } from "../../components/ImagePicker.tsx";
@@ -120,20 +120,23 @@ const CONTAINERS_HISTORY: ImageHistoryVersion[] = [
 
 /** The image page's field: the box, its description, and the hint and warning beside it, each naming the box. */
 function ContainersFieldDemo({ on, hint, warning }: { readonly on: boolean; readonly hint?: boolean; readonly warning?: boolean }) {
-  const ids = [hint ? "g-containers-hint" : null, warning ? "g-containers-warning" : null].filter(Boolean).join(" ");
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const warningId = `${id}-warning`;
+  const ids = [hint ? hintId : null, warning ? warningId : null].filter(Boolean).join(" ");
   const line = { display: "flex", gap: 6, margin: "0 0 0 22px", fontSize: "var(--ds-text-xs)", color: "var(--ds-color-text-secondary)" } as const;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <Checkbox checked={on} label="Can run containers" aria-describedby={ids || undefined}
         description="Runs in this image can start containers inside with podman or Docker. dude checks the build can, and fails it if not." />
       {hint ? (
-        <p id="g-containers-hint" style={line}>
+        <p id={hintId} style={line}>
           <Icon name="warning" size={12} style={{ color: "var(--ds-tone-attention-fg)", marginTop: 2 }} />
           This Containerfile doesn't install podman or Docker. The build will fail its container check unless the base has them.
         </p>
       ) : null}
       {warning ? (
-        <p id="g-containers-warning" style={line}>
+        <p id={warningId} style={line}>
           <Icon name="warning" size={12} style={{ color: "var(--ds-tone-attention-fg)", marginTop: 2 }} />
           New previews of this image can't run containers. Existing ones keep theirs until they start a fresh run.
         </p>
