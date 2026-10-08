@@ -603,11 +603,10 @@ async function restorePrompt(ctx: RequestContext): Promise<Response> {
 
 /**
  * The names a project's agents looked up in the last `days` and lux
- * refused, most called first: one row per name, its calls summed across
- * Runs. A name the project's Runs would now reach (listed since, or under a
- * wildcard) is left out: it is no longer refused. At most the first 200
- * are listed, read from the first 500 so names allowed since still leave
- * 200 to show.
+ * refused, refused in the most Runs first: one row per name. A name the
+ * project's Runs would now reach (listed since, or under a wildcard) is
+ * left out: it is no longer refused. At most the first 200 are listed,
+ * read from the first 500 so names allowed since still leave 200 to show.
  */
 async function refusedNames(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
@@ -616,9 +615,9 @@ async function refusedNames(ctx: RequestContext): Promise<Response> {
   const [defaults, settings] = await Promise.all([networkDefaults(ctx), settingsLayers(ctx, projectId)]);
   const reach = network(settings, defaults).effective;
   const rows = await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
-    SELECT name, sum(count)::int AS calls, array_agg(DISTINCT role ORDER BY role) AS roles, max(last_at) AS "lastAt"
-    FROM agent_egress_refusals WHERE project_id = ${projectId} AND last_at > now() - make_interval(days => ${days})
-    GROUP BY name ORDER BY calls DESC, name LIMIT 500`) as RefusedName[];
+    SELECT name, count(*)::int AS runs, array_agg(DISTINCT role ORDER BY role) AS roles, max(refused_at) AS "lastAt"
+    FROM agent_egress_refusals WHERE project_id = ${projectId} AND refused_at > now() - make_interval(days => ${days})
+    GROUP BY name ORDER BY runs DESC, name LIMIT 500`) as RefusedName[];
   return json({ refused: rows.filter((r) => !egressAllows(reach, r.name)).slice(0, 200) });
 }
 

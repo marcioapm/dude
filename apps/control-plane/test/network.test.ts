@@ -177,21 +177,23 @@ describe("a project's list", () => {
 });
 
 describe("names refused recently", () => {
-  test("are each name the project's agents were refused in the window, with how often and by whom, most called first", async () => {
-    await owner`INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role, count, last_at) VALUES
-      ('run_a', 'files.pythonhosted.org', ${ORG}, ${PROJECT}, 'fixer', 30, now() - interval '1 hour'),
-      ('run_b', 'files.pythonhosted.org', ${ORG}, ${PROJECT}, 'implementer', 11, now() - interval '2 hours'),
-      ('run_a', 'registry.npmjs.org', ${ORG}, ${PROJECT}, 'reviewer', 4, now() - interval '3 hours'),
-      ('run_a', 'api.github.com', ${ORG}, ${PROJECT}, 'fixer', 2, now()),
-      ('run_old', 'old.example.com', ${ORG}, ${PROJECT}, 'fixer', 9, now() - interval '8 days'),
-      ('run_other', 'secret.other.example', ${OTHER}, ${OTHER_PROJECT}, 'fixer', 1, now())`;
+  test("are each name the project's agents were refused in the window, in how many Runs and by whom, most Runs first", async () => {
+    await owner`INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role, refused_at) VALUES
+      ('run_a', 'files.pythonhosted.org', ${ORG}, ${PROJECT}, 'fixer', now() - interval '1 hour'),
+      ('run_b', 'files.pythonhosted.org', ${ORG}, ${PROJECT}, 'implementer', now() - interval '2 hours'),
+      ('run_a', 'registry.npmjs.org', ${ORG}, ${PROJECT}, 'reviewer', now() - interval '3 hours'),
+      ('run_b', 'a.example.net', ${ORG}, ${PROJECT}, 'implementer', now() - interval '3 hours'),
+      ('run_a', 'api.github.com', ${ORG}, ${PROJECT}, 'fixer', now()),
+      ('run_old', 'old.example.com', ${ORG}, ${PROJECT}, 'fixer', now() - interval '8 days'),
+      ('run_other', 'secret.other.example', ${OTHER}, ${OTHER_PROJECT}, 'fixer', now())`;
     const res = await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused?days=7`);
     expect(res.status).toBe(200);
     const refused = (await body(res)).refused;
     // api.github.com is under *.github.com now: allowed since, not listed.
-    expect(refused.map((r: Json) => [r.name, r.calls, r.roles])).toEqual([
-      ["files.pythonhosted.org", 41, ["fixer", "implementer"]],
-      ["registry.npmjs.org", 4, ["reviewer"]],
+    expect(refused.map((r: Json) => [r.name, r.runs, r.roles])).toEqual([
+      ["files.pythonhosted.org", 2, ["fixer", "implementer"]],
+      ["a.example.net", 1, ["implementer"]],
+      ["registry.npmjs.org", 1, ["reviewer"]],
     ]);
     expect(Date.parse(refused[0].lastAt)).toBeGreaterThan(0);
     const older = (await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused?days=30`))).refused;
@@ -202,12 +204,12 @@ describe("names refused recently", () => {
   test("Allow appends them to the project's list, and they are no longer refused", async () => {
     expect((await call(memberKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["registry.npmjs.org"] })).status).toBe(403);
     expect((await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["*.com"] })).status).toBe(400);
-    const res = await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["Registry.npmjs.org", "files.pythonhosted.org"] });
+    const res = await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["Registry.npmjs.org", "files.pythonhosted.org", "a.example.net"] });
     expect(res.status).toBe(200);
-    expect((await body(res)).network.egress.value).toEqual(["registry.npmjs.org", "files.pythonhosted.org"]);
+    expect((await body(res)).network.egress.value).toEqual(["registry.npmjs.org", "files.pythonhosted.org", "a.example.net"]);
     // Allowed again: listed once.
     await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["registry.npmjs.org"] });
-    expect((await projectNetwork()).egress.value).toEqual(["registry.npmjs.org", "files.pythonhosted.org"]);
+    expect((await projectNetwork()).egress.value).toEqual(["registry.npmjs.org", "files.pythonhosted.org", "a.example.net"]);
     expect((await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused`))).refused).toEqual([]);
   });
 

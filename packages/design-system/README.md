@@ -1565,8 +1565,8 @@ MarkdownCheatsheet.
   listed.
 - **HostPresets / RefusedHosts / NetworkRefusedNote** — the agent network:
   a toolchain's hosts added by name, ticked when the list already reaches
-  them all; the hosts agents were refused, with Allow on each and Allow
-  all; and, in a Run, the note a tool call whose output names a refused
+  them all; the hosts agents were refused, in how many Runs, with Allow on
+  each and Allow all; and, in a Run, the note a tool call whose output names a refused
   host carries as `ToolCallCard`'s `note` — under the card, folded or
   open, with Allow for the project and Settings.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way

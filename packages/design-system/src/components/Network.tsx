@@ -49,7 +49,8 @@ export function HostPresets({ presets, has, onAdd, disabled, className, ...rest 
 
 export interface RefusedHost {
   readonly name: string;
-  readonly calls: number;
+  /** How many Runs were refused it. */
+  readonly runs: number;
   readonly roles: ReadonlyArray<string>;
 }
 
@@ -62,7 +63,7 @@ export interface RefusedHostsProps extends HTMLAttributes<HTMLDivElement> {
   readonly disabled?: boolean | undefined;
 }
 
-/** Hosts agents tried and were refused, most called first, each with Allow, and Allow all. */
+/** Hosts agents tried and were refused, in the most Runs first, each with Allow, and Allow all. */
 export function RefusedHosts({ refused, target, onAllow, disabled, className, ...rest }: RefusedHostsProps) {
   return (
     <div className={cx(styles["refused"], className)} {...rest}>
@@ -70,7 +71,7 @@ export function RefusedHosts({ refused, target, onAllow, disabled, className, ..
         <THead>
           <Tr>
             <Th>Host</Th>
-            <Th align="right" width="64px">Calls</Th>
+            <Th align="right" width="64px">Runs</Th>
             <Th>By</Th>
             {onAllow ? <Th align="right" width="88px"><span className="ds-sr-only">Allow</span></Th> : null}
           </Tr>
@@ -79,7 +80,7 @@ export function RefusedHosts({ refused, target, onAllow, disabled, className, ..
           {refused.map((r) => (
             <Tr key={r.name} data-refused={r.name}>
               <Td mono>{r.name}</Td>
-              <Td align="right">{r.calls}</Td>
+              <Td align="right">{r.runs}</Td>
               <Td muted title={r.roles.join(", ")}>
                 <span className={styles["by"]}><Icon name="agent" size={12} />{r.roles.join(", ")}</span>
               </Td>

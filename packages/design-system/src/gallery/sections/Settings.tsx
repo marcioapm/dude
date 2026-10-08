@@ -193,8 +193,8 @@ function NetworkDemo() {
   const org = ["github.com", "*.github.com", "objects.githubusercontent.com"];
   const [own, setOwn] = useState(["pypi.org"]);
   const [refused, setRefused] = useState([
-    { name: "files.pythonhosted.org", calls: 41, roles: ["fixer", "implementer"] },
-    { name: "registry.npmjs.org", calls: 4, roles: ["reviewer"] },
+    { name: "files.pythonhosted.org", runs: 12, roles: ["fixer", "implementer"] },
+    { name: "registry.npmjs.org", runs: 2, roles: ["reviewer"] },
   ]);
   const [allowed, setAllowed] = useState(false);
   const allow = (names: string[]) => {

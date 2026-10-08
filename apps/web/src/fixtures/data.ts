@@ -320,8 +320,8 @@ export const SETTINGS: SettingsResponse = {
 
 /** What the project's agents were refused, as its Network page lists it. */
 export const REFUSED: RefusedName[] = [
-  { name: "files.pythonhosted.org", calls: 41, roles: ["fixer", "implementer"], lastAt: iso(20 * MIN) },
-  { name: "registry.npmjs.org", calls: 4, roles: ["reviewer"], lastAt: iso(3 * 60 * MIN) },
+  { name: "files.pythonhosted.org", runs: 12, roles: ["fixer", "implementer"], lastAt: iso(20 * MIN) },
+  { name: "registry.npmjs.org", runs: 2, roles: ["reviewer"], lastAt: iso(3 * 60 * MIN) },
 ];
 
 /** The organisation's machine sizes: lux's own default, and a bigger one the implementer runs on. */

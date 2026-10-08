@@ -205,10 +205,11 @@ after it: lux cannot change a live Run's rules, and a Run keeps what it was
 submitted with (`runs.network`) through its resumes. A session's agent gets
 its organisation's list.
 
-lux reports every distinct name a Run looks up as a `dns` event. dude keeps
-those lux refused (`agent_egress_refusals`, one row per Run and name) and
-says each once on the Run (`agent.network.refused`): the project's Network
-page lists the last 7 days' under **Refused recently**, with Allow, and a
+lux reports every distinct name a Run looks up as a `dns` event. dude says
+each one lux refused once on the Run (`agent.network.refused`), and for a
+project's Run keeps it (`agent_egress_refusals`, one row per Run and name),
+up to 100 names a Run: the project's Network page lists the last 7 days'
+under **Refused recently**, in how many Runs, with Allow, and a
 tool call whose output names one carries a note with **Allow for
 <project>** (`POST /v1/projects/:id/network/allow`).
 

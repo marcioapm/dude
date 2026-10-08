@@ -98,7 +98,7 @@ def test_a_refused_lookup_is_listed_and_allow_clears_it(env, client: ApiClient, 
     assert all(p["role"] == "implementer" for p in refused)
 
     listed = client.get(f"/v1/projects/{pid}/network/refused?days=7").json()["refused"]
-    assert sorted((r["name"], r["calls"], r["roles"]) for r in listed) == [
+    assert sorted((r["name"], r["runs"], r["roles"]) for r in listed) == [
         ("files.pythonhosted.org", 1, ["implementer"]), ("registry.npmjs.org", 1, ["implementer"])]
     assert second_org["client"].get(f"/v1/projects/{pid}/network/refused").status_code == 404
 

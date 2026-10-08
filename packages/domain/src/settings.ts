@@ -217,8 +217,8 @@ export const allowNamesSchema = z.object({ names: agentEgressSchema.refine((n) =
 /** A name agents of a project looked up and lux refused, as its Network page lists it. */
 export interface RefusedName {
   name: string;
-  /** How many times, across the project's Runs. */
-  calls: number;
+  /** How many of the project's Runs were refused it. */
+  runs: number;
   /** The roles whose Runs looked it up, as their settings name them. */
   roles: string[];
   lastAt: string;

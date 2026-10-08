@@ -55,13 +55,14 @@ describe("HostPresets", () => {
 
 describe("RefusedHosts", () => {
   const refused = [
-    { name: "files.pythonhosted.org", calls: 41, roles: ["fixer", "implementer"] },
-    { name: "registry.npmjs.org", calls: 4, roles: ["reviewer"] },
+    { name: "files.pythonhosted.org", runs: 12, roles: ["fixer", "implementer"] },
+    { name: "registry.npmjs.org", runs: 2, roles: ["reviewer"] },
   ];
 
-  test("a row per host with its calls and who, Allow on each and Allow all", () => {
+  test("a row per host with how many Runs and who, Allow on each and Allow all", () => {
     const h = html(<RefusedHosts refused={refused} onAllow={() => {}} target="jervasion" />);
-    expect(text(h)).toContain("files.pythonhosted.org 41 fixer, implementer");
+    expect(text(h)).toContain("Host Runs By");
+    expect(text(h)).toContain("files.pythonhosted.org 12 fixer, implementer");
     expect(buttons(h)).toEqual(["Allow", "Allow", "Allow all 2"]);
     expect(text(h)).toContain("Adds them to jervasion’s list. The next Run on this project gets them.");
   });
@@ -69,7 +70,7 @@ describe("RefusedHosts", () => {
   test("read-only, nothing can be allowed", () => {
     const h = html(<RefusedHosts refused={refused} target="jervasion" />);
     expect(buttons(h)).toEqual([]);
-    expect(text(h)).toContain("registry.npmjs.org 4 reviewer");
+    expect(text(h)).toContain("registry.npmjs.org 2 reviewer");
   });
 });
 

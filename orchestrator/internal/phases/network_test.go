@@ -24,9 +24,9 @@ func (w *receiptWorld) dns(name string, allowed bool) {
 }
 
 // A name lux refused is said once on the Run, with the agent's role, and
-// counted for the project's Network page; one it allowed is noise, and
+// kept once for the project's Network page; one it allowed is noise, and
 // nothing of what it answered is kept.
-func TestARefusedLookupIsSaidOnceAndCountedForTheProject(t *testing.T) {
+func TestARefusedLookupIsSaidOnceAndKeptForTheProject(t *testing.T) {
 	w := newReceiptWorld(t)
 	w.tr.run.Phase, w.tr.run.Role = "fix", "implementer"
 	w.dns("files.pythonhosted.org", false)
@@ -47,13 +47,12 @@ func TestARefusedLookupIsSaidOnceAndCountedForTheProject(t *testing.T) {
 		t.Errorf("refused events = %v, want one for files.pythonhosted.org by the fixer", events)
 	}
 	var project, role string
-	var count int
-	if err := w.owner.QueryRow(context.Background(), `SELECT project_id, role, count FROM agent_egress_refusals
-		WHERE run_id = $1 AND name = 'files.pythonhosted.org'`, w.tr.run.ID).Scan(&project, &role, &count); err != nil {
+	if err := w.owner.QueryRow(context.Background(), `SELECT project_id, role FROM agent_egress_refusals
+		WHERE run_id = $1 AND name = 'files.pythonhosted.org'`, w.tr.run.ID).Scan(&project, &role); err != nil {
 		t.Fatal(err)
 	}
-	if project != w.tr.run.ProjectID || role != "fixer" || count != 3 {
-		t.Errorf("refusal = %s %s %d, want the project's, the fixer's, three times", project, role, count)
+	if project != w.tr.run.ProjectID || role != "fixer" {
+		t.Errorf("refusal = %s %s, want the project's, the fixer's", project, role)
 	}
 	if n := w.events(evNetworkRefused); n != 1 {
 		t.Errorf("%d refused events in all, want 1", n)
@@ -62,6 +61,20 @@ func TestARefusedLookupIsSaidOnceAndCountedForTheProject(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals WHERE name = 'api.github.com'`).Scan(&allowed)
 	if allowed != 0 {
 		t.Error("an allowed lookup was counted as refused")
+	}
+}
+
+// A session's Run is told what lux refused it, as a project's is; with no
+// project page to list them, nothing is kept.
+func TestASessionsRefusedLookupIsSaidAndNotKept(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.tr.run.ProjectID, w.tr.run.Role = "", "brainstorm"
+	w.dns("pypi.org", false)
+	w.dns("pypi.org", false)
+	var rows int
+	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals`).Scan(&rows)
+	if n := w.events(evNetworkRefused); rows != 0 || n != 1 {
+		t.Errorf("%d rows, %d events; want none kept and one said", rows, n)
 	}
 }
 
