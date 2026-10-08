@@ -93,27 +93,49 @@ test("a project with a digit in its key numbers its tasks under it: PAY2-1", asy
   expect(((await res.json()) as { key: string }).key).toBe("PAY2-1");
 });
 
-/** Holds this organisation's project inserts for a second, so two creates both read before either writes. */
-async function slowInserts(): Promise<() => Promise<void>> {
-  const fn = `slow_${org}`;
+const BARRIER_LOCK = 920_092;
+
+/**
+ * Runs two creates so that both read the taken keys before either inserts:
+ * a BEFORE INSERT trigger on this organisation's projects waits for an
+ * advisory lock this test holds, and the lock is released only once both
+ * inserts are blocked on it.
+ */
+async function bothReadThenInsert(requests: () => Array<Promise<Response>>): Promise<Response[]> {
+  const fn = `hold_${org}`;
   await owner.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN IF NEW.organization_id = '${org}' THEN PERFORM pg_sleep(1); END IF; RETURN NEW; END $$`);
+    BEGIN IF NEW.organization_id = '${org}' THEN PERFORM pg_advisory_xact_lock(${BARRIER_LOCK}); END IF; RETURN NEW; END $$`);
   await owner.unsafe(`CREATE TRIGGER ${fn} BEFORE INSERT ON projects FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
-  return async () => {
+  const holder = await owner.reserve();
+  let held = false;
+  try {
+    await holder`SELECT pg_advisory_lock(${BARRIER_LOCK})`;
+    held = true;
+    const pending = Promise.all(requests());
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const [{ waiting }] = (await owner`
+        SELECT count(*)::int AS waiting FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'advisory'
+          AND query LIKE '%INSERT INTO projects%'`) as Array<{ waiting: number }>;
+      if (waiting >= 2) break;
+      if (Date.now() > deadline) throw new Error(`only ${waiting} of 2 project inserts reached the barrier in 15 s`);
+      await Bun.sleep(20);
+    }
+    await holder`SELECT pg_advisory_unlock(${BARRIER_LOCK})`;
+    held = false;
+    return await pending;
+  } finally {
+    if (held) await holder`SELECT pg_advisory_unlock(${BARRIER_LOCK})`;
+    holder.release();
     await owner.unsafe(`DROP TRIGGER ${fn} ON projects`);
     await owner.unsafe(`DROP FUNCTION ${fn}()`);
-  };
+  }
 }
 
 test("two creates at once choosing one key: one is made, the other refused with the key's 409, never 500", async () => {
-  const restore = await slowInserts();
-  let got: Array<[number, Refusal | { key: string; name: string }]>;
-  try {
-    const both = await Promise.all([create("Search A", "search-a", "SRCH"), create("Search B", "search-b", "SRCH")]);
-    got = await Promise.all(both.map(async (r) => [r.status, await r.json()] as [number, Refusal | { key: string; name: string }]));
-  } finally {
-    await restore();
-  }
+  const both = await bothReadThenInsert(() => [create("Search A", "search-a", "SRCH"), create("Search B", "search-b", "SRCH")]);
+  const got = await Promise.all(both.map(async (r) => [r.status, await r.json()] as [number, Refusal | { key: string; name: string }]));
   expect(got.map(([s]) => s).sort()).toEqual([201, 409]);
   const made = got.find(([s]) => s === 201)![1] as { name: string };
   const refused = got.find(([s]) => s === 409)![1] as Refusal;
@@ -124,14 +146,8 @@ test("two creates at once choosing one key: one is made, the other refused with 
 }, 20_000);
 
 test("two creates at once deriving one key: both are made, under distinct keys", async () => {
-  const restore = await slowInserts();
-  let got: Array<[number, { key: string; slug: string }]>;
-  try {
-    const both = await Promise.all([create("Orders API", "orders-api"), create("Orders Worker", "orders-worker")]);
-    got = await Promise.all(both.map(async (r) => [r.status, await r.json()] as [number, { key: string; slug: string }]));
-  } finally {
-    await restore();
-  }
+  const both = await bothReadThenInsert(() => [create("Orders API", "orders-api"), create("Orders Worker", "orders-worker")]);
+  const got = await Promise.all(both.map(async (r) => [r.status, await r.json()] as [number, { key: string; slug: string }]));
   expect(got.map(([s]) => s)).toEqual([201, 201]);
   const bySlug = Object.fromEntries(got.map(([, p]) => [p.slug, p.key]));
   // Whichever lands first is ORDE; the other derives again and takes its next.
