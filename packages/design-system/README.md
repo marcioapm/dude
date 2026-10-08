@@ -445,6 +445,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   reads as needs-you.
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+- **The same bar as an agent session**, under the header: a `Segmented`
+  switch between **Conversation** and **Events** (with its count), from
+  the same parts as the Run screen's. There is no Changes: a session
+  changes no code. **Events** is the session's ledger — every event of
+  every Run it had, and its own `session.*` events — in the `EventStream`
+  of `EventRow`s an agent session's Events uses, each opening onto its
+  payload. Its members' alone: anyone else is told the session does not
+  exist.
 - **A session starts untitled and names itself.** New session (the list's,
   the sidebar's) makes one at once — no dialog, no title, nothing linked —
   and opens it with the composer focused; its owner links projects from the

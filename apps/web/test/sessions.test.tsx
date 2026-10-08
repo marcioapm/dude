@@ -490,6 +490,31 @@ describe("a session's files", () => {
   });
 });
 
+describe("a session's events", () => {
+  test("the switch is Conversation | Events (count), with no Changes; Events lists every Run's events and the session's own", async () => {
+    const other = "run_brainstorm2";
+    const client = new SessionClient(detail("read"), [
+      ev("chat.message", { text: "first" }, { type: "human", id: YOU }),
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, { type: "agent", id: RUN }),
+      { ...ev("agent.message", { text: "from the second Run" }, { type: "agent", id: other }), runId: other },
+      { ...ev("session.linked", { projects: [] }, { type: "human", id: YOU }), runId: null },
+    ]);
+    const page = await sessionPage(client);
+    const bar = await until(() => page.querySelector("[data-testid=session-view]"), "the switch");
+    const options = [...bar.querySelectorAll("button")].map((b) => b.textContent);
+    expect(options).toEqual(["Conversation", "Events4"]);
+    expect(page.querySelector("[data-testid=event-log]")).toBeNull();
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Events"))!);
+    const log = await until(() => page.querySelector("[data-testid=event-log]"), "the ledger");
+    expect(page.querySelector("[data-testid=session-composer]")).toBeNull();
+    const rows = log.textContent ?? "";
+    for (const type of ["chat.message", "session.renamed", "agent.message", "session.linked"]) expect(rows).toContain(type);
+    expect(rows).toContain("from the second Run");
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent === "Conversation")!);
+    await until(() => page.querySelector("[data-testid=session-composer]"), "the conversation again");
+  });
+});
+
 describe("what a session's ledger says in its Chat", () => {
   test("membership and handover, by name", () => {
     const people = { you: YOU, me: null, all: [], byId: new Map(), names: new Map([[YOU, ME.name], [ANA.id, ANA.name]]),
