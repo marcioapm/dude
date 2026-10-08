@@ -94,28 +94,36 @@ func (w *resumeWorld) stopReason() string {
 
 // A kept Run whose lux Run succeeded is kept as a stopped one is: lux
 // resumes a succeeded Run. Only a Run lux has ended for good, under either
-// name, is let go without a call.
+// name, is let go without a call; one whose kept_until has passed is
+// terminated, succeeded included.
 func TestAKeptRunThatSucceededInLuxIsKept(t *testing.T) {
 	for _, c := range []struct {
-		luxState, reason string
-		calls            []string
+		luxState    string
+		keepExpired bool
+		reason      string
+		calls       []string
 	}{
-		{"succeeded", "kept", nil},
-		{"stopped", "kept", nil},
-		{"failed", "kept", nil},
-		{"terminated", "cancel", nil},
-		{"cancelled", "cancel", nil},
+		{"succeeded", false, "kept", nil},
+		{"stopped", false, "kept", nil},
+		{"failed", false, "kept", nil},
+		{"terminated", false, "cancel", nil},
+		{"cancelled", false, "cancel", nil},
+		{"succeeded", true, "cancel", []string{"cancel lrun_1"}},
 	} {
-		t.Run(c.luxState, func(t *testing.T) {
+		t.Run(c.luxState+map[bool]string{true: "/expired"}[c.keepExpired], func(t *testing.T) {
 			w := newResumeWorld(t)
 			r, fake := endedRun(t, w, "failed", c.luxState, true)
+			if c.keepExpired {
+				w.exec(`UPDATE runs SET kept_until = now() - interval '1 second' WHERE id = $1`, r.ID)
+				r.KeepExpired = true
+			}
 			if err := w.s.end(w.ctx, r); err != nil {
 				t.Fatal(err)
 			}
 			if got := w.stopReason(); got != c.reason {
 				t.Errorf("lux_stop_reason %q, want %q", got, c.reason)
 			}
-			// lux reports every one of these as over: nothing to stop.
+			// Kept, or lux reports it over: nothing to stop. Expired: terminated.
 			if got := fake.Calls(); !slices.Equal(got, c.calls) {
 				t.Errorf("asked lux %v, want %v", got, c.calls)
 			}
