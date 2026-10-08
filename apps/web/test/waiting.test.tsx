@@ -174,6 +174,20 @@ describe("useRunServers: why a Run waits", () => {
     expect(client.reads).toEqual(["run_1", "run_1", "run_1"]);
   });
 
+  test("a Run that ends during a read with lux's state changed is not asked again", async () => {
+    const client = new HeldClient();
+    client.reasons.set("run_1", NESTED);
+    client.holdNext = true;
+    const page = await harness(client, { runId: "run_1", status: "scheduled", waitAsk: 0 });
+    await until(() => (client.reads.length === 1 ? true : null), "the held read started");
+    await act(async () => drive!({ runId: "run_1", status: "scheduled", waitAsk: 1 }));
+    await act(async () => drive!({ runId: "run_1", status: "completed", waitAsk: 1 }));
+    await act(async () => client.release());
+    await settle(100);
+    expect(client.reads).toEqual(["run_1"]);
+    expect(callout(page)).toBeNull();
+  });
+
   test("any other reason of lux's is shown as lux wrote it, with one period", async () => {
     const client = new WaitClient();
     client.reasons.set("run_1", "waiting for capacity: 2 hosts in its pool lack cpus (requested 4).");
