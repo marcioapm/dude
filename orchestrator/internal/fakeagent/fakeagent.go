@@ -176,8 +176,16 @@ const Brainstorm = "brainstorm"
 const BrainstormMessage = "## The first message\n\n"
 
 // brainstormLead is how a session agent's briefing names its session
-// (delivery.sessionBriefing): its title, quoted.
-const brainstormLead = "Brainstorm, this is the session "
+// (delivery.sessionBriefing): its title, quoted; brainstormUntitled, how it
+// opens before the session has one.
+const (
+	brainstormLead     = "Brainstorm, this is the session "
+	brainstormUntitled = "Brainstorm, this is a new session"
+)
+
+// UntitledSession is what the scripted reply calls a session not named yet,
+// as people see it (delivery.UntitledSession).
+const UntitledSession = "New session"
 
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
@@ -228,8 +236,11 @@ func ConductorScript(briefing string) string {
 }
 
 // sessionTitle is the session's title a session agent's briefing opens
-// with, and whether it is one.
+// with, "New session" for one not named yet, and whether it is one.
 func sessionTitle(briefing string) (string, bool) {
+	if strings.HasPrefix(briefing, brainstormUntitled) {
+		return UntitledSession, true
+	}
 	rest, ok := strings.CutPrefix(briefing, brainstormLead)
 	if !ok {
 		return "", false
