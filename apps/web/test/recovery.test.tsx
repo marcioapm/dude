@@ -53,6 +53,18 @@ const openTab = (page: HTMLElement, name: string) => act(async () => {
 });
 
 describe("a stopped task", () => {
+  test("a restarted Run is not the recovery stop when its replacement is still running", async () => {
+    const client = new FixtureClient("a");
+    const { runId } = await client.restart(RUN_ID, "Read the files yourself.");
+    const task = await client.getTask(TASK_ID);
+    client.getTask = async () => ({ ...task, status: "aborted", runs: task.runs.map((r): Run => r.id === runId
+      ? { ...r, status: "running", endedAt: null } : r) });
+    const page = await taskPage(client);
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
+    expect(notice.textContent).toContain("Delivery stopped");
+    expect(notice.textContent).not.toContain("Someone aborted the implement");
+  });
+
   for (const status of ["aborted", "failed"] as const) {
     test(`a restarted Run is not the recovery stop when its replacement is ${status}`, async () => {
       const client = new FixtureClient("a");
@@ -193,6 +205,18 @@ describe("a task started over", () => {
     const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the set-aside notice");
     expect(bar.textContent).toContain("stopped at Fix, failed");
     expect(bar.textContent).not.toContain("aborted");
+  });
+
+  test("an earlier attempt has no stopped-at attribution when its restarted Run's replacement is still running", async () => {
+    const client = restarted();
+    const { runId } = await client.restart("run_a1_fix", "Read the files yourself.");
+    const task = await client.getTask(TASK_ID);
+    client.getTask = async () => ({ ...task, runs: task.runs
+      .filter((r) => r.attempt !== 1 || r.id === "run_a1_fix" || r.id === runId)
+      .map((r): Run => r.id === runId ? { ...r, status: "running", endedAt: null } : r) });
+    const page = await onAttempt1(client);
+    const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the set-aside notice");
+    expect(bar.textContent).not.toContain("stopped at Fix");
   });
   /** What the page asked the URL to say: [tab, attempt, replace], in order. */
   function navigations() {
