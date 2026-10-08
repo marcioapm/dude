@@ -254,7 +254,7 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
   const by = name(e.actor?.id);
   switch (e.eventType) {
     case EventTypes.BrainstormTurnStopped:
-      return `Stopped Brainstorm's turn: ${typeof p.tool === "string" ? p.tool : "tool"} was open for 10 min.`;
+      return `Stopped Brainstorm's turn: ${typeof p.tool === "string" ? p.tool : "tool"} was open for 10\u00a0min.`;
     case EventTypes.BrainstormShared: {
       const who = Array.isArray(p.people) ? p.people.map(name) : [];
       if (p.role === "owner") return `${by} asked ${who.join(", ")} to take the session over.`;
