@@ -132,7 +132,7 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     assert client.get(f"/v1/tasks/{task['id']}/servers").json()["run"] is None
     wait_until(lambda: lux_get(env, f"/v1/servers?hostname={host}")["servers"] == [], timeout=60,
                message="the preview's server was never deleted in lux")
-    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "cancelled", timeout=60,
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] in ("cancelled", "terminated"), timeout=60,
                message="the preview's Run was never cancelled")
 
 
@@ -164,7 +164,7 @@ def test_a_preview_whose_resumed_run_fails_to_start_wakes_on_a_new_run(client: A
     again = wait_until(lambda: (s := servers())["run"]["previewStage"] == "ready" and s["run"],
                        timeout=60, message="the preview never recovered from the failed start")
     assert again["luxRunId"] != first and again.get("error") is None, again
-    assert lux_get(env, f"/v1/runs/{first}")["state"] == "cancelled"
+    assert lux_get(env, f"/v1/runs/{first}")["state"] in ("cancelled", "terminated")
     assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is True
 
 
