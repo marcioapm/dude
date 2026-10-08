@@ -154,6 +154,12 @@ export interface EventQuery {
   projectId?: string | undefined;
   eventTypes?: readonly string[] | undefined;
   limit?: number | undefined;
+  /**
+   * The person reading: a brainstorm session's events only if they are an
+   * accepted member (session_visible). Unset only for the process's own
+   * read that feeds the live bus, which filters per subscriber.
+   */
+  viewer?: string | undefined;
 }
 
 const DEFAULT_LIMIT = 200;
@@ -179,6 +185,7 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
         AND (${q.projectId ?? null}::text IS NULL OR project_id = ${q.projectId ?? null})
         AND (${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[] IS NULL
              OR event_type = ANY(${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[]))
+        AND (${q.viewer ?? null}::text IS NULL OR session_visible(session_id, ${q.viewer ?? null}))
       ORDER BY cursor ASC
       LIMIT ${limit}`) as EventRow[];
     return rows.map(toPersisted);

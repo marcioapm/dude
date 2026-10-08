@@ -42,11 +42,13 @@ const (
 	causeIdle       = "idle"
 	// A person's message to a parked conductor.
 	causeConductor = "conductor"
+	// A member's message to a session's parked agent.
+	causeSession = "session"
 )
 
 // resumeCause is why whilePaused resumes r: a person's Resume, of an idle
-// park or of anything else, a message to a parked conductor, or dude's own
-// reason being over.
+// park or of anything else, a message to a parked conductor or session
+// agent, or dude's own reason being over.
 func resumeCause(r phaseRun) string {
 	switch {
 	case r.Control == "resume" && r.DudePause == "idle":
@@ -57,6 +59,8 @@ func resumeCause(r phaseRun) string {
 		return causeRepository
 	case r.DudePause == "conductor":
 		return causeConductor
+	case r.DudePause == "session":
+		return causeSession
 	}
 	return causeAnswer
 }
@@ -106,6 +110,7 @@ const woken = `CASE $3
 	WHEN 'idle' THEN r.control_requested_at
 	WHEN 'repository' THEN (SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'approved')
 	WHEN 'conductor' THEN (SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
+	WHEN 'session' THEN (SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
 	ELSE (SELECT GREATEST(
 			(SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id AND q.answered_at >= park.at),
 			(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.blocking
@@ -363,7 +368,7 @@ func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
 	}
 	var due []untimed
 	if err := s.DB.InSystem(ctx, "resume-timing", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, rr.epoch
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''), rr.epoch
 			FROM run_resumes rr JOIN runs r ON r.id = rr.run_id
 			WHERE rr.timed_at IS NULL AND (rr.first_output_at IS NOT NULL OR rr.frames_missed)
 			  AND rr.created_at > now() - make_interval(secs => $1)

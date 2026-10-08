@@ -17,7 +17,11 @@ export type Place =
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
-  | { view: "inbox" };
+  | { view: "inbox" }
+  // Brainstorm sessions: the list, and one (`#/sessions/<id>`; `#/session/<id>`
+  // is an agent's session inside a task's Run).
+  | { view: "sessions" }
+  | { view: "brainstorm"; id: string };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
 export type TaskTab = "chat" | "findings" | "sessions" | "files" | "servers" | "activity";
@@ -42,6 +46,7 @@ export function parsePlace(hash: string): Place | null {
   }
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return { view: "inbox" };
+  if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
   if (kind === "project" && view === "settings") {
@@ -66,6 +71,10 @@ export function formatPlace(place: Place | null): string {
       return "#/me/settings";
     case "inbox":
       return "#/waiting";
+    case "sessions":
+      return "#/sessions";
+    case "brainstorm":
+      return `#/sessions/${encodeURIComponent(place.id)}`;
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
     case "tree":

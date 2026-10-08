@@ -62,6 +62,11 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    * they may answer.
    */
   readonly waitingOn?: string | undefined;
+  /**
+   * Put to `waitingOn` alone, with nothing to take over (a brainstorm
+   * session's question to one member): no "Take over this task" hint.
+   */
+  readonly onlyThey?: boolean | undefined;
   /** A question to answer (the default), or a request to decide: every word the card says follows. */
   readonly kind?: QuestionKind | undefined;
   /** Flash once on mount (a question that just arrived). */
@@ -90,9 +95,9 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, settledBy, onChoose, waitingOn, kind = "question", isNew, className, ...rest }: QuestionCardProps) {
+export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, settledBy, onChoose, waitingOn, onlyThey, kind = "question", isNew, className, ...rest }: QuestionCardProps) {
   const words = WORDS[kind];
-  const takeOver = `Take over this task to ${words.verb}`;
+  const takeOver = onlyThey ? `Only ${waitingOn} can ${words.verb} this one` : `Take over this task to ${words.verb}`;
   const answered = toDate(answeredAt);
   const state: QuestionState = answered ? "answered" : dismissed || settledBy ? "dismissed" : "waiting";
   const waiting = state === "waiting";

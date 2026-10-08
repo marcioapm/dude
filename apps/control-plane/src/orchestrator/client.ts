@@ -53,11 +53,11 @@ export async function orchestrator(
  * response as it came, for the caller to pass on. Only the time to its
  * first byte is limited; a large file may take as long as it takes.
  */
-export async function orchestratorStream(organizationId: string, path: string): Promise<Response> {
+export async function orchestratorStream(organizationId: string, path: string, actor?: Principal): Promise<Response> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), settings().orchestratorTimeouts.callMs);
   try {
-    return await call(organizationId, "GET", path, { signal: abort.signal });
+    return await call(organizationId, "GET", path, { signal: abort.signal, headers: identity(actor) });
   } finally {
     clearTimeout(timer);
   }

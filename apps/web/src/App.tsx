@@ -14,12 +14,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
+import type { SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
 import { AGENT_CHATTER, useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -33,6 +35,8 @@ import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
+import { SessionScreen } from "./screens/SessionScreen.tsx";
+import { NewSessionDialog, SessionsScreen } from "./screens/SessionsScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
 import { DudeMark } from "./DudeMark.tsx";
@@ -47,6 +51,7 @@ export interface AppProps {
 /** The one dialog the shell may have open. */
 type Open =
   | { kind: "newProject" }
+  | { kind: "newSession" }
   | { kind: "task"; projectId: string; epicId: string | null; editing?: string }
   | Extract<Intent, { kind: "newEpic" }>
   | Extract<Intent, { kind: "editEpic" }>
@@ -107,6 +112,14 @@ const MINE = "dude.tree.mine";
  */
 const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.PlanUpdated, EventTypes.WorkerHeartbeat]);
 
+/** A session's events that change your list of sessions or what waits on you. */
+const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
+  EventTypes.BrainstormCreated, EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined,
+  EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormFiled,
+  EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
+  EventTypes.RunPaused, EventTypes.RunResumed,
+]);
+
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
@@ -166,10 +179,34 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
+  // Your brainstorm sessions, invitations and questions put to you: the
+  // sidebar's list and the inbox's lines. Re-read when a session's event
+  // reaches you (the stream gives you only your sessions').
+  const [sessionsList, setSessionsList] = useState<SessionsList | null>(null);
+  const loadSessions = useCallback(async () => {
+    try {
+      setSessionsList(await client.sessions());
+    } catch {
+      // The list is a nicety beside the tree: kept as it was.
+    }
+  }, [client]);
+  // An invitation is not on your stream until you accept it: read again
+  // each minute while the page is shown, and once on showing it again.
+  useVisibleInterval(() => void loadSessions(), 60_000);
+  const reloadSessions = useRef(loadSessions);
+  reloadSessions.current = loadSessions;
+
   // Someone seen is presence, and an agent's words, tools, plan and diff
   // change nothing the tree shows: no reload for either.
   const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400,
-    (e) => people.seen(e) || QUIET_EVENTS.has(e.eventType));
+    (e) => {
+      if (people.seen(e)) return true;
+      if (e.sessionId?.startsWith("ssn_") || e.eventType.startsWith("session.")) {
+        if (SESSION_LIST_EVENTS.has(e.eventType)) void reloadSessions.current();
+        return true;
+      }
+      return QUIET_EVENTS.has(e.eventType);
+    });
 
   // First load with nothing selected: open the first project's board rather
   // than an empty pane. Unless the URL has named a place since `place` was
@@ -278,6 +315,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // The board fills the pane edge to edge; everything else sits in it with a margin.
   let flush = false;
   let main;
+  const openSession = (id: string) => go({ view: "brainstorm", id });
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
@@ -287,6 +325,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       onPage={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page }, !sub)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
+  } else if (place?.view === "sessions") {
+    main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} projects={projects ?? []} onOpen={(id) => {
+      void loadSessions();
+      openSession(id);
+    }} />;
+  } else if (place?.view === "brainstorm") {
+    flush = true;
+    main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
+      onChanged={() => void loadSessions()} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -303,7 +350,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     );
   } else if (place?.view === "inbox") {
     flush = true;
-    main = <InboxScreen client={client} projects={projects} onSelect={(ref) => go(inTree(ref))} onChanged={() => void load()} />;
+    main = <InboxScreen client={client} projects={projects} sessions={sessionsList} onSelect={(ref) => go(inTree(ref))}
+      onOpenSession={openSession} onChanged={() => {
+        void load();
+        void loadSessions();
+      }} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -463,6 +514,17 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
         onWaitingSelect={() => go({ view: "inbox" })}
         waitingSelected={place?.view === "inbox"}
+        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
+        sessions={
+          <SidebarSessions
+            sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: s.title, shared: s.shared,
+              owner: s.role === "owner" ? null : s.owner }))}
+            selected={place?.view === "brainstorm" ? place.id : null}
+            onSelect={openSession}
+            onOpenList={() => go({ view: "sessions" })}
+            onNew={() => setOpen({ kind: "newSession" })}
+          />
+        }
         mine={mine}
         onMineChange={(m) => {
           localStorage.setItem(MINE, m ? "1" : "0");
@@ -495,6 +557,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           </>
         }
       />
+      {open?.kind === "newSession" ? (
+        <NewSessionDialog client={client} projects={projects ?? []} open onClose={close} onCreated={(id) => {
+          close();
+          void loadSessions();
+          openSession(id);
+        }} />
+      ) : null}
       {open?.kind === "newProject" ? (
         <NewProjectDialog
           client={client}
@@ -561,6 +630,11 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Your settings";
     case "inbox":
       return "Waiting on you";
+    // Never a session's title: the tab's words reach teammates as presence.
+    case "sessions":
+      return "Sessions";
+    case "brainstorm":
+      return "A session";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
     case "tree": {

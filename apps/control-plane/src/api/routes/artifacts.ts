@@ -11,6 +11,7 @@
 
 import { withOrg } from "../../db/client.ts";
 import { orchestratorStream } from "../../orchestrator/client.ts";
+import type { Principal } from "../auth.ts";
 import { badRequest, HttpError, json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { zipStream, type ZipEntry } from "../zip.ts";
@@ -93,18 +94,23 @@ async function listArtifacts(ctx: RequestContext): Promise<Response> {
   return json({ artifacts: await artifactsOf(ctx.principal.organizationId, taskId) });
 }
 
-/** An artifact's row, in the caller's organization. */
-async function artifactNamed(organizationId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
+/** An artifact's row, in the caller's organization; a session's Run's, for its members only. */
+async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
   return withOrg(organizationId, async ({ sql }) => {
-    const [row] = (await sql`SELECT name, content_type AS "contentType" FROM artifacts WHERE id = ${id}`) as Array<{
+    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType" FROM artifacts a
+      LEFT JOIN runs r ON r.id = a.run_id
+      WHERE a.id = ${id} AND (r.session_id IS NULL OR session_role(r.session_id, ${personId}) IS NOT NULL)`) as Array<{
       name: string; contentType: string }>;
     return row;
   });
 }
 
-/** An artifact's bytes from lux, through the orchestrator. */
-function fetchContent(organizationId: string, id: string): Promise<Response> {
-  return orchestratorStream(organizationId, `/internal/artifacts/${encodeURIComponent(id)}/content`);
+/**
+ * An artifact's bytes from lux, through the orchestrator, as the person
+ * asking: it checks a session Run's artifact against them too.
+ */
+function fetchContent(principal: Principal, id: string): Promise<Response> {
+  return orchestratorStream(principal.organizationId, `/internal/artifacts/${encodeURIComponent(id)}/content`, principal);
 }
 
 /**
@@ -116,10 +122,10 @@ function fetchContent(organizationId: string, id: string): Promise<Response> {
 async function artifactContent(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
   const id = ctx.params.id!;
-  // Its name is needed only once the bytes come; asked for meanwhile.
-  const named = artifactNamed(organizationId, id);
-  named.catch(() => undefined);
-  const res = await fetchContent(organizationId, id);
+  // Asked for first: one the caller may not see is never fetched.
+  const artifact = await artifactNamed(organizationId, ctx.principal.personId, id);
+  if (!artifact) throw notFound(`artifact ${id} not found`);
+  const res = await fetchContent(ctx.principal, id);
   const headers = new Headers({
     "x-content-type-options": "nosniff",
     "content-security-policy": "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
@@ -132,8 +138,7 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
     headers.set("content-type", res.headers.get("content-type") ?? "application/json");
     return new Response(res.body, { status: res.status, headers });
   }
-  const artifact = await named;
-  const name = artifact?.name ?? "file";
+  const name = artifact.name || "file";
   let type = artifactType(res.headers.get("content-type"), name);
   let body: ReadableStream<Uint8Array> = res.body;
   if (GENERIC.has(bare(type))) {
@@ -192,7 +197,7 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
     for (const a of latest) {
       // The orchestrator unreachable throws rather than answers: that file
       // is missing too, not the end of the archive.
-      const res = await fetchContent(organizationId, a.id).catch(
+      const res = await fetchContent(ctx.principal, a.id).catch(
         (e: unknown) => new Response(null, { status: e instanceof HttpError ? e.status : 502 }),
       );
       if (!res.ok || !res.body) {

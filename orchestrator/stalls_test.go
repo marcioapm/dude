@@ -733,7 +733,7 @@ func TestAChangedDiffIsChangedFacts(t *testing.T) {
 // the file runs as the migrator runs it, in one transaction.
 func (w *world) migrate085() {
 	w.t.Helper()
-	sql, err := os.ReadFile("../migrations/085_stalled_runs.sql")
+	sql, err := os.ReadFile("../migrations/090_stalled_runs.sql")
 	if err != nil {
 		w.t.Fatal(err)
 	}

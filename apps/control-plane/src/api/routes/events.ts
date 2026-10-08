@@ -11,6 +11,7 @@
 import type { PersistedEvent } from "@dude/domain";
 import { eventBus } from "../../events/bus.ts";
 import * as ledger from "../../events/ledger.ts";
+import { canSee } from "../../events/visibility.ts";
 import { intParam, json } from "../http.ts";
 import type { RequestContext } from "../router.ts";
 import type { Router } from "../router.ts";
@@ -29,6 +30,7 @@ async function listEvents({ url, principal }: RequestContext): Promise<Response>
     ...filtersFrom(url),
     after: intParam(url, "after", { min: 0 }),
     limit: intParam(url, "limit", { min: 1, max: 1000 }),
+    viewer: principal.personId,
   });
 
   return json({
@@ -144,7 +146,11 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       // Buffer anything published while the backfill query is in flight.
       const pending: PersistedEvent[] = [];
       let backfilled = false;
-      unsubscribe = eventBus.subscribe(filter, (event) => {
+      // A brainstorm session's events go only to its members: each is
+      // checked (visibility.ts) in arrival order, one after the other, so
+      // the stream's cursor order holds.
+      let checked = Promise.resolve();
+      const deliver = (event: PersistedEvent) => {
         // Not in the ledger (presence, cursor 0): sent at once and without
         // an id, so a reconnect's Last-Event-ID stays the last ledger
         // event's. Only for streams watching what happens now.
@@ -152,6 +158,12 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
           if (liveOnly && !closed) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         } else if (backfilled) send(event);
         else pending.push(event);
+      };
+      unsubscribe = eventBus.subscribe(filter, (event) => {
+        checked = checked.then(async () => {
+          if (closed) return;
+          if (await canSee(principal.organizationId, principal.personId, event.sessionId).catch(() => false)) deliver(event);
+        });
       });
 
       try {
@@ -167,6 +179,7 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
             ...filtersFrom(url),
             after: cursor,
             limit: BACKFILL_PAGE,
+            viewer: principal.personId,
           });
           for (const event of page) send(event);
           if (page.length < BACKFILL_PAGE) break;

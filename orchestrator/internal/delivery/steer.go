@@ -64,8 +64,10 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 		in.Scope = "run"
 	}
 	var projectID, taskID, status, kind string
-	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, kind FROM runs WHERE id = $1 FOR UPDATE`, in.RunID).
-		Scan(&projectID, &taskID, &status, &kind)
+	// A session's Run is steered only by its members' messages in the
+	// session: to anyone else here it does not exist.
+	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, kind FROM runs WHERE id = $1 AND session_id IS NULL
+		FOR UPDATE`, in.RunID).Scan(&projectID, &taskID, &status, &kind)
 	if db.IsNotFound(err) {
 		return Steered{}, steerErr("not_found", "run %s not found", in.RunID)
 	}

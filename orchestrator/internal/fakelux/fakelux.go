@@ -667,7 +667,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
 		Publish: published, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
-		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor, OpenCalls: open}
+		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
 
 // Runs returns every Run submitted, in order.

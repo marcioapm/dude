@@ -32,6 +32,12 @@ func person(r *http.Request) memory.Actor {
 	return memory.Actor{Type: principalOf(r).ActorType, ID: principalOf(r).Actor}
 }
 
+// viewer is the caller as the memory reads them: a session's memories are
+// its accepted members' alone, an admin's included.
+func viewer(r *http.Request) memory.Viewer {
+	return memory.Viewer{Person: principalOf(r).Person}
+}
+
 // memoryError turns the package's refusals into the caller's.
 func memoryError(err error) error {
 	var bad *memory.Invalid
@@ -58,7 +64,7 @@ func (s *Server) memorySearch(w http.ResponseWriter, r *http.Request, org string
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
 		out, err = memory.Ranked(r.Context(), tx, emb, memory.Query{
-			Text: q.Get("q"), Project: q.Get("project"), Types: split(q.Get("types")), Limit: limit,
+			Text: q.Get("q"), Project: q.Get("project"), Types: split(q.Get("types")), Limit: limit, Viewer: viewer(r),
 		})
 		return err
 	})
@@ -76,7 +82,7 @@ func (s *Server) memoryList(w http.ResponseWriter, r *http.Request, org string) 
 		var err error
 		out, err = memory.List(r.Context(), tx, memory.ListQuery{
 			Project: q.Get("project"), Scope: q.Get("scope"), Author: q.Get("author"),
-			Text: q.Get("q"), Archived: q.Get("archived") == "true",
+			Text: q.Get("q"), Archived: q.Get("archived") == "true", Viewer: viewer(r),
 		})
 		return err
 	})
@@ -91,7 +97,7 @@ func (s *Server) memoryGet(w http.ResponseWriter, r *http.Request, org string) e
 	var m memory.Memory
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
-		m, err = memory.Get(r.Context(), tx, r.PathValue("id"))
+		m, err = memory.Get(r.Context(), tx, r.PathValue("id"), viewer(r))
 		return err
 	})
 	if err != nil {
@@ -154,7 +160,7 @@ func (s *Server) memoryUpdate(w http.ResponseWriter, r *http.Request, org string
 	}
 	var m memory.Memory
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		cur, err := memory.Get(r.Context(), tx, r.PathValue("id"))
+		cur, err := memory.Get(r.Context(), tx, r.PathValue("id"), viewer(r))
 		if err != nil {
 			return err
 		}
@@ -181,7 +187,7 @@ func (s *Server) memoryArchive(w http.ResponseWriter, r *http.Request, org strin
 	}
 	var m memory.Memory
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		cur, err := memory.Get(r.Context(), tx, r.PathValue("id"))
+		cur, err := memory.Get(r.Context(), tx, r.PathValue("id"), viewer(r))
 		if err != nil {
 			return err
 		}
@@ -207,7 +213,7 @@ func (s *Server) memoryIndex(w http.ResponseWriter, r *http.Request, org string)
 		if s.Indexer != nil {
 			health = s.Indexer.Health()
 		}
-		out, err = memory.IndexStatus(r.Context(), tx, s.Embedder, health, r.URL.Query().Get("project"))
+		out, err = memory.IndexStatus(r.Context(), tx, s.Embedder, health, r.URL.Query().Get("project"), viewer(r))
 		return err
 	})
 	if err != nil {

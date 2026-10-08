@@ -167,6 +167,14 @@ const Notes = "NOTES.md"
 // phase: its role names it).
 const Conductor = "conductor"
 
+// Brainstorm is the label a session's agent runs under; scripted, it is
+// played as the conductor is: each input's tool lines called, then a reply
+// quoting the input.
+const Brainstorm = "brainstorm"
+
+// BrainstormMessage heads the first message in a session agent's briefing.
+const BrainstormMessage = "## The first message\n\n"
+
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
 // arrived, and the input it answers, quoted back.
@@ -188,6 +196,9 @@ func ConductorScript(briefing string) string {
 	message := ""
 	if i := strings.LastIndex(briefing, "'s message\n\n"); i >= 0 {
 		message = briefing[i+len("'s message\n\n"):]
+	} else if i := strings.LastIndex(briefing, BrainstormMessage); i >= 0 {
+		message = briefing[i+len(BrainstormMessage):]
+		message, _, _ = strings.Cut(message, "\n\n## How you work")
 	}
 	var b strings.Builder
 	for _, c := range ConductorCalls(message) {
@@ -325,7 +336,7 @@ func For(phase, model, runID string, fixed bool) Step {
 			return Step{Reply: "Reviewed the fix; no further problems.\n\n" + Verdict}
 		}
 		return Step{Reply: "One problem:\n\n```yaml\n" + Finding + "```\n"}
-	case Conductor:
+	case Conductor, Brainstorm:
 		// Each turn's reply is ConductorReply, from its briefing and input.
 		step := Step{Reply: "Read-only: I changed nothing."}
 		if model == AskModel {

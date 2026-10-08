@@ -18,7 +18,7 @@ async function runDiff(ctx: RequestContext): Promise<Response> {
     const [row] = (await sql`
       SELECT r.id, d.base, d.files, d.checksum, d.final, d.updated_at AS "updatedAt"
       FROM runs r LEFT JOIN run_diffs d ON d.run_id = r.id
-      WHERE r.id = ${id}`) as Array<{ id: string; base: string | null; files: RunDiff["files"] | null;
+      WHERE r.id = ${id} AND (r.session_id IS NULL OR session_role(r.session_id, ${ctx.principal.personId}) IS NOT NULL)`) as Array<{ id: string; base: string | null; files: RunDiff["files"] | null;
         checksum: string | null; final: boolean | null; updatedAt: Date | null }>;
     return row;
   });

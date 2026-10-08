@@ -31,13 +31,15 @@ function forward(action: "steer" | "pause" | "resume" | "abort" | "restart" | "l
       await ctx.request.text(), ctx.principal);
 }
 
-/** Directives issued for a Run, newest first. */
+/** Directives issued for a Run, newest first; a session's Run's, to its members only. */
 async function listDirectives(ctx: RequestContext): Promise<Response> {
   const runId = ctx.params.id!;
   const directives = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
-      SELECT ${scope.sql.unsafe(DIRECTIVE_SELECT)} FROM directives
+      SELECT ${scope.sql.unsafe(DIRECTIVE_SELECT)} FROM directives d
       WHERE run_id = ${runId}
+        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = d.run_id AND r.session_id IS NOT NULL
+                        AND session_role(r.session_id, ${ctx.principal.personId}) IS NULL)
       ORDER BY created_at DESC`) as Array<Record<string, unknown>>;
   });
   return json({ directives });
@@ -45,7 +47,8 @@ async function listDirectives(ctx: RequestContext): Promise<Response> {
 
 /**
  * Questions agents asked, newest first: those of a Run, of a task, or
- * every one still open in the organization — what needs a person.
+ * every one still open in the organization — what needs a person. A
+ * session's agent's questions are its members' (the session's own routes).
  */
 async function listQuestions(ctx: RequestContext): Promise<Response> {
   const url = new URL(ctx.request.url);
@@ -53,10 +56,12 @@ async function listQuestions(ctx: RequestContext): Promise<Response> {
   const taskId = url.searchParams.get("taskId");
   const questions = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
-      SELECT ${scope.sql.unsafe(QUESTION_SELECT)} FROM questions
+      SELECT ${scope.sql.unsafe(QUESTION_SELECT)} FROM questions q
       WHERE (${runId}::text IS NULL OR run_id = ${runId})
         AND (${taskId}::text IS NULL OR task_id = ${taskId})
         AND (${runId}::text IS NOT NULL OR ${taskId}::text IS NOT NULL OR status = 'open')
+        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = q.run_id AND r.session_id IS NOT NULL
+                        AND session_role(r.session_id, ${ctx.principal.personId}) IS NULL)
       ORDER BY asked_at DESC LIMIT 200`) as Array<Record<string, unknown>>;
   });
   return json({ questions });

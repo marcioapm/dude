@@ -111,8 +111,10 @@ type ask struct {
 	Cursor                         int64
 	Org, Type, RunID, TaskID, Task string
 	Role                           string
-	// The task's first active person; empty for a task nobody owns.
+	// The task's first active person; empty for a task nobody owns. For a
+	// session's ask, the member it is for.
 	Owner   string
+	Session string
 	Payload json.RawMessage
 }
 
@@ -130,9 +132,19 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	var found []ask
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
+		// A session's ask is for the member it is put to, else its owner:
+		// never the organisation. Read now, just before it is sent: only
+		// while the question is open and they may still answer it (an
+		// accepted owner or member who can chat); else nobody's.
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(owner.person_id, ''), e.payload
+				COALESCE(CASE WHEN e.session_id IS NOT NULL THEN (
+					SELECT x.person FROM (SELECT COALESCE(q.to_person,
+						(SELECT sp.person_id FROM session_people sp WHERE sp.session_id = e.session_id AND sp.role = 'owner')) AS person
+						FROM questions q WHERE q.id = e.payload->>'questionId' AND q.status = 'open') x
+					WHERE session_role(e.session_id, x.person) IN ('owner', 'chat'))
+					ELSE owner.person_id END, ''),
+				COALESCE(e.session_id, ''), e.payload
 			FROM events e
 			LEFT JOIN tasks w ON w.id = e.task_id
 			LEFT JOIN LATERAL (
@@ -189,7 +201,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		}
 		body, _ := json.Marshal(msg)
 		for _, s := range subs[a.Org] {
-			if a.Owner != "" && s.Person != a.Owner {
+			if (a.Owner != "" || a.Session != "") && s.Person != a.Owner {
 				continue
 			}
 			wg.Add(1)
@@ -281,6 +293,15 @@ func messageFor(a ask) (Message, bool) {
 		who = strings.TrimSpace(who + " · " + label)
 	}
 	msg := Message{Tag: "run:" + a.RunID, URL: "#/run/" + a.RunID}
+	if a.Session != "" {
+		// Only a question reaches a member; the session's page has the rest.
+		if a.Type != delivery.EvQuestionAsked {
+			return msg, false
+		}
+		msg.Tag, msg.URL = "session:"+a.Session, "#/sessions/"+a.Session
+		msg.Title, msg.Body = "The brainstorm asks you", str("prompt")
+		return msg, true
+	}
 	if a.RunID == "" {
 		msg.Tag, msg.URL = "task:"+a.TaskID, "#/task/"+a.TaskID
 	}

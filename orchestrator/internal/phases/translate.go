@@ -550,8 +550,8 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		return nil
 	}
 	role := t.run.Phase
-	if t.run.conductor() {
-		role = delivery.RoleConductor
+	if t.run.talker() {
+		role = t.run.Role
 	}
 	return s.event(ctx, tx, t.run, evSessionStarted, ledger.ActorAgent,
 		map[string]any{"role": role, "externalSessionId": id})
@@ -632,6 +632,12 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	if _, err := tx.Exec(ctx, `DELETE FROM task_repositories wr USING repository_requests q, repositories repo
 		WHERE q.run_id = $1 AND q.status = 'failed' AND repo.id = q.repository_id AND repo.name = $2
 		  AND wr.task_id = q.task_id AND wr.repository_id = q.repository_id`, t.run.ID, repo); err != nil {
+		return err
+	}
+	// A session's: unlinked, or the next resume would try it again for good.
+	if _, err := tx.Exec(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
+		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
+		  AND p.key_prefix || '-' || repo.name = $2`, t.run.ID, repo); err != nil {
 		return err
 	}
 	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
