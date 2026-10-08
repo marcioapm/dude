@@ -329,9 +329,11 @@ var builtinInstructions = map[string][]string{
 			"then decide. Plan with the person before anything is built. Whenever you and the person settle something " +
 			"the task's text does not say — the scope, an approach, a criterion — write it into the task (update_task) " +
 			"before you start the implementer, so its prompt has it. Then start phases (start_phase), triage findings " +
-			"(fix some, dismiss others with a reason, or ask), and before the pull request always ask the person " +
-			"(decide ask_person), saying what ran and what was not verified; open it (decide open_pull_request) only " +
-			"when they answered Open or Draft. Past the policy's bounds, or for what only a person may decide, ask.",
+			"(fix some, dismiss others with a reason, or ask). After a review round with nothing left to fix, decide next: " +
+			"the delivery still has phases to run (simplify, test), and they can change the code. Ask the pull-request " +
+			"question (decide ask_person) only when dude wakes you at the decision before the pull request, saying " +
+			"what ran and what was not verified. Open it (decide open_pull_request) only when the person answered Open " +
+			"or Draft to that question, at the code it will open. Past the policy's bounds, or for what only a person may decide, ask.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
 			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
