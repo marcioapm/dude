@@ -421,7 +421,7 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 			map[string]any{"questionId": q.ID, "by": "withdrawn"})); err != nil {
 			return err
 		}
-		if _, err := TellBrainstorm(ctx, tx, org, sessionID, fmt.Sprintf("Your question to %s is withdrawn: they can no longer answer "+
+		if err := TellBrainstorm(ctx, tx, org, sessionID, fmt.Sprintf("Your question to %s is withdrawn: they can no longer answer "+
 			"in this session. Nobody answered %q; ask someone else if you still need it decided.", name, oneLine(q.Prompt))); err != nil {
 			return err
 		}
@@ -431,25 +431,25 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 
 // TellBrainstorm queues a line from dude for the session's live agent,
 // resuming it if it is parked; nothing when none is live.
-func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string) (string, error) {
+func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string) error {
 	var runID string
 	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` FOR NO KEY UPDATE`,
 		sessionID).Scan(&runID)
 	if db.IsNotFound(err) {
-		return "", nil
+		return nil
 	}
 	if err != nil {
-		return "", err
+		return err
 	}
 	ref := RunRef{Org: org, SessionID: sessionID, RunID: runID}
 	id, _, err := QueueDirective(ctx, tx, ref, Directive{Text: text, Scope: "run"})
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := RequestResumeForMessage(ctx, tx, runID, "dude told it something"); err != nil {
-		return "", err
+		return err
 	}
-	return runID, SessionEvent(ctx, tx, ref, "session.told", ledger.ActorSystem, "dude", map[string]any{"text": text, "directiveId": id})
+	return SessionEvent(ctx, tx, ref, "session.told", ledger.ActorSystem, "dude", map[string]any{"text": text, "directiveId": id})
 }
 
 // Proposal items (session_proposals.items), each one thing the card asks
