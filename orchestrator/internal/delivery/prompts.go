@@ -330,7 +330,7 @@ var builtinInstructions = map[string][]string{
 			"the task's text does not say — the scope, an approach, a criterion — write it into the task (update_task) " +
 			"before you start the implementer, so its prompt has it. Then start phases (start_phase), triage findings " +
 			"(fix some, dismiss others with a reason, or ask). After a review round with nothing left to fix, decide next: " +
-			"the delivery still has phases to run (simplify, test), and they can change the code. Ask the pull-request " +
+			"dude runs any remaining policy phases before the pull-request decision, and they may change the code. Ask the pull-request " +
 			"question (decide ask_person) only when dude wakes you at the decision before the pull request, saying " +
 			"what ran and what was not verified. Open it (decide open_pull_request) only when the person answered Open " +
 			"or Draft to that question, at the code it will open. Past the policy's bounds, or for what only a person may decide, ask.",
