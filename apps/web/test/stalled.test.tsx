@@ -16,6 +16,7 @@ import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { conductedLines } from "../src/conducted.ts";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
+import { formatPlace, inTree } from "../src/place.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -120,6 +121,35 @@ describe("a restart in Chat", () => {
 });
 
 describe("a restarted Run's presentation", () => {
+  test("Chat shows Restarted with the new Run link, while a plain abort reads Aborted without a link", async () => {
+    for (const restarted of [true, false]) {
+      localStorage.setItem("dude.fixtures.run", restarted ? "stalled" : "aborted");
+      const client = new FixtureClient("a");
+      const replacement = restarted ? (await client.restart(RUN_ID, "Read the files yourself.")).runId : null;
+      const getTask = client.getTask.bind(client);
+      client.getTask = async (id) => {
+        const task = await getTask(id);
+        return { ...task, decider: "conductor", runs: [run({ id: "run_conductor", role: "conductor", phase: null }),
+          ...task.runs.map((r) => ({ ...r, conductorRunId: "run_conductor" }))] };
+      };
+      const getRun = client.getRun.bind(client);
+      client.getRun = async (id) => id === "run_conductor"
+        ? { ...(await getRun(RUN_ID)), id, role: "conductor", phase: null, status: "running", replacedBy: null, endedAt: null }
+        : getRun(id);
+      const { container, unmount } = await mount(
+        <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+          <TaskScreen client={client} taskId={TASK_ID} tab="chat" onOpenRun={() => {}} onBack={() => {}} />
+        </PeopleProvider></ToastProvider></TooltipProvider>,
+      );
+      mounted.push(unmount);
+      const line = await until(() => container.querySelector<HTMLElement>(`[data-testid=chat-run][data-run="${RUN_ID}"]`), "the Chat Run line");
+      expect(line.textContent).toContain(restarted ? "Restarted" : "Aborted");
+      expect(line.textContent).not.toContain(restarted ? "Aborted" : "Restarted");
+      if (replacement) expect(line.querySelector("a")?.getAttribute("href")).toBe(formatPlace(inTree({ kind: "session", id: replacement })));
+      else expect(line.querySelectorAll("a").length).toBe(0);
+    }
+  });
+
   async function pageFor(restarted: boolean, view: "sessions" | "step" | "run") {
     localStorage.setItem("dude.fixtures.run", restarted ? "stalled" : "aborted");
     const client = new FixtureClient("a");
@@ -144,12 +174,20 @@ describe("a restarted Run's presentation", () => {
       expect(restarted.textContent).not.toContain("Aborted");
       expect(restarted.querySelector("a")?.getAttribute("href")).toContain(`${RUN_ID}_again`);
       if (view === "run") {
+        const header = restarted.closest("[data-testid=run-screen]")?.querySelector("header[data-status]");
+        expect(header?.textContent).toContain("Restarted");
+        expect(header?.textContent).not.toContain("Aborted");
         expect(restarted.textContent).toContain("Restarted by Márcio Martins: Read the files yourself.");
         expect(restarted.closest("[data-testid=run-screen]")?.textContent).not.toContain("Aborted");
       }
       const aborted = await pageFor(false, view);
       expect(aborted.textContent?.toLowerCase()).toContain("aborted");
       expect(aborted.textContent).not.toContain("Restarted");
+      if (view === "run") {
+        const header = aborted.closest("[data-testid=run-screen]")?.querySelector("header[data-status]");
+        expect(header?.textContent).toContain("Aborted");
+        expect(header?.textContent).not.toContain("Restarted");
+      }
     });
   }
 });
