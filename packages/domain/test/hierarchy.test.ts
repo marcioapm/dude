@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ALL_AGENT_ROLES,
   agentModelConfigSchema,
+  clampTimeLimit,
   resolveAgentModel,
   ROLE_MODEL_REMOVED,
   taskGoalShortBy,
@@ -117,5 +118,13 @@ describe("taskGoalShortBy", () => {
     expect(taskGoalShortBy(`\uFEFF${"a".repeat(15)}\uFEFF`)).toBe(1);
     expect(taskGoalShortBy(" ".repeat(20))).toBe(16);
     expect(taskGoalShortBy(`\u0085${"a".repeat(15)}`)).toBe(0);
+  });
+});
+
+describe("a role's time limit without progress", () => {
+  test("is half an hour at least and a week at most; a stored lower one reads as half an hour", () => {
+    const limit = (timeLimitMinutes: number) => agentModelConfigSchema.safeParse({ timeLimitMinutes }).success;
+    expect([limit(29), limit(30), limit(10_080), limit(10_081)]).toEqual([false, true, true, false]);
+    expect([clampTimeLimit(10), clampTimeLimit(30), clampTimeLimit(45)]).toEqual([30, 30, 45]);
   });
 });

@@ -109,7 +109,7 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
 
 /** An earlier attempt's last aborted or failed Run: where it stopped. */
 function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
-  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && (r.status === "aborted" || r.status === "failed"))
+  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && !r.replacedBy && (r.status === "aborted" || r.status === "failed"))
     .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
 }
 

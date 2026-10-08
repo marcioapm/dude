@@ -1,6 +1,7 @@
 package fakelux
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -158,6 +159,16 @@ func (s *Server) inWorkspace(run *Run, args []string) []string {
 	return out
 }
 
+// Edit is a working agent writing files into its checkout now, each with
+// the edit tool call OpenCode reports.
+func (s *Server) Edit(id string, files map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil && run.State == "running" {
+		s.edit(run, files)
+	}
+}
+
 // Timeout stops a Run as lux's own timeout would: the beforeStop hook runs,
 // then the Run fails with reason "timeout".
 func (s *Server) Timeout(id string) {
@@ -214,7 +225,20 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	args := append([]string{open.Command[0]}, s.inWorkspace(run, open.Command[1:])...)
+	ps, fails := s.PS, s.ExecFails
 	s.mu.Unlock()
+	if args[0] == "ps" {
+		// The fake has no processes: what lux's would print is the test's.
+		if ps == nil || fails != "" {
+			_ = wsjson.Write(ctx, ws, map[string]any{"error": cmp.Or(fails, "ps: no processes in the fake")})
+			_ = ws.Close(websocket.StatusNormalClosure, "")
+			return
+		}
+		_ = wsjson.Write(ctx, ws, map[string]any{"data": []byte(ps(run.ID)), "ch": "stdout"})
+		_ = wsjson.Write(context.WithoutCancel(ctx), ws, map[string]any{"exitCode": 0})
+		_ = ws.Close(websocket.StatusNormalClosure, "")
+		return
+	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = dir
 	var stdout, stderr strings.Builder

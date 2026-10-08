@@ -85,6 +85,11 @@ var tools = []tool{
 		"stops its turn so it hears this now: only when its current work is wasted. You are woken when it reads it, "+
 		"or if it never will. Allowed whoever takes the decisions; refused for a Run that ended, another task's or an "+
 		"earlier attempt's.", conductors, steer),
+	define("restart_run", "Restart a phase Run of this task that the delivery waits on: it is stopped, and a new Run of the same "+
+		"phase and category takes its place in the same step, starting fresh from the task's head, told your note. The "+
+		"old Run's uncommitted work is lost and its agent's context with it: to keep them, steer instead. tier runs the "+
+		"new Run on another of the organization's model tiers. Refused for another task's Run, one the delivery does not "+
+		"wait on, or one that ended.", conductors, restartRun),
 	define("decide", "Take the decision the delivery waits on: next (what Deliver would do now), ask_person (a "+
 		"question for the person in the note; before the pull request, the fixed question Open / Draft / Show me the "+
 		"diff / Another round), wait (at pull request feedback: leave it), or open_pull_request — accepted only after "+

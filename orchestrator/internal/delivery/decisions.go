@@ -428,14 +428,23 @@ func RecordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 // recordWakeTx is RecordWakeTx; settled records the reason as heard
 // already, so it marks the key without waking anyone.
 func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line string, settled bool) (bool, error) {
+	limit := wakeLineChars
+	if kind == WakeStalled {
+		// A stall's facts, which the conductor decides on without a tool.
+		limit = stalledLineChars
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, delivered_at)
 		VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN now() END) ON CONFLICT (task_id, key) DO NOTHING`,
-		ids.New("cwk"), org, taskID, kind, key, clip(oneLine(line), wakeLineChars), settled)
+		ids.New("cwk"), org, taskID, kind, key, clip(oneLine(line), limit), settled)
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
-// wakeLineChars bounds one reason's line, as the table does.
-const wakeLineChars = 300
+// wakeLineChars bounds one reason's line, as the table does; a stall's,
+// stalledLineChars.
+const (
+	wakeLineChars    = 300
+	stalledLineChars = 2000
+)
 
 // SetDeciderTx changes who decides a task's delivery, recording it once:
 // a no-op when it already is. Returns whether it changed.

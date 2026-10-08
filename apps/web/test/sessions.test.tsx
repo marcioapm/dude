@@ -106,6 +106,18 @@ async function write(page: HTMLElement, text: string) {
 }
 
 describe("a brainstorm session's page", () => {
+  test("a stopped turn is visible to readers with its tool and error kind", async () => {
+    const client = new SessionClient(detail("read"), [
+      ev("session.turn_stopped", { runId: RUN, tool: "bash", openSecs: 660, directiveId: "dir_stopped" }),
+    ]);
+    const page = await sessionPage(client);
+    await settle();
+    const notice = page.querySelector('[data-kind="stopped"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("Stopped Brainstorm's turn: bash was open for 10\u00a0min.");
+    expect(notice!.querySelector('[data-icon="warning"]')).not.toBeNull();
+  });
+
   test("its conversation: each member's message signed, dude's briefing without the first message, the agent's answer", async () => {
     const client = new SessionClient(detail("owner"), [
       ev("chat.message", { text: "Can the meter take a run event?" }, { type: "human", id: YOU }),
