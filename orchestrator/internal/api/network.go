@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"net/url"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
 // networkRoutes are what the Network settings page shows under every
@@ -19,11 +21,7 @@ func (s *Server) networkRoutes(mux *http.ServeMux) {
 			host := u.Hostname()
 			always, model = append(always, host), &host
 		}
-		operator := s.AgentEgress
-		if operator == nil {
-			operator = []string{}
-		}
-		write(w, http.StatusOK, map[string]any{"operator": operator, "always": append(always, "dude’s tools"), "model": model})
+		write(w, http.StatusOK, map[string]any{"operator": db.NonNil(s.AgentEgress), "always": append(always, "dude’s tools"), "model": model})
 		return nil
 	}))
 }
