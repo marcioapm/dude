@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -785,5 +786,69 @@ func TestAPassedCheckIsDoneWhileTheFinalIsPushedAndAfterItsPushFails(t *testing.
 	got := f.row(`SELECT state, error, containers_check->>'passed' FROM image_builds WHERE id = $1`, build)
 	if got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "pushing to the registry failed: ") || got[2] != "true" {
 		t.Errorf("build = %v", got)
+	}
+}
+
+// A flagged build whose final lacks any one thing the check needs fails
+// with the check's sentence, pushes no final, and leaves v1 published; a
+// final with rootless Docker instead of podman passes.
+func TestAFlaggedBuildMissingAnyOneThingIsNotPublished(t *testing.T) {
+	docker := able
+	docker.Podman, docker.PodmanVersion = "", ""
+	docker.Docker, docker.Dockerd, docker.Rootlesskit, docker.Slirp4netns = "/usr/bin/dockerd-rootless.sh", "/usr/bin/dockerd", "/usr/bin/rootlesskit", "/usr/bin/slirp4netns"
+	for _, c := range []struct {
+		name string
+		drop func(*Found)
+	}{
+		{"no engine", func(f *Found) { f.Podman = "" }},
+		{"no fuse-overlayfs", func(f *Found) { f.FuseOverlayfs = "" }},
+		{"no newuidmap", func(f *Found) { f.Newuidmap = Mapper{} }},
+		{"no newgidmap", func(f *Found) { f.Newgidmap = Mapper{} }},
+		{"newuidmap without cap_setuid", func(f *Found) { f.Newuidmap.FileCap = false }},
+		{"newgidmap without cap_setgid", func(f *Found) { f.Newgidmap.FileCap = false }},
+		{"no subuid", func(f *Found) { f.Subuid = nil }},
+		{"no subgid", func(f *Found) { f.Subgid = nil }},
+		{"a range past the Run's ids", func(f *Found) { f.Subgid = []string{"agent:100000:65536"} }},
+		{"rootless Docker without slirp4netns", func(f *Found) { *f = docker; f.Slirp4netns = "" }},
+		{"rootless Docker", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			f.image("img_n", "node-22")
+			f.queue("img_n", "imv_n1", 1, "FROM node:22\n")
+			f.once()
+			var pushed []string
+			f.podman.fail = func(op, tag, _ string) (string, error) {
+				if op == "push" {
+					pushed = append(pushed, tag)
+				}
+				return "", nil
+			}
+			f.queue("img_n", "imv_n2", 2, "FROM node:22\nRUN true\n")
+			f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_n2'`)
+			found := able
+			if c.drop == nil {
+				found = docker
+			} else {
+				c.drop(&found)
+			}
+			f.podman.found = found
+			f.once()
+			final := FinalTag(repo, "imv_n2", layer)
+			got := f.row(`SELECT state, coalesce(error, '') FROM image_versions WHERE id = 'imv_n2'`)
+			published := f.str(`SELECT published_version_id FROM images WHERE id = 'img_n'`)
+			if c.drop == nil {
+				if got[0] != "published" || published != "imv_n2" || !slices.Contains(pushed, final) {
+					t.Errorf("v2 = %v, published %s, pushed %v", got, published, pushed)
+				}
+				return
+			}
+			if got[0] != "failed" || got[1] != found.Sentence() || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
+				t.Errorf("v2 = %v, want failed with %q", got, found.Sentence())
+			}
+			if published != "imv_n1" || slices.Contains(pushed, final) {
+				t.Errorf("published %s, pushed %v", published, pushed)
+			}
+		})
 	}
 }
