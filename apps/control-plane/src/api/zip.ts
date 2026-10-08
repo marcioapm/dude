@@ -43,7 +43,11 @@ export function safeEntryName(name: string): string {
   return parts.join("/") || "file";
 }
 
-/** A stream of the archive holding `entries`, in order. */
+/**
+ * A stream of the archive holding `entries`, in order. Each pull emits one
+ * piece (a header, one chunk of an entry's body, its trailer), so a reader
+ * that stops reading stops the entry's source being read too.
+ */
 export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const central: Uint8Array[] = [];
@@ -52,6 +56,11 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
   const iterator = (async function* () {
     yield* entries;
   })();
+  // The entry whose body is being read, between pulls.
+  let current: {
+    name: string; encoded: Uint8Array; time: number; date: number; headerOffset: number;
+    reader: ReadableStreamDefaultReader<Uint8Array> | null; crc: number; size: number;
+  } | null = null;
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -59,6 +68,48 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
         controller.enqueue(bytes);
         offset += bytes.length;
       };
+      const finish = () => {
+        const e = current!;
+        current = null;
+        if (e.size > LIMIT) throw new Error(`${e.name} is too large for a zip without ZIP64`);
+        const descriptor = new DataView(new ArrayBuffer(16));
+        descriptor.setUint32(0, 0x08074b50, true);
+        descriptor.setUint32(4, e.crc, true);
+        descriptor.setUint32(8, e.size, true);
+        descriptor.setUint32(12, e.size, true);
+        push(new Uint8Array(descriptor.buffer));
+
+        const record = new Uint8Array(46 + e.encoded.length);
+        const cd = new DataView(record.buffer);
+        cd.setUint32(0, 0x02014b50, true);
+        // Made on Unix, with a file's mode: unzip then takes names as they
+        // are, rather than translating them from an MS-DOS code page.
+        cd.setUint16(4, (3 << 8) | 20, true);
+        cd.setUint16(6, 20, true);
+        cd.setUint16(8, FLAGS, true);
+        cd.setUint16(10, 0, true);
+        cd.setUint16(12, e.time, true);
+        cd.setUint16(14, e.date, true);
+        cd.setUint32(16, e.crc, true);
+        cd.setUint32(20, e.size, true);
+        cd.setUint32(24, e.size, true);
+        cd.setUint16(28, e.encoded.length, true);
+        cd.setUint32(38, (0o100644 << 16) >>> 0, true);
+        cd.setUint32(42, e.headerOffset, true);
+        record.set(e.encoded, 46);
+        central.push(record);
+        count++;
+      };
+
+      if (current?.reader) {
+        const { done, value } = await current.reader.read();
+        if (done) return finish();
+        current.crc = crc32(value, current.crc);
+        current.size += value.length;
+        push(value);
+        return;
+      }
+
       const next = await iterator.next();
       if (next.done) {
         const start = offset;
@@ -79,7 +130,7 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
         return;
       }
       const entry = next.value;
-      const name = encoder.encode(safeEntryName(entry.name));
+      const encoded = encoder.encode(safeEntryName(entry.name));
       const { time, date } = dosTime(entry.modified ?? new Date());
       const headerOffset = offset;
       if (headerOffset > LIMIT) throw new Error("the archive is too large for a zip without ZIP64");
@@ -91,58 +142,24 @@ export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>)
       local.setUint16(8, 0, true); // stored
       local.setUint16(10, time, true);
       local.setUint16(12, date, true);
-      local.setUint16(26, name.length, true);
+      local.setUint16(26, encoded.length, true);
       push(new Uint8Array(local.buffer));
-      push(name);
+      push(encoded);
 
-      let crc = 0;
-      let size = 0;
       const body = await entry.open();
+      current = { name: entry.name, encoded, time, date, headerOffset, reader: null, crc: 0, size: 0 };
       if (body instanceof Uint8Array) {
-        crc = crc32(body);
-        size = body.length;
+        // Already in memory: nothing more to hold back.
+        current.crc = crc32(body);
+        current.size = body.length;
         push(body);
+        finish();
       } else {
-        const reader = body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          crc = crc32(value, crc);
-          size += value.length;
-          push(value);
-        }
+        current.reader = body.getReader();
       }
-      if (size > LIMIT) throw new Error(`${entry.name} is too large for a zip without ZIP64`);
-
-      const descriptor = new DataView(new ArrayBuffer(16));
-      descriptor.setUint32(0, 0x08074b50, true);
-      descriptor.setUint32(4, crc, true);
-      descriptor.setUint32(8, size, true);
-      descriptor.setUint32(12, size, true);
-      push(new Uint8Array(descriptor.buffer));
-
-      const record = new Uint8Array(46 + name.length);
-      const cd = new DataView(record.buffer);
-      cd.setUint32(0, 0x02014b50, true);
-      // Made on Unix, with a file's mode: unzip then takes names as they
-      // are, rather than translating them from an MS-DOS code page.
-      cd.setUint16(4, (3 << 8) | 20, true);
-      cd.setUint16(6, 20, true);
-      cd.setUint16(8, FLAGS, true);
-      cd.setUint16(10, 0, true);
-      cd.setUint16(12, time, true);
-      cd.setUint16(14, date, true);
-      cd.setUint32(16, crc, true);
-      cd.setUint32(20, size, true);
-      cd.setUint32(24, size, true);
-      cd.setUint16(28, name.length, true);
-      cd.setUint32(38, (0o100644 << 16) >>> 0, true);
-      cd.setUint32(42, headerOffset, true);
-      record.set(name, 46);
-      central.push(record);
-      count++;
     },
-    async cancel() {
+    async cancel(reason) {
+      await current?.reader?.cancel(reason);
       await iterator.return?.(undefined);
     },
   });
