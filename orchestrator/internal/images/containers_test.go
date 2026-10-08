@@ -3,6 +3,7 @@ package images
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,6 +105,26 @@ func TestTheCheckLooksForEachPartOfRootlessDocker(t *testing.T) {
 		}
 		if got := ContainersCheck(root).docker(); got != c.want {
 			t.Errorf("%s: docker = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// The check counts only lines a mapper looks the workload up by: the first
+// passwd name for agent's uid, or the uid.
+func TestTheCheckCountsTheLinesOfTheFirstNameForAgentsUid(t *testing.T) {
+	for _, c := range []struct {
+		name, passwd, subuid, want string
+	}{
+		{"agent first", "agent:x:1000:1000::/home/agent:/bin/sh\n", "agent:1:999\n1000:1001:64535\nother:1:5\n", "agent:1:999,1000:1001:64535"},
+		{"node first", "node:x:1000:1000::/home/node:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n", "agent:1:999\nnode:100000:65536\n1000:1001:64535\n", "node:100000:65536,1000:1001:64535"},
+		{"node first, agent lines only", "node:x:1000:1000::/home/node:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n", "agent:1:999\nagent:1001:64535\n", ""},
+	} {
+		root := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(root, "etc"), 0o755)
+		_ = os.WriteFile(filepath.Join(root, "etc/passwd"), []byte(c.passwd), 0o644)
+		_ = os.WriteFile(filepath.Join(root, "etc/subuid"), []byte(c.subuid), 0o644)
+		if got := strings.Join(ContainersCheck(root).Subuid, ","); got != c.want {
+			t.Errorf("%s: subuid = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

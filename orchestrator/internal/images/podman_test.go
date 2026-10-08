@@ -322,6 +322,37 @@ func TestPodmanTheLayerGivesAgentSubordinateIdsARunCanMap(t *testing.T) {
 	}
 }
 
+// On an image whose uid 1000 is node's, agent's lines by name are not the
+// workload's: podman looks the caller up as node or 1000 and, finding
+// neither, runs with a single id. The layer adds 1000's lines all the same,
+// the check counts those alone, and podman maps them as the workload.
+func TestPodmanAgentLinesBehindAnotherNameAreNotTheWorkloads(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	final := localFinish(t, "FROM docker.io/library/node:24-bookworm-slim\n"+
+		"RUN apt-get update && apt-get install -y --no-install-recommends git podman fuse-overlayfs uidmap libcap2-bin"+
+		" && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap"+
+		" && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap"+
+		" && printf 'agent:1:999\\nagent:1001:64535\\n' > /etc/subuid && cp /etc/subuid /etc/subgid\n")
+	if got := runIn(t, final, "cat", "/etc/subuid"); got != "agent:1:999\nagent:1001:64535\n1000:1:999\n1000:1001:64535" {
+		t.Errorf("/etc/subuid = %q", got)
+	}
+	var log bytes.Buffer
+	found, err := c.CheckContainers(context.Background(), final, &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if got := strings.Join(found.Subuid, ","); got != "1000:1:999,1000:1001:64535" || !found.Passed() {
+		t.Errorf("the check's subuid = %s, passed %v", got, found.Passed())
+	}
+	// As the workload, the map podman makes: its own id and both ranges.
+	// The mappers carry file capabilities: under a rootless podman a
+	// setuid-root newuidmap cannot write uid_map.
+	if got := runAs(t, "1000", final, "sh", "-c", "podman unshare cat /proc/self/uid_map 2>/dev/null | wc -l"); got != "3" {
+		t.Errorf("podman's uid_map as the workload has %s lines, want 3", got)
+	}
+}
+
 // The check, run in a finished image as the builder runs it: podman,
 // fuse-overlayfs and newuidmap/newgidmap with their file capabilities, and
 // the layer's ids, pass; the same image without them fails, naming each.
