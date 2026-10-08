@@ -3,6 +3,7 @@ package orchestrator_test
 // lux's succeeded state, before and after lux made it resumable.
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -32,8 +33,10 @@ func TestASucceededPreviewRunIsResumedWhereLuxCan(t *testing.T) {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 			})
 			if old {
-				if r.Resumed != before || len(w.luxRuns()) != 2 {
-					t.Fatalf("a final succeeded Run: resumed %d more, %d lux runs; want it replaced\n%s", r.Resumed-before, len(w.luxRuns()), w.preview(runID))
+				// Replaced, and the refused Run terminated, not left resting in lux.
+				if calls := w.lux.CallsOf(r.ID); r.Resumed != before || len(w.luxRuns()) != 2 || !slices.Contains(calls, "cancel") {
+					t.Fatalf("a final succeeded Run: resumed %d more, %d lux runs, calls %v; want it terminated and replaced\n%s",
+						r.Resumed-before, len(w.luxRuns()), calls, w.preview(runID))
 				}
 				return
 			}

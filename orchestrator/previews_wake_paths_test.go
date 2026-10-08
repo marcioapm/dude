@@ -6,6 +6,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +84,10 @@ func TestARefusedResumeSubmitsANewRun(t *testing.T) {
 			}
 			if old.Resumed != 0 {
 				t.Errorf("the refused Run was resumed %d times", old.Resumed)
+			}
+			// lux keeps a Run it was refused to resume until it is terminated.
+			if calls := w.lux.CallsOf(old.ID); !slices.Contains(calls, "cancel") {
+				t.Errorf("the refused Run was not terminated in lux: calls %v", calls)
 			}
 			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2`, runID, w.luxRuns()[1].ID); n != 1 {
 				t.Errorf("dude still holds the old Run:\n%s", w.describeRuns())
