@@ -1,0 +1,44 @@
+-- 096_agent_network.sql — what an agent's Run may reach, set in dude.
+--
+-- An organisation lists the hosts (addresses, CIDR ranges, lux wildcards
+-- *.example.com, or * for anywhere) every agent Run of it may reach; a
+-- project adds its own to them ('add'), or runs on its own alone ('only'),
+-- for code that must stay tighter than the rest. The operator's
+-- agent.egress (DUDE_AGENT_EGRESS) stays a floor under both, and the model's
+-- host and dude's tools are always reachable. The API validates entries as
+-- lux takes them; the orchestrator leaves out any it cannot parse.
+ALTER TABLE organizations ADD COLUMN agent_egress text[] NOT NULL DEFAULT '{}';
+ALTER TABLE projects ADD COLUMN agent_egress text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN agent_egress_mode text NOT NULL DEFAULT 'add' CHECK (agent_egress_mode IN ('add', 'only'));
+
+-- The network a Run was submitted with, as lux's spec says it
+-- ({unrestricted} or {egress: [{host} | {cidr}]}): lux cannot change a live
+-- Run's rules, so a later change of the lists is not what this Run had.
+ALTER TABLE runs ADD COLUMN network jsonb;
+
+-- Names a Run's agent looked up and lux refused (its dns event with
+-- allowed false), one row per Run and name: what a project's Network page
+-- lists as refused recently, without scanning events. lux reports each
+-- distinct lookup once per Run; count is how many times dude was told.
+-- A session's Run has no project.
+CREATE TABLE agent_egress_refusals (
+  run_id          text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  name            text NOT NULL CHECK (name <> '' AND length(name) <= 253),
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id      text,
+  -- The agent's role, as its settings name it (implementer, fixer, …).
+  role            text NOT NULL,
+  first_at        timestamptz NOT NULL DEFAULT now(),
+  last_at         timestamptz NOT NULL DEFAULT now(),
+  count           integer NOT NULL DEFAULT 1 CHECK (count > 0),
+  PRIMARY KEY (run_id, name),
+  FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id) ON DELETE CASCADE
+);
+CREATE INDEX agent_egress_refusals_project_idx ON agent_egress_refusals (project_id, last_at);
+
+ALTER TABLE agent_egress_refusals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_egress_refusals FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON agent_egress_refusals
+  USING (organization_id = current_organization_id())
+  WITH CHECK (organization_id = current_organization_id());
+GRANT SELECT, INSERT, UPDATE ON agent_egress_refusals TO dude_app;
