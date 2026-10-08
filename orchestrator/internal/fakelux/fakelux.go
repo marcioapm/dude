@@ -1358,10 +1358,10 @@ func (s *Server) turn(run *Run) {
 // internal/runner/network.go): a dns event, allowed or not, with the
 // addresses it answered. Callers hold s.mu.
 func (s *Server) lookUp(run *Run, lookups []Lookup) {
+	if run.looked == nil {
+		run.looked = map[string]bool{}
+	}
 	for _, l := range lookups {
-		if run.looked == nil {
-			run.looked = map[string]bool{}
-		}
 		if run.looked[l.Name] {
 			continue
 		}
