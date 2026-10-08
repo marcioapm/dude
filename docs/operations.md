@@ -198,12 +198,13 @@ The domain's wildcard certificate need cover one level only. Each part is
 lowercased with anything outside `a-z0-9` made `-`; a label longer than 63
 characters is cut and ends in `-` and 8 hex characters of a hash of the
 server's name and the task's and project's ids, so it is stable and
-distinct. A project's slug is unique in its organization and never changes,
-so two projects sharing a key prefix get different names; another
+distinct. A project's slug and key are each unique in its organization and
+never change (a task's key is its project's key and a number, see
+[CONTRIBUTING](CONTRIBUTING.md#hierarchy)), so two of its tasks never share
+a name; another
 organization's project of the same slug may hold the name, and lux refusing
 a hostname another server has (`hostname_taken`) makes dude choose a
-second, hashed one. A server keeps the hostname it was created at: renaming
-a project's key prefix leaves existing previews' URLs as they are, and
+second, hashed one. A server keeps the hostname it was created at:
 previews made before names used key and slug keep their id-based ones. dude
 keeps lux's server id, stores the full hostname and URL lux returns, and
 finds a preview's servers by their `dude.preview` label; it never reads a
@@ -339,6 +340,12 @@ mode.
    makes a no-op. A concurrent build interrupted part-way leaves an invalid
    index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`) and run
    `dude-migrate` again.
+   A migration that adds a uniqueness rule checks the data first and stops,
+   naming what breaks it, before anything changes: 094 for two repositories
+   of a project checked out under one name (rename one), 095 for two
+   projects of an organisation under one key, ignoring case (`UPDATE
+   projects SET key_prefix = '<another>' WHERE id = '<one of them>'`, as the
+   owner). Fix each pair it lists and run `dude-migrate` again.
 3. Switch to the new release and, if the agent image was rebuilt with the
    new `dude` CLI, set `DUDE_AGENT_IMAGE` to its digest; then restart
    `dude-orchestrator` and `dude-backend`.

@@ -754,6 +754,12 @@ here.
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
   or while open, so the tree's ↑↓ → ← Home End `/` are untouched.
+- **Input** renders its own label, hint and error, tied to the field by
+  `aria-describedby`. A refusal with a known fix ("BILL is already the key
+  of Billing API; pick another") puts the fix beside the error as
+  `errorAction={{ label: "Use BLED", onClick }}`: a small quiet button,
+  after the error, never submitting. One fix, named by what it puts in
+  the field; anything longer belongs in a `Callout`.
 - **Textarea** has the `Input` anatomy (label, hint, error,
   `aria-describedby`) and grows from `rows` to `maxRows` (3 → 12) then
   scrolls; never a resize handle. `mono` for commands and config.

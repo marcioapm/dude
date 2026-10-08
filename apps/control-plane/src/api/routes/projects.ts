@@ -6,16 +6,19 @@
  */
 
 import { z } from "zod";
-import { agentModelsSchema, deliveryPolicySchema, newId, EventTypes } from "@dude/domain";
+import { SQL } from "bun";
+import {
+  agentModelsSchema, deliveryPolicySchema, deriveProjectKey, newId, EventTypes, PROJECT_KEY, PROJECT_KEY_MESSAGE, projectKeyTakenMessage,
+} from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { conflict, json, notFound, parseBody } from "../http.ts";
+import { conflict, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
-import { repositoryFields } from "./structure.ts";
+import { repositoryFields, sameCheckout, sameCheckoutMessage } from "./structure.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { checkTiers } from "./models.ts";
@@ -43,6 +46,8 @@ const repositoryInput = z.object({
 const createProjectInput = z.object({
   name: z.string().min(1).max(200),
   slug: z.string().min(1).max(100).regex(slugPattern, "slug must be lowercase alphanumeric with dashes"),
+  // Omitted: derived from the slug (projectKeyCandidates).
+  key: z.string().transform((k) => k.toUpperCase()).pipe(z.string().regex(PROJECT_KEY, PROJECT_KEY_MESSAGE)).optional(),
   description: z.string().max(2000).default(""),
   agentModels: agentModelsSchema,
   // A typed image is from before the library: it can only be cleared now.
@@ -53,7 +58,7 @@ const createProjectInput = z.object({
 });
 
 const updateProjectInput = createProjectInput
-  .omit({ slug: true, repositories: true })
+  .omit({ slug: true, key: true, repositories: true })
   .partial();
 
 interface ProjectRow {
@@ -61,6 +66,7 @@ interface ProjectRow {
   organizationId: string;
   name: string;
   slug: string;
+  key: string;
   description: string;
   agentModels: Record<string, unknown>;
   runtimeImage: string | null;
@@ -74,37 +80,85 @@ interface ProjectRow {
 export const PROJECT_IMAGE_URL = `CASE WHEN image_key IS NOT NULL THEN '/v1/projects/' || id || '/image?t=' || image_token END`;
 
 const PROJECT_SELECT = `
-  id, organization_id AS "organizationId", name, slug, description,
+  id, organization_id AS "organizationId", name, slug, key_prefix AS key, description,
   agent_models AS "agentModels", runtime_image AS "runtimeImage", runtime_image_id AS "runtimeImageId",
   delivery_policy AS "deliveryPolicy", created_at AS "createdAt",
   ${PROJECT_IMAGE_URL} AS "imageUrl"`;
 
-/** The start of a project's task keys (TK-12): the slug's first letters. */
-export function keyPrefix(slug: string): string {
-  return slug.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "WI";
+/** The organisation's project keys, upper-cased, as projects_key_idx compares them. */
+async function takenKeys(scope: OrgScope): Promise<string[]> {
+  return ((await scope.sql`SELECT upper(key_prefix) AS key FROM projects`) as Array<{ key: string }>).map((r) => r.key);
 }
+
+/** The 409 for `key`, which another project has, with a free key for `slug` to take instead. */
+async function keyTaken(scope: OrgScope, key: string, slug: string): Promise<HttpError> {
+  const [holder] = (await scope.sql`
+    SELECT name FROM projects WHERE upper(key_prefix) = ${key}`) as Array<{ name: string }>;
+  const taken = await takenKeys(scope);
+  return keyConflict(key, holder?.name ?? "another project", deriveProjectKey(slug, taken));
+}
+
+const keyConflict = (key: string, holder: string, suggestion: string | null) =>
+  new HttpError(409, projectKeyTakenMessage(key, holder), "conflict", suggestion ? { suggestion } : undefined);
+
+/** Whether `err` is projects_key_idx refusing a write (SQLSTATE 23505, in Bun's errno). */
+const isKeyTaken = (err: unknown) =>
+  err instanceof SQL.PostgresError && err.errno === "23505" && err.constraint === "projects_key_idx";
 
 async function createProject(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, createProjectInput);
   const { organizationId } = ctx.principal;
 
-  const result = await withOrg(organizationId, async (scope) => {
+  // Another create can take the key between this one's check and its
+  // insert; the index then refuses it. A chosen key gets the same 409 as
+  // the check gives; a derived one is derived again, once, past it.
+  let result;
+  try {
+    result = await insertProject(ctx, input);
+  } catch (err) {
+    if (!isKeyTaken(err)) throw err;
+    if (input.key) throw await withOrg(organizationId, (scope) => keyTaken(scope, input.key!, input.slug));
+    try {
+      result = await insertProject(ctx, input);
+    } catch (again) {
+      if (!isKeyTaken(again)) throw again;
+      throw new HttpError(409, "another project took this project's key as it was made; try again", "conflict");
+    }
+  }
+
+  if ("conflict" in result) throw conflict(`a project with slug "${input.slug}" already exists`);
+  for (const repo of result.project.repositories) await registerRepositoryWebhook(ctx, repo.id as string);
+  return json(result.project, 201);
+}
+
+// parseBody's type, which is the schema's input: defaults are still read with `??`.
+async function insertProject(ctx: RequestContext, input: z.input<typeof createProjectInput>) {
+  const { organizationId } = ctx.principal;
+  return withOrg(organizationId, async (scope) => {
     const existing = await scope.sql`
       SELECT id FROM projects WHERE slug = ${input.slug} LIMIT 1`;
     if (existing.length > 0) return { conflict: true as const };
     await checkTiers(scope, input.agentModels ?? {});
+
+    const taken = await takenKeys(scope);
+    if (input.key && taken.includes(input.key)) throw await keyTaken(scope, input.key, input.slug);
+    const key = input.key ?? deriveProjectKey(input.slug, taken);
+    if (!key) throw new HttpError(409, `every key dude would derive from "${input.slug}" is taken; choose one`, "conflict");
 
     const projectId = newId("project");
     if (input.runtimeImageId) await requireImage(scope, input.runtimeImageId);
     await checkRoleImages(scope, input.agentModels);
     const rows = (await scope.sql`
       INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, runtime_image_id, delivery_policy)
-      VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${keyPrefix(input.slug)}, ${input.description},
+      VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${key}, ${input.description},
               ${input.agentModels ?? {}}::jsonb, ${input.runtimeImageId}, ${input.deliveryPolicy ?? {}}::jsonb)
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
 
     const repositories = [];
     for (const repo of input.repositories ?? []) {
+      // Thrown, so the project goes with the transaction.
+      const other = await sameCheckout(scope, projectId, repo.name, null);
+      if (other) throw conflict(sameCheckoutMessage(repo.name, other));
       const repoRows = (await scope.sql`
         INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust)
         VALUES (${newId("repository")}, ${organizationId}, ${projectId}, ${repo.name}, ${repo.url},
@@ -121,15 +175,11 @@ async function createProject(ctx: RequestContext): Promise<Response> {
       projectId,
       actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
       source: "control-plane",
-      payload: { name: input.name, slug: input.slug },
+      payload: { name: input.name, slug: input.slug, key },
     });
 
     return { project: { ...rows[0]!, repositories }, event };
   });
-
-  if ("conflict" in result) throw conflict(`a project with slug "${input.slug}" already exists`);
-  for (const repo of result.project.repositories) await registerRepositoryWebhook(ctx, repo.id as string);
-  return json(result.project, 201);
 }
 
 async function listProjects(ctx: RequestContext): Promise<Response> {

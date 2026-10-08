@@ -411,7 +411,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		}
 		spec.Git = &lux.Git{}
 		for _, rp := range repos {
-			lr := lux.Repository{Name: rp.Name, URL: rp.URL, Ref: rp.Ref, Path: phases.RepoPath(rp.Name), Push: new(bool)}
+			lr := lux.Repository{Name: lux.SpecName(rp.Name), URL: rp.URL, Ref: rp.Ref, Path: phases.RepoPath(rp.Name), Push: new(bool)}
 			if token != "" {
 				lr.Credential = "GIT_TOKEN"
 			}
