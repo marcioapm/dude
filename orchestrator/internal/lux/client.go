@@ -697,7 +697,7 @@ func (c *HTTPClient) Stop(ctx context.Context, runID string) error {
 }
 
 func (c *HTTPClient) Cancel(ctx context.Context, runID string) error {
-	// /cancel, not /terminate: every lux takes it (a deprecated alias of /terminate since terminate exists).
+	// /cancel, not /terminate: every lux takes it, a newer one as terminate's alias.
 	return c.do(ctx, "POST", "/v1/runs/"+runID+"/cancel", nil, nil, nil)
 }
 

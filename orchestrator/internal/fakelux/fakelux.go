@@ -541,7 +541,7 @@ type Server struct {
 	NoSyncModes bool
 	// CancelledState is a lux from before terminate: a Run ended for good
 	// is "cancelled", and a succeeded Run is final too. By default it is
-	// "terminated", and succeeded resumes as stopped does, as lux now.
+	// "terminated", and succeeded resumes as stopped does.
 	CancelledState bool
 	// HoldPushes is a lux that accepts a push and never reports it: no
 	// git.push follows, until ReleasePushes.
@@ -2057,8 +2057,8 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, s.view(run))
 }
 
-// cancel is the deprecated alias of terminate; a lux from before terminate
-// (CancelledState) has only this one.
+// cancel is the deprecated alias of terminate, and a CancelledState lux's
+// only one.
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	run := s.find(w, r)
 	if run == nil {
