@@ -267,13 +267,18 @@ def test_pickers_say_an_image_can_run_containers_and_a_typed_one_cannot(
     page.goto(f"{web_url}#/project/{project['id']}/settings/servers")
     preview = page.get_by_test_id("preview-image")
     preview.get_by_role("combobox").click()
+    # Each pick is saved at once; its toast is awaited so a shot's dismissal finds it.
+    saved = page.locator("[data-toast]").filter(has_text="Image saved")
     preview.get_by_role("option").filter(has_text="abs-preview").click()
     expect(page.get_by_test_id("preview-containers-note")).to_contain_text(
         "This image can run containers. A preview keeps its containers while it sleeps, so it wakes in seconds instead of rebuilding them.")
+    expect(saved).to_have_count(1)
     _shoot(page, "08-previews-containers")
+    _dismiss_toasts(page)
     preview.get_by_role("combobox").click()
     preview.get_by_role("option").filter(has_text="node-22").click()
     expect(page.get_by_test_id("preview-containers-note")).to_have_count(0)
+    expect(saved).to_have_count(1)
     _shoot(page, "08b-previews-plain")
     assert console_errors == []
 
