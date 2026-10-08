@@ -93,6 +93,17 @@ test("a project with a digit in its key numbers its tasks under it: PAY2-1", asy
   expect(((await res.json()) as { key: string }).key).toBe("PAY2-1");
 });
 
+test("a project's key is fixed: PATCH with key or key_prefix answers 200 and leaves it as it was", async () => {
+  const [project] = await owner`SELECT id FROM projects WHERE organization_id = ${org} AND key_prefix = 'PAY2'` as Array<{ id: string }>;
+  for (const body of [{ key: "NEW2" }, { key: "NEW2", name: "Payments Renamed" }, { key_prefix: "NEW2" }]) {
+    const res = await call("PATCH", `/v1/projects/${project!.id}`, body);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { key: string }).key).toBe("PAY2");
+  }
+  expect(await owner`SELECT name, slug, key_prefix FROM projects WHERE id = ${project!.id}`)
+    .toEqual([{ name: "Payments Renamed", slug: "payments", key_prefix: "PAY2" }]);
+});
+
 const BARRIER_LOCK = 920_092;
 
 /**
