@@ -188,3 +188,43 @@ jobs:
           name: e2e-logs-${{ matrix.shard }}
           path: ${{ runner.temp }}/e2e-logs
           if-no-files-found: ignore
+
+  # dude-image-builder's podman tests need rootless podman on cgroup v2 with
+  # the cpu and memory controllers delegated to the user, as on a build host.
+  image-builder:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      - name: podman
+        run: |
+          command -v podman >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q podman; }
+          podman --version
+
+      # systemd delegates only memory and pids to user@.service by default.
+      - name: Delegate cpu and memory to the runner's user manager
+        run: |
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl restart "user@$(id -u).service"
+          controllers="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+          cat "$controllers"
+          for c in cpu memory; do grep -qw "$c" "$controllers" || { echo "$c is not delegated" >&2; exit 1; }; done
+
+      # In a scope of the user's systemd instance, so podman's builds land in
+      # the delegated cgroup rather than the runner service's. Delegate=yes: a
+      # controller delegated to the user manager reaches a child cgroup only
+      # once a unit asks for it, and by default none asks for cpu.
+      - name: scripts/test-image-builder.sh
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          systemd-run --user --scope --quiet -p Delegate=yes -- scripts/test-image-builder.sh
