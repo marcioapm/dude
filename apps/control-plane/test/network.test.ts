@@ -51,6 +51,7 @@ let otherKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 /** What the orchestrator says sits under every list. */
 const defaults = { operator: ["mirror.internal"], always: ["llm.example", "dude’s tools"], model: "llm.example" };
+let answer = defaults;
 let orchestratorDown = false;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -90,7 +91,7 @@ beforeAll(async () => {
     fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === "/internal/network/defaults") {
-        return orchestratorDown ? new Response("restarting", { status: 503 }) : Response.json(defaults);
+        return orchestratorDown ? new Response("restarting", { status: 503 }) : Response.json(answer);
       }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
@@ -222,6 +223,8 @@ describe("names refused recently", () => {
       expect(res.status).toBe(400);
       const [{ agent_egress: after }] = await owner`SELECT agent_egress FROM projects WHERE id = ${PROJECT}`;
       expect(after).toEqual(full);
+      // Exactly 200 is not past it.
+      expect((await call(adminKey, "POST", `/v1/projects/${PROJECT}/network/allow`, { names: ["a.example.com"] })).status).toBe(200);
     } finally {
       await owner`UPDATE projects SET agent_egress = ${owner.array(before, "text")}::text[] WHERE id = ${PROJECT}`;
     }
@@ -244,11 +247,38 @@ describe("names refused recently", () => {
     await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt) VALUES ('run_many', ${ORG}, ${PROJECT}, 'wi_net', 1)`;
     await owner`INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
       SELECT 'run_many', 'h' || lpad(i::text, 3, '0') || '.example.org', ${ORG}, ${PROJECT}, 'fixer' FROM generate_series(1, 600) i`;
+    // Refused in two Runs, so first, and on the project's list since: never listed, and 200 others still are.
+    const allowed = ["a1.example.net", "a2.example.net", "a3.example.net", "a4.example.net"];
+    const [{ agent_egress: before }] = await owner`SELECT agent_egress FROM projects WHERE id = ${PROJECT}`;
+    await owner`UPDATE projects SET agent_egress = ${owner.array([...before, ...allowed], "text")}::text[] WHERE id = ${PROJECT}`;
+    await owner`INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
+      SELECT r, n, ${ORG}, ${PROJECT}, 'fixer' FROM unnest(ARRAY['run_a', 'run_b']) r, unnest(${owner.array(allowed, "text")}::text[]) n`;
     try {
       const refused = (await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused`))).refused;
       expect(refused.map((r: Json) => r.name)).toEqual(Array.from({ length: 200 }, (_, i) => `h${String(i + 1).padStart(3, "0")}.example.org`));
     } finally {
       await owner`DELETE FROM runs WHERE id = 'run_many'`;
+      await owner`DELETE FROM agent_egress_refusals WHERE name = ANY(${owner.array(allowed, "text")}::text[])`;
+      await owner`UPDATE projects SET agent_egress = ${owner.array(before, "text")}::text[] WHERE id = ${PROJECT}`;
+    }
+  });
+});
+
+describe("the orchestrator's defaults", () => {
+  test("are kept for a minute, then read again", async () => {
+    const start = Date.now();
+    await orgNetwork();
+    answer = { ...defaults, operator: ["mirror2.internal"] };
+    try {
+      expect((await orgNetwork()).operator).toEqual(["mirror.internal"]);
+      setSystemTime(new Date(start + 61_000));
+      expect((await orgNetwork()).operator).toEqual(["mirror2.internal"]);
+    } finally {
+      // Read the original back, so the tests after this one see it.
+      answer = defaults;
+      setSystemTime(new Date(start + 122_000));
+      await orgNetwork();
+      setSystemTime();
     }
   });
 });

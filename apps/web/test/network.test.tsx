@@ -6,12 +6,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { useState } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { SettingsPatch, SettingsResponse } from "@dude/domain";
+import { EventTypes, type PersistedEvent, type SettingsPatch, type SettingsResponse } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { byLabel, byRole } from "../../../packages/design-system/test/queries.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { hostMatchers, refusedHostIn } from "../src/networkRefused.tsx";
+import { hostMatchers, refusedHostIn, useNetworkNotes } from "../src/networkRefused.tsx";
+import type { ToolTurn } from "../src/api/conversation.ts";
 import { PROJECT, RUN_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
@@ -242,7 +244,7 @@ describe("which refused host a call's output names", () => {
   test("a host only as a whole name, not inside a longer one", () => {
     expect(name("fetch https://github.com/acme/api.git: dns error", ["github.com"])).toBe("github.com");
     expect(name("resolving github.com.", ["github.com"])).toBe("github.com");
-    for (const other of ["GET https://api.github.com/repos", "notgithub.com", "github.com.internal", "github.community", "a-github.com"]) {
+    for (const other of ["GET https://api.github.com/repos", "notgithub.com", "github.com.internal", "github.community", "a-github.com", "githubxcom"]) {
       expect([other, name(other, ["github.com"])]).toEqual([other, null]);
     }
   });
@@ -251,5 +253,25 @@ describe("which refused host a call's output names", () => {
     const both = "fetching https://github.com/acme/api: Could not resolve host: api.github.com";
     expect(name(both, ["github.com", "api.github.com"])).toBe("api.github.com");
     expect(name("Could not resolve host: github.com", ["github.com", "api.github.com"])).toBe("github.com");
+  });
+
+  test("a call already shown gets its note when the host it names is refused later", async () => {
+    const refused = (...names: string[]) => names.map((n) => ({ eventType: EventTypes.NetworkRefused, payload: { name: n } }) as unknown as PersistedEvent);
+    const turn = { kind: "tool", id: "t1", tool: "bash", args: {}, status: "completed", startedAt: "", endedAt: "", result: out("Could not resolve host: b.example.com") } as ToolTurn;
+    let setEvents: (e: PersistedEvent[]) => void = () => {};
+    const client = new Recording("a");
+    function Probe() {
+      const [events, set] = useState(refused("a.example.com"));
+      setEvents = set;
+      const notes = useNetworkNotes(client, PROJECT.id, events);
+      return <TooltipProvider>{notes && <i data-testid="notes-ready" />}{notes?.(turn)}</TooltipProvider>;
+    }
+    const { container, unmount } = await mount(<Probe />);
+    mounted.push(unmount);
+    // The settings are read: the call has been scanned for a.example.com alone.
+    await until(() => container.querySelector("[data-testid=notes-ready]"), "the project's settings");
+    expect(container.querySelector("[data-testid=network-refused]")).toBeNull();
+    await act(async () => setEvents(refused("a.example.com", "b.example.com")));
+    await until(() => container.querySelector("[data-testid=network-refused]"), "the note for b.example.com");
   });
 });

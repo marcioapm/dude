@@ -72,7 +72,9 @@ func TestASessionsRefusedLookupIsSaidAndNotKept(t *testing.T) {
 	w.dns("pypi.org", false)
 	w.dns("pypi.org", false)
 	var rows int
-	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals`).Scan(&rows)
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
 	if n := w.events(evNetworkRefused); rows != 0 || n != 1 {
 		t.Errorf("%d rows, %d events; want none kept and one said", rows, n)
 	}
@@ -80,18 +82,33 @@ func TestASessionsRefusedLookupIsSaidAndNotKept(t *testing.T) {
 
 // A Run's refused names stop being kept and said at the cap: lux bounds
 // none, and the table, the ledger and the Run's transcript would grow with
-// every random name an agent resolved.
+// every random name an agent resolved. The cap is each Run's: another Run
+// of the organisation at its own cap takes none of this one's. A session's
+// Run, which keeps none, stops being told at the same cap.
 func TestARunsRefusedNamesStopAtTheCap(t *testing.T) {
-	w := newReceiptWorld(t)
-	for i := range maxRefusedNames + 1 {
-		w.dns(fmt.Sprintf("h%d.example.com", i), false)
-	}
-	var rows int
-	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals WHERE run_id = $1`,
-		w.tr.run.ID).Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	if n := w.events(evNetworkRefused); rows != maxRefusedNames || n != maxRefusedNames {
-		t.Errorf("%d rows, %d events; want %d of each", rows, n, maxRefusedNames)
+	for _, session := range []bool{false, true} {
+		t.Run(map[bool]string{false: "project", true: "session"}[session], func(t *testing.T) {
+			w := newReceiptWorld(t)
+			if _, err := w.owner.Exec(context.Background(), `INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
+				SELECT 'other_'||$1, 'o' || i || '.example.com', $1, 'prj_'||$1, 'fixer' FROM generate_series(1, $2::int) i`,
+				w.org, maxRefusedNames); err != nil {
+				t.Fatal(err)
+			}
+			want := maxRefusedNames
+			if session {
+				w.tr.run.ProjectID, want = "", 0
+			}
+			for i := range maxRefusedNames + 1 {
+				w.dns(fmt.Sprintf("h%d.example.com", i), false)
+			}
+			var rows int
+			if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals WHERE run_id = $1`,
+				w.tr.run.ID).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.events(evNetworkRefused); rows != want || n != maxRefusedNames {
+				t.Errorf("%d rows, %d events; want %d rows, %d events", rows, n, want, maxRefusedNames)
+			}
+		})
 	}
 }
