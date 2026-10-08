@@ -103,8 +103,10 @@ async function networkDefaults(ctx: RequestContext): Promise<NetworkDefaults> {
     lastDefaults = { from, at: Date.now(), value };
     return value;
   } catch (err) {
-    if (last) return last.value;
-    throw err;
+    if (!last) throw err;
+    // Ask again only in a minute: an orchestrator that hangs then delays one request a minute, not each.
+    lastDefaults = { ...last, at: Date.now() };
+    return last.value;
   }
 }
 const builtinPrompts = constant<Record<PromptRole, string>>("/internal/prompts/builtin");

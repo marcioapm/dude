@@ -47,9 +47,11 @@ export function refusedHostIn(result: ToolResult | null, matchers: ReadonlyArray
  */
 export function useNetworkNotes(client: ApiClient, projectId: string | undefined, events: readonly PersistedEvent[]): ((turn: ToolTurn) => ReactNode) | undefined {
   const hosts = useMemo(() => refusedHosts(events), [events]);
-  const matchers = useMemo(() => hostMatchers(hosts), [hosts]);
-  // A call's result never changes once it has one: each is scanned once
-  // per set of refused hosts, not on every render of a live Run.
+  // Keyed on the names, not the array, which is new with every event of a
+  // live Run. A call's result never changes once it has one: each is
+  // scanned once per set of refused hosts.
+  const key = hosts.join("\n");
+  const matchers = useMemo(() => hostMatchers(key ? key.split("\n") : []), [key]);
   const matched = useMemo(() => new WeakMap<ToolResult, string | null>(), [matchers]);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [busy, setBusy] = useState(false);
