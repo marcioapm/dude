@@ -20,23 +20,30 @@ export function WaitingForHost({ reason, onRunPage }: { reason: string; onRunPag
         </>
       ) : (
         <>
-          <b>Waiting for a host.</b> lux says: {reason}.{meanwhile}
+          <b>Waiting for a host.</b> lux says: {sentence(reason)}{meanwhile}
         </>
       )}
     </Callout>
   );
 }
 
+/** lux's reason as a sentence: one period at its end, whether lux wrote it or not. */
+function sentence(reason: string): string {
+  const r = reason.trim();
+  return /[.!?]$/.test(r) ? r : `${r}.`;
+}
+
 /**
  * Why lux has not placed a Run yet, read with its servers (the one place
  * dude reads lux's Run for the page) whenever `askAgain` moves while it is
- * scheduled: its stream's servers.changed and status changes. Null when
- * it is not waiting.
+ * live: its stream's servers.changed (lux's state changed while it waits
+ * for a host, or it got one) and the stream coming back. Null when lux
+ * says it is not waiting: a running, resumed or moved Run alike.
  */
-export function useWaitingReason(client: ApiClient, runId: string, scheduled: boolean, askAgain: number): string | null {
+export function useWaitingReason(client: ApiClient, runId: string, live: boolean, askAgain: number): string | null {
   const [reason, setReason] = useState<{ runId: string; reason: string | null } | null>(null);
   useEffect(() => {
-    if (!scheduled) return;
+    if (!live) return;
     let cancelled = false;
     client.runServers(runId).then((s) => {
       if (!cancelled) setReason({ runId, reason: s.run?.waitingReason ?? null });
@@ -44,6 +51,6 @@ export function useWaitingReason(client: ApiClient, runId: string, scheduled: bo
     return () => {
       cancelled = true;
     };
-  }, [client, runId, scheduled, askAgain]);
-  return scheduled && reason?.runId === runId ? reason.reason : null;
+  }, [client, runId, live, askAgain]);
+  return live && reason?.runId === runId ? reason.reason : null;
 }

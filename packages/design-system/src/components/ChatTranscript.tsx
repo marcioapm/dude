@@ -46,6 +46,8 @@ export interface ChatTranscriptSession {
   readonly owner?: Person | undefined;
   /** Under the title, in place of role · model: "for Ana · sonnet · started 2m ago". */
   readonly subtitle?: ReactNode;
+  /** Beside the status, what qualifies it: "Waiting for a host". Keeps its width; the title gives way. */
+  readonly statusNote?: ReactNode;
 }
 
 export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "title"> {
@@ -220,6 +222,7 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
           ) : null}
           <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
           <StatusBadge status={session.status} size="sm" />
+          {session.statusNote ? <span className={styles["headerStatusNote"]}>{session.statusNote}</span> : null}
         </div>
         <div className={styles["headerSub"]}>
           {session.subtitle ?? (
