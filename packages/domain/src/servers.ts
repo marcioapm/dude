@@ -147,6 +147,11 @@ export type WakeableServerState = "ready" | "waking" | "asleep" | "stopped" | "u
 
 export type PreviewStage = "scheduling" | "cloning" | "setup" | "starting" | "ready";
 
+/** lux's reason for a Run waiting because no host in its pool can run containers. */
+export function waitsForContainerHost(reason: string | null | undefined): boolean {
+  return Boolean(reason && /does not support nested containers|do not support nested containers/.test(reason));
+}
+
 /** A task's (or a Run's) servers: `GET /v1/tasks/:id/servers`, `GET /v1/runs/:id/servers`. */
 export interface TaskServers {
   run: null | {
@@ -177,6 +182,12 @@ export interface TaskServers {
     error?: string | null;
     /** The memory limit lux gave its container, in bytes, when lux reports one. */
     memoryLimit?: number | null;
+    /**
+     * Why lux has not placed it yet, as lux says it, while it waits for a
+     * host ("waiting for capacity: 1 host in its pool does not support
+     * nested containers"); null once it has one.
+     */
+    waitingReason?: string | null;
   };
   servers: RunServer[];
   moved: null | { at: string; fromHost: string | null; toHost: string | null };

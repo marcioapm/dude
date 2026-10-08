@@ -98,6 +98,10 @@ type RunView struct {
 	// The memory limit lux gave its current container, in bytes, when lux
 	// reports one: what the Run's size asked for less the host's share.
 	MemoryLimit *int64 `json:"memoryLimit"`
+	// Why lux has not placed it yet, as lux says it (its stateReason while
+	// the Run waits for a host): "waiting for capacity: 1 host in its pool
+	// does not support nested containers". Nil once it has a host.
+	WaitingReason *string `json:"waitingReason"`
 }
 
 type PersonRef struct {
@@ -270,6 +274,9 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 			v.LuxState = luxRun.State
 			v.Host = nonEmpty(luxRun.Host)
 			v.MemoryLimit = luxRun.MemoryLimit()
+			if Waiting(luxRun.State) {
+				v.WaitingReason = nonEmpty(luxRun.StateReason)
+			}
 		} else {
 			s.Log.Debug("reading the run from lux", "run", r.ID, "error", err)
 		}
@@ -292,6 +299,16 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 	}
 	out.Moved = moved(out.Servers, luxRun)
 	return out
+}
+
+// Waiting is a lux state in which a Run has no host yet and lux's
+// stateReason says why it waits.
+func Waiting(luxState string) bool {
+	switch luxState {
+	case "submitted", "provisioning", "resuming":
+		return true
+	}
+	return false
 }
 
 // phaseLabel names a phase's agent as the app does (SETTINGS_ROLE_LABEL).

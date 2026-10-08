@@ -15,6 +15,7 @@ import {
   shortDigest,
   type LintContext,
 } from "../src/images.ts";
+import { waitsForContainerHost } from "../src/servers.ts";
 
 const LIB: LintContext = { images: ["acme-base", "node-pnpm"] };
 const lint = (text: string, ctx = LIB) => lintContainerfile(text, ctx);
@@ -199,5 +200,16 @@ describe("lacksContainerEngine: the pre-build hint for a version that can run co
   test("fromImage names a first FROM image:", () => {
     expect(fromImage("FROM image:agents-podman AS b\n")).toBe("agents-podman");
     expect(fromImage("FROM debian\nFROM image:x\n")).toBeNull();
+  });
+});
+
+describe("waitsForContainerHost: lux's reason, read as the nested one", () => {
+  test("lux's words for one host and for several", () => {
+    expect(waitsForContainerHost("waiting for capacity: 1 host in its pool does not support nested containers")).toBe(true);
+    expect(waitsForContainerHost("waiting for capacity: 3 hosts in its pool lack cpus (requested 4), 2 do not support nested containers")).toBe(true);
+  });
+  test("any other reason, or none, is not", () => {
+    expect(waitsForContainerHost("waiting for capacity: 1 host in its pool lacks memory (requested 16.0 GiB)")).toBe(false);
+    expect(waitsForContainerHost(null)).toBe(false);
   });
 });

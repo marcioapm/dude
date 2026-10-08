@@ -36,7 +36,7 @@ type fakePodman struct {
 	// lists those tags in order.
 	found   Found
 	checked []string
-	block       chan struct{}
+	block   chan struct{}
 	// Closed, when set, once a build is blocked on block.
 	blocked chan struct{}
 }
