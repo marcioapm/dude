@@ -210,17 +210,29 @@ func workdir(repos []specRepo) string {
 	return workspaceDir
 }
 
-// repoRefs is where each repository starts, by name.
+// repoRefs is where each repository starts, by its name in the spec (what
+// lux reports the checkout as, and what a live read of the diff names).
 func repoRefs(repos []specRepo) map[string]string {
 	refs := make(map[string]string, len(repos))
 	for _, r := range repos {
-		refs[r.Name] = r.Ref
+		refs[lux.SpecName(r.Name)] = r.Ref
 	}
 	return refs
 }
 
-// RepoPath is where a repository is checked out in the container.
-func RepoPath(name string) string { return workspaceDir + "/repos/" + name }
+// repositoriesBySpecName maps lux's reported names back to dude's repositories.
+func repositoriesBySpecName(repos []delivery.Repository) map[string]delivery.Repository {
+	byName := make(map[string]delivery.Repository, len(repos))
+	for _, repo := range repos {
+		byName[lux.SpecName(repo.Name)] = repo
+	}
+	return byName
+}
+
+// RepoPath is where a repository is checked out in the container, given
+// its name or its name in the spec (lux.SpecName leaves that as it is): a
+// name lux would refuse is checked out under the one the spec gives it.
+func RepoPath(name string) string { return workspaceDir + "/repos/" + lux.SpecName(name) }
 
 // Which coding agent runs a phase, as recorded on the Run: what the chat
 // labels it with, and what dude's translation of its output assumes.
@@ -289,7 +301,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
 		for _, r := range in.Repos {
-			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: r.path()}
+			// lux takes only some names (lux.NameRe); everything lux reports
+			// back — checkouts, clones, pushes, syncs — carries this one.
+			repo := lux.Repository{Name: lux.SpecName(r.Name), URL: r.URL, Ref: r.Ref, Path: r.path()}
 			if in.ForgeToken != "" {
 				// Used by lux to clone and push; never placed in the container.
 				// Declared as a secret only with a repository that uses it:

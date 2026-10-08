@@ -10,6 +10,7 @@ Usage:
     python run_tests.py --keep                   # keep the environment (debug)
     python run_tests.py -v                       # verbose
     python run_tests.py --lux                    # the contract suite, against a real lux
+    python run_tests.py --shard 2/6              # the 2nd of 6 shares of the suites, as CI runs them
 
 Each invocation creates an isolated PostgreSQL database and starts the
 control plane on a free port, so runs do not collide with each other or with
@@ -28,6 +29,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web  # noqa: E402
 from env import TestEnvironment, llm_env, lux_env, require_bun  # noqa: E402
+from shard import shard_suites  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -39,7 +41,18 @@ def main() -> None:
     parser.add_argument("--no-ui", action="store_true", help="skip suites that drive a browser")
     parser.add_argument("--lux", action="store_true",
                         help="run the contract suite against a real lux instead (see suites/test_lux_contract.py)")
+    parser.add_argument("--shard", default="", metavar="N/M",
+                        help="run only the Nth of M shares of the suites, split by recorded duration (shard.py)")
     args, pytest_args = parser.parse_known_args()
+
+    if args.shard:
+        selected = shard_suites(args.shard, pytest_args)
+        if not selected:
+            # Without paths pytest would run every suite, not none.
+            print(f"shard {args.shard}: no suites")
+            sys.exit(0)
+        print(f"shard {args.shard}: {' '.join(Path(s).name for s in selected)}")
+        pytest_args = [*selected, *pytest_args]
 
     require_bun()
     build()

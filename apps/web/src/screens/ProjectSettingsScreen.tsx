@@ -217,7 +217,9 @@ function GeneralTab({ client, project, canEdit, onSaved, images, orgName, onMana
         />
         {face.problem ? <Callout tone="danger">{face.problem}</Callout> : null}
         <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
-        <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
+        <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths." />
+        <Input label="Key" value={project.key} mono disabled data-testid="project-settings-key"
+          hint={`Fixed: its tasks are ${project.key}-1, ${project.key}-2… No other project in the organisation has it.`} />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {canEdit ? (
           <FormActions>

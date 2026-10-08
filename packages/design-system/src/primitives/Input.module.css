@@ -19,6 +19,21 @@
   color: var(--ds-tone-danger-fg);
 }
 
+/* The hint or error, then (with an error) its one-click fix. */
+.hintRow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-8);
+}
+.hintRow .hint {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.errorAction {
+  flex-shrink: 0;
+}
+
 .control {
   --input-h: var(--ds-size-control-md);
   display: flex;

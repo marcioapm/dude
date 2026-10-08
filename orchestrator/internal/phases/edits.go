@@ -69,10 +69,11 @@ func (s *Syncer) currentRefs(ctx context.Context, r phaseRun) ([]lux.SyncRef, er
 			return err
 		}
 		for _, repo := range repos {
-			if repo.Access == "read" || d.State.Heads[repo.Name] == "" || !slices.Contains(held, repo.Name) {
+			name := lux.SpecName(repo.Name) // as lux holds it
+			if repo.Access == "read" || d.State.Heads[repo.Name] == "" || !slices.Contains(held, name) {
 				continue
 			}
-			refs = append(refs, lux.SyncRef{Repo: repo.Name, Ref: branch, Mode: lux.SyncFastForward})
+			refs = append(refs, lux.SyncRef{Repo: name, Ref: branch, Mode: lux.SyncFastForward})
 		}
 		return nil
 	})
