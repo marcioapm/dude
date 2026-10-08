@@ -10,7 +10,8 @@ export interface ScreenHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "ti
   /**
    * The title may shrink below its words (a `SessionTitle`, which cuts its
    * own words with an ellipsis), on one line with the meta and actions:
-   * as wide as its words while they fit.
+   * as wide as its words while they fit. On a phone the meta and actions
+   * wrap under it.
    */
   readonly fillTitle?: boolean | undefined;
   /** After the title, muted: what it is, its figures. */

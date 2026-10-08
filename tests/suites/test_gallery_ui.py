@@ -501,6 +501,39 @@ def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(
     assert console_errors == []
 
 
+def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_page: Page, console_errors: list):
+    """At 375px a shared header's marker, model and Share do not shrink; they wrap under the title,
+    which keeps the first line, with room for at least "New session"."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    gallery_page.set_viewport_size({"width": 375, "height": 900})
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    # The gallery's own navigation takes 220px of a phone: the header is measured as a phone's screen
+    # draws it, alone at the viewport's width (a copy, inside the pane for its theme).
+    m = pane.get_by_test_id("title-in-header").locator("header").first.evaluate("""el => {
+        const h = el.cloneNode(true);
+        h.style.cssText = 'position:fixed;left:0;top:0;width:375px;box-sizing:border-box;z-index:10';
+        el.parentElement.append(h);
+        const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
+        const probe = words.cloneNode(false);
+        probe.textContent = 'New session';
+        probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
+        h.append(probe);
+        const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,
+                   room: title.getBoundingClientRect().width, need: probe.getBoundingClientRect().width,
+                   words: words.getBoundingClientRect().width, cut: words.scrollWidth > words.clientWidth,
+                   text: words.textContent, titleBottom: title.getBoundingClientRect().bottom,
+                   metaTop: title.nextElementSibling.getBoundingClientRect().top,
+                   actionsRight: h.lastElementChild.previousElementSibling.getBoundingClientRect().right};
+        h.remove();
+        return r;
+    }""")
+    assert m["header"] == 375 and m["overflow"] <= 0, m
+    assert (m["text"], m["cut"]) == ("Billing v2", False) and m["words"] > 0, m
+    assert m["room"] > m["need"] > 0, m
+    assert m["metaTop"] >= m["titleBottom"] and m["actionsRight"] <= 375, m
+    assert console_errors == []
+
+
 def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, console_errors: list):
     """PublishedFiles: the rail's Files, each by its own name with the folder in its tooltip, then N more."""
     gallery_page.get_by_role("link", name="PublishedFiles", exact=True).click()
