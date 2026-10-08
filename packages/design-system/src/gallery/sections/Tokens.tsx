@@ -115,7 +115,7 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="tokens-roles" title="Agent role colors" note="Categorical identity for the six roles, fixed order, never reused for status. Lightness varies per role on purpose: it is what keeps violet/blue and teal/green apart for deutan viewers. All 15 pairs validated in both modes.">
+      <Block id="tokens-roles" title="Agent role colors" note="Categorical identity, fixed order, never reused for status. Six colour slots for seven roles: the brainstorm wears the conductor's, told apart by its glyph. Lightness varies per slot on purpose: it is what keeps violet/blue and teal/green apart for deutan viewers. All 15 slot pairs validated in both modes.">
         <Panes mode={mode}>
           {(theme) => (
             <div className={styles["swatches"]}>
