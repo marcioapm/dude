@@ -17,6 +17,7 @@ import {
   Breadcrumb,
   BuildQueueStrip,
   BuildStages,
+  CanRunContainersBadge,
   CodeEditor,
   ImageHistory,
   ImageMark,
@@ -27,11 +28,12 @@ import {
   type ImageHistoryVersion,
   type LogLine,
 } from "@dude/design-system/components";
-import { formatDuration, formatTimestamp } from "@dude/design-system";
+import { formatDuration, formatTimestamp, Icon } from "@dude/design-system";
 import {
   Badge,
   Button,
   Callout,
+  Checkbox,
   Dialog,
   Input,
   RowMenu,
@@ -53,6 +55,7 @@ import {
   IMAGE_NAME,
   IMAGE_NAME_MESSAGE,
   imageReferences,
+  lacksContainerEngine,
   lintContainerfile,
   shortDigest,
   type ImageBuild,
@@ -188,6 +191,7 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
                         <span className="imageRowName">
                           <span className="ds-mono">{image.name}</span>
                           {image.isDefault ? <Badge size="sm" tone="info" emphasis="subtle">Default base</Badge> : null}
+                          {image.published?.canRunContainers ? <CanRunContainersBadge /> : null}
                           {image.archivedAt ? <Badge size="sm" icon="archive">Archived</Badge> : null}
                         </span>
                         {image.description ? <span className="imageRowDesc">{image.description}</span> : null}
@@ -335,6 +339,7 @@ function ImagePage({ client, orgName, id, tab, onSub, library, onChanged }: {
           <span className="imageHeadActions">
             <ImageState kind={state.kind}>{image.published ? `v${image.published.number} published` : state.words}</ImageState>
             {image.isDefault ? <Badge tone="info" emphasis="subtle">Default base</Badge> : null}
+            {image.published?.canRunContainers ? <CanRunContainersBadge size="md" /> : null}
             {detail.canEdit ? (
               <RowMenu label={`Actions for ${image.name}`} items={[
                 { id: "describe", label: "Edit description", icon: "edit", onSelect: () => setDescribing(true) },
@@ -405,6 +410,9 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
   const published = versions.find((v) => v.id === image.published?.versionId) ?? null;
   const [text, setText] = useState(draft?.containerfile ?? base?.containerfile ?? "FROM debian:bookworm-slim\n");
   const [note, setNote] = useState(draft?.note ?? "");
+  // Saved with the draft, like its Containerfile; a new draft starts from the published version's.
+  const savedContainers = draft?.canRunContainers ?? published?.canRunContainers ?? base?.canRunContainers ?? false;
+  const [containers, setContainers] = useState(savedContainers);
   const [refused, setRefused] = useState<string | null>(null);
   const { busy, problem, save } = useSave();
   const names = useMemo(() => (library?.images ?? []).map((i) => i.name), [library]);
@@ -412,7 +420,12 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
   const lintNames = useMemo(() => (library ? names : [...names, ...imageReferences(text)]), [library, names, text]);
   const diagnostics = useMemo(() => lintContainerfile(text, { images: lintNames, self: image.name }), [text, lintNames, image.name]);
   const errors = diagnostics.filter((d) => d.severity === "error").length;
-  const dirty = text !== (draft?.containerfile ?? base?.containerfile ?? "") || note !== (draft?.note ?? "");
+  const dirty = text !== (draft?.containerfile ?? base?.containerfile ?? "") || note !== (draft?.note ?? "") || containers !== savedContainers;
+  // The draft against the version it is from: "Can run containers turned on".
+  const flipped = (draft || dirty) && containers !== (base?.canRunContainers ?? false) ? (containers ? "on" : "off") : null;
+  const noEngine = containers && lacksContainerEngine(text, (library?.images ?? []).map((i) => ({ name: i.name, canRunContainers: Boolean(i.published?.canRunContainers) })));
+  // Turning it off where previews use it now: their kept containers go at their next wake.
+  const previewsLose = !containers && Boolean(image.published?.canRunContainers) && image.usedBy.some((u) => u.kind === "preview");
   const next = (versions.reduce((n, v) => Math.max(n, v.number ?? 0), 0) || 0) + 1;
   const ahead = (library?.queue ?? []).length;
   const counts = base ? draftCounts(base.containerfile, text) : null;
@@ -464,11 +477,33 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
             <>
               <span>{text.split("\n").length} lines</span>
               {counts ? <span>+{counts.add} −{counts.del} against v{base!.number}</span> : null}
+              {flipped ? (
+                <span className="imageFlagChange" data-testid="containers-changed">
+                  <Icon name="cube" size={12} />Can run containers turned {flipped}
+                </span>
+              ) : null}
               <span className="imageEditSpacer" />
               {errors ? <span className="lintBad" data-testid="lint-errors">✕ {errors} won’t build</span> : <span className="lintOk">Builds</span>}
             </>
           }
         />
+        <div className="imageContainers" data-testid="can-run-containers-field">
+          <Checkbox checked={containers} disabled={!canEdit} onCheckedChange={(c) => setContainers(c === true)}
+            label="Can run containers"
+            description="Runs in this image can start containers inside with podman or Docker. dude checks the build can, and fails it if not." />
+          {noEngine ? (
+            <p className="imageContainersHint" data-testid="containers-hint">
+              <Icon name="warning" size={12} />
+              This Containerfile doesn’t install podman or Docker. The build will fail its container check unless the base has them.
+            </p>
+          ) : null}
+          {previewsLose ? (
+            <p className="imageContainersHint" data-testid="containers-off-warning">
+              <Icon name="warning" size={12} />
+              Previews of this image lose their saved containers on their next wake.
+            </p>
+          ) : null}
+        </div>
         {refused ?? problem ? <Callout tone="danger" data-testid="image-save-problem">{refused ?? problem}</Callout> : null}
         {canEdit ? (
           <>
@@ -482,11 +517,11 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
                 </Button>
               ) : null}
               <Button variant="secondary" disabled={busy || !dirty} data-testid="save-draft"
-                onClick={() => void save(() => client.saveImageDraft(image.id, { containerfile: text, note }).then(onChanged, failed), undefined, "Draft saved")}>
+                onClick={() => void save(() => client.saveImageDraft(image.id, { containerfile: text, note, canRunContainers: containers }).then(onChanged, failed), undefined, "Draft saved")}>
                 Save draft
               </Button>
               <Button variant="primary" disabled={busy || errors > 0 || !builder.available || (!draft && !dirty)} data-testid="build-publish"
-                onClick={() => void save(() => client.buildImage(image.id, { containerfile: text, note }).then((r) => {
+                onClick={() => void save(() => client.buildImage(image.id, { containerfile: text, note, canRunContainers: containers }).then((r) => {
                   onChanged(r.image);
                   onOpenBuild(r.buildId);
                 }, failed), undefined, `v${next} queued`)}>
@@ -511,6 +546,7 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
             <dl className="imageFacts">
               <dt>Built</dt><dd>{published.builtAt ? formatTimestamp(published.builtAt, "datetime") : "—"}</dd>
               {published.parents.length ? <><dt>Base</dt><dd className="ds-mono">{published.parents.map((p) => `${p.name} v${p.version ?? "?"}`).join(", ")}</dd></> : null}
+              <dt>Containers</dt><dd data-testid="image-fact-containers">{published.canRunContainers ? "Can run them" : "No"}</dd>
               <dt>Image</dt><dd className="ds-mono">{shortDigest(published.userRef)}</dd>
             </dl>
           </>
@@ -519,7 +555,8 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
         <ul className="imageAsideList">
           <li>on the dude host, rootless, {builder.cpus} CPU and {(builder.memoryMiB / 1024).toFixed(1).replace(/\.0$/, "")} GB, one at a time;</li>
           <li>with no build files: COPY only from a stage or an image;</li>
-          <li>with the internet, but not the host’s AWS credentials or dude’s own services.</li>
+          <li>with the internet, but not the host’s AWS credentials or dude’s own services;</li>
+          <li>and, for a version that can run containers, checked that it can before it’s pushed.</li>
         </ul>
       </aside>
     </div>
@@ -536,6 +573,7 @@ const asHistory = (v: ImageVersion): ImageHistoryVersion => ({
   when: formatTimestamp(v.createdAt, "relative"),
   builtOn: v.parents.filter((p) => p.version).map((p) => `${p.name} v${p.version}`).join(", ") || undefined,
   error: v.error,
+  canRunContainers: v.canRunContainers,
 });
 
 function HistoryTab({ client, detail, onChanged, onOpenBuild }: { client: ApiClient; detail: ImageDetail; onChanged: (d: ImageDetail) => void; onOpenBuild: (b: string) => void }) {
@@ -615,6 +653,23 @@ function BuildsTable({ builds, onOpen }: { builds: readonly ImageBuild[]; onOpen
 // A build
 // ---------------------------------------------------------------------------
 
+/** The container check's own lines: what dude says italic, the failure as an error. */
+function logLevel(text: string): LogLine["level"] {
+  if (text.startsWith("Can't run containers:")) return "error";
+  if (/^(Check containers: |Check passed: |Not pushed\.)/.test(text)) return "system";
+  return undefined;
+}
+
+/** A library image that can run containers, other than this one, for the failed check's way out. */
+function useAbleBase(client: ApiClient, imageId: string | undefined): string | null {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!imageId) return;
+    client.imageChoices().then((r) => setName(r.images.find((i) => i.canRunContainers && !i.archived && i.id !== imageId)?.name ?? null), () => undefined);
+  }, [client, imageId]);
+  return name;
+}
+
 function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: string; onSub: (sub: string | undefined) => void }) {
   const [build, setBuild] = useState<ImageBuildWithLog | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -639,7 +694,8 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
   }, [live, load]);
-  const lines = useMemo<LogLine[]>(() => (build?.log ?? "").replace(/\n$/, "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((text, seq) => ({ seq, text })), [build?.log]);
+  const lines = useMemo<LogLine[]>(() => (build?.log ?? "").replace(/\n$/, "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((text, seq) => ({ seq, text, level: logLevel(text) })), [build?.log]);
+  const ableBase = useAbleBase(client, build?.imageId);
   if (!build) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
   const elapsed = build.startedAt ? (build.finishedAt ? Date.parse(build.finishedAt) : Date.now()) - Date.parse(build.startedAt) : null;
   return (
@@ -657,11 +713,17 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
       <dl className="buildFacts">
         <div><dt className="ds-tnum">{elapsed !== null ? formatDuration(elapsed) : build.state === "queued" ? queuePlace(build.ahead) : "—"}</dt><dd>{elapsed !== null ? (live ? "elapsed" : "took") : "in the line"}</dd></div>
         {build.buildSeconds ? <div><dt className="ds-tnum">{formatDuration(build.buildSeconds * 1000)}</dt><dd>building</dd></div> : null}
+        {build.checkSeconds ? <div><dt className="ds-tnum">{formatDuration(build.checkSeconds * 1000)}</dt><dd>checking containers</dd></div> : null}
         {build.pushSeconds ? <div><dt className="ds-tnum">{formatDuration(build.pushSeconds * 1000)}</dt><dd>pushing</dd></div> : null}
         <div><dt className="ds-tnum">{build.published ? `v${build.published.number}` : "none"}</dt><dd>{build.state === "succeeded" && build.kind === "build" ? "published now" : "published"}</dd></div>
       </dl>
       {live ? <BuilderOffline builder={build.builder} /> : null}
       {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
+      {build.state === "failed" && build.containersCheck && !build.containersCheck.passed ? (
+        <p className="buildFix" data-testid="build-fix">
+          Install them in the Containerfile, or build <code>FROM image:{ableBase ?? "<an image that can>"}</code>, which can run containers. Or untick Can run containers.
+        </p>
+      ) : null}
       {build.state === "succeeded" && build.kind === "build" ? (
         <Callout tone="success">Published. Everything that uses {build.imageName} gets v{build.version} on its next Run.</Callout>
       ) : null}

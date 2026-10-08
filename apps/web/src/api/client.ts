@@ -835,7 +835,7 @@ export class ApiClient {
   }
 
   /** Save the image's draft; 422 invalid_containerfile names each line that won't build. */
-  saveImageDraft(id: string, draft: { containerfile: string; buildArgs?: Record<string, string>; note?: string }): Promise<ImageDetail> {
+  saveImageDraft(id: string, draft: { containerfile: string; buildArgs?: Record<string, string>; note?: string; canRunContainers?: boolean }): Promise<ImageDetail> {
     return this.#request("PUT", `/v1/images/${encodeURIComponent(id)}/draft`, draft);
   }
 
@@ -846,7 +846,7 @@ export class ApiClient {
   /** Build & publish: the draft (saved first, when given) numbered and queued. */
   buildImage(
     id: string,
-    draft?: { containerfile: string; buildArgs?: Record<string, string>; note?: string },
+    draft?: { containerfile: string; buildArgs?: Record<string, string>; note?: string; canRunContainers?: boolean },
   ): Promise<{ buildId: string; versionId: string; version: number; image: ImageDetail }> {
     return this.#request("POST", `/v1/images/${encodeURIComponent(id)}/build`, draft);
   }

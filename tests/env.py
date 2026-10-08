@@ -230,6 +230,9 @@ class TestEnvironment:
              "-key", self.lux_key, "-addr-file", str(addr_file),
              # Previews wake on request, as on a lux with previews.
              "-preview-domain", FAKE_PREVIEW_DOMAIN,
+             # No host runs nested containers: a Run on an image that can
+             # run them waits, as on a pool without one.
+             "-no-nested-host",
              # Each Run's checkout, removed with the rest of the run's files.
              "-workspaces", str(self.git_root.parent)],
             stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,

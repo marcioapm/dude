@@ -311,6 +311,7 @@ function RoleImageField({ scope, role, images, onManageImages }: { scope: Settin
             onReset={settings.canEdit ? () => set(null, "Image reset") : undefined} />
         ) : null}>
         <ImageField testId="role-image" label={`${SETTINGS_ROLE_LABEL[role]}’s image`} images={images.images} value={own} orgName={orgName}
+          containersFor={`${SETTINGS_ROLE_LABEL[role].toLowerCase()}s`}
           allowNone={fixer ? "The implementer’s" : project ? `From ${orgName}` : "The project’s runtime image"} noneLabel={noneLabel}
           disabled={!settings.canEdit} onManage={onManageImages}
           onChange={(id) => set(id, id ? "Image saved" : "Image reset")} />

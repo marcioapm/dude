@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ImagePicker, type ImageChoiceView } from "@dude/design-system/components";
+import { Icon } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
 import type { ImageChoice } from "@dude/domain";
 import type { ApiClient } from "./api/client.ts";
@@ -39,7 +40,13 @@ export const choiceView = (i: ImageChoice): ImageChoiceView => ({
   isDefault: i.isDefault,
   archived: i.archived,
   status: i.status,
+  canRunContainers: i.canRunContainers,
 });
+
+/** Whether the library image `id` can run containers now (its published version). */
+export function canRunContainers(images: readonly ImageChoice[] | null, id: string | null): boolean {
+  return Boolean(id && images?.find((x) => x.id === id)?.canRunContainers);
+}
 
 /** An image's name and version now, for words: "acme-base v7". */
 export function imageWords(images: readonly ImageChoice[] | null, id: string | null): string | null {
@@ -69,10 +76,15 @@ export interface ImageFieldProps {
   onManage?: (() => void) | undefined;
   onCreateFrom?: ((text: string) => void) | undefined;
   testId?: string | undefined;
+  /**
+   * Who starts containers in a picked image that can run them, for the
+   * line under the picker: "this project’s agents", "testers". None: no line.
+   */
+  containersFor?: string | undefined;
 }
 
 /** The picker, with a typed image from before the library said and clearable under it. */
-export function ImageField({ images, value, onChange, label, legacy, onClearLegacy, shadowedBy, noneLabel, allowNone, orgName, disabled, onManage, onCreateFrom, testId }: ImageFieldProps) {
+export function ImageField({ images, value, onChange, label, legacy, onClearLegacy, shadowedBy, noneLabel, allowNone, orgName, disabled, onManage, onCreateFrom, testId, containersFor }: ImageFieldProps) {
   const used = value === null && !shadowedBy;
   const views = (images ?? []).map(choiceView);
   return (
@@ -90,10 +102,16 @@ export function ImageField({ images, value, onChange, label, legacy, onClearLega
         onCreateFrom={onCreateFrom}
         data-testid={testId}
       />
+      {containersFor && canRunContainers(images, value) ? (
+        <p className="imageNested" data-testid={testId ? `${testId}-containers` : undefined}>
+          <Icon name="cube" size={14} />
+          This image can run containers: {containersFor} can start containers.
+        </p>
+      ) : null}
       {legacy ? (
         <p className="imageLegacy" data-testid={testId ? `${testId}-legacy` : undefined}>
           {used ? "Uses" : "Not used:"} <code>{legacy}</code> (typed by hand).{" "}
-          {used ? "Pick an image to replace it." : value ? "The picked image wins over it." : `${shadowedBy} wins over it.`}
+          {used ? "It can’t run containers. Pick an image to replace it." : value ? "The picked image wins over it." : `${shadowedBy} wins over it.`}
           {onClearLegacy && !disabled ? (
             <Button size="sm" variant="quiet" onClick={onClearLegacy} data-testid={testId ? `${testId}-clear-legacy` : undefined}>
               Clear it

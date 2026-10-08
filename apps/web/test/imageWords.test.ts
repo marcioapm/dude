@@ -4,12 +4,12 @@ import { buildStages, containerfileCompletions, draftCounts, imageState, mergeBu
 
 const summary = (over: Partial<ImageSummary> = {}): ImageSummary => ({
   id: "img_a", name: "node-pnpm", description: "", archivedAt: null, createdAt: "2026-09-01T00:00:00Z", createdBy: null, isDefault: false,
-  published: { versionId: "v4", number: 4, builtAt: "2026-09-30T00:00:00Z", userRef: "r@sha256:1" }, pending: null, draft: null,
+  published: { versionId: "v4", number: 4, builtAt: "2026-09-30T00:00:00Z", userRef: "r@sha256:1", canRunContainers: false }, pending: null, draft: null,
   parents: [], from: "image:acme-base", usedBy: [], lastChange: { at: "2026-09-30T00:00:00Z", by: null, source: "person" }, ...over,
 });
 const job = (over: Partial<ImageBuild> = {}): ImageBuild => ({
   id: "b", imageId: "img_a", imageName: "node-pnpm", versionId: "v5", version: 5, kind: "build", state: "queued", stage: null, layerRef: null,
-  requestedBy: null, requestedAt: "2026-10-01T00:00:00Z", startedAt: null, finishedAt: null, error: null, buildSeconds: null, pushSeconds: null, ahead: 1, ...over,
+  requestedBy: null, requestedAt: "2026-10-01T00:00:00Z", startedAt: null, finishedAt: null, error: null, buildSeconds: null, pushSeconds: null, canRunContainers: false, containersCheck: null, checkSeconds: null, ahead: 1, ...over,
 });
 const ago = () => "2h ago";
 
@@ -116,5 +116,34 @@ describe("the build page's log after a read", () => {
     // "aaaaébb" is 8 bytes; the last 3 would start inside é, so 2 are kept.
     expect(got).toEqual({ id: "imb_1", log: "bb", logStart: 6, logTotal: 8 });
     expect(mergeBuildLog(null, log(0, "x".repeat(10)), "imb_1", 4)).toEqual({ id: "imb_1", log: "xxxx", logStart: 6, logTotal: 10 });
+  });
+});
+
+describe("a build of a version that can run containers", () => {
+  const limits = { cpus: 2, memoryMiB: 4096 };
+  const base = { kind: "build" as const, error: null, canRunContainers: true };
+  test("has a Check containers cell between Built and Published", () => {
+    const stages = buildStages({ ...base, state: "queued", stage: null }, limits, 2);
+    expect(stages.map((s) => s.label)).toEqual(["Waiting", "Building", "Check containers", "Pushed and published"]);
+    expect(buildStages({ ...base, canRunContainers: false, state: "queued", stage: null }, limits, 2).map((s) => s.id)).toEqual(["wait", "build", "done"]);
+  });
+  test("checking is the current cell, after Built", () => {
+    expect(buildStages({ ...base, state: "running", stage: "checking" }, limits, 2).map((s) => [s.label, s.state])).toEqual([
+      ["Waiting", "done"], ["Built", "done"], ["Check containers", "current"], ["Pushed and published", "todo"]]);
+  });
+  test("passed: what it found, and published", () => {
+    const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
+    const stages = buildStages({ ...base, state: "succeeded", stage: null, containersCheck: { passed: true, detail } }, limits, 3);
+    expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
+      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check containers", "done", detail],
+      ["Published", "done", "every user gets it on their next Run"]]);
+  });
+  test("failed: the check's cell fails, the next says nothing was pushed", () => {
+    const stages = buildStages({ ...base, state: "failed", stage: null, error: "Can't run containers: …",
+      containersCheck: { passed: false, detail: "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap" } }, limits, 4);
+    expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
+      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"],
+      ["Check containers", "failed", "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap"],
+      ["Not published", "todo", "Not pushed · v4 is still live"]]);
   });
 });
