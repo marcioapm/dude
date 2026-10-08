@@ -14,7 +14,8 @@ import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
   | { kind: "decision" | "notice"; id: string; at: string; text: string }
-  | { kind: "commit"; id: string; at: string; text: string; sha: string; paths: string[] };
+  | { kind: "commit"; id: string; at: string; text: string; sha: string; paths: string[] }
+  | { kind: "restart"; id: string; at: string; text: string; by: "conductor" | "person"; from: string; to: string };
 
 /**
  * A steer the conductor sent one of its Runs, and what became of it, as a
@@ -51,6 +52,19 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
         // dude's own line, in its words: ready to merge, or no longer.
         if (typeof p.text === "string" && p.text) out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: p.text });
         break;
+      case EventTypes.RunRestarted: {
+        // A Run stopped and a fresh one put in its place: by the conductor
+        // (restart_run), or a person on the banner.
+        if (typeof p.from !== "string" || typeof p.to !== "string") break;
+        const from = task.runs.find((r) => r.id === p.from);
+        const what = from ? runWhat(from) : typeof p.phase === "string" ? p.phase : "phase";
+        const who = p.by === "conductor" ? "The conductor" : "A person";
+        const note = typeof p.note === "string" && p.note ? `: ${p.note}` : ".";
+        const tier = typeof p.tier === "string" && p.tier ? " on another tier" : "";
+        out.push({ kind: "restart", id: e.eventId, at: e.occurredAt, from: p.from, to: p.to, by: p.by === "conductor" ? "conductor" : "person",
+          text: `${who} restarted the ${what} Run${tier}, starting over${note}` });
+        break;
+      }
       case EventTypes.GitCommitCreated: {
         // A commit the conductor published itself: its short sha and files.
         if (p.by !== "conductor" || typeof p.headSha !== "string") break;

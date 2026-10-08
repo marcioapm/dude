@@ -8,6 +8,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // specOf is the spec lux was given for a task's phase.
@@ -50,8 +51,10 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 		t.Errorf("model %q tier %q effort %q: want the organization's tier and the project's effort",
 			spec.Labels["dude.model"], spec.Labels["dude.model_tier"], spec.Labels["dude.effort"])
 	}
-	if spec.Timeout != "45m" {
-		t.Errorf("timeout = %q, want the organization's 45m", spec.Timeout)
+	// The role's time limit is when its owner is told of no progress, not
+	// lux's: lux is sent the hard limit.
+	if spec.Timeout != phases.DefaultTimeout {
+		t.Errorf("timeout = %q, want the hard limit %s", spec.Timeout, phases.DefaultTimeout)
 	}
 	if config := spec.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(config, `"reasoningEffort":"high"`) {
 		t.Errorf("opencode config lacks the effort: %s", config)
@@ -86,8 +89,8 @@ func TestAnOrganizationThatNeverEditsRunsTheBuiltInPrompt(t *testing.T) {
 	if !strings.HasPrefix(spec.Workload.Prompt, delivery.BuiltinPrompt("implementer")) {
 		t.Errorf("prompt:\n%s", spec.Workload.Prompt)
 	}
-	if spec.Timeout != "" || spec.Labels["dude.effort"] != "" {
-		t.Errorf("timeout %q effort %q, want none", spec.Timeout, spec.Labels["dude.effort"])
+	if spec.Labels["dude.effort"] != "" {
+		t.Errorf("effort %q, want none", spec.Labels["dude.effort"])
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND (prompt_version_id IS NOT NULL OR project_prompt_version_id IS NOT NULL)`, wi); n != 0 {
 		t.Errorf("%d runs recorded a prompt version", n)

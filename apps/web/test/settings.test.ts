@@ -48,7 +48,7 @@ describe("settings helpers", () => {
 
   test("labels read as a person says them", () => {
     expect([timeLimitLabel(null), timeLimitLabel(45), timeLimitLabel(60), timeLimitLabel(120), timeLimitLabel(90)])
-      .toEqual(["No limit", "45 min", "1 hour", "2 hours", "90 min"]);
+      .toEqual(["2 hours (default)", "45 min", "1 hour", "2 hours", "90 min"]);
     expect([effortLabel(null), effortLabel("high")]).toEqual(["Model’s default", "High"]);
   });
 

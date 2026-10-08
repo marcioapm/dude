@@ -9,6 +9,8 @@ import styles from "./ChatRunLine.module.css";
 export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "title"> {
   readonly role: AgentRole;
   readonly status: RunStatus;
+  readonly statusLabel?: string | undefined;
+  readonly replacement?: ReactNode;
   /** What it is, after its role: "correctness", "fix of 2 findings". */
   readonly what?: ReactNode;
   /** Short facts at the end: its duration, its cost. */
@@ -31,7 +33,7 @@ export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * where it started, never its transcript. The conductor's steers of it
  * sit under it.
  */
-export function ChatRunLine({ role, status, what, facts = [], onOpen, steers, className, ...rest }: ChatRunLineProps) {
+export function ChatRunLine({ role, status, statusLabel, replacement, what, facts = [], onOpen, steers, className, ...rest }: ChatRunLineProps) {
   return (
     <div className={cx(styles["root"], styles[role], className)} data-role={role} data-status={status} {...rest}>
       <button type="button" className={styles["line"]} onClick={onOpen} aria-label={`Open the ${ROLE_LABEL[role]}'s session`}>
@@ -40,10 +42,11 @@ export function ChatRunLine({ role, status, what, facts = [], onOpen, steers, cl
         <span className={styles["role"]}>{ROLE_LABEL[role]}</span>
         {what ? <span className={styles["what"]}>· {what}</span> : null}
         <span className={styles["end"]}>
-          <StatusMark status={status} size="sm" />
+          <StatusMark status={status} label={statusLabel} size="sm" />
           {facts.map((fact, i) => <span key={i}>{fact}</span>)}
         </span>
       </button>
+      {replacement}
       {steers ? <div className={styles["steers"]} data-testid="run-line-steers">{steers}</div> : null}
     </div>
   );

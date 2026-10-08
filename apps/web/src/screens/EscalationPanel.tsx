@@ -23,6 +23,10 @@ const ACTION_LABEL: Record<EscalationAction, string> = {
   stop: "Stop",
 };
 
+/** What an action reads as for this reason: accepting a failed review is going on without it. */
+const actionLabel = (action: EscalationAction, reason: string) =>
+  action === "accept" && reason === "review_failed" ? "Go on without it" : ACTION_LABEL[action];
+
 export function EscalationPanel({ client, task, you, onOpenRun, onDecided }: {
   client: ApiClient;
   task: TaskDetail & { escalation: NonNullable<TaskDetail["escalation"]> };
@@ -50,7 +54,7 @@ export function EscalationPanel({ client, task, you, onOpenRun, onDecided }: {
       setNote("");
       onDecided();
     } catch (err) {
-      setProblem(`Could not ${ACTION_LABEL[action].toLowerCase()}: ${errorText(err)}`);
+      setProblem(`Could not ${actionLabel(action, task.escalation.reason).toLowerCase()}: ${errorText(err)}`);
     } finally {
       setBusy(null);
     }
@@ -79,7 +83,7 @@ export function EscalationPanel({ client, task, you, onOpenRun, onDecided }: {
                 <Button key={action} size="sm" variant={action === "stop" ? "quiet" : action === task.escalation.actions[0] ? "primary" : "secondary"}
                   disabled={busy !== null} loading={busy === action} onClick={() => void decide(action)}
                   data-testid={`escalation-${action}`}>
-                  {ACTION_LABEL[action]}
+                  {actionLabel(action, task.escalation.reason)}
                 </Button>
               ))}
             </div>

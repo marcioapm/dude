@@ -93,7 +93,7 @@ type schema struct {
 	} `toml:"embeddings"`
 	Agent struct {
 		Image   any `toml:"image" env:"DUDE_AGENT_IMAGE" kind:"string" use:"orchestrator" default:"localhost/dude-runtime:dev"`
-		Timeout any `toml:"timeout" env:"DUDE_AGENT_TIMEOUT" kind:"string" use:"orchestrator"`
+		Timeout any `toml:"timeout" env:"DUDE_AGENT_TIMEOUT" kind:"string" use:"orchestrator" default:"4h"`
 		Egress  any `toml:"egress" env:"DUDE_AGENT_EGRESS" kind:"list" use:"orchestrator"`
 		// NestedContainers is agent.nested_containers.
 		NestedContainers any `toml:"nested_containers" env:"DUDE_AGENT_NESTED_CONTAINERS" kind:"bool" use:"orchestrator" default:"false"`
