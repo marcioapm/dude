@@ -565,4 +565,22 @@ describe("can run containers", () => {
     const [v] = await owner`SELECT can_run_containers FROM image_versions WHERE id = ${rebuilds[0]!.version_id}`;
     expect(v.can_run_containers).toBe(true);
   });
+
+  test("a multi-stage Containerfile inherits from its first FROM image:, either way round", async () => {
+    const first = await body(await call(adminKey, "POST", "/v1/images", {
+      name: "first-can", containerfile: "FROM image:agents-podman AS tools\nFROM image:acme-base\nCOPY --from=tools /usr/bin/podman /usr/bin/\n" }));
+    expect(first.versions[0].canRunContainers).toBe(true);
+    const second = await body(await call(adminKey, "POST", "/v1/images", {
+      name: "first-cannot", containerfile: "FROM image:acme-base AS tools\nFROM image:agents-podman\n" }));
+    expect(second.versions[0].canRunContainers).toBe(false);
+  });
+
+  test("an image whose published version cannot keeps that over its FROM's", async () => {
+    const own = await body(await call(adminKey, "POST", "/v1/images", { name: "published-off", containerfile: PODMAN, canRunContainers: false }));
+    const v1 = await body(await call(adminKey, "POST", `/v1/images/${own.image.id}/build`));
+    await built(v1.versionId);
+    expect((await image(own.image.id)).image.published).toMatchObject({ number: 1, canRunContainers: false });
+    const draft = await body(await call(adminKey, "PUT", `/v1/images/${own.image.id}/draft`, { containerfile: "FROM image:agents-podman\n" }));
+    expect(draft.versions[0]).toMatchObject({ state: "draft", canRunContainers: false });
+  });
 });
