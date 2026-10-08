@@ -744,7 +744,7 @@ func (w *world) migrate085() {
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `DROP FUNCTION run_stalled(runs);
-		ALTER TABLE runs DROP COLUMN open_tool_calls_at, DROP COLUMN files_changed_at, DROP COLUMN stall_reported_at,
+		ALTER TABLE runs DROP COLUMN open_tool_calls_at, DROP COLUMN files_changed_at, DROP COLUMN left_running_at, DROP COLUMN stall_reported_at,
 			DROP COLUMN stall_reasons, DROP COLUMN stall_fingerprint, DROP COLUMN stall_usage, DROP COLUMN stall_left_at,
 			DROP COLUMN restart_note, DROP COLUMN tier_override, DROP COLUMN replaced_by`); err != nil {
 		w.t.Fatal(err)
@@ -1194,9 +1194,10 @@ func TestAResumedRunIsNotSilentForItsWaitToRun(t *testing.T) {
 	id := runs[0]
 	release := w.movedAndHeld(id)
 	// As a resume lux accepted leaves the row (whilePaused): no activity,
-	// no turn, files dated at the acceptance — 3 hours ago.
-	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = NULL, agent_busy_at = NULL,
-		started_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	// no turn, files dated at the acceptance — 3 hours ago — and away from
+	// running since then.
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = NULL, agent_busy_at = NULL, started_at = now() - interval '3 hours',
+		files_changed_at = now() - interval '3 hours', left_running_at = now() - interval '3 hours' WHERE id = $1`, id)
 	w.sweep()
 	if n := w.stalls(id); n != 0 {
 		t.Fatalf("%d reports while waiting for a host", n)
@@ -1248,7 +1249,9 @@ func TestAResumedImplementerIsNotReportedForItsWaitToRun(t *testing.T) {
 	w := newWorld(t)
 	id := w.hangingImplementer()
 	release := w.movedAndHeld(id)
-	mustExec(t, w.owner, `UPDATE runs SET agent_busy_at = NULL, files_changed_at = now() - interval '3 hours' WHERE id = $1`, id)
+	// As a resume lux accepted 3 hours ago leaves the row (whilePaused).
+	mustExec(t, w.owner, `UPDATE runs SET agent_busy_at = NULL, files_changed_at = now() - interval '3 hours',
+		left_running_at = now() - interval '3 hours' WHERE id = $1`, id)
 	w.sweep()
 	if n := w.stalls(id); n != 0 {
 		t.Fatalf("%d reports while waiting for a host", n)
@@ -1341,4 +1344,168 @@ func TestASilentConductedRunIsReportedJustPastItsWindow(t *testing.T) {
 	if n := w.stalls(id); n != 1 {
 		t.Fatalf("silent for 30 min 10 s: %d reports, want 1", n)
 	}
+}
+
+// movedAfter has lux move the Run, as movedAndHeld does, and dates its
+// departure from running away ago, so the move's wait for a host is away
+// long. The old turn's busy marker is cleared while it is held, so the new
+// placement's first idle does not end a turn it never took.
+func (w *world) movedAfter(runID string, away time.Duration) (release func()) {
+	w.t.Helper()
+	release = w.movedAndHeld(runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET agent_busy_at = NULL, left_running_at = now() - make_interval(secs => $2)
+		WHERE id = $1`, runID, away.Seconds())
+	return release
+}
+
+// filesUnchangedFor dates a Run's last change of files ago.
+func (w *world) filesUnchangedFor(runID string, ago time.Duration) {
+	mustExec(w.t, w.owner, `UPDATE runs SET files_changed_at = now() - make_interval(secs => $2) WHERE id = $1`, runID, ago.Seconds())
+}
+
+// thirtyMinuteWriters sets the implementer's window to 30 minutes.
+func (w *world) thirtyMinuteWriters() {
+	mustExec(w.t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,timeLimitMinutes}', '30')
+		WHERE id = $1`, w.project)
+}
+
+// A writer whose files have not changed for 3 hours, moved by lux to
+// another host, its agent at work throughout: the move is not a change of
+// its files, and it is reported for them once running again.
+func TestAMovedWriterIsStillReportedForItsUnchangedFiles(t *testing.T) {
+	w := newWorld(t)
+	id := w.hangingImplementer()
+	w.filesUnchangedFor(id, 3*time.Hour)
+	w.runningAgain(id, w.movedAfter(id, 0))
+	w.silentFor(id, 0)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("writer unchanged for 3 hours across a host move: %d reports, want 1", n)
+	}
+	if r := w.reasonsOf(id); r != `["files"]` {
+		t.Errorf("reasons %s", r)
+	}
+}
+
+// A writer unchanged for 20 minutes of running, then moved with a
+// 40-minute wait for a host: 20 minutes on its 30-minute window when it
+// runs again, not 60 and not 0. 10 more minutes running, it is reported.
+func TestAMovedWriterKeepsItsRunningTimeButNotItsWait(t *testing.T) {
+	w := newWorld(t)
+	w.thirtyMinuteWriters()
+	id := w.hangingImplementer()
+	release := w.movedAfter(id, 40*time.Minute)
+	w.filesUnchangedFor(id, 60*time.Minute)
+	w.runningAgain(id, release)
+	w.silentFor(id, 0)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports on reaching running: the wait counted as no change", n)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET files_changed_at = files_changed_at - interval '10 minutes 10 seconds' WHERE id = $1`, id)
+	w.silentFor(id, 0)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports after 30 minutes of running unchanged, want 1: the running before the move was lost", n)
+	}
+	if r := w.reasonsOf(id); r != `["files"]` {
+		t.Errorf("reasons %s", r)
+	}
+}
+
+// A conducted reviewer silent for 20 minutes, then moved with a 40-minute
+// wait for a host: silent 20 minutes on its 30-minute window when it runs
+// again, and reported once 10 more silent minutes pass.
+func TestAMovedRunsSilenceKeepsItsRunningTimeButNotItsWait(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	release := w.movedAfter(id, 40*time.Minute)
+	w.silentFor(id, 60*time.Minute)
+	w.runningAgain(id, release)
+	w.sweep()
+	if n := w.stalls(id); n != 0 {
+		t.Fatalf("%d reports on reaching running: the wait counted as silence", n)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = agent_active_at - interval '10 minutes 10 seconds' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports after 30 minutes of running silent, want 1: the silence before the move was lost", n)
+	}
+	if r := w.reasonsOf(id); r != `["silent"]` {
+		t.Errorf("reasons %s", r)
+	}
+}
+
+// A conducted reviewer whose agent did something while it waited 40
+// minutes for a host (its records reach dude before lux reports it
+// running): silent from its arrival at the latest, so silent for its
+// window 30 minutes after it, and reported.
+func TestActivityBeforeAMovedRunRunsAgainCountsFromItsArrival(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	release := w.movedAfter(id, 40*time.Minute)
+	w.silentFor(id, 0)
+	w.runningAgain(id, release)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_active_at <= now()`, id); n != 1 {
+		t.Fatal("its last activity is dated after now")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = agent_active_at - interval '30 minutes 10 seconds' WHERE id = $1`, id)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("%d reports 30 minutes after its arrival, silent since, want 1", n)
+	}
+}
+
+// A writer reported for its unchanged files, then moved by lux: still
+// stalled once it runs again, as its files have not changed.
+func TestAMovedWritersFilesReportStillStands(t *testing.T) {
+	w := newWorld(t)
+	id := w.hangingImplementer()
+	w.filesUnchangedFor(id, 3*time.Hour)
+	w.silentFor(id, 0)
+	w.sweep()
+	stalled := func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND run_stalled(runs)`, id) == 1 }
+	if n := w.stalls(id); n != 1 || !stalled() {
+		t.Fatalf("%d reports, stalled %v: want 1, true", n, stalled())
+	}
+	w.runningAgain(id, w.movedAfter(id, 40*time.Minute))
+	w.silentFor(id, 0)
+	if !stalled() {
+		t.Fatal("a writer reported for its files no longer reads as stalled after a host move")
+	}
+}
+
+// A reviewer in an open call moved by lux: the agent's process starts
+// again on the new host, and its first idle closes the old placement's
+// calls. None survives into the new placement to be timed.
+func TestAMovedRunsOpenCallsDoNotSurviveTheMove(t *testing.T) {
+	w := newWorld(t)
+	w.quickDiffs()
+	w.hangingReviews(taskCall)
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersOpen(wi, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.openSince(id, 20*time.Minute)
+	release := w.movedAndHeld(id)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND open_tool_calls_at <> '{}'`, id); n != 1 {
+		t.Fatal("the call closed before the new placement ran: the case is not the one under test")
+	}
+	w.runningAgain(id, release)
+	w.until("the old placement's calls closed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND open_tool_calls_at = '{}' AND open_tool_calls = '{}'`, id) == 1
+	})
 }

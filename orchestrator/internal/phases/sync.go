@@ -278,11 +278,12 @@ var (
 	stalledSilent = `(r.open_tool_calls_at = '{}' AND ` + silentSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 )
 
-// silentSince (SQL, over runs r): when the agent last said, thought or did
-// anything (agent_active_at); before it has, since its placement entered
-// running — files_changed_at, which that entry sets (luxEvent) and only a
-// change of its files moves on, read only while agent_active_at is NULL,
-// as a resume leaves it. run_stalled (migration 085) repeats it.
+// silentSince (SQL, over runs r): where the agent's silence starts on the
+// Run's running clock: its last activity (agent_active_at), else, before
+// any, files_changed_at. Both are moved on by any time the Run spent not
+// running (luxEvent), so now() minus this is running time alone. A
+// person's resume clears agent_active_at and dates the files then.
+// run_stalled (migration 085) repeats it.
 const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
@@ -1558,11 +1559,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
-			-- Time stopped is not time without progress. The stream's
-			-- running dates them again (luxEvent), so a wait for a host
-			-- does not count either; this date stands only when lux
-			-- answered the resume as already running.
+			-- A person's resume is a fresh window. Its wait for a host is
+			-- time away from running, which the stream's running then
+			-- excludes (luxEvent).
 			files_changed_at = now(),
+			left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,

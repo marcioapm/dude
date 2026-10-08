@@ -3,16 +3,21 @@
 
 -- open_tool_calls_at: each open tool call's id → when it opened (the
 -- translator stamps a call the first time it sees it open; open_tool_calls
--- stays the set). files_changed_at: when the Run's placement entered
--- running (its start, or a resume once it runs again), then each time its
--- live diff reads a new checksum or a commit of its lands.
+-- stays the set). files_changed_at: when its files last changed (a new
+-- live-diff checksum, or a commit of its), else its first start or a
+-- person's resume. left_running_at: when its lux_state last left running,
+-- NULL while running or before it first runs. On entering running again,
+-- files_changed_at, agent_active_at and stall_reported_at move on by the
+-- time away (capped at now()): each is a
+-- point on the Run's running clock, so a move between hosts neither erases
+-- the running time before it nor counts its wait.
 --
 -- stall_reported_at: when it was last reported as making no progress;
 -- stall_reasons why ('call': a tool call open the whole window; 'files': a
 -- Run that changes code whose files did not change; 'silent': no tool call
 -- open, and its agent said, thought and did nothing — counted from
--- agent_active_at, or before the agent did anything from when its placement
--- entered running), stall_fingerprint its facts then (the open calls, the diff's
+-- agent_active_at, or before the agent did anything from files_changed_at),
+-- stall_fingerprint its facts then (the open calls, the diff's
 -- checksum and, while silent, when the silence began: unchanged facts wait
 -- longer to be reported again), stall_usage lux's CPU and network counters
 -- then (what the next report's window is measured from). stall_left_at: its
@@ -25,6 +30,7 @@
 ALTER TABLE runs
   ADD COLUMN open_tool_calls_at jsonb NOT NULL DEFAULT '{}',
   ADD COLUMN files_changed_at timestamptz,
+  ADD COLUMN left_running_at timestamptz,
   ADD COLUMN stall_reported_at timestamptz,
   ADD COLUMN stall_reasons text[] NOT NULL DEFAULT '{}',
   ADD COLUMN stall_fingerprint text,
