@@ -409,6 +409,8 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     _title_uncut(page)
     composer = page.get_by_test_id("session-composer").locator("textarea")
     expect(composer).to_be_focused()
+    # A session has no task: its composer says who it writes to.
+    expect(composer).to_have_attribute("placeholder", "Message the brainstorm…")
     session = page.url.split("#/sessions/")[1]
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
     expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")

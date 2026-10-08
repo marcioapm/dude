@@ -227,7 +227,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                   // A session nobody has written to yet (a new one, opened at once) is for writing in.
                   autoFocus={!reader && session.messages === 0}
                   disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
-                  placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.` : undefined}
+                  // A session has no task: the chat composer's own words would say "this task". An answer keeps its own.
+                  placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
+                    : yours ? undefined : "Message the brainstorm…"}
                   onSubmit={({ text }) => send(text)}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
