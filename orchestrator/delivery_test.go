@@ -600,11 +600,6 @@ func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 
 	var spec lux.Spec
 	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
-	// No wall-clock limit: agents work for days, and a parked one is not
-	// running.
-	if spec.Timeout != "" {
-		t.Errorf("the spec sets a timeout: %q", spec.Timeout)
-	}
 	// Served by lux inside the container, which adds the token: the MCP
 	// server names the service, and carries no header of its own.
 	if len(spec.Workload.Services) != 1 || spec.Workload.Services[0].URL != "http://10.9.8.7:3120/mcp" ||

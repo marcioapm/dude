@@ -154,18 +154,21 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
             hint={project ? undefined : "The proxy drops it for models that don’t reason"}
           />
         </SettingField>
-        <SettingField
-          label="Time limit per session"
-          source={<Source scope={scope} setting={r.timeLimitMinutes} reset={() => void set({ timeLimitMinutes: null }, "Time limit reset")} />}
-        >
-          <Select
-            aria-label="Time limit per session"
-            disabled={!canEdit}
-            value={String(r.timeLimitMinutes.value ?? NONE)}
-            onValueChange={(v) => void set({ timeLimitMinutes: v === NONE ? null : Number(v) }, "Time limit saved")}
-            options={TIME_LIMITS.map((m) => ({ value: m === null ? NONE : String(m), label: timeLimitLabel(m) }))}
-          />
-        </SettingField>
+        {role === "conductor" ? null : (
+          <SettingField
+            label="Time limit without progress"
+            source={<Source scope={scope} setting={r.timeLimitMinutes} reset={() => void set({ timeLimitMinutes: null }, "Time limit reset")} />}
+          >
+            <Select
+              aria-label="Time limit without progress"
+              disabled={!canEdit}
+              value={String(r.timeLimitMinutes.value ?? NONE)}
+              onValueChange={(v) => void set({ timeLimitMinutes: v === NONE ? null : Number(v) }, "Time limit saved")}
+              options={TIME_LIMITS.map((m) => ({ value: m === null ? NONE : String(m), label: timeLimitLabel(m) }))}
+              hint="After this long without progress, the owner is told. Runs are stopped at 4 hours."
+            />
+          </SettingField>
+        )}
         <MachineField scope={scope} role={role} sizes={sizes} onManageSizes={onManageSizes} />
       </SettingFields>
       {images ? <RoleImageField scope={scope} role={role} images={images} onManageImages={onManageImages} /> : null}

@@ -68,7 +68,7 @@ export const KEYS: readonly Key[] = [
   key("embeddings.model", "DUDE_EMBEDDINGS_MODEL", "string", "orchestrator", "gemini-embedding-2"),
   key("embeddings.dimensions", "DUDE_EMBEDDINGS_DIMENSIONS", "int", "orchestrator", "768"),
   key("agent.image", "DUDE_AGENT_IMAGE", "string", "orchestrator", "localhost/dude-runtime:dev"),
-  key("agent.timeout", "DUDE_AGENT_TIMEOUT", "string", "orchestrator"),
+  key("agent.timeout", "DUDE_AGENT_TIMEOUT", "string", "orchestrator", "4h"),
   key("agent.egress", "DUDE_AGENT_EGRESS", "list", "orchestrator"),
   key("agent.nested_containers", "DUDE_AGENT_NESTED_CONTAINERS", "bool", "orchestrator", "false"),
   key("registry.auth", "DUDE_REGISTRY_AUTH", "string", "orchestrator", "none"),

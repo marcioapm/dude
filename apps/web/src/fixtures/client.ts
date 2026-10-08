@@ -19,7 +19,7 @@ import { egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -116,6 +116,7 @@ export class FixtureClient extends ApiClient {
       if (as === "preview") this.#events = this.#events.filter((e) => e.runId !== RUN_ID || e.eventType === "run.created" || e.eventType === "run.started");
     }
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
+    if (as === "stalled") this.#stall();
     this.#nav = navigationFor(scenario);
     // The tree and the board say what the task's page does.
     if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
@@ -182,6 +183,41 @@ export class FixtureClient extends ApiClient {
 
   #restarted = false;
   #recovery: RecoveryOptions | null = null;
+
+  /**
+   * `dude.fixtures.run` = stalled: the implementer of a plain delivery has
+   * made no progress for its time limit, and its owner was told (data.ts's
+   * STALLED_TEXT); Restart puts a fresh one in its place, Leave it hides
+   * the banner.
+   */
+  #stall() {
+    const at = new Date(Date.now() - 4 * 60_000).toISOString();
+    const stalled = { at, text: STALLED_TEXT, owner: true, left: false };
+    this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, stalled } : r)) };
+    this.#events = [...this.#events, { ...this.#events[0]!, cursor: 10_000, eventId: "evt_stalled", eventType: "run.stalled",
+      occurredAt: at, runId: RUN_ID, actor: { type: "system", id: "dude" }, payload: { conducted: false, text: STALLED_TEXT } }];
+  }
+
+  override async restart(runId: string, note: string): Promise<{ runId: string; replaced: string }> {
+    await wait(150);
+    const fresh = `${runId}_again`;
+    const old = this.#task.runs.find((r) => r.id === runId)!;
+    this.#task = { ...this.#task, runs: [
+      { ...old, id: fresh, status: "pending", stalled: null, createdAt: new Date().toISOString(), startedAt: null },
+      ...this.#task.runs.map((r) => (r.id === runId ? { ...r, status: "aborted" as const, stalled: null, replacedBy: fresh,
+        endedAt: new Date().toISOString() } : r)),
+    ] };
+    this.#events = [...this.#events, { ...this.#events[0]!, cursor: 10_001, eventId: "evt_restarted", eventType: "run.restarted",
+      occurredAt: new Date().toISOString(), runId, actor: { type: "human", id: YOU, name: "Márcio Martins" },
+      payload: { from: runId, to: fresh, note, phase: old.phase } }];
+    return { runId: fresh, replaced: runId };
+  }
+
+  override async leaveStalled(runId: string): Promise<{ runId: string; left: true }> {
+    await wait(100);
+    this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === runId && r.stalled ? { ...r, stalled: { ...r.stalled, left: true } } : r)) };
+    return { runId, left: true };
+  }
 
   override recoveryOptions(): Promise<RecoveryOptions> {
     return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null });

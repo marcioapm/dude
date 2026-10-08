@@ -123,6 +123,7 @@
       "kind": "state"
     }
   ],
+  "timeout": "4h",
   "network": {
     "egress": [
       {
