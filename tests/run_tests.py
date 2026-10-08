@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web  # noqa: E402
 from env import TestEnvironment, llm_env, lux_env, require_bun  # noqa: E402
-from shard import all_suites, parse_shard, split, suite_seconds  # noqa: E402
+from shard import shard_suites  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -46,15 +46,12 @@ def main() -> None:
     args, pytest_args = parser.parse_known_args()
 
     if args.shard:
-        if any((TESTS_DIR / a.split("::")[0]).exists() for a in pytest_args if not a.startswith("-")):
-            sys.exit("--shard picks its own suites: name none")
-        n, m = parse_shard(args.shard)
-        selected = split(all_suites(), m, suite_seconds())[n - 1]
+        selected = shard_suites(args.shard, pytest_args)
         if not selected:
             # Without paths pytest would run every suite, not none.
-            print(f"shard {n}/{m}: no suites")
+            print(f"shard {args.shard}: no suites")
             sys.exit(0)
-        print(f"shard {n}/{m}: {' '.join(Path(s).name for s in selected)}")
+        print(f"shard {args.shard}: {' '.join(Path(s).name for s in selected)}")
         pytest_args = [*selected, *pytest_args]
 
     require_bun()

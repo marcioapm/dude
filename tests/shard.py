@@ -15,6 +15,7 @@ suite, e.g. one per shard (each run is shorter than the whole suite at once):
 from __future__ import annotations
 
 import json
+import os
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -61,6 +62,34 @@ def split(suites: list[str], m: int, seconds: Mapping[str, float],
         bins[i].append(suite)
         load[i] += seconds.get(suite, default)
     return [sorted(b) for b in bins]
+
+
+def names_a_suite(arg: str) -> bool:
+    """Whether a pytest argument selects suites: `suites`, `suites/...` or a
+    `.py` file, with or without a node id. Judged by spelling, not by what
+    exists on disk, so an option value such as `--junitxml r.xml` is never
+    mistaken for one; a value spelled like a suite (`-k suites`) is."""
+    path = arg.split("::")[0]
+    if path.endswith(".py"):
+        return True
+    # Resolved lexically from TESTS_DIR, as pytest would: `./suites`,
+    # `../tests/suites` and an absolute path all name the same directory.
+    p = Path(os.path.abspath(TESTS_DIR / path))
+    if not p.is_relative_to(TESTS_DIR):
+        return False
+    rel = p.relative_to(TESTS_DIR).as_posix()
+    return rel == "suites" or rel.startswith("suites/")
+
+
+def shard_suites(spec: str, pytest_args: list[str], suites: list[str] | None = None,
+                 seconds: Mapping[str, float] | None = None) -> list[str]:
+    """The suites of shard `spec` (N/M). SystemExit if `pytest_args` also
+    names suites: the shard picks its own."""
+    if any(names_a_suite(a) for a in pytest_args):
+        raise SystemExit("--shard picks its own suites: name none")
+    n, m = parse_shard(spec)
+    suites = all_suites() if suites is None else suites
+    return split(suites, m, suite_seconds() if seconds is None else seconds)[n - 1]
 
 
 def seconds_from_junit(xml_path: Path) -> dict[str, float]:
