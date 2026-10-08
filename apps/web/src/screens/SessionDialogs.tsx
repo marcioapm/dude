@@ -4,7 +4,7 @@
  * opens them; the orchestrator checks again.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { NavProject } from "@dude/design-system";
 import { firstName } from "@dude/design-system";
 import { PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
@@ -13,6 +13,16 @@ import type { SessionDetail, SessionLink, SessionMemberView } from "@dude/domain
 import type { ApiClient, Repository } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople } from "../people.tsx";
+
+const MEMBER_ROLES = [
+  { value: "chat" as const, label: SESSION_ROLE_WORD.chat },
+  { value: "read" as const, label: SESSION_ROLE_WORD.read },
+];
+
+const HANDOVER_ROLES = [
+  ...MEMBER_ROLES,
+  { value: "leave" as const, label: "Leave", description: "You lose the conversation; what you filed stays yours." },
+];
 
 /** Which projects and repositories a session reads; a new session's too. */
 export function LinkDialog({ client, projects, linked, open, onClose, onSave, title = "Link projects", saveLabel = "Link", lead }: {
@@ -194,7 +204,7 @@ export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOw
                 <>
                   <Select<"chat" | "read"> size="sm" aria-label={`What ${m.person.name} can do`} value={m.role as "chat" | "read"} disabled={busy}
                     onValueChange={(r) => void act(() => client.setSessionRole(detail.session.id, m.person.id, r))}
-                    options={[{ value: "chat", label: SESSION_ROLE_WORD.chat }, { value: "read", label: SESSION_ROLE_WORD.read }]} />
+                    options={MEMBER_ROLES} />
                   {m.accepted ? (
                     <Button size="sm" variant="quiet" disabled={busy} onClick={() => onMakeOwner(m)} data-testid="make-owner">Make owner…</Button>
                   ) : null}
@@ -222,11 +232,6 @@ export function MakeOwnerDialog({ client, detail, member, onClose, onChanged }: 
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const name = member ? firstName(member.person.name) : "";
-  const options = useMemo(() => [
-    { value: "chat" as const, label: SESSION_ROLE_WORD.chat },
-    { value: "read" as const, label: SESSION_ROLE_WORD.read },
-    { value: "leave" as const, label: "Leave", description: "You lose the conversation; what you filed stays yours." },
-  ], []);
   const hand = async () => {
     if (!member) return;
     setBusy(true);
@@ -250,7 +255,7 @@ export function MakeOwnerDialog({ client, detail, member, onClose, onChanged }: 
         <Button variant="quiet" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onClick={() => void hand()} data-testid="make-owner-confirm">Make {name} owner</Button>
       </>}>
-      <ChoiceList label="You, after" options={options} value={keep} onChange={setKeep} />
+      <ChoiceList label="You, after" options={HANDOVER_ROLES} value={keep} onChange={setKeep} />
       <p className="muted">Nothing you filed changes hands. Hand a task over on the task itself.</p>
     </Dialog>
   );
