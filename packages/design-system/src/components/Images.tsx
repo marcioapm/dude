@@ -329,11 +329,10 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
         {onOff(version) !== undefined && (!base || onOff(base) !== onOff(version)) ? (
           <div className={styles["propDiff"]} data-testid="flag-diff">
             <Icon name="cube" size={14} />
-            <span>Can run containers</span>
+            <span>Can run containers</span>{" "}
             {base && onOff(base) !== undefined ? (
               <>
-                <s className={styles["propBefore"]}>{onOff(base)}</s>
-                <span>→</span>
+                <s className={styles["propBefore"]}>{onOff(base)}</s> <span>→</span>{" "}
                 <ins className={styles["propAfter"]}>{onOff(version)}</ins>
               </>
             ) : (
