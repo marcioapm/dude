@@ -210,7 +210,7 @@ def test_a_shared_session_signs_every_message_and_a_question_to_one_member_waits
     assert listed["sessions"] == [] and [i["id"] for i in listed["invitations"]] == [session]
     assert "Ana owns billing" not in json.dumps(listed)
     assert ana_client.get(f"/v1/brainstorms/{session}").status_code == 404
-    assert ana_client.get("/v1/events", params={"sessionId": session}).json()["events"] == []
+    assert ana_client.get("/v1/events", params={"sessionId": session}).status_code == 404
 
     # Accepted: the whole history, from the first message.
     assert ana_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
@@ -316,8 +316,9 @@ def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(cl
     renamed = [(e["payload"]["title"], e["payload"]["by"]) for e in client.events(sessionId=session, limit=1000)
                if e["eventType"] == "session.renamed"]
     assert renamed == [("Usage metering", "agent"), ("Billing v2", ana["id"])]
-    # Members only, like every session event.
-    assert not [e for e in otto_client.events(sessionId=session, limit=1000) if e["eventType"] == "session.renamed"]
+    # Members only, like every session event: anyone else is told the session does not exist.
+    assert otto_client.get("/v1/events", params={"sessionId": session}).status_code == 404
+    assert not [e for e in otto_client.events(limit=1000) if e["eventType"] == "session.renamed" and e["sessionId"] == session]
 
 
 @pytest.mark.ui
@@ -408,6 +409,48 @@ def test_the_session_rail_lists_its_files_and_one_opens_in_the_viewer(client: Ap
     expect(viewer.get_by_test_id("file-content")).to_contain_text("Count each run once.")
     page.keyboard.press("Escape")
     expect(viewer).to_have_count(0)
+
+
+def test_a_sessions_events_are_every_run_and_its_own_for_its_members_alone(client: ApiClient, env, owner_dsn: str):
+    _scripted_brainstorm(client)
+    otto, otto_client = _person(client, env, "Otto Other")
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    first = client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"}).json()["runId"]
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    # Its agent ends; the next message starts another Run of the same session.
+    execute(owner_dsn, "UPDATE runs SET status = 'completed', ended_at = now() WHERE id = %s", (first,))
+    second = client.post(f"/v1/brainstorms/{session}/chat", {"text": "again"}).json()["runId"]
+    assert second != first
+    wait_until(lambda: len(_said(client, session)) >= 2, timeout=60, message="the second Run never answered")
+    events = client.events(sessionId=session, limit=1000)
+    runs = {e["runId"] for e in events if e["runId"]}
+    assert {first, second} <= runs
+    assert "session.created" in [e["eventType"] for e in events]
+    assert all(e["sessionId"] == session for e in events)
+    assert [e["cursor"] for e in events] == sorted(e["cursor"] for e in events)
+    # Anyone else: 404, on the history and the live stream alike.
+    assert otto_client.get("/v1/events", params={"sessionId": session}).status_code == 404
+    res = requests.get(f"{otto_client.base_url}/v1/events/stream", params={"sessionId": session, "key": otto_client.api_key}, timeout=10)
+    assert res.status_code == 404
+
+
+@pytest.mark.ui
+def test_the_session_screen_switches_to_its_events(client: ApiClient, page: Page, web_url: str, org: dict):
+    _scripted_brainstorm(client)
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
+    switch = page.get_by_test_id("session-view")
+    expect(switch.get_by_role("button")).to_have_count(2, timeout=15_000)
+    expect(switch).not_to_contain_text("Changes")
+    switch.get_by_role("button", name="Events").click()
+    log = page.get_by_test_id("event-log")
+    expect(log).to_contain_text("session.created")
+    expect(log).to_contain_text("agent.message")
+    expect(page.get_by_test_id("session-composer")).to_have_count(0)
+    switch.get_by_role("button", name="Conversation").click()
+    expect(page.get_by_test_id("session-composer")).to_be_visible()
 
 
 def _listen(who: ApiClient, frames: list, ready: threading.Event, stop: threading.Event) -> None:

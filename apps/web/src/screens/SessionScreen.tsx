@@ -15,7 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { firstName, type NavProject } from "@dude/design-system";
 import {
   Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
-  ScreenHeader, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
@@ -28,11 +28,14 @@ import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
-import { asides, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
 const OPEN_EVERY_MS = 60_000;
+
+/** What the session shows: its conversation, or its ledger. There are no Changes: a session changes no code. */
+type SessionView = "chat" | "events";
 
 /** The session's own events that change what the page reads (people, links, the card). */
 const SESSION_EVENTS: ReadonlySet<string> = new Set([
@@ -64,6 +67,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   const [problem, setProblem] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"share" | "link" | null>(null);
   const [handing, setHanding] = useState<SessionMemberView | null>(null);
+  const [view, setView] = useState<SessionView>("chat");
 
   const load = useCallback(async () => {
     try {
@@ -199,8 +203,14 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
         </>}
         actions={isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : undefined}
       />
-      <div className="runScreen" data-view="chat">
+      <div className="runScreen" data-view={view}>
+        {/* The Run screen's switch, without Changes: a session changes no code. */}
+        <div className="runBar">
+          <Segmented<SessionView> label="Show" value={view} onChange={setView} data-testid="session-view"
+            options={[conversationOption, eventsOption(events.length)]} />
+        </div>
         <div className="runView">
+          {view === "events" ? <EventLog events={events} people={people} /> : (
           <div className="runChat">
             <ChatTranscript
               fill
@@ -267,6 +277,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               </SessionRailBlock>
             </SessionRail>
           </div>
+          )}
         </div>
         {problem ? <Callout tone="danger" data-testid="session-problem">{problem}</Callout> : null}
       </div>
