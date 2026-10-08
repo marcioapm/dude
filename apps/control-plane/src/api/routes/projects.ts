@@ -15,7 +15,7 @@ import { auditActor } from "../auth.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
-import { repositoryFields } from "./structure.ts";
+import { repositoryFields, sameCheckout, sameCheckoutMessage } from "./structure.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { checkTiers } from "./models.ts";
@@ -105,6 +105,9 @@ async function createProject(ctx: RequestContext): Promise<Response> {
 
     const repositories = [];
     for (const repo of input.repositories ?? []) {
+      // Thrown, so the project goes with the transaction.
+      const other = await sameCheckout(scope, projectId, repo.name, null);
+      if (other) throw conflict(sameCheckoutMessage(repo.name, other));
       const repoRows = (await scope.sql`
         INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust)
         VALUES (${newId("repository")}, ${organizationId}, ${projectId}, ${repo.name}, ${repo.url},
