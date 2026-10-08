@@ -82,19 +82,26 @@ func (c CLI) auth() []string {
 	return out
 }
 
-// BuildArgs is the podman build command line for dir, tag and args: the
-// limits apply to every RUN step. podman build has no --cpus or
-// --pids-limit: CPUs are a CFS quota over a 100 ms period, and processes
-// are capped with the nproc ulimit, the closest it offers.
-func (c CLI) BuildArgs(dir, tag string, args map[string]string) []string {
-	quota := int64(c.Limits.CPUs * 100000)
-	out := []string{"build",
-		"--platform", c.Limits.Platform,
+// resources are the flags that hold a build's RUN steps, and the check
+// run in its image, to Limits. podman build has no --cpus or --pids-limit:
+// CPUs are a CFS quota over a 100 ms period, swap is none beyond the
+// memory, and processes are capped with the nproc ulimit, the closest it
+// offers.
+func (l Limits) resources() []string {
+	quota := int64(l.CPUs * 100000)
+	return []string{
 		"--cpu-period", "100000", "--cpu-quota", strconv.FormatInt(quota, 10),
-		"--memory", c.Limits.Memory, "--memory-swap", c.Limits.Memory,
+		"--memory", l.Memory, "--memory-swap", l.Memory,
 		"--ulimit", "nproc=4096:4096",
-		"--pull=newer", "--layers=false", "--force-rm",
 	}
+}
+
+// BuildArgs is the podman build command line for dir, tag and args: the
+// limits apply to every RUN step.
+func (c CLI) BuildArgs(dir, tag string, args map[string]string) []string {
+	out := []string{"build", "--platform", c.Limits.Platform}
+	out = append(out, c.Limits.resources()...)
+	out = append(out, "--pull=newer", "--layers=false", "--force-rm")
 	out = append(out, c.auth()...)
 	keys := make([]string, 0, len(args))
 	for k := range args {
@@ -157,7 +164,7 @@ func (c CLI) Remove(ctx context.Context, tag string, log io.Writer) error {
 }
 
 // CheckContainers runs Self's CheckCommand in image, as root, offline,
-// under the build's memory limit, with nothing of the host but Self.
+// under the build's limits, with nothing of the host but Self.
 // Cancelled (a timeout, the builder stopping), podman is asked to stop
 // first, and the container is removed whatever happened: a killed podman
 // client leaves its container running.
@@ -168,9 +175,10 @@ func (c CLI) CheckContainers(ctx context.Context, image string, log io.Writer) (
 	name := "dude-check-" + randomHex(8)
 	defer c.removeContainer(ctx, name, log)
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, c.bin(), "run", "--rm", "--name", name, "--pull=never", "--network=none", "--user=0:0",
-		"--security-opt=label=disable", "--memory", c.Limits.Memory,
-		"--volume", c.Self+":/.dude-check:ro", "--entrypoint", "/.dude-check", image, CheckCommand)
+	args := append([]string{"run", "--rm", "--name", name, "--pull=never", "--network=none", "--user=0:0",
+		"--security-opt=label=disable"}, c.Limits.resources()...)
+	args = append(args, "--volume", c.Self+":/.dude-check:ro", "--entrypoint", "/.dude-check", image, CheckCommand)
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
 	cmd.Stdout, cmd.Stderr = &out, log
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second

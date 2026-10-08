@@ -467,6 +467,63 @@ func TestPodmanACancelledCheckLeavesNoContainer(t *testing.T) {
 	}
 }
 
+// The check runs under the limits a build's RUN steps have: the same CPU
+// quota, memory, no swap beyond it, and process cap, read from inside each.
+func TestPodmanTheCheckRunsUnderTheBuildsLimits(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	const read = "cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max; ulimit -u"
+	dir, err := contextDir("FROM docker.io/library/alpine:3\nRUN echo limits; " + read + "; echo end\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	tag := fmt.Sprintf("localhost/dude-test-limits:%d", time.Now().UnixNano())
+	var log bytes.Buffer
+	build := c
+	build.Limits.Platform = "linux/" + map[string]string{"aarch64": "arm64", "x86_64": "amd64"}[strings.TrimSpace(uname(t))]
+	if err := build.Build(context.Background(), dir, tag, nil, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "--ignore", tag).Run() })
+	inBuild := between(log.String(), "limits\n", "end\n")
+	// The check blocks on a FIFO at /etc/subuid while its limits are read.
+	image := fmt.Sprintf("localhost/dude-test-hang:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/alpine:3\nRUN echo agent:x:1000:1000::/home/agent:/bin/sh >> /etc/passwd && mkfifo /etc/subuid\n", image)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _, _ = c.CheckContainers(ctx, image, &bytes.Buffer{}); close(done) }()
+	defer func() { cancel(); <-done }()
+	var name string
+	for deadline := time.Now().Add(60 * time.Second); name == "" && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		out, _ := exec.Command("podman", "ps", "--filter", "ancestor="+image, "--filter", "status=running", "--format", "{{.Names}}").Output()
+		name = strings.TrimSpace(string(out))
+	}
+	if name == "" {
+		t.Fatal("the check's container never ran")
+	}
+	out, err := exec.Command("podman", "exec", name, "sh", "-c", read).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if inCheck := string(out); inBuild == "" || inCheck != inBuild {
+		t.Errorf("limits in the check:\n%s\nin a build's RUN step:\n%s", inCheck, inBuild)
+	}
+}
+
+// between is the text in s from after the line start to before the line end.
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	s = s[i+len(start):]
+	if j := strings.Index(s, end); j >= 0 {
+		return s[:j]
+	}
+	return ""
+}
+
 // TestPodmanFinishOnAnImageWithoutAShellSaysWhatItNeeds, with no registry.
 func TestPodmanLocalFinishWithoutAShellSaysWhatItNeeds(t *testing.T) {
 	c := localPodman(t)
