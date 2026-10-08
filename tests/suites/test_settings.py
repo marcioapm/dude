@@ -790,33 +790,34 @@ def test_the_session_header_says_the_tier_and_the_model_it_requested(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
     """The scripted agent runs the implementer on a tier, and stays at work
-    (fake/hang); the Run records the tier's name and the model it requested
-    at the submit, and the header says both. A later edit of the tier changes
-    neither."""
+    (fake/hang); the Run records the tier's name, the model it requested and
+    its effort at the submit, and the header says all three. A later edit of
+    the tier changes none."""
     project = forge_project
     client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
     tier_id = client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["tier"]
-    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Scripted", "model": "fake/hang"}).status_code == 200
+    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Scripted", "model": "fake/hang", "effort": "medium"}).status_code == 200
     task = client.create_task(project["id"], "Write it up")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
     def submitted():
-        rows = query(owner_dsn, "SELECT id, model, model_tier FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
+        rows = query(owner_dsn, "SELECT id, model, model_tier, effort FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
                      (task["id"],))
         return rows[0] if rows else None
 
     run = wait_until(submitted, timeout=60, message="the implementer never reached lux")
-    assert (run["model"], run["model_tier"]) == ("fake/hang", "Scripted")
-    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Renamed", "model": "fake/hang"}).status_code == 200
-    assert client.get(f"/v1/runs/{run['id']}").json()["modelTier"] == "Scripted"
+    assert (run["model"], run["model_tier"], run["effort"]) == ("fake/hang", "Scripted", "medium")
+    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Renamed", "model": "fake/hang", "effort": "max"}).status_code == 200
+    assert (client.get(f"/v1/runs/{run['id']}").json()["modelTier"], client.get(f"/v1/runs/{run['id']}").json()["effort"]) == ("Scripted", "medium")
 
     _sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/run/{run['id']}")
     chip = page.get_by_test_id("run-model")
-    expect(chip).to_have_attribute("aria-label", "Model: Scripted, requests fake/hang")
+    expect(chip).to_have_attribute("aria-label", "Model: Scripted, requests fake/hang at effort medium")
+    expect(chip).to_have_text(re.compile(r"Scripted ·\s*fake/hang\s*· medium"))
     chip.focus()
     tip = page.get_by_role("tooltip")
-    expect(tip).to_contain_text("When this session started, Scripted asked the proxy for fake/hang")
+    expect(tip).to_contain_text("When this session started, Scripted asked the proxy for fake/hang at effort medium")
     expect(tip).to_contain_text("changing Scripted now changes the next session, not this one.")
     expect(tip).to_contain_text("how the proxy served it is the proxy’s to say")
     assert console_errors == []
