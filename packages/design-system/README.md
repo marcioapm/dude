@@ -464,7 +464,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   session" in muted ink. For a member who can chat it is a button that
   edits the name in place — Enter saves, Escape cancels; a reader's is
   plain words. **A person's name wins**: once someone has named it, the
-  agent's `name_session` refuses. The Chat says who named it, a
+  agent's `name_session` refuses. In the header (`ScreenHeader fillTitle`)
+  the name takes the line's free width, shown and edited: it is cut, with
+  an ellipsis and the whole name in its tooltip, only when the line is
+  genuinely too short for it. The wash behind a nameable title sits past
+  its edge by a translate, not a negative margin, which would lay the
+  button out narrower than its words and cut even "New session". The Chat says who named it, a
   `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
   unsigned, "Ana renamed it “…”".
 - **`ProposalCard`** is what the agent proposes: epics, tasks, edits and

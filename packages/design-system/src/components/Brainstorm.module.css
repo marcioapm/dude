@@ -254,9 +254,12 @@
   color: var(--ds-color-text-muted);
 }
 
-/* The session's name in its header: the screen title's type, edited in place. */
+/* The session's name in its header: the screen title's type, edited in place.
+   It takes the header's free width (ScreenHeader's h1 is a flex item that
+   would otherwise shrink to its content), so the words are cut only when the
+   line is genuinely too short for them. */
 .title {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--ds-space-6);
   min-width: 0;
@@ -268,6 +271,7 @@
   line-height: var(--ds-leading-tight);
 }
 .titleWords {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -277,7 +281,10 @@
 }
 .titleEdit {
   padding: 0 var(--ds-space-4);
-  margin-left: calc(-1 * var(--ds-space-4));
+  /* The words on the header's edge, the wash past it. A translate, not a
+     negative margin: the margin comes off the title's max-content, and the
+     button is then laid out short of its words, cutting a short name. */
+  translate: calc(-1 * var(--ds-space-4));
   border: 0;
   border-radius: var(--ds-radius-control);
   background: none;
@@ -302,10 +309,11 @@
   opacity: 1;
 }
 .titleInput {
+  box-sizing: content-box;
   min-width: 16ch;
-  width: min(40ch, 100%);
+  max-width: 100%;
   padding: 0 var(--ds-space-4);
-  margin-left: calc(-1 * var(--ds-space-4));
+  translate: calc(-1 * var(--ds-space-4));
   border: 0;
   border-radius: var(--ds-radius-control);
   background: var(--ds-color-surface);

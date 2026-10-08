@@ -4,6 +4,8 @@ import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
 import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { ScreenHeader } from "../../components/ScreenHeader.tsx";
+import { Button } from "../../primitives/Button.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { people } from "../navFixtures.ts";
@@ -75,6 +77,15 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <TitleDemo initial="Usage-based billing" />
             <Label>a reader</Label>
             <SessionTitle title="Usage-based billing" />
+            <Label>in a screen's header, as the session screen draws it</Label>
+            <div style={{ width: "100%" }} data-testid="title-in-header">
+              <ScreenHeader fillTitle title={<TitleDemo initial="Billing v2" />}
+                meta={<><SharedMark owner={P["marcio"]} label="Shared with 2" /><span>Brainstorm · claude-opus-5-5</span></>}
+                actions={<Button size="sm" variant="secondary">Share</Button>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial={null} />} meta={<span>Brainstorm</span>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial={"Usage-based billing for experiment runs, with a dedupe on run id ".repeat(4).trim()} />}
+                meta={<span>Brainstorm</span>} />
+            </div>
             <Label>in the Chat</Label>
             <ChatNotice kind="renamed" by="Brainstorm" text="Named it “Usage-based billing”" at={Date.now() - 60_000} />
             <ChatNotice kind="renamed" text="Ana renamed it “Billing v2”" at={Date.now()} />

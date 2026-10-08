@@ -468,6 +468,39 @@ def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page:
     assert console_errors == []
 
 
+def _title_fits(title) -> dict:
+    """A SessionTitle's words, as Chrome laid them out: whether they are cut, and the space around them."""
+    return title.evaluate("""el => {
+        const words = el.querySelector('[data-title-words]');
+        const header = el.closest('header');
+        return {text: words.textContent, cut: words.scrollWidth > words.clientWidth, tip: words.getAttribute('title'),
+                words: words.getBoundingClientRect().width, header: header.getBoundingClientRect().width};
+    }""")
+
+
+def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(gallery_page: Page, console_errors: list):
+    """In a screen's header at desktop width, a short title and "New session" are never cut, shown or
+    edited; a title longer than the line is cut with an ellipsis, all of it in the tooltip."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 1000})
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    headers = gallery_page.locator("#bs-title [data-theme]").first.get_by_test_id("title-in-header")
+    titles = headers.get_by_test_id("session-title")
+    short, untitled, long = (_title_fits(titles.nth(i)) for i in range(3))
+    assert (short["text"], short["cut"]) == ("Billing v2", False), short
+    assert (untitled["text"], untitled["cut"]) == ("New session", False), untitled
+    assert long["cut"] and long["tip"] == long["text"], long
+    # Cut only for want of room: the long title takes the header's line.
+    assert long["words"] > long["header"] * 0.6, long
+    # Edited, the field is as wide as the name needs and no narrower than a short one's room.
+    titles.nth(0).click()
+    field = headers.get_by_test_id("session-title-input")
+    expect(field).to_be_focused()
+    fits = field.evaluate("el => el.scrollWidth <= el.clientWidth")
+    assert fits, "the name field cuts a short name"
+    gallery_page.keyboard.press("Escape")
+    assert console_errors == []
+
+
 def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, console_errors: list):
     """PublishedFiles: the rail's Files, each by its own name with the folder in its tooltip, then N more."""
     gallery_page.get_by_role("link", name="PublishedFiles", exact=True).click()
