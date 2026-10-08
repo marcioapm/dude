@@ -962,6 +962,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/push", s.push)
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.stop)
 	mux.HandleFunc("POST /v1/runs/{id}/cancel", s.cancel)
+	mux.HandleFunc("POST /v1/runs/{id}/terminate", s.terminate)
 	mux.HandleFunc("POST /v1/runs/{id}/resume", s.resume)
 	mux.HandleFunc("GET /v1/runs/{id}/artifacts", s.listArtifacts)
 	mux.HandleFunc("GET /v1/artifacts/{aid}", s.downloadArtifact)
@@ -2056,14 +2057,33 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, s.view(run))
 }
 
+// cancel is the deprecated alias of terminate; a lux from before terminate
+// (CancelledState) has only this one.
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	run := s.find(w, r)
 	if run == nil {
 		return
 	}
+	s.end(w, run, "cancel")
+}
+
+func (s *Server) terminate(w http.ResponseWriter, r *http.Request) {
+	if s.CancelledState {
+		http.NotFound(w, r)
+		return
+	}
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	s.end(w, run, "terminate")
+}
+
+// end ends a Run for good, asked as call.
+func (s *Server) end(w http.ResponseWriter, run *Run, call string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	run.Calls = append(run.Calls, "cancel")
+	run.Calls = append(run.Calls, call)
 	run.Cancelled = true
 	s.beforeStop(run)
 	if !lux.Terminated(run.State) {
