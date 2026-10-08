@@ -187,11 +187,21 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A Run lux is moving to another host stops on the way, and is
 		// resumed by lux itself: recorded as resuming, not over.
 		state := lux.Recorded(str("state"), str("reason"))
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
-			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
-			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
-			WHERE id = $1`, t.run.ID, state); err != nil {
+		var was string
+		if err := tx.QueryRow(ctx, `UPDATE runs r SET lux_state = $2,
+			started_at = CASE WHEN $2 = 'running' THEN COALESCE(r.started_at, now()) ELSE r.started_at END,
+			status = CASE WHEN $2 = 'running' AND r.status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE r.status END
+			FROM (SELECT id, COALESCE(lux_state, '') AS lux_state FROM runs WHERE id = $1 FOR UPDATE) old
+			WHERE r.id = old.id RETURNING old.lux_state`, t.run.ID, state).Scan(&was); err != nil {
 			return err
+		}
+		// Waiting for a host, or no longer: the Run page reads why again
+		// (its waitingReason), as a preview's state change has it do.
+		if lux.Waiting(state) || lux.Waiting(was) {
+			if err := s.event(ctx, tx, t.run, EvServersChanged, ledger.ActorSystem,
+				map[string]any{"taskId": t.run.TaskID, "runId": t.run.ID, "change": "state", "luxState": state}); err != nil {
+				return err
+			}
 		}
 		if state == "running" {
 			t.resumeRunning(ctx, tx, s, f.Epoch)
