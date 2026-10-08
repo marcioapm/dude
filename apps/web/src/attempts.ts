@@ -13,6 +13,7 @@ import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
+import { runStatusLabel } from "./runPresentation.tsx";
 
 /** A Run that is an attempt's own work: neither a branch preview nor the task's conductor. */
 const isAttemptWork = (r: Run) => r.kind !== "preview" && !isConductor(r);
@@ -109,7 +110,7 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
 
 /** An earlier attempt's last aborted or failed Run: where it stopped. */
 function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
-  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && (r.status === "aborted" || r.status === "failed"))
+  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && !runStatusLabel(r) && (r.status === "aborted" || r.status === "failed"))
     .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
 }
 
