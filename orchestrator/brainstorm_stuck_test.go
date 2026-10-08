@@ -2,12 +2,62 @@ package orchestrator_test
 
 import (
 	"context"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
+
+func TestBrainstormUpgradeDatesExistingOpenCalls(t *testing.T) {
+	owner, apply := dbtest.Upgrade(t, "090")
+	org := dbtest.Org(t, owner)
+	mustExec(t, owner, `INSERT INTO people (id, organization_id, name) VALUES ('per_upgrade', $1, 'Owner')`, org)
+	mustExec(t, owner, `INSERT INTO sessions (id, organization_id, title, created_by)
+		VALUES ('ssn_upgrade', $1, 'Existing brainstorm', 'per_upgrade')`, org)
+	mustExec(t, owner, `INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status, lux_state,
+		started_at, open_tool_calls) VALUES ('run_upgrade', $1, 'ssn_upgrade', 1, 'brainstorm', 'agent', 'running', 'running',
+		now() - interval '30 minutes', ARRAY['call_upgrade', 'call_missing'])`, org)
+	mustExec(t, owner, `INSERT INTO events (id, organization_id, run_id, session_id, event_type, actor_type, actor_id, source, payload, occurred_at)
+		VALUES ('evt_upgrade', $1, 'run_upgrade', 'ssn_upgrade', 'agent.tool.called', 'agent', 'run_upgrade',
+		'orchestrator', '{"callId":"call_upgrade","tool":"bash"}', now() - interval '20 minutes')`, org)
+	apply()
+	var dated, fallback bool
+	if err := owner.QueryRow(context.Background(), `SELECT
+		COALESCE((open_tool_calls_at->>'call_upgrade')::timestamptz = (SELECT occurred_at FROM events WHERE id = 'evt_upgrade'), false),
+		COALESCE((open_tool_calls_at->>'call_missing')::timestamptz = started_at, false) FROM runs WHERE id = 'run_upgrade'`).Scan(&dated, &fallback); err != nil {
+		t.Fatal(err)
+	}
+	if !dated || !fallback {
+		t.Fatalf("existing calls dated from ledger = %v, missing-event fallback = %v", dated, fallback)
+	}
+	app, err := db.Open(context.Background(), owner.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	fake := fakelux.New("", "lux-key", nil)
+	defer fake.Close()
+	luxServer := httptest.NewServer(fake.Handler())
+	defer luxServer.Close()
+	syncer := &phases.Syncer{DB: app, Lux: lux.New(luxServer.URL, "lux-key"), Log: quiet}
+	if _, err := syncer.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var interrupts int
+	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM directives WHERE run_id = 'run_upgrade'
+		AND interrupt AND scope = 'turn'`).Scan(&interrupts); err != nil {
+		t.Fatal(err)
+	}
+	if interrupts != 1 {
+		t.Fatalf("upgrade sweep interrupts = %d, want 1", interrupts)
+	}
+}
 
 func TestBrainstormStuckCallsInterruptOnce(t *testing.T) {
 	for _, tc := range []struct {
