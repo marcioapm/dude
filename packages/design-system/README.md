@@ -201,7 +201,7 @@ surface. If you change a hue or a surface, re-run the search; do not nudge
 by eye. `test/paletteDistance.test.ts` enforces the pair bar (OKLab ΔE×100,
 Machado 2009 protan and deutan at severity 1.0, slots that share a colour
 counted once) and keeps every role colour more than ΔE 3 from the attention
-fg in normal vision. `test/palette.test.ts` holds the WCAG half: the text
+fg, mark and solid (every way needs-you is drawn) in normal vision. `test/palette.test.ts` holds the WCAG half: the text
 ladder, tone and role foregrounds, link, focus ring and button label.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
