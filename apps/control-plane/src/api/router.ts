@@ -135,7 +135,7 @@ export class Router {
           if (principal?.credentialKind === "person" && expiresAt !== undefined) principal.expiresAt = expiresAt;
         }
         if (!principal) throw unauthorized();
-        await touch(principal, request.headers.get("x-dude-where"));
+        await touch(principal, request.headers.get("x-dude-where"), url.pathname);
 
         return await (route.handler as Handler)({ request, url, params, principal });
       }

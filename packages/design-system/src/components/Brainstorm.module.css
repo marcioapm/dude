@@ -1,0 +1,254 @@
+/*
+ * A brainstorm session's parts. Regions are told apart by shade and space;
+ * an item someone else must file is dimmed, never boxed.
+ */
+
+.muted {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+
+/* The proposal card: a raised surface inside the agent's turn. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-raised);
+  border-radius: var(--ds-radius-float);
+  max-width: 860px;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+}
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+}
+.item:hover {
+  background: var(--ds-color-hover-wash);
+}
+.child {
+  padding-left: var(--ds-space-32);
+}
+.blocked .itemTitle,
+.blocked .itemDetail,
+.blocked .beforeAfter {
+  color: var(--ds-color-text-muted);
+}
+.tick {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--ds-tone-success-fg);
+}
+.itemBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+.itemTitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-md);
+}
+.kind {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tag {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-neutral-fg);
+  background: var(--ds-tone-neutral-bg);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-mark);
+}
+.itemDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.beforeAfter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+  margin-top: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.ins {
+  text-decoration: none;
+  color: var(--ds-tone-success-fg);
+  background: var(--ds-tone-success-bg);
+}
+.note {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.cardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-12);
+}
+
+/* Shared: the glyph, and the owner's face. */
+.shared {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+}
+
+/* A session in the list. */
+.row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--ds-space-16);
+  padding: var(--ds-space-12);
+  margin: 0 calc(-1 * var(--ds-space-12));
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.rowFace {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ds-radius-face-agent);
+  background: var(--ds-role-brainstorm-bg);
+  color: var(--ds-role-brainstorm-fg);
+}
+.rowOpen {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.rowOpen:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-mark);
+}
+.rowTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-md);
+}
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: 2px var(--ds-space-8) 2px 2px;
+  background: var(--ds-color-sunken);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.rowState {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rail's people, projects and capabilities. */
+.people,
+.can {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.member {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.member b {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.openWord {
+  color: var(--ds-color-live);
+}
+.linked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.project {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.projectHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-strong);
+}
+.repo {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding-left: var(--ds-space-20);
+}
+.can li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.can li[data-can="no"] {
+  color: var(--ds-color-text-muted);
+}

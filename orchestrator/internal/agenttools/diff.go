@@ -110,7 +110,7 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 	// RLS keeps another organization's Runs out; the task check keeps out
 	// the rest of this one.
 	var task string
-	err := tx.QueryRow(ctx, `SELECT task_id FROM runs WHERE id = $1`, runID).Scan(&task)
+	err := tx.QueryRow(ctx, `SELECT task_id FROM runs WHERE id = $1 AND task_id IS NOT NULL`, runID).Scan(&task)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, refuse("no run %q", runID)
 	}

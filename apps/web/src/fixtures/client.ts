@@ -14,14 +14,14 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
-import type { AddServer, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
+import type { AddServer, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RunServer, SessionsList, SettingsResponse, TaskServers } from "@dude/domain";
 import { egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
 
-type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
+type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
 
 /**
@@ -53,7 +53,8 @@ class QuietEventSource extends EventTarget {
       this.readyState = 1;
       this.onopen?.(new Event("open"));
       if (q.get("live") || !ledger) return;
-      const params = { ...(q.get("runId") ? { runId: q.get("runId")! } : {}), ...(q.get("taskId") ? { taskId: q.get("taskId")! } : {}), after: Number(q.get("after") ?? 0) };
+      const params = { ...(q.get("runId") ? { runId: q.get("runId")! } : {}), ...(q.get("taskId") ? { taskId: q.get("taskId")! } : {}),
+        ...(q.get("sessionId") ? { sessionId: q.get("sessionId")! } : {}), after: Number(q.get("after") ?? 0) };
       for (const e of ledger(params)) this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(e) }));
     }, 20);
   }
@@ -194,8 +195,9 @@ export class FixtureClient extends ApiClient {
   }
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */
-  protected ledgerFor({ runId, taskId, after = 0 }: LedgerQuery): PersistedEvent[] {
-    return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId));
+  protected ledgerFor({ runId, taskId, sessionId, after = 0 }: LedgerQuery): PersistedEvent[] {
+    return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId)
+      && (!sessionId || e.sessionId === sessionId));
   }
 
   /** After a change a backend would announce: the stream says `servers.changed`. */
@@ -227,6 +229,13 @@ export class FixtureClient extends ApiClient {
   }
   override recentPullRequests() {
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
+  }
+  // The mockups' world has no brainstorm sessions; a test's client adds its own.
+  override sessions(): Promise<SessionsList> {
+    return Promise.resolve({ sessions: [], invitations: [], questions: [] });
+  }
+  override sessionOpen(_id: string, open: boolean) {
+    return Promise.resolve({ open });
   }
   override listPullRequests(taskId: string) {
     if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });

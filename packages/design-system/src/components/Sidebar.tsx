@@ -54,11 +54,15 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
   /** The inbox is what is open: its row is current. */
   readonly waitingSelected?: boolean | undefined;
+  /** Waiting on you beyond the tree's tasks: session invitations and questions put to you. */
+  readonly waitingExtra?: number | undefined;
   /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
   readonly mine?: boolean | undefined;
   readonly onMineChange?: ((mine: boolean) => void) | undefined;
   /** Beside the Projects label: a new-project button. */
   readonly treeActions?: ReactNode;
+  /** Above Projects: your brainstorm sessions (`SidebarSessions`). */
+  readonly sessions?: ReactNode;
   /** Row "…" menus for the tree; see `NavTree`. */
   readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
   readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
@@ -116,9 +120,11 @@ export function Sidebar({
   online,
   onWaitingSelect,
   waitingSelected,
+  waitingExtra = 0,
   mine,
   onMineChange,
   treeActions,
+  sessions,
   menuItems,
   menu,
   width = 300,
@@ -255,7 +261,7 @@ export function Sidebar({
           <SidebarLink
             current={waitingSelected}
             onClick={() => openWaiting("you")}
-            leading={waiting.yours.length > 0 ? <NeedsYouCount count={waiting.yours.length} /> : undefined}
+            leading={waiting.yours.length + waitingExtra > 0 ? <NeedsYouCount count={waiting.yours.length + waitingExtra} /> : undefined}
             data-testid="waiting-on-you"
           >
             Waiting on you
@@ -267,6 +273,8 @@ export function Sidebar({
           ) : null}
         </nav>
       ) : null}
+
+      {sessions}
 
       <div className={styles["treeHead"]}>
         <span className="ds-label">Projects</span>
@@ -310,6 +318,52 @@ export function Sidebar({
       {aside}
       <div className={cx(styles["scrim"], drawerOpen && styles["scrimOn"])} aria-hidden onClick={() => onOpenChange?.(false)} />
     </>
+  );
+}
+
+export interface SidebarSession {
+  readonly id: string;
+  readonly title: string;
+  /** In it with others; with the owner's face when it is not yours. */
+  readonly shared?: boolean | undefined;
+  readonly owner?: Person | null | undefined;
+}
+
+export interface SidebarSessionsProps {
+  readonly sessions: ReadonlyArray<SidebarSession>;
+  readonly selected?: string | null | undefined;
+  readonly onSelect: (id: string) => void;
+  /** The label opens the list of them all. */
+  readonly onOpenList?: (() => void) | undefined;
+  readonly onNew: () => void;
+}
+
+/**
+ * Your brainstorm sessions, above the projects: only those you are in.
+ * Each row has the bulb glyph; one shared carries the shared glyph, and the
+ * owner's face when the owner is someone else. Then New session.
+ */
+export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNew }: SidebarSessionsProps) {
+  return (
+    <nav className={styles["sessions"]} aria-label="Sessions" data-testid="sidebar-sessions">
+      <div className={styles["treeHead"]}>
+        {onOpenList ? (
+          <button type="button" className={cx(styles["link"], "ds-label")} onClick={onOpenList}>Sessions</button>
+        ) : <span className="ds-label">Sessions</span>}
+      </div>
+      {sessions.map((s) => (
+        <SidebarLink key={s.id} icon="brainstorm" current={selected === s.id} onClick={() => onSelect(s.id)} data-session={s.id}
+          trailing={s.shared ? (
+            <span className={styles["sessionShared"]} aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
+              <Icon name="shared" size={12} />
+              {s.owner ? <PersonAvatar person={s.owner} size={16} /> : null}
+            </span>
+          ) : undefined}>
+          {s.title}
+        </SidebarLink>
+      ))}
+      <SidebarLink icon="plus" onClick={onNew} data-testid="new-session">New session</SidebarLink>
+    </nav>
   );
 }
 

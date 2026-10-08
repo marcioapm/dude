@@ -16,7 +16,8 @@ import { z } from "zod";
 
 /**
  * Roles a Session can play — plan §30 (the first agents). The conductor is
- * the agent people talk to in a task's Chat (it was the orchestrator).
+ * the agent people talk to in a task's Chat (it was the orchestrator); the
+ * brainstorm, the one a brainstorm session's members talk to.
  */
 export const agentRoleSchema = z.enum([
   "conductor",
@@ -25,6 +26,7 @@ export const agentRoleSchema = z.enum([
   "reviewer",
   "simplifier",
   "qa_browser",
+  "brainstorm",
 ]);
 export type AgentRole = z.infer<typeof agentRoleSchema>;
 

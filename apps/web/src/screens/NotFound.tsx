@@ -6,12 +6,13 @@
 
 import { Button, EmptyState } from "@dude/design-system/primitives";
 
-export function NotFound({ what, onBack }: { what: "task" | "run" | "epic" | "project"; onBack: () => void }) {
+export function NotFound({ what, onBack }: { what: "task" | "run" | "epic" | "project" | "session"; onBack: () => void }) {
   return (
     <div className="centered" data-testid="not-found">
       <EmptyState
         icon="search"
-        title={`This ${what} doesn't exist (or was deleted)`}
+        // A session you are not in is not shown to exist either.
+        title={what === "session" ? "This session doesn't exist, or you're not in it" : `This ${what} doesn't exist (or was deleted)`}
         description="The link may be old, or for another organization."
         action={<Button variant="secondary" leadingIcon="arrow-right" onClick={onBack} data-testid="not-found-back">Go to the board</Button>}
       />

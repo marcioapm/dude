@@ -25,12 +25,15 @@ import postgres from "postgres";
 import { EventTypes, type PersistedEvent, type PersonRef } from "@dude/domain";
 import { eventBus } from "./bus.ts";
 import * as ledger from "./ledger.ts";
+import { noteEvent } from "./visibility.ts";
 
 interface Notice {
   cursor: number;
   organizationId: string;
   /** Presence (api/presence.ts): live only, not in the ledger. */
   seen?: PersonRef & { where: string | null };
+  /** Someone has a session open (routes/sessions.ts): live only, its members only. */
+  sessionOpen?: { sessionId: string; personId: string; open: boolean };
 }
 
 /** How long notifications are gathered before the events are read. */
@@ -56,7 +59,10 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
         try {
           for (;;) {
             const events = await ledger.query(organizationId, { after, limit: PAGE });
-            for (const event of events) eventBus.publish(event);
+            for (const event of events) {
+              noteEvent(event.eventType, event.sessionId);
+              eventBus.publish(event);
+            }
             if (events.length < PAGE) break;
             after = events[events.length - 1]!.cursor;
           }
@@ -90,6 +96,12 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
     }
     if (notice.seen) {
       eventBus.publish(seenEvent(notice.organizationId, notice.seen));
+      return;
+    }
+    if (notice.sessionOpen) {
+      // Only to the session's members: its sessionId routes it through
+      // their streams' membership check (visibility.ts).
+      eventBus.publish(sessionOpenEvent(notice.organizationId, notice.sessionOpen));
       return;
     }
     const pending = waiting.get(notice.organizationId);
@@ -126,5 +138,26 @@ export function seenEvent(organizationId: string, person: PersonRef & { where: s
     correlationId: null,
     causationId: null,
     payload: { person },
+  };
+}
+
+/** Someone has a session open, or no longer: cursor 0, as seenEvent. */
+export function sessionOpenEvent(organizationId: string, o: { sessionId: string; personId: string; open: boolean }): PersistedEvent {
+  return {
+    cursor: 0,
+    eventId: `open_${o.sessionId}_${o.personId}_${Date.now()}`,
+    eventType: EventTypes.BrainstormOpen,
+    occurredAt: new Date().toISOString(),
+    organizationId,
+    projectId: null,
+    taskId: null,
+    runId: null,
+    sessionId: o.sessionId,
+    workflowRunId: null,
+    actor: { type: "person", id: o.personId },
+    source: "control-plane",
+    correlationId: null,
+    causationId: null,
+    payload: { personId: o.personId, open: o.open },
   };
 }
