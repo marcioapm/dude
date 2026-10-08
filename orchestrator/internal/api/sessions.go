@@ -1118,7 +1118,7 @@ func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep st
 	case "leave":
 		stays = fromName + " left it."
 	}
-	_, err = delivery.TellBrainstorm(ctx, tx, org, sessionID, toName+" owns this session now. "+stays+
+	err = delivery.TellBrainstorm(ctx, tx, org, sessionID, toName+" owns this session now. "+stays+
 		" Edits you propose are filed by whoever owns the task, as before.")
 	return err
 }
