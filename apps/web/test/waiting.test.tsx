@@ -33,7 +33,7 @@ class WaitClient extends FixtureClient {
   override async getRun(id: string): Promise<RunDetail> {
     return { ...(await super.getRun(id)), ...this.patch };
   }
-  override async runServers(runId: string): Promise<TaskServers> {
+  override async runServers(runId = RUN_ID): Promise<TaskServers> {
     this.reads.push(runId);
     const s = await super.runServers();
     const reason = this.reasons.get(runId) ?? null;
@@ -94,7 +94,7 @@ describe("useWaitingReason", () => {
     let release!: () => void;
     const slow = new Promise<void>((r) => (release = r));
     const read = client.runServers.bind(client);
-    client.runServers = async (id: string) => {
+    client.runServers = async (id = RUN_ID) => {
       if (id === "run_1") await slow;
       return read(id);
     };

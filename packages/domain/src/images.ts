@@ -198,6 +198,12 @@ export interface ImagesResponse {
 
 export interface ImageDetail {
   image: ImageSummary;
+  /**
+   * The projects whose branch previews run this image: picked for previews,
+   * else the project's runtime image, else the organization's default, as
+   * the orchestrator chooses (images.Site.Pick).
+   */
+  previewedBy: Array<{ id: string; name: string }>;
   /** Newest first; the draft first of all. */
   versions: ImageVersion[];
   /** Newest first, without logs. */

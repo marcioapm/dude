@@ -430,6 +430,18 @@ describe("where images are named", () => {
     expect(uses("node-pnpm")).toEqual([["project_role", "qa_browser"], ["runtime", "Dashboard"]]);
   });
 
+  test("an image says which projects' previews run it: picked for previews, else the runtime image, else the default", async () => {
+    const previewedBy = async (id: string) => (await image(id)).previewedBy.map((p: Json) => p.name);
+    // Dashboard picks acme-base for previews: its runtime image, node-pnpm, is not what they run.
+    expect(await previewedBy(ids.base!)).toEqual(["Dashboard"]);
+    expect(await previewedBy(ids.child!)).toEqual([]);
+    await owner`UPDATE projects SET preview_image_id = NULL WHERE id = ${PROJECT}`;
+    expect(await previewedBy(ids.child!)).toEqual(["Dashboard"]);
+    await owner`UPDATE projects SET runtime_image_id = NULL WHERE id = ${PROJECT}`;
+    expect(await previewedBy(ids.base!)).toEqual(["Dashboard"]);
+    await owner`UPDATE projects SET preview_image_id = ${ids.base!}, runtime_image_id = ${ids.child!} WHERE id = ${PROJECT}`;
+  });
+
   test("an archived image is hidden from new choices but keeps working where it is named", async () => {
     await call(adminKey, "PATCH", `/v1/images/${ids.child}`, { archived: true });
     const picker = await body(await call(memberKey, "GET", "/v1/images/picker"));
