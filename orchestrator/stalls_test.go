@@ -1353,9 +1353,15 @@ func TestASilentConductedRunIsReportedJustPastItsWindow(t *testing.T) {
 func (w *world) movedAfter(runID string, away time.Duration) (release func()) {
 	w.t.Helper()
 	release = w.movedAndHeld(runID)
-	mustExec(w.t, w.owner, `UPDATE runs SET agent_busy_at = NULL, left_running_at = now() - make_interval(secs => $2)
-		WHERE id = $1`, runID, away.Seconds())
+	w.idleWhileHeld(runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET left_running_at = now() - make_interval(secs => $2) WHERE id = $1`, runID, away.Seconds())
 	return release
+}
+
+// idleWhileHeld clears a held Run's old busy marker, so the new
+// placement's first idle does not end a turn it never took.
+func (w *world) idleWhileHeld(runID string) {
+	mustExec(w.t, w.owner, `UPDATE runs SET agent_busy_at = NULL WHERE id = $1`, runID)
 }
 
 // filesUnchangedFor dates a Run's last change of files ago.
@@ -1371,12 +1377,18 @@ func (w *world) thirtyMinuteWriters() {
 
 // A writer whose files have not changed for 3 hours, moved by lux to
 // another host, its agent at work throughout: the move is not a change of
-// its files, and it is reported for them once running again.
+// its files, and it is reported for them once running again. Its departure
+// from running is the one dude stamped.
 func TestAMovedWriterIsStillReportedForItsUnchangedFiles(t *testing.T) {
 	w := newWorld(t)
 	id := w.hangingImplementer()
 	w.filesUnchangedFor(id, 3*time.Hour)
-	w.runningAgain(id, w.movedAfter(id, 0))
+	release := w.movedAndHeld(id)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND left_running_at IS NOT NULL`, id); n != 1 {
+		t.Fatal("leaving running was not stamped")
+	}
+	w.idleWhileHeld(id)
+	w.runningAgain(id, release)
 	w.silentFor(id, 0)
 	w.sweep()
 	if n := w.stalls(id); n != 1 {
@@ -1503,6 +1515,36 @@ func TestReviewAMoveDoesNotChangeSilentFacts(t *testing.T) {
 	w.sweep()
 	if n := w.stalls(id); n != 2 {
 		t.Fatalf("unchanged silence 60 running minutes after its report: %d reports, want 2", n)
+	}
+}
+
+// A conducted reviewer reported as silent 31 minutes ago, silent since,
+// moved by lux on dude's own departure stamp: however short its wait, the
+// move is no change of facts, and it is not told again before 60 minutes.
+func TestASilentRunMovedOnItsOwnDepartureIsNotToldAgain(t *testing.T) {
+	w := conducting(t)
+	w.quickDiffs()
+	w.silentReviews()
+	task := w.task()
+	w.conductedReview(task)
+	runs := w.reviewersSilent(task, 2)
+	w.diffsSettled(runs)
+	id := runs[0]
+	w.silentFor(id, 2*time.Hour)
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("initial reports %d, want 1", n)
+	}
+	w.reportedAgo(id, 31*time.Minute)
+	release := w.movedAndHeld(id)
+	w.idleWhileHeld(id)
+	w.runningAgain(id, release)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_active_at < now() - interval '119 minutes'`, id); n != 1 {
+		t.Fatal("the agent was active on the new placement: the case is not the one under test")
+	}
+	w.sweep()
+	if n := w.stalls(id); n != 1 {
+		t.Fatalf("unchanged silence 31 minutes after its report, across a move: %d reports, want 1", n)
 	}
 }
 
