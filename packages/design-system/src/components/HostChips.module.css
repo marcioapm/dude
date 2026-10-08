@@ -33,3 +33,12 @@
 .add {
   width: 200px;
 }
+/* Listed here, changed elsewhere: no remove, so the chip pads evenly. */
+.fixed {
+  padding: 0 var(--ds-space-8);
+}
+/* Always reachable, never listed: quieter than a list's own hosts. */
+[data-muted="true"] .fixed {
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}

@@ -120,6 +120,8 @@ export { ServerRecipeDialog, ServerRecipeTable, EnvVarRows, ServerUrlPreview } f
 export type { EnvVarRowsProps, RecipeEnvVar, ServerRecipeDialogProps, ServerRecipeDraft, ServerRecipeTableProps, ServerUrlPreviewProps } from "./ServerRecipe.tsx";
 export { HostChips } from "./HostChips.tsx";
 export type { HostChipsProps } from "./HostChips.tsx";
+export { HostPresets, NetworkRefusedNote, RefusedHosts } from "./Network.tsx";
+export type { HostPreset, HostPresetsProps, NetworkRefusedNoteProps, RefusedHost, RefusedHostsProps } from "./Network.tsx";
 export { SearchResultList, SearchResultRow } from "./SearchResultRow.tsx";
 export type { SearchResultRowProps } from "./SearchResultRow.tsx";
 export { RefLead } from "./RefLead.tsx";
