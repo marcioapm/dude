@@ -88,6 +88,11 @@ export const EventTypes = {
   /** dude interrupted a turn with an overdue open call. Payload: `BrainstormTurnStopped`. */
   BrainstormTurnStopped: "session.turn_stopped",
   /**
+   * The session was named: by its agent (name_session, `by: "agent"`) or a
+   * member who can chat (`by`: their person id). Payload: `{ title, by }`.
+   */
+  BrainstormRenamed: "session.renamed",
+  /**
    * A member has the session open, or no longer. Live only, never in the
    * ledger, and only to the session's members. Payload: `{ personId, open }`.
    */

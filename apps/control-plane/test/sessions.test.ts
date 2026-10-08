@@ -134,7 +134,10 @@ test("every session route goes to the orchestrator as the person, and a bad body
   const ok = [
     ["GET", "/v1/brainstorms", undefined, "/internal/sessions"],
     ["POST", "/v1/brainstorms", { title: " Ideas ", projects: [{ projectId: "prj_1", repositoryIds: ["repo_1"] }] }, "/internal/sessions"],
+    // Untitled: its agent names it.
+    ["POST", "/v1/brainstorms", {}, "/internal/sessions"],
     ["GET", `/v1/brainstorms/${SESSION}`, undefined, `/internal/sessions/${SESSION}`],
+    ["POST", `/v1/brainstorms/${SESSION}/title`, { title: " Billing v2 " }, `/internal/sessions/${SESSION}/title`],
     ["POST", `/v1/brainstorms/${SESSION}/chat`, { text: "hi" }, `/internal/sessions/${SESSION}/chat`],
     ["POST", `/v1/brainstorms/${SESSION}/link`, { projects: [] }, `/internal/sessions/${SESSION}/link`],
     ["POST", `/v1/brainstorms/${SESSION}/people`, { people: ["per_x"], role: "read" }, `/internal/sessions/${SESSION}/people`],
@@ -149,10 +152,14 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded.map((f) => [f.method, f.path])).toEqual(ok.map(([m, , , to]) => [m, to]));
   expect(forwarded.every((f) => f.person === marcio.personId)).toBe(true);
   expect(forwarded[1]!.body).toEqual({ title: "Ideas", projects: [{ projectId: "prj_1", repositoryIds: ["repo_1"] }] });
+  expect(forwarded[2]!.body).toEqual({ projects: [] });
+  expect(forwarded[4]!.body).toEqual({ title: "Billing v2" });
 
   forwarded.length = 0;
   for (const [path, body] of [
-    ["/v1/brainstorms", { title: "  " }],
+    ["/v1/brainstorms", { title: "x".repeat(201) }],
+    [`/v1/brainstorms/${SESSION}/title`, { title: "  " }],
+    [`/v1/brainstorms/${SESSION}/title`, {}],
     [`/v1/brainstorms/${SESSION}/chat`, { text: "" }],
     [`/v1/brainstorms/${SESSION}/people`, { people: ["per_x"], role: "owner" }],
     [`/v1/brainstorms/${SESSION}/people/per_x/role`, { role: "owner" }],
@@ -342,6 +349,33 @@ test("someone removed stops receiving on a stream they already have open", async
   expect(frames.some((e) => e.eventId === mark)).toBe(true);
   expect(frames.some((e) => e.eventId === after)).toBe(false);
   expect(JSON.stringify(frames)).not.toContain("said after they left");
+});
+
+test("a session's rename, title and all, reaches its members alone: through the history and the live stream", async () => {
+  const renamed = async () => {
+    const id = `evt_ren_${Bun.randomUUIDv7("hex").slice(-12)}`;
+    await owner`INSERT INTO events (id, organization_id, event_type, session_id, actor_type, actor_id, source, payload)
+      VALUES (${id}, ${ORG}, ${EventTypes.BrainstormRenamed}, ${SESSION}, 'agent', ${RUN}, 'orchestrator',
+        ${JSON.stringify({ title: "Zephyr acquisition", by: "agent" })}::jsonb)`;
+    return id;
+  };
+  let mark = "", event = "";
+  const seen = (frames: PersistedEvent[]) => mark !== "" && frames.some((e) => e.eventId === mark);
+  const [toJoao, ...toOthers] = await Promise.all([
+    streamed(joao, async () => { event = await renamed(); mark = await marker(); }, seen),
+    ...outsiders.map(([, who]) => streamed(who, async () => {}, seen)),
+  ]);
+  expect(toJoao.some((e) => e.eventId === event)).toBe(true);
+  for (const frames of toOthers) {
+    expect(frames.some((e) => e.eventId === mark)).toBe(true);
+    expect(JSON.stringify(frames)).not.toContain("Zephyr");
+  }
+  for (const [, who] of outsiders) {
+    const history = await (await call(who, "GET", `/v1/events?sessionId=${SESSION}`)).json() as { events: PersistedEvent[] };
+    expect(JSON.stringify(history)).not.toContain("Zephyr");
+  }
+  const mine = await (await call(marcio, "GET", `/v1/events?sessionId=${SESSION}`)).json() as { events: PersistedEvent[] };
+  expect(mine.events.map((e) => e.eventId)).toContain(event);
 });
 
 test("presence never carries a session's title: its where is a fixed word", async () => {

@@ -16,7 +16,7 @@ import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
-import type { SessionsList } from "@dude/domain";
+import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
@@ -36,7 +36,7 @@ import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
-import { NewSessionDialog, SessionsScreen } from "./screens/SessionsScreen.tsx";
+import { SessionsScreen, useNewSession } from "./screens/SessionsScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
 import { DudeMark } from "./DudeMark.tsx";
@@ -51,7 +51,6 @@ export interface AppProps {
 /** The one dialog the shell may have open. */
 type Open =
   | { kind: "newProject" }
-  | { kind: "newSession" }
   | { kind: "task"; projectId: string; epicId: string | null; editing?: string }
   | Extract<Intent, { kind: "newEpic" }>
   | Extract<Intent, { kind: "editEpic" }>
@@ -116,6 +115,7 @@ const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.
 const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormCreated, EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormFiled,
+  EventTypes.BrainstormRenamed,
   EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
   EventTypes.RunPaused, EventTypes.RunResumed,
 ]);
@@ -316,6 +316,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   let flush = false;
   let main;
   const openSession = (id: string) => go({ view: "brainstorm", id });
+  const newSession = useNewSession(client, (id) => {
+    void loadSessions();
+    openSession(id);
+  });
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
@@ -326,7 +330,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "sessions") {
-    main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} projects={projects ?? []} onOpen={(id) => {
+    main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onOpen={(id) => {
       void loadSessions();
       openSession(id);
     }} />;
@@ -517,12 +521,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
         sessions={
           <SidebarSessions
-            sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: s.title, shared: s.shared,
+            sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,
               owner: s.role === "owner" ? null : s.owner }))}
             selected={place?.view === "brainstorm" ? place.id : null}
             onSelect={openSession}
             onOpenList={() => go({ view: "sessions" })}
-            onNew={() => setOpen({ kind: "newSession" })}
+            onNew={newSession.start}
           />
         }
         mine={mine}
@@ -557,13 +561,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           </>
         }
       />
-      {open?.kind === "newSession" ? (
-        <NewSessionDialog client={client} projects={projects ?? []} open onClose={close} onCreated={(id) => {
-          close();
-          void loadSessions();
-          openSession(id);
-        }} />
-      ) : null}
       {open?.kind === "newProject" ? (
         <NewProjectDialog
           client={client}

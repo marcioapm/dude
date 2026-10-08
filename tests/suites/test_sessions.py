@@ -20,6 +20,7 @@ import json
 import os
 import threading
 
+import pytest
 import requests
 
 from fake_github import FakeGitHub
@@ -275,6 +276,78 @@ def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient,
     assert ana_client.post(f"/v1/brainstorms/{session}/people/{me}/remove").status_code == 200
     assert client.get(f"/v1/brainstorms/{session}").status_code == 404
     assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == []
+
+
+def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(client: ApiClient, env, owner_dsn: str):
+    _scripted_brainstorm(client)
+    ana, ana_client = _person(client, env, "Ana Nunes")
+    reader, reader_client = _person(client, env, "Rita Reader")
+    otto, otto_client = _person(client, env, "Otto Other")
+    resp = client.post("/v1/brainstorms", {})
+    assert resp.status_code == 201, resp.text
+    session = resp.json()["id"]
+    assert resp.json()["title"] is None
+    for who in (ana, reader):
+        role = "chat" if who is ana else "read"
+        assert client.post(f"/v1/brainstorms/{session}/people", {"people": [who["id"]], "role": role}).status_code == 200
+    assert ana_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    assert reader_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    listed = next(s for s in client.get("/v1/brainstorms").json()["sessions"] if s["id"] == session)
+    assert listed["title"] is None
+
+    # The agent names it once the subject is clear.
+    client.post(f"/v1/brainstorms/{session}/chat",
+                {"text": "metering for experiments\n" + _tool("name_session", {"title": "Usage metering"})})
+    wait_until(lambda: client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Usage metering",
+               timeout=60, message="the agent never named the session")
+    detail = client.get(f"/v1/brainstorms/{session}").json()["session"]
+    assert detail["titledBy"] == "agent"
+
+    # A reader can't rename it; someone not in it is told it does not exist.
+    assert reader_client.post(f"/v1/brainstorms/{session}/title", {"title": "Mine"}).status_code == 403
+    assert otto_client.post(f"/v1/brainstorms/{session}/title", {"title": "Mine"}).status_code == 404
+    # Ana can, and her name wins: the agent's next name_session is refused (the scripted agent says the 422).
+    assert ana_client.post(f"/v1/brainstorms/{session}/title", {"title": "Billing v2"}).status_code == 200
+    said = len(_said(client, session))
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "rename\n" + _tool("name_session", {"title": "Something else"})})
+    wait_until(lambda: len(_said(client, session)) > said, timeout=60, message="the agent never answered")
+    assert any("dude name_session answered 422" in s for s in _said(client, session)[said:]), _said(client, session)[said:]
+    assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Billing v2"
+    renamed = [(e["payload"]["title"], e["payload"]["by"]) for e in client.events(sessionId=session, limit=1000)
+               if e["eventType"] == "session.renamed"]
+    assert renamed == [("Usage metering", "agent"), ("Billing v2", ana["id"])]
+    # Members only, like every session event.
+    assert not [e for e in otto_client.events(sessionId=session, limit=1000) if e["eventType"] == "session.renamed"]
+
+
+@pytest.mark.ui
+def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_renames_it(
+        client: ApiClient, page: Page, web_url: str, org: dict):
+    _scripted_brainstorm(client)
+    sign_in(page, web_url, org["api_key"], at="#/sessions")
+    page.get_by_test_id("sessions").get_by_test_id("new-session").click()
+    expect(page.get_by_test_id("session-screen")).to_be_visible(timeout=15_000)
+    # No dialog: the session exists, untitled, and the composer has the focus.
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    expect(page.get_by_test_id("session-title")).to_have_text("New session")
+    expect(page.get_by_test_id("session-composer").locator("textarea")).to_be_focused()
+    session = page.url.split("#/sessions/")[1]
+    assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
+    expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")
+
+    # Escape cancels; Enter saves, and the Chat says who named it.
+    page.get_by_test_id("session-title").click()
+    page.get_by_test_id("session-title-input").fill("Throwaway")
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("session-title")).to_have_text("New session")
+    page.get_by_test_id("session-title").click()
+    page.get_by_test_id("session-title-input").fill("Billing v2")
+    page.keyboard.press("Enter")
+    expect(page.get_by_test_id("session-title")).to_have_text("Billing v2")
+    expect(page.locator('[data-kind="renamed"]')).to_contain_text("renamed it “Billing v2”", timeout=15_000)
+    assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Billing v2"
+    # The tab never carries the name.
+    assert "Billing" not in page.title()
 
 
 def _listen(who: ApiClient, frames: list, ready: threading.Event, stop: threading.Event) -> None:

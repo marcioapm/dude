@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
-import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { people } from "../navFixtures.ts";
@@ -34,6 +35,11 @@ function Card({ readOnly }: { readonly readOnly?: boolean }) {
   );
 }
 
+function TitleDemo({ initial }: { readonly initial: string | null }) {
+  const [title, setTitle] = useState(initial);
+  return <SessionTitle title={title} onRename={async (t) => setTitle(t)} />;
+}
+
 export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="brainstorm" title="Brainstorm sessions"
@@ -56,6 +62,22 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
                 <AgentAvatar role="conductor" size="md" /><AgentAvatar role="brainstorm" size="md" /><StatusMark status="awaiting_input" />
               </span>],
             ]} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="bs-title" title="SessionTitle"
+        note="A session's name in its header. Untitled until its agent or a member names it: “New session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>untitled, can chat</Label>
+            <TitleDemo initial={null} />
+            <Label>named, can chat (press it)</Label>
+            <TitleDemo initial="Usage-based billing" />
+            <Label>a reader</Label>
+            <SessionTitle title="Usage-based billing" />
+            <Label>in the Chat</Label>
+            <ChatNotice kind="renamed" by="Brainstorm" text="Named it “Usage-based billing”" at={Date.now() - 60_000} />
+            <ChatNotice kind="renamed" text="Ana renamed it “Billing v2”" at={Date.now()} />
           </Col>
         </Panes>
       </Block>

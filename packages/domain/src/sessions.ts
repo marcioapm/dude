@@ -8,6 +8,14 @@ import type { PersonRef } from "./hierarchy.ts";
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
 
+/** What a session is called until its agent or a member names it. */
+export const UNTITLED_SESSION = "New session";
+
+/** A session's name as people see it: its title, or "New session" until it has one. */
+export function sessionTitle(s: { title: string | null }): string {
+  return s.title ?? UNTITLED_SESSION;
+}
+
 export interface SessionProjectRef {
   id: string;
   key: string;
@@ -18,7 +26,8 @@ export interface SessionProjectRef {
 /** A session in your list. */
 export interface SessionSummary {
   id: string;
-  title: string;
+  /** null until it is named. */
+  title: string | null;
   role: SessionRole;
   createdAt: string;
   owner: PersonRef;
@@ -34,7 +43,7 @@ export interface SessionSummary {
 /** An invitation waiting on you: what an inbox line shows, never a word said. */
 export interface SessionInvitation {
   id: string;
-  title: string;
+  title: string | null;
   role: SessionRole;
   /** A handover: accepting makes you its owner. */
   becomesOwner: boolean;
@@ -52,7 +61,7 @@ export interface SessionQuestionLine {
   options: string[];
   askedAt: string;
   sessionId: string;
-  title: string;
+  title: string | null;
 }
 
 export interface SessionsList {
@@ -104,7 +113,9 @@ export interface Proposal {
 export interface SessionDetail {
   session: {
     id: string;
-    title: string;
+    title: string | null;
+    /** Who named it last: once a person has, the agent no longer renames it. */
+    titledBy: "agent" | "person" | null;
     createdAt: string;
     people: SessionMemberView[];
     projects: SessionProjectRef[];

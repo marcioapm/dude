@@ -22,7 +22,8 @@ const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
 }).strict();
-const create = z.object({ title: z.string().trim().min(1).max(200), projects: z.array(link).max(50).default([]) }).strict();
+const create = z.object({ title: z.string().trim().max(200).optional(), projects: z.array(link).max(50).default([]) }).strict();
+const rename = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const links = z.object({ projects: z.array(link).max(50) }).strict();
 const invite = z.object({ people: z.array(z.string().min(1)).min(1).max(50), role: z.enum(["chat", "read"]).default("chat") }).strict();
 const role = z.object({ role: z.enum(["chat", "read"]) }).strict();
@@ -70,6 +71,7 @@ export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms", forward("GET", () => "/internal/sessions"));
   router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
   router.get("/v1/brainstorms/:id", forward("GET", at()));
+  router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
   router.post("/v1/brainstorms/:id/link", forward("POST", at("/link"), links));
   router.post("/v1/brainstorms/:id/people", forward("POST", at("/people"), invite));

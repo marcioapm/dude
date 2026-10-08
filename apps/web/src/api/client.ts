@@ -1022,8 +1022,14 @@ export class ApiClient {
     return this.#request("GET", `/v1/brainstorms/${encodeURIComponent(id)}`);
   }
 
-  createSession(title: string, projects: SessionLink[] = []): Promise<{ id: string; title: string }> {
-    return this.#request("POST", "/v1/brainstorms", { title, projects });
+  /** A new session, untitled and linked to nothing: its agent names it, its owner links projects from its rail. */
+  createSession(): Promise<{ id: string; title: string | null }> {
+    return this.#request("POST", "/v1/brainstorms", {});
+  }
+
+  /** Name the session, as a member who can chat: the agent leaves a person's name alone. */
+  renameSession(id: string, title: string): Promise<{ id: string; title: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/title`, { title });
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
