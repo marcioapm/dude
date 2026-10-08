@@ -1,6 +1,6 @@
 /**
  * A project's key: the start of its tasks' keys (BILL-12), unique in its
- * organisation ignoring case (migration 094). People and agents name a
+ * organisation ignoring case (migration 095). People and agents name a
  * project's task by it alone, so two projects must never share one.
  */
 

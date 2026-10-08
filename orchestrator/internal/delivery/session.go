@@ -119,7 +119,7 @@ type SessionRepo struct {
 // SpecName is the repository's name in the lux spec: <key>-<name>, unique
 // within the Run since names are unique only within a project, made one
 // lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL). Keys are
-// unique in an organisation (projects_key_idx, migration 094) and names
+// unique in an organisation (projects_key_idx, migration 095) and names
 // per project, so <key>-<name> is distinct for every repository a session
 // can link. Keys are upper case, so the spec name is always rewritten and
 // carries the hash of <key>-<name>: two repositories share one only if
