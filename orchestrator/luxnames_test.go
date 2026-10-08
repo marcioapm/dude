@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -204,15 +205,53 @@ func TestATaskRunsSpecNamesAreDistinctWhateverItsProjectsRepositoriesAreCalled(t
 
 // A task's repository named in a way lux refuses as a spec name (upper
 // case, a dot) is delivered as any: every phase's spec names it as lux
-// takes it, the checkout, push and fast-forward match it back, and what
-// the ledger and the pull request say name the repository as the task does.
+// takes it and starts its agent in that checkout, the checkout, push and
+// fast-forward match it back, and what the ledger and the pull request say
+// name the repository as the task does. The implementer's work is done as
+// an agent does it: a file written and committed by a command run in the
+// spec's workdir, through lux's exec, and it is that commit the publish
+// pushes and the pull request carries.
 func TestATaskRepositoryLuxWouldRefuseByNameIsDelivered(t *testing.T) {
 	w := newWorld(t)
+	w.lux.Workspaces = t.TempDir()
 	const name = "Target.API"
 	mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, name)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			// It works until told it is done; what it commits is its own.
+			b.Commit, b.Hang, b.WakeOnInput = nil, true, true
+		}
+		return b
+	}
 	wi := w.task()
 	w.deliver(wi)
+	var implementer string
+	w.until("the implementer to be working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`,
+			wi).Scan(&implementer)
+		return implementer != ""
+	})
+	var spec lux.Spec
+	for _, r := range w.lux.Runs() {
+		if r.ID == w.luxRunOf(implementer) {
+			_ = json.Unmarshal(r.Spec, &spec)
+		}
+	}
+	cmd := "cd " + spec.Workload.Workdir + " && printf 'from its workdir\\n' > AGENT.md && git add AGENT.md" +
+		" && git -c user.name=agent -c user.email=agent@x commit -q -m 'Agent edit from its workdir'"
+	res, err := w.syncer.Lux.Exec(context.Background(), w.luxRunOf(implementer), []string{"sh", "-c", cmd})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("committing in the agent's workdir %s: exit %d, %v: %s", spec.Workload.Workdir, res.ExitCode, err, res.Stderr)
+	}
+	// Told to finish, interrupting the turn it keeps open.
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text, interrupt)
+		VALUES ('dir_done', $1, $2, $3, 'done', true)`, w.org, wi, implementer)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if log := strings.Join(w.gh.Log(delivery.BranchFor(wi, 1)), "\n"); !strings.Contains(log, "Agent edit from its workdir") {
+		t.Errorf("the task branch does not carry the agent's commit:\n%s", log)
+	}
 	for _, r := range w.lux.Runs() {
 		var spec lux.Spec
 		_ = json.Unmarshal(r.Spec, &spec)
@@ -222,6 +261,9 @@ func TestATaskRepositoryLuxWouldRefuseByNameIsDelivered(t *testing.T) {
 		got := spec.Git.Repositories[0]
 		if got.Name != lux.SpecName(name) || !lux.NameRe.MatchString(got.Name) || got.Path != "/workspace/repos/"+got.Name {
 			t.Errorf("%s: repository %s at %s", spec.Labels["dude.phase"], got.Name, got.Path)
+		}
+		if spec.Workload.Workdir != got.Path {
+			t.Errorf("%s: the agent starts in %s, its checkout is at %s", spec.Labels["dude.phase"], spec.Workload.Workdir, got.Path)
 		}
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'repo' = $2`,
