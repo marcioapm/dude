@@ -469,44 +469,80 @@ test("096 keeps every titled session's name as a person's, and lets a new one st
   }
 }, 120_000);
 
-test("096 holds its exclusive lock on sessions for no scan: an indexed read waits only for its catalog changes", async () => {
-  const { url, sql } = await migratedBefore("096");
-  const reader = new SQL(url);
-  const observer = new SQL(url);
+test("096 validates nothing under its exclusive lock on sessions: its checks are added unvalidated", async () => {
+  const { sql } = await migratedBefore("096");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
-    await sql`INSERT INTO sessions (id, organization_id, title)
-      SELECT 'ssn_' || i, 'org_n', 'Usage-based billing for experiment runs ' || i FROM generate_series(1, 500000) i`;
-    await sql`ANALYZE sessions`;
+    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_1', 'org_n', 'Usage-based billing')`;
     const file = (await listMigrationFiles()).find((f) => f.version === "096")!;
     const contents = await file.contents();
-    // As the runner applies it: the whole file in one transaction.
-    let done = false;
-    const began = performance.now();
-    const applied = sql.begin(async (tx) => {
+    // As the runner applies it: the whole file in one transaction, observed before it commits.
+    const seen = await sql.begin(async (tx) => {
       await tx.unsafe(contents);
-    }).then(() => {
-      done = true;
-      return performance.now() - began;
+      const [lock] = await tx`SELECT count(*)::int AS n FROM pg_locks WHERE relation = 'sessions'::regclass
+        AND pid = pg_backend_pid() AND mode = 'AccessExclusiveLock' AND granted`;
+      const checks = await tx`SELECT conname, convalidated FROM pg_constraint
+        WHERE conrelid = 'sessions'::regclass AND contype = 'c' ORDER BY conname`;
+      return { locked: lock.n, checks: [...checks] };
     });
-    // Wait until the migration holds its lock, or has already let it go.
-    let locked = false;
-    while (!done && !locked) {
-      locked = (await observer`SELECT 1 FROM pg_locks
-        WHERE relation = 'sessions'::regclass AND mode = 'AccessExclusiveLock' AND granted`).length > 0;
-    }
-    const asked = performance.now();
-    expect([...await reader`SELECT title FROM sessions WHERE id = 'ssn_1'`]).toEqual([{ title: "Usage-based billing for experiment runs 1" }]);
-    const waited = performance.now() - asked;
-    const held = await applied;
-    // Validating the checks under this lock held such a read 330-370 ms on 500k rows on a laptop; 096's catalog changes alone, ~10 ms.
-    expect(waited, `the read waited ${Math.round(waited)} ms; 096 took ${Math.round(held)} ms`).toBeLessThan(100);
-    // Nothing was scanned: the checks are there, still to be validated by 097.
-    expect((await sql`SELECT bool_or(convalidated) AS any FROM pg_constraint
-      WHERE conrelid = 'sessions'::regclass AND contype = 'c'`)[0].any).toBe(false);
+    // A check added without NOT VALID scans every row under this lock and is left convalidated = true.
+    expect(seen).toEqual({
+      locked: 1,
+      checks: [
+        { conname: "sessions_title_check", convalidated: false },
+        { conname: "sessions_titled_by_check", convalidated: false },
+        { conname: "sessions_titled_check", convalidated: false },
+      ],
+    });
   } finally {
-    await reader.end();
-    await observer.end();
+    await sql.end();
+  }
+}, 120_000);
+
+test("097 validates while another transaction holds a row lock on sessions: it never asks for a lock that blocks writes", async () => {
+  const { url, sql } = await migratedBefore("096");
+  const holder = new SQL(url);
+  let release = () => {};
+  let holding: Promise<unknown> = Promise.resolve();
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
+    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_1', 'org_n', 'Billing'), ('ssn_2', 'org_n', 'Metering')`;
+    const file096 = (await listMigrationFiles()).find((f) => f.version === "096")!;
+    const contents = await file096.contents();
+    await sql.begin(async (tx) => {
+      await tx.unsafe(contents);
+      await tx`INSERT INTO schema_migrations (version, name, checksum)
+        VALUES (${file096.version}, ${file096.name}, ${createHash("sha256").update(contents).digest("hex")})`;
+    });
+    // An open write transaction: ROW EXCLUSIVE on sessions until released.
+    const updated = Promise.withResolvers<void>();
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    holding = holder.begin(async (tx) => {
+      await tx`UPDATE sessions SET title = 'Billing v2' WHERE id = 'ssn_1'`;
+      updated.resolve();
+      await released;
+    });
+    await updated.promise;
+    const heldLock = sql`SELECT count(*)::int AS n FROM pg_locks WHERE relation = 'sessions'::regclass
+      AND mode = 'RowExclusiveLock' AND granted`;
+    expect((await heldLock)[0].n).toBe(1);
+
+    // VALIDATE takes SHARE UPDATE EXCLUSIVE, which does not conflict with ROW EXCLUSIVE; a lock that
+    // did (SHARE and up) would wait for the holder. The timer only ends a hang: no duration is asserted.
+    const migrating = migrate(url, { log: () => {} });
+    migrating.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      migrating.then((r) => r.applied),
+      new Promise<string>((resolve) => { timer = setTimeout(() => resolve("097 still waiting after 30 s"), 30_000); }),
+    ]);
+    clearTimeout(timer);
+    expect(outcome).toEqual(["097_session_names_validate.sql"]);
+    expect((await heldLock)[0].n).toBe(1);
+  } finally {
+    release();
+    await holding.catch(() => {});
+    await holder.end();
     await sql.end();
   }
 }, 120_000);
