@@ -61,6 +61,11 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION seed_model_tiers_for(text, text, text) FROM PUBLIC;
 
+-- What each Run requested, beside runs.model and runs.model_tier: its tier's
+-- effort when it was submitted (NULL: the model's default, or a Run from
+-- before tiers carried one).
+ALTER TABLE runs ADD COLUMN effort text;
+
 -- No role names an effort any more. A role left with nothing is dropped, as
 -- a Reset leaves it.
 UPDATE organizations SET default_agent_models = (

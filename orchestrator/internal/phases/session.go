@@ -43,8 +43,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		settings = delivery.ResolveRole(role, orgModels)
 		var err error
 		if stored != nil {
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, '') FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, role, settings); err != nil || noTier != "" {
