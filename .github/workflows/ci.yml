@@ -1,0 +1,190 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17-trixie
+        env:
+          POSTGRES_USER: dude
+          POSTGRES_PASSWORD: dude
+          POSTGRES_DB: dude
+        # dbtest's default host is localhost:5433.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dude"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      # dbtest migrates its template database with apps/control-plane's runner.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - name: gofmt
+        working-directory: orchestrator
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l lists:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        working-directory: orchestrator
+        run: go vet ./...
+
+      # dbtest skips a test when Postgres is unreachable; here that is broken
+      # setup, so a "no test database" skip fails the step.
+      - name: go test, and no test skipped for want of a database
+        working-directory: orchestrator
+        run: |
+          set -o pipefail
+          # The root package alone runs about 14 minutes on a hosted runner,
+          # past go test's default 10-minute limit per binary.
+          go test -p 4 -count=1 -timeout 25m -v ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+          if grep -F 'no test database' "$RUNNER_TEMP/go-test.log"; then
+            echo "tests skipped without a database: Postgres was not reachable at localhost:5433" >&2
+            exit 1
+          fi
+
+      - name: Upload the go test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-log
+          path: ${{ runner.temp }}/go-test.log
+          if-no-files-found: ignore
+
+  ts:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17-trixie
+        env:
+          POSTGRES_USER: dude
+          POSTGRES_PASSWORD: dude
+          POSTGRES_DB: dude
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dude"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://dude:dude@localhost:5433/dude
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      # Some suites use DATABASE_URL's database as it is, expecting it
+      # migrated; the rest create and migrate databases of their own.
+      - run: bun run migrate
+
+      - run: bun test
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: The E2E shard split
+        working-directory: tests
+        run: uv run pytest suites/test_shard.py -q
+
+  e2e:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    name: e2e (${{ matrix.shard }}/6)
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17-trixie
+        env:
+          POSTGRES_USER: dude
+          POSTGRES_PASSWORD: dude
+          POSTGRES_DB: dude
+        # tests/env.py's default DUDE_TEST_PG_PORT.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dude"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: astral-sh/setup-uv@v6
+
+      - run: bun install --frozen-lockfile
+
+      - name: uv sync
+        working-directory: tests
+        run: uv sync --frozen
+
+      # The browser suites launch Playwright with channel "chrome": Google
+      # Chrome, not Playwright's bundled Chromium.
+      - name: Google Chrome
+        working-directory: tests
+        run: |
+          if ! command -v google-chrome >/dev/null; then
+            uv run playwright install --with-deps chrome
+          fi
+          google-chrome --version
+
+      - name: e2e shard
+        working-directory: tests
+        env:
+          DUDE_TEST_LOG_DIR: ${{ runner.temp }}/e2e-logs
+        run: uv run python run_tests.py --shard ${{ matrix.shard }}/6
+
+      - name: Upload the e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-logs
+          if-no-files-found: ignore
