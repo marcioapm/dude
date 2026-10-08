@@ -59,6 +59,20 @@ func TestBrainstormUpgradeDatesExistingOpenCalls(t *testing.T) {
 	}
 }
 
+func openBrainstormCall(s *sessionWorld, conductor bool) (id, run string) {
+	s.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Conductor: conductor, OpenCalls: [][3]string{taskCall}}
+	}
+	id = s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	s.until("the open brainstorm call", func() bool {
+		run, _ = s.brainstorm(id)
+		return run != "" && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'
+			AND open_tool_calls_at <> '{}'`, run) == 1
+	})
+	return id, run
+}
+
 func TestBrainstormStuckCallsInterruptOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name, change string
@@ -76,17 +90,7 @@ func TestBrainstormStuckCallsInterruptOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSessionWorld(t)
 			s.syncer.ConductorWarm = time.Hour
-			s.lux.Decide = func(map[string]any) fakelux.Behaviour {
-				return fakelux.Behaviour{Hang: true, Conductor: true, OpenCalls: [][3]string{taskCall}}
-			}
-			id := s.session()
-			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
-			var run string
-			s.until("the open brainstorm call", func() bool {
-				run, _ = s.brainstorm(id)
-				return run != "" && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'
-					AND open_tool_calls_at <> '{}'`, run) == 1
-			})
+			id, run := openBrainstormCall(s, true)
 			mustExec(t, s.owner, `UPDATE runs SET `+tc.change+` open_tool_calls_at = jsonb_build_object('open_0',
 				now() - make_interval(secs => $2)) WHERE id = $1`, run, tc.age.Seconds())
 			s.sweep()
@@ -153,17 +157,7 @@ func TestBrainstormOldestOpenCallDeterminesTheInterrupt(t *testing.T) {
 
 func TestConcurrentSweepsInterruptAStuckBrainstormOnce(t *testing.T) {
 	s := newSessionWorld(t)
-	s.lux.Decide = func(map[string]any) fakelux.Behaviour {
-		return fakelux.Behaviour{Hang: true, OpenCalls: [][3]string{taskCall}}
-	}
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
-	var run string
-	s.until("the open brainstorm call", func() bool {
-		run, _ = s.brainstorm(id)
-		return run != "" && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'
-			AND open_tool_calls_at <> '{}'`, run) == 1
-	})
+	_, run := openBrainstormCall(s, false)
 	mustExec(t, s.owner, `UPDATE runs SET open_tool_calls_at = jsonb_build_object('open_0', now() - interval '11 minutes') WHERE id = $1`, run)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
