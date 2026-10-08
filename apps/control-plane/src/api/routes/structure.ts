@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { SQL } from "bun";
 import {
   EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, epicState, epicStateSchema, newId, taskCriteriaInput,
   taskGoalInput, taskGoalShortBy, type EpicState,
@@ -85,6 +86,21 @@ export async function sameCheckout(scope: OrgScope, projectId: string, name: str
 export const sameCheckoutMessage = (name: string, other: { name: string; checkout: string }) =>
   `${name} would be checked out as ${other.checkout}, which ${other.name} already is; rename one of them.`;
 
+/**
+ * A write `repositories_lux_name_idx` refused, as the 409 the check would
+ * have given: the repository it clashed with is read in a transaction of
+ * its own, since the failed one is aborted. Anything else is rethrown.
+ */
+async function checkoutRefused(ctx: RequestContext, err: unknown, projectId: string, name: string, except: string | null): Promise<never> {
+  if (err instanceof SQL.PostgresError && err.errno === "23505" && err.constraint === "repositories_lux_name_idx") {
+    const other = await withOrg(ctx.principal.organizationId, async (scope) =>
+      await sameCheckout(scope, projectId, name, except) ??
+        { name: "another repository", checkout: ((await scope.sql`SELECT lux_name(${name}) AS c`) as Array<{ c: string }>)[0]!.c });
+    throw conflict(sameCheckoutMessage(name, other));
+  }
+  throw err;
+}
+
 async function addRepository(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, addRepositoryInput);
   const projectId = ctx.params.id!;
@@ -103,7 +119,7 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
       RETURNING ${scope.sql.unsafe(REPOSITORY_SELECT)}`) as Array<Record<string, unknown>>;
     await record(scope, ctx, EventTypes.RepositoryAdded, projectId, { repositoryId: rows[0]!.id, name: input.name });
     return { repository: rows[0]! };
-  });
+  }).catch((err: unknown) => checkoutRefused(ctx, err, projectId, input.name, null));
   if ("missing" in result) throw notFound(`project ${projectId} not found`);
   if ("taken" in result) throw conflict(`the project already has a repository named "${input.name}"`);
   if ("sameCheckout" in result) throw conflict(sameCheckoutMessage(input.name, result.sameCheckout));
@@ -129,7 +145,15 @@ async function inUse(scope: OrgScope, repositoryId: string): Promise<boolean> {
 async function updateRepository(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updateRepositoryInput);
   const id = ctx.params.id!;
+  let projectId = "";
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
+    // The project row first, as adding takes it: renames and adds in one
+    // project then check and write one at a time. A repository never moves
+    // project, so the unlocked read names the right one.
+    const owning = (await scope.sql`SELECT project_id AS "projectId" FROM repositories WHERE id = ${id}`) as Array<{ projectId: string }>;
+    if (!owning[0]) return { missing: true as const };
+    projectId = owning[0].projectId;
+    await scope.sql`SELECT 1 FROM projects WHERE id = ${projectId} FOR UPDATE`;
     const current = (await scope.sql`
       SELECT project_id AS "projectId" FROM repositories WHERE id = ${id} FOR UPDATE`) as Array<{ projectId: string }>;
     if (!current[0]) return { missing: true as const };
@@ -152,7 +176,7 @@ async function updateRepository(ctx: RequestContext): Promise<Response> {
       RETURNING ${scope.sql.unsafe(REPOSITORY_SELECT)}`) as Array<Record<string, unknown>>;
     await record(scope, ctx, EventTypes.RepositoryUpdated, current[0].projectId, { repositoryId: id, ...input });
     return { repository: rows[0]! };
-  });
+  }).catch((err: unknown) => checkoutRefused(ctx, err, projectId, input.name ?? "", id));
   if ("missing" in result) throw notFound(`repository ${id} not found`);
   if ("busy" in result) throw conflict("work is being delivered to this repository; wait for it or abort it first");
   if ("taken" in result) throw conflict(`the project already has a repository named "${input.name}"`);

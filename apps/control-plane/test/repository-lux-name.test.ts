@@ -4,7 +4,8 @@
  * repository's own ("Web" is web-29751047). Adding, renaming or creating a
  * project with a repository whose checkout name another of the project's
  * already has is refused with 409 naming both, and changes nothing; the
- * same name in another project is fine.
+ * same name in another project is fine. Two such changes at once get one
+ * 409 too, never a 500 from the index.
  *
  * Requires DATABASE_URL: the owner of a database migrated to the release.
  */
@@ -69,14 +70,93 @@ test("adding a repository its Runs would check out under another's name is refus
   expect(await names(project)).toEqual(["Web", "web-app"]);
 });
 
+/** A project of its own with repositories by name, inserted directly; their ids by name. */
+async function projectWith(...repos: string[]): Promise<{ id: string; repo: Record<string, string> }> {
+  const id = `${org}_${Bun.randomUUIDv7("hex").slice(-12)}`;
+  await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix)
+    VALUES (${id}, ${org}, ${id}, ${id}, ${`P${id.slice(-5).toUpperCase()}`})`;
+  const repo: Record<string, string> = {};
+  for (const name of repos) {
+    repo[name] = `${id}_${name}`;
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url)
+      VALUES (${repo[name]}, ${org}, ${id}, ${name}, ${`https://github.com/acme/${name}.git`})`;
+  }
+  return { id, repo };
+}
+
 test("renaming a repository onto another's checkout name is refused; renaming it to itself is not", async () => {
-  const [app] = await owner`SELECT id FROM repositories WHERE project_id = ${project} AND name = 'web-app'` as Array<{ id: string }>;
-  await refused(await call("PATCH", `/v1/repositories/${app!.id}`, { name: "web-29751047" }),
+  const { id, repo } = await projectWith("Web", "web-app");
+  await refused(await call("PATCH", `/v1/repositories/${repo["web-app"]}`, { name: "web-29751047" }),
     "web-29751047 would be checked out as web-29751047, which Web already is; rename one of them.");
-  expect(await names(project)).toEqual(["Web", "web-app"]);
-  const [web] = await owner`SELECT id FROM repositories WHERE project_id = ${project} AND name = 'Web'` as Array<{ id: string }>;
-  expect((await call("PATCH", `/v1/repositories/${web!.id}`, { name: "Web" })).status).toBe(200);
+  expect(await names(id)).toEqual(["Web", "web-app"]);
+  expect((await call("PATCH", `/v1/repositories/${repo["Web"]}`, { name: "Web" })).status).toBe(200);
 });
+
+/**
+ * Holds every write to `projectId`'s repositories for a second, so two
+ * requests both read before either writes: each one's own check sees no
+ * clash. Returns its removal.
+ */
+async function slowWrites(projectId: string): Promise<() => Promise<void>> {
+  const fn = `slow_${projectId.replace(/[^a-z0-9_]/g, "_")}`;
+  await owner.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.project_id = '${projectId}' THEN PERFORM pg_sleep(1); END IF; RETURN NEW; END $$`);
+  await owner.unsafe(`CREATE TRIGGER ${fn} BEFORE INSERT OR UPDATE ON repositories FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+  return async () => {
+    await owner.unsafe(`DROP TRIGGER ${fn} ON repositories`);
+    await owner.unsafe(`DROP FUNCTION ${fn}()`);
+  };
+}
+
+const statuses = async (responses: Response[]) => {
+  const out = [];
+  for (const r of responses) out.push([r.status, ((await r.json()) as { error?: { message: string } }).error?.message ?? null]);
+  return out;
+};
+
+test("two renames at once onto one checkout name: one is renamed, the other refused with 409, never 500", async () => {
+  const { id, repo } = await projectWith("first", "second");
+  const restore = await slowWrites(id);
+  try {
+    const got = await statuses(await Promise.all([
+      call("PATCH", `/v1/repositories/${repo["first"]}`, { name: "Web" }),
+      call("PATCH", `/v1/repositories/${repo["second"]}`, { name: "web-29751047" }),
+    ]));
+    expect(got.map(([s]) => s).sort()).toEqual([200, 409]);
+    const [, message] = got.find(([s]) => s === 409)!;
+    expect([
+      "Web would be checked out as web-29751047, which web-29751047 already is; rename one of them.",
+      "web-29751047 would be checked out as web-29751047, which Web already is; rename one of them.",
+    ]).toContain(message as string);
+  } finally {
+    await restore();
+  }
+  const left = await names(id);
+  expect(left.length).toBe(2);
+  expect(left.filter((n) => n === "Web" || n === "web-29751047").length).toBe(1);
+}, 20_000);
+
+test("an add and a rename at once onto one checkout name: one lands, the other is refused with 409, never 500", async () => {
+  const { id, repo } = await projectWith("first");
+  const restore = await slowWrites(id);
+  try {
+    const got = await statuses(await Promise.all([
+      add(id, "Web"),
+      call("PATCH", `/v1/repositories/${repo["first"]}`, { name: "web-29751047" }),
+    ]));
+    // The add answers 201 when it lands, the rename 200.
+    const landed = got[0]![0] === 201 ? [201, 409] : [409, 200];
+    expect(got.map(([s]) => s)).toEqual(landed);
+    const [, message] = got.find(([s]) => s === 409)!;
+    expect([
+      "Web would be checked out as web-29751047, which web-29751047 already is; rename one of them.",
+      "web-29751047 would be checked out as web-29751047, which Web already is; rename one of them.",
+    ]).toContain(message as string);
+  } finally {
+    await restore();
+  }
+  expect((await names(id)).filter((n) => n === "Web" || n === "web-29751047").length).toBe(1);
+}, 20_000);
 
 test("a new project whose repositories would share a checkout name is refused whole", async () => {
   const slug = `pair-${Bun.randomUUIDv7("hex").slice(-12)}`;
