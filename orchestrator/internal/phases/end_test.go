@@ -5,15 +5,33 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// callLux records the stops and cancels a Run's end asks lux for.
+// callLux records the stops and cancels a Run's end asks lux for. A cancel
+// of a lux run id in err is refused with that error. For a pass of
+// RetireCompleted (setPass): when gated, the cancels lux does not refuse as
+// unhealthy wait until such a refusal has had time to end the batch; a
+// retryable refusal waits (up to a second) until await calls are recorded.
 type callLux struct {
 	lux.Client
 	mu    sync.Mutex
 	calls []string
+	err   map[string]error
+	gate  chan struct{}
+	once  *sync.Once
+	await int
+}
+
+func (c *callLux) setPass(gated bool, await int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gate, c.once, c.await = nil, &sync.Once{}, await
+	if gated {
+		c.gate = make(chan struct{})
+	}
 }
 
 func (c *callLux) record(call string) error {
@@ -23,8 +41,28 @@ func (c *callLux) record(call string) error {
 	return nil
 }
 
-func (c *callLux) Stop(_ context.Context, id string) error   { return c.record("stop " + id) }
-func (c *callLux) Cancel(_ context.Context, id string) error { return c.record("cancel " + id) }
+func (c *callLux) Stop(_ context.Context, id string) error { return c.record("stop " + id) }
+
+func (c *callLux) Cancel(_ context.Context, id string) error {
+	_ = c.record("cancel " + id)
+	c.mu.Lock()
+	gate, once, await := c.gate, c.once, c.await
+	c.mu.Unlock()
+	err := c.err[id]
+	if le, ok := lux.AsError(err); ok && le.Retryable() {
+		for deadline := time.Now().Add(time.Second); len(c.Calls()) < await && time.Now().Before(deadline); {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if gate != nil {
+			once.Do(func() { time.AfterFunc(50*time.Millisecond, func() { close(gate) }) })
+		}
+		return err
+	}
+	if gate != nil {
+		<-gate
+	}
+	return err
+}
 
 func (c *callLux) Calls() []string {
 	c.mu.Lock()
@@ -155,5 +193,69 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	// Nothing left: the loop sleeps.
 	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 0 {
 		t.Fatalf("retired %d, %v; want 0", n, err)
+	}
+}
+
+// lux refusing a terminate for good (unknown, already terminated) counts as
+// terminated; lux unhealthy (503) leaves the Run to ask again and ends the
+// batch, so the Runs behind it wait for the next pass.
+func TestARetireLuxRefusesIsDoneOrAskedAgain(t *testing.T) {
+	w := newResumeWorld(t)
+	// Oldest first: the 503 one, the two refusals, then seven healthy ones.
+	ids := []string{"r503", "r404", "r409", "h1", "h2", "h3", "h4", "h5", "h6", "h7"}
+	for i, id := range ids {
+		w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state,
+				lux_stop_reason, ended_at)
+			VALUES ($2, $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'completed', 'l'||$2, 'stopped', 'complete',
+				now() - make_interval(secs => $3))`, w.run.Org, id, 100-i)
+	}
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE organization_id = $1`, w.run.Org)
+	fake := &callLux{err: map[string]error{
+		"lr503": &lux.Error{Status: 503, Code: "unavailable"},
+		"lr404": &lux.Error{Status: 404, Code: "not_found"},
+		"lr409": &lux.Error{Status: 409, Code: "not_cancellable"},
+	}}
+	w.s.Lux = fake
+	terminated := func() []string {
+		t.Helper()
+		var got []string
+		if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(array_agg(id ORDER BY id), '{}') FROM runs
+			WHERE organization_id = $1 AND lux_stop_reason = 'cancel'`, w.run.Org).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	// The 503, answered once all 8 slots are asked, ends the batch: h6 and
+	// h7 are not asked.
+	fake.setPass(true, 8)
+	n, err := w.s.RetireCompleted(w.ctx)
+	if err == nil || n != 7 {
+		t.Fatalf("first pass retired %d, %v; want 7 and lux's 503 (asked %v, recorded %v)", n, err, fake.Calls(), terminated())
+	}
+	got := fake.Calls()
+	slices.Sort(got)
+	if want := []string{"cancel lh1", "cancel lh2", "cancel lh3", "cancel lh4", "cancel lh5", "cancel lr404", "cancel lr409", "cancel lr503"}; !slices.Equal(got, want) {
+		t.Errorf("first pass asked lux %v, want %v", got, want)
+	}
+	if got, want := terminated(), []string{"h1", "h2", "h3", "h4", "h5", "r404", "r409"}; !slices.Equal(got, want) {
+		t.Errorf("first pass recorded %v terminated, want %v", got, want)
+	}
+
+	// Then the rest and the 503 again; then the 503 alone.
+	for pass, want := range [][]string{{"cancel lh6", "cancel lh7", "cancel lr503"}, {"cancel lr503"}} {
+		before := len(fake.Calls())
+		fake.setPass(false, before+len(want))
+		if _, err := w.s.RetireCompleted(w.ctx); err == nil {
+			t.Fatalf("pass %d: lux's 503 not returned", pass+2)
+		}
+		got := fake.Calls()[before:]
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("pass %d asked lux %v, want %v", pass+2, got, want)
+		}
+	}
+	if got := terminated(); slices.Contains(got, "r503") || len(got) != 9 {
+		t.Errorf("recorded %v terminated; want every one but r503", got)
 	}
 }
