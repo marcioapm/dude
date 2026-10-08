@@ -51,6 +51,11 @@
   text-overflow: ellipsis;
   min-width: 0;
 }
+.headerStatusNote {
+  display: inline-flex;
+  flex-shrink: 0;
+  font-weight: var(--ds-weight-regular);
+}
 .headerSub {
   display: flex;
   align-items: center;

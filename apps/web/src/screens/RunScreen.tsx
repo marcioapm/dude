@@ -223,8 +223,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // (lux took the Run) or a stream that came back asks again.
   const askAgain = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
   const { url: terminalUrl, memoryLimit } = useTerminalUrl(client, runId, run?.status === "running", askAgain);
-  // lux took the Run and has no host for it yet: why, as lux says it.
-  const waitingReason = useWaitingReason(client, runId, run?.status === "scheduled", askAgain);
+  // lux has no host for the Run yet (a first placement, a resume, a move):
+  // why, as lux says it. Asked while the Run is live; the answer is the gate.
+  const waitingReason = useWaitingReason(client, runId, run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false, askAgain);
 
   useEffect(() => {
     if (!taskId) return;
@@ -380,6 +381,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     id: run.id,
     role,
     status: run.status,
+    ...(waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
     ...(owner ? { owner } : {}),
     subtitle: (
       <>
@@ -387,7 +389,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {run.model ? <RunTierChip tier={run.modelTier} model={run.model} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
-        {waitingReason ? <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
