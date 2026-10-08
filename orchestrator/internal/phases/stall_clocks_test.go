@@ -1,0 +1,122 @@
+package phases
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+)
+
+// The stall clocks' time away from running (left_running_at), as its
+// production writers set it: a person's resume (whilePaused) and lux's
+// state frames (luxEvent).
+
+// runningAnswerLux answers a resume as a lux that has the Run running
+// already.
+type runningAnswerLux struct {
+	*streamLux
+	base time.Time
+}
+
+func (f *runningAnswerLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.placementLux.set(runningAgain(f.base, "host-a"), nil)
+	return lux.Run{ID: "lrun_1", State: "running", Epoch: 2}, nil
+}
+
+// clock reads one of w's Run's timestamps.
+func (w *resumeWorld) clock(col string) *time.Time {
+	w.t.Helper()
+	var at *time.Time
+	if err := w.owner.QueryRow(w.ctx, `SELECT `+col+` FROM runs WHERE id = $1`, w.run.ID).Scan(&at); err != nil {
+		w.t.Fatal(err)
+	}
+	return at
+}
+
+// A person's resume lux accepts as resuming, the Run never away before:
+// its time away starts at the acceptance, with its fresh files.
+func TestAPersonsResumeStartsItsTimeAwayAtTheAcceptance(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	w.s.Lux = &stoppedEpochLux{streamLux: w.following(), base: base}
+	w.exec(`UPDATE runs SET left_running_at = NULL WHERE id = $1`, w.run.ID)
+	w.whilePaused()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'resuming'`); n != 1 {
+		t.Fatal("the resume was not accepted as resuming: the case is not the one under test")
+	}
+	away, files := w.clock("left_running_at"), w.clock("files_changed_at")
+	if away == nil || files == nil || !away.Equal(*files) {
+		t.Fatalf("time away from %v, files from %v: want both at the acceptance", away, files)
+	}
+}
+
+// A person's resume lux answers already running: never away since, so an
+// old time away is cleared, and the next running frame moves nothing.
+func TestAResumeLuxAnswersRunningClearsItsTimeAway(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	w.s.Lux = &runningAnswerLux{streamLux: w.following(), base: base}
+	w.exec(`UPDATE runs SET left_running_at = now() - interval '1 hour' WHERE id = $1`, w.run.ID)
+	w.whilePaused()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`); n != 1 {
+		t.Fatal("the resume was not accepted as running: the case is not the one under test")
+	}
+	if away := w.clock("left_running_at"); away != nil {
+		t.Fatalf("a Run lux answered running is away from running since %v", away)
+	}
+}
+
+// Leaving running is stamped once: later frames on the way to running
+// again (stopping, then resuming, each in its own batch) keep the first
+// departure, so the whole wait is time away.
+func TestFramesOnTheWayBackKeepTheFirstDeparture(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status = 'running', lux_state = 'running', left_running_at = NULL WHERE id = $1`, w.run.ID)
+	w.follow(luxState(1, "stopping"))
+	first := w.clock("left_running_at")
+	if first == nil {
+		t.Fatal("leaving running was not stamped")
+	}
+	time.Sleep(30 * time.Millisecond)
+	w.follow(luxState(1, "resuming"))
+	if last := w.clock("left_running_at"); last == nil || !last.Equal(*first) {
+		t.Fatalf("the departure moved from %v to %v on a later frame away from running", first, last)
+	}
+}
+
+// Two moves, each 10 minutes away, and lux saying running twice after
+// each: entering running clears the time away and moves the clocks on by
+// it once; the repeated frame moves nothing.
+func TestEachEntryIntoRunningMovesTheClocksOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status = 'running', lux_state = 'running', files_changed_at = now() - interval '1 hour',
+		agent_active_at = now() - interval '1 hour', left_running_at = NULL WHERE id = $1`, w.run.ID)
+	for epoch := 2; epoch <= 3; epoch++ {
+		w.follow(luxState(epoch-1, "resuming"))
+		w.exec(`UPDATE runs SET left_running_at = now() - interval '10 minutes' WHERE id = $1`, w.run.ID)
+		files, active := w.clock("files_changed_at"), w.clock("agent_active_at")
+		w.follow(running(epoch))
+		if away := w.clock("left_running_at"); away != nil {
+			t.Fatalf("move %d: still away from running since %v once running", epoch-1, away)
+		}
+		movedFiles, movedActive := w.clock("files_changed_at"), w.clock("agent_active_at")
+		if d := movedFiles.Sub(*files); d < 10*time.Minute || d > 11*time.Minute {
+			t.Fatalf("move %d: files moved on by %v, want 10 minutes", epoch-1, d)
+		}
+		if d := movedActive.Sub(*active); d < 10*time.Minute || d > 11*time.Minute {
+			t.Fatalf("move %d: activity moved on by %v, want 10 minutes", epoch-1, d)
+		}
+		w.follow(running(epoch))
+		if again := w.clock("files_changed_at"); !again.Equal(*movedFiles) {
+			t.Errorf("move %d: a repeated running frame moved the files again, from %v to %v", epoch-1, movedFiles, again)
+		}
+		if again := w.clock("agent_active_at"); !again.Equal(*movedActive) {
+			t.Errorf("move %d: a repeated running frame moved the activity again, from %v to %v", epoch-1, movedActive, again)
+		}
+	}
+}
