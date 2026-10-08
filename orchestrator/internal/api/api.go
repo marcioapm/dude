@@ -989,7 +989,7 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			// and back): nothing to bring, so it is settled now — nothing
 			// would ever clone it.
 			tag, err := tx.Exec(r.Context(), `UPDATE repository_requests q SET status = 'cloned'
-				FROM runs run WHERE q.id = $1 AND run.id = q.run_id AND $2 = ANY (run.lux_repositories)`, id, repoName)
+				FROM runs run WHERE q.id = $1 AND run.id = q.run_id AND lux_name($2) = ANY (run.lux_repositories)`, id, repoName)
 			if err != nil {
 				return err
 			}

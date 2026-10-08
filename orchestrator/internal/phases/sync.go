@@ -217,7 +217,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped')))
 	ELSE false END,
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
-	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories)))
+	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (lux_name(repo.name) = ANY (r.lux_repositories)))
 	OR (r.session_id IS NOT NULL AND r.lux_run_id IS NOT NULL AND ` + sessionRepoMissing + `),
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
@@ -1291,9 +1291,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	}); err != nil {
 		return nil, err
 	}
+	// By the name lux reports, the spec's (lux.SpecName); the task's own
+	// name for each is repo.Name.
 	byName := map[string]delivery.Repository{}
 	for _, repo := range repos {
-		byName[repo.Name] = repo
+		byName[lux.SpecName(repo.Name)] = repo
 	}
 
 	heads := map[string]delivery.RunHead{}
@@ -1312,7 +1314,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			if strings.Contains(message, "refusing to allow a personal access token to create or update workflow") && strings.Contains(message, "scope") {
 				guidance = "; workflow-file pushes require Workflows: Read and write on a fine-grained PAT, or the workflow scope on a classic PAT; ordinary push preflight does not establish this permission"
 			}
-			return nil, fmt.Errorf("push %s %s: %s%s", res.Repo, res.Status, res.Error, guidance)
+			return nil, fmt.Errorf("push %s %s: %s%s", repo.Name, res.Status, res.Error, guidance)
 		}
 		if res.Commit == "" {
 			continue // nothing committed there
@@ -1321,7 +1323,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		// change is measured against.
 		base := r.BaseSHAs[res.Repo]
 		if base == "" {
-			return nil, fmt.Errorf("lux never reported where %s's checkout started", res.Repo)
+			return nil, fmt.Errorf("lux never reported where %s's checkout started", repo.Name)
 		}
 		if res.Commit == base {
 			continue // nothing committed there
@@ -1340,15 +1342,15 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			return nil, fmt.Errorf("no forge to publish %s to", repo.URL)
 		}
 		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
-			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, res.Repo, short(res.Commit), err)
+			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
 		changed, err := gh.ChangedFiles(ctx, slug, base, res.Commit)
 		if err != nil {
-			return nil, fmt.Errorf("compare %s %s...%s: %w", res.Repo, short(base), short(res.Commit), err)
+			return nil, fmt.Errorf("compare %s %s...%s: %w", repo.Name, short(base), short(res.Commit), err)
 		}
-		heads[res.Repo] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
+		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
@@ -1360,7 +1362,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 				return err
 			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": res.Repo, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
+				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
 		}); err != nil {
 			return nil, err
 		}
@@ -1786,14 +1788,15 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 	var told []string
 	var carried, failed []string
 	for _, q := range reqs {
-		if slices.Contains(have, q.Name) {
+		name := lux.SpecName(q.Name)
+		if slices.Contains(have, name) {
 			continue
 		}
-		if len(byName[q.Name]) != 1 {
+		if len(byName[name]) != 1 {
 			failed = append(failed, q.ID)
 			continue
 		}
-		repo := byName[q.Name][0]
+		repo := byName[name][0]
 		in.AddRepositories = append(in.AddRepositories, repo)
 		carried = append(carried, q.ID)
 		note := "read only"

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 
 import requests
@@ -215,6 +216,35 @@ def test_a_shared_session_signs_every_message_and_a_question_to_one_member_waits
     assert "e2e user: also, cost estimates?" in after[1], after
     answer = query(owner_dsn, "SELECT answer, answered_by_person FROM questions WHERE id = %s", (question["id"],))
     assert answer == [{"answer": "Experiment runs only", "answered_by_person": ana["id"]}]
+
+
+# lux's rule for a spec's repository names (lux internal/spec/spec.go volumeRe).
+LUX_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def test_a_session_linking_a_project_lux_would_refuse_by_name_starts(client: ApiClient, env, owner_dsn: str,
+                                                                      fake_github: FakeGitHub):
+    _scripted_brainstorm(client)
+    # An uppercase key (BILL) and a repository name past lux's 32 characters: <key>-<name> breaks lux's rule twice.
+    name = "Billing-API.payments-ledger-service"
+    repo = fake_github.add_repository("billing-api-ledger")
+    project = client.create_project(name="billing", slug=f"bill-{int.from_bytes(os.urandom(3)):08d}",
+                                    repositories=[{"name": name, "url": repo.clone_url, "defaultBranch": "main"}])
+    project = client.get(f"/v1/projects/{project['id']}").json()
+    assert query(owner_dsn, "SELECT key_prefix FROM projects WHERE id = %s", (project["id"],)) == [{"key_prefix": "BILL"}]
+    session = client.post("/v1/brainstorms", {"title": "Billing", "projects": [
+        {"projectId": project["id"], "repositoryIds": [project["repositories"][0]["id"]]}]}).json()["id"]
+    run = client.post(f"/v1/brainstorms/{session}/chat", {"text": "where does metering go?"}).json()["runId"]
+
+    # The fake lux refuses a name real lux would; the agent starts and answers.
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered: lux refused its spec?")
+    row = query(owner_dsn, "SELECT status::text AS status, lux_repositories FROM runs WHERE id = %s", (run,))[0]
+    assert row["status"] != "failed"
+    [held] = row["lux_repositories"]
+    assert LUX_NAME.match(held) and held.startswith("bill-billing-api-"), held
+    # Checked out where the agent is told, by the project's key and the repository's own name.
+    briefing = query(owner_dsn, "SELECT prompt FROM runs WHERE id = %s", (run,))[0]["prompt"]
+    assert f"/workspace/repos/BILL/{name}" in briefing
 
 
 def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient, env):

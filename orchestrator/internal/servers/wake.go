@@ -700,8 +700,9 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 	}
 	var out []lux.SyncRef
 	for _, rf := range refs {
-		if len(r.Repos) == 0 || slices.Contains(r.Repos, rf.Name) {
-			out = append(out, lux.SyncRef{Repo: rf.Name, Ref: rf.Ref})
+		name := lux.SpecName(rf.Name) // as the spec named it, and r.Repos holds it
+		if len(r.Repos) == 0 || slices.Contains(r.Repos, name) {
+			out = append(out, lux.SyncRef{Repo: name, Ref: rf.Ref})
 		}
 	}
 	return out, nil

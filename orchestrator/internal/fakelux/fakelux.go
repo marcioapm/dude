@@ -982,6 +982,10 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 422, "invalid_spec", msg)
 		return
 	}
+	if msg := specNameProblems(raw); msg != "" {
+		writeErr(w, 422, "invalid_spec", msg)
+		return
+	}
 	// The prompt's images, checked at submit as lux does.
 	var withImages struct {
 		Workload struct {
@@ -2041,7 +2045,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		var added []lux.Repository
 		raw, _ := json.Marshal(in.Git.Repositories)
 		_ = json.Unmarshal(raw, &added)
-		if msg := workloadCredential(run.Spec, added); msg != "" {
+		msg := workloadCredential(run.Spec, added)
+		if msg == "" {
+			msg = addedRepoProblems(run.Spec, added)
+		}
+		if msg != "" {
 			s.mu.Unlock()
 			writeErr(w, 422, "invalid_spec", msg)
 			return
