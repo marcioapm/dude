@@ -9,10 +9,12 @@
 
 ALTER TABLE image_versions ADD COLUMN can_run_containers boolean NOT NULL DEFAULT false;
 
--- The container check of a build or finish that ran one: what it found in
--- one line (what passed, or "Missing: …"), and how long it took.
+-- The container check of a build or finish that ran one, {passed, detail}:
+-- whether it passed, and what it found in one line ("podman 5.4,
+-- fuse-overlayfs, …" or "Missing: …"); and how long it took.
 ALTER TABLE image_builds
-  ADD COLUMN containers_check text,
+  ADD COLUMN containers_check jsonb CHECK (jsonb_typeof(containers_check->'passed') = 'boolean'
+    AND jsonb_typeof(containers_check->'detail') = 'string'),
   ADD COLUMN check_seconds double precision;
 
 -- image_publish as in 068, the rebuild it queues keeping the published

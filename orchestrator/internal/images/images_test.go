@@ -23,7 +23,7 @@ func TestFinishContainerfileAddsTheLayerAndItsSetupLast(t *testing.T) {
 	got := FinishContainerfile("r.example/dude/custom@sha256:aa", "r.example/dude/layer@sha256:bb")
 	want := `FROM r.example/dude/custom@sha256:aa
 COPY --from=r.example/dude/layer@sha256:bb /rootfs/ /
-RUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]
+RUN /bin/sh /usr/local/share/dude/setup.sh && ` + SubIDs + `
 ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent

@@ -68,7 +68,7 @@ export type ImageVersionState = (typeof IMAGE_VERSION_STATES)[number];
 export type ImageBuildState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type ImageBuildKind = "build" | "finish";
 /** Where a running build is. */
-export type ImageBuildStage = "resolving" | "building" | "pushing" | "finishing" | "publishing";
+export type ImageBuildStage = "resolving" | "building" | "pushing" | "finishing" | "checking" | "publishing";
 
 export interface ImagePerson {
   id: string;
@@ -119,8 +119,8 @@ export interface ImageBuild {
   pushSeconds: number | null;
   /** Its version can run containers, so the build checks it can (the "Check containers" stage). */
   canRunContainers: boolean;
-  /** What that check found, one line; null before it ran. */
-  containersCheck: string | null;
+  /** What that check found: passed, and one line of what it found; null before it ran. */
+  containersCheck: { passed: boolean; detail: string } | null;
   checkSeconds: number | null;
   /** Jobs the builder takes before this one, of any organization; null unless queued. */
   ahead: number | null;

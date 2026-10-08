@@ -32,6 +32,10 @@ type fakePodman struct {
 	removed     []string
 	controllers []string
 	fail        func(op, tag, containerfile string) (string, error)
+	// What the container check finds, per tag it was asked of; checked
+	// lists those tags in order.
+	found   Found
+	checked []string
 	block       chan struct{}
 	// Closed, when set, once a build is blocked on block.
 	blocked chan struct{}
@@ -103,6 +107,13 @@ func (f *fakePodman) Remove(_ context.Context, tag string, _ io.Writer) error {
 	f.removed = append(f.removed, tag)
 	f.mu.Unlock()
 	return nil
+}
+
+func (f *fakePodman) CheckContainers(_ context.Context, tag string, _ io.Writer) (Found, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checked = append(f.checked, tag)
+	return f.found, nil
 }
 
 func (f *fakePodman) Controllers(context.Context) ([]string, error) {
@@ -631,5 +642,115 @@ func TestCheckLimitsRefusesAPodmanWithoutCPUAndMemoryControllers(t *testing.T) {
 		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
 			t.Errorf("%v: %v", c.have, err)
 		}
+	}
+}
+
+// able is what the check finds in an image that can run containers.
+var able = Found{Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
+	Newuidmap: Mapper{Path: "/usr/bin/newuidmap", FileCap: true}, Newgidmap: Mapper{Path: "/usr/bin/newgidmap", FileCap: true},
+	Subuid: []string{"agent:1:999", "agent:1001:64535"}, Subgid: []string{"agent:1:999", "agent:1001:64535"}}
+
+func TestAVersionThatCanRunContainersIsCheckedOnItsFinalBeforeItIsPushed(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	build := f.queue("img_p", "imv_p1", 1, "FROM debian\nRUN apt-get install -y podman\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	f.once()
+	// The final, with the dude layer's agent on it, is what is checked.
+	if got := strings.Join(f.podman.checked, " "); got != FinalTag(repo, "imv_p1", layer) {
+		t.Errorf("checked %q", got)
+	}
+	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_p1'`); got != "published" {
+		t.Fatalf("state = %s", got)
+	}
+	got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail', check_seconds IS NOT NULL FROM image_builds WHERE id = $1`, build)
+	if got[0] != "true" || got[1] != "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent" || got[2] != true {
+		t.Errorf("check = %v", got)
+	}
+	log := f.log(build)
+	for _, want := range []string{
+		"Check containers: v1 is marked Can run containers, so dude checks it.\n",
+		"check  engine  podman: /usr/bin/podman (5.4) · docker: not found\n",
+		"check  subuid  agent:1:999, agent:1001:64535\n",
+		"Check passed: it can run containers.\npushed " + repo + "@",
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestAVersionThatCannotRunContainersFailsItsBuildAndThePreviousStaysPublished(t *testing.T) {
+	f := setup(t)
+	f.image("img_n", "node-22")
+	f.queue("img_n", "imv_n4", 4, "FROM node:22\n")
+	f.once()
+	pushes := 0
+	f.podman.fail = func(op, _, _ string) (string, error) {
+		if op == "push" {
+			pushes++
+		}
+		return "", nil
+	}
+	build := f.queue("img_n", "imv_n5", 5, "FROM node:22\nRUN true\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_n5'`)
+	f.podman.found = Found{Subuid: able.Subuid, Subgid: able.Subgid}
+	f.once()
+	const sentence = "Can't run containers: the image has no podman or rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."
+	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_n5'`); got[0] != "failed" || got[1] != sentence {
+		t.Fatalf("v5 = %v", got)
+	}
+	if got := f.str(`SELECT published_version_id FROM images WHERE id = 'img_n'`); got != "imv_n4" {
+		t.Errorf("published = %s", got)
+	}
+	// The user image was pushed for children; the final, which failed its
+	// check, was not.
+	if pushes != 1 {
+		t.Errorf("%d pushes, want the user image's alone", pushes)
+	}
+	if got := f.str(`SELECT count(*) FROM image_finals WHERE image_version_id = 'imv_n5'`); got != "0" {
+		t.Errorf("%s finals", got)
+	}
+	if got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail' FROM image_builds WHERE id = $1`, build); got[0] != "false" ||
+		got[1] != "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap" {
+		t.Errorf("check = %v", got)
+	}
+	log := f.log(build)
+	for _, want := range []string{"check  fuse-overlayfs  not found\n", "check  newuidmap  missing\n", sentence + "\nNot pushed. v4 stays published.\n"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestAVersionNotMarkedIsNotChecked(t *testing.T) {
+	f := setup(t)
+	f.image("img_b", "acme-base")
+	f.queue("img_b", "imv_b1", 1, "FROM debian\n")
+	f.once()
+	if len(f.podman.checked) != 0 {
+		t.Errorf("checked %v", f.podman.checked)
+	}
+}
+
+// A published version that can run containers, finished again for a new
+// dude layer, is checked again: the new layer must keep it able.
+func TestAFinishOfAVersionThatCanRunContainersIsCheckedToo(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	f.queue("img_p", "imv_p1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	f.once()
+	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_p1', 'finish', $2)`, f.org, next)
+	f.podman.found = Found{}
+	f.once()
+	if got := f.row(`SELECT state, error FROM image_builds WHERE id = 'imb_fin'`); got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
+		t.Errorf("finish = %v", got)
+	}
+	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_p1'`); got != "published" {
+		t.Errorf("version = %s", got)
 	}
 }

@@ -35,15 +35,32 @@ const (
 // OpenCode reads, and the agent user as the image's user. HOME is set
 // because agent may be a second name for uid 1000 (node on node images),
 // and podman takes HOME from the first passwd entry for that uid.
+//
+// The same step gives agent /etc/subuid and /etc/subgid entries when it has
+// none (SubIDs), so every image with an engine can run containers as agent.
 func FinishContainerfile(userRef, layer string) string {
 	return fmt.Sprintf(`FROM %s
 COPY --from=%s /rootfs/ /
-RUN ["/bin/sh", "%s"]
+RUN /bin/sh %s && %s
 ENV OPENCODE_CONFIG=%s DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent
-`, userRef, layer, LayerSetup, LayerConfig)
+`, userRef, layer, LayerSetup, SubIDs, LayerConfig)
 }
+
+// SubIDs writes agent's subordinate ids where /etc/subuid or /etc/subgid
+// has none: every id but 0 and agent's own below 65536. lux runs each Run
+// in a user namespace of 65536 ids (--userns=auto:size=65536), so a range
+// above it (useradd's 100000:65536) could not be mapped inside a Run; this
+// is lux's own tests/images/nested layout. The owner is agent, or its uid
+// where another name comes first for that uid (node on node images):
+// newuidmap looks the caller up by uid and matches that name or the number.
+// Lines the image has for that other name are its own; the container check
+// fails a version whose lines a Run cannot map.
+const SubIDs = `u=$(id -u agent) && n=$(grep -m1 "^[^:]*:[^:]*:$u:" /etc/passwd | cut -d: -f1) && ` +
+	`o=agent && { [ "$n" = agent ] || o=$u; } && for f in /etc/subuid /etc/subgid; do ` +
+	`grep -qs -e "^agent:" -e "^$u:" $f || ` +
+	`printf '%s:1:%d\n%s:%d:%d\n' $o $((u-1)) $o $((u+1)) $((65535-u)) >> $f; done`
 
 // UserTag is where a version's user image is pushed.
 func UserTag(repository, versionID string) string {

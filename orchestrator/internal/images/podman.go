@@ -34,6 +34,9 @@ type Podman interface {
 	Remove(ctx context.Context, tag string, log io.Writer) error
 	// Controllers are the cgroup controllers podman can apply limits with.
 	Controllers(ctx context.Context) ([]string, error)
+	// CheckContainers runs the container check (ContainersCheck) in image,
+	// a local tag, and returns what it found.
+	CheckContainers(ctx context.Context, image string, log io.Writer) (Found, error)
 }
 
 // Limits are each build's: what a build may use of the dude host.
@@ -54,6 +57,9 @@ type CLI struct {
 	TLSVerify bool
 	// The podman binary; "podman" when "".
 	Bin string
+	// A static build of dude-image-builder, run in an image to check it
+	// can run containers (CheckCommand); the builder's own executable.
+	Self string
 }
 
 func (c CLI) bin() string {
@@ -146,6 +152,27 @@ func (c CLI) Prune(ctx context.Context, log io.Writer) error {
 
 func (c CLI) Remove(ctx context.Context, tag string, log io.Writer) error {
 	return c.run(ctx, log, "rmi", "--ignore", tag)
+}
+
+// CheckContainers runs Self's CheckCommand in image, as root, offline,
+// under the build's memory limit, with nothing of the host but Self.
+func (c CLI) CheckContainers(ctx context.Context, image string, log io.Writer) (Found, error) {
+	if c.Self == "" {
+		return Found{}, errors.New("the builder cannot check containers: it does not know its own executable")
+	}
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, c.bin(), "run", "--rm", "--pull=never", "--network=none", "--user=0:0",
+		"--security-opt=label=disable", "--memory", c.Limits.Memory,
+		"--volume", c.Self+":/.dude-check:ro", "--entrypoint", "/.dude-check", image, CheckCommand)
+	cmd.Stdout, cmd.Stderr = &out, log
+	cmd.WaitDelay = 10 * time.Second
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return Found{}, ctx.Err()
+		}
+		return Found{}, fmt.Errorf("the container check could not run in the image: %w", err)
+	}
+	return parseFound(out.Bytes())
 }
 
 func (c CLI) Controllers(ctx context.Context) ([]string, error) {
