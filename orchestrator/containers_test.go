@@ -83,10 +83,13 @@ func TestATypedImageNeverRunsContainersAndTheFallbackDoesWhenTheOperatorSays(t *
 }
 
 // A branch preview asks for nested containers on an image that can, both
-// ways it reaches lux: submitted (an old-style preview) and woken.
+// ways it reaches lux: submitted (an old-style preview) and woken. The
+// repository is named so lux needs its own spelling of it (lux.SpecName),
+// so the engine store is kept on that path too.
 func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 	t.Run("submitted", func(t *testing.T) {
 		w := newWorld(t)
+		mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, "Target.API")
 		w.useLayer(imageLayer)
 		podman := w.libraryImage("img_podman", "abs-preview", true)
 		w.canRunContainers(podman, true)
@@ -105,6 +108,7 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 	t.Run("woken", func(t *testing.T) {
 		w := newWorld(t)
 		w.wakeable()
+		mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, "Target.API")
 		w.useLayer(imageLayer)
 		podman := w.libraryImage("img_podman", "abs-preview", true)
 		w.canRunContainers(podman, true)
