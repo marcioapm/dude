@@ -14,6 +14,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A brainstorm session: a conversation with an agent (role brainstorm)
@@ -109,15 +110,26 @@ func PersonName(ctx context.Context, tx pgx.Tx, personID string) (string, error)
 }
 
 // SessionRepo is a repository a session's agent has checked out:
-// repos/<project key>/<name>, named <key>-<name> in the lux spec, never
+// repos/<project key>/<name>, named SpecName in the lux spec, never
 // pushed.
 type SessionRepo struct {
 	ID, ProjectID, Key, Name, URL, DefaultBranch string
 }
 
-// SpecName is the repository's name in the lux spec: unique within the
-// Run, since names are unique only within a project.
-func (r SessionRepo) SpecName() string { return r.Key + "-" + r.Name }
+// SpecName is the repository's name in the lux spec: <key>-<name>, unique
+// within the Run since names are unique only within a project, made one
+// lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL). Keys are
+// unique in an organisation (projects_key_idx, migration 095) and names
+// per project, so <key>-<name> is distinct for every repository a session
+// can link. Keys are upper case, so the spec name is always rewritten and
+// carries the hash of <key>-<name>: two repositories share one only if
+// their 32-bit hash suffixes and truncated prefixes collide. Nothing else
+// guards against that.
+func (r SessionRepo) SpecName() string { return lux.SpecName(r.Key + "-" + r.Name) }
+
+// SessionSpecNameSQL is SpecName in SQL, over projects p and repositories
+// repo: what runs.lux_repositories holds for a session's checkout.
+const SessionSpecNameSQL = `lux_name(p.key_prefix || '-' || repo.name)`
 
 // SessionRepoPath is where it is checked out.
 func SessionRepoPath(key, name string) string { return "/workspace/repos/" + key + "/" + name }
@@ -494,7 +506,8 @@ func RecordProposal(ctx context.Context, tx pgx.Tx, ref RunRef, items []Proposal
 	return id, err
 }
 
-// taskKey matches a task's key as people write it (BL-58).
+// taskKey matches a task's key as people write it (BL-58): a project key
+// as PROJECT_KEY (@dude/domain) allows, digits included, then its number.
 var taskKey = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-([0-9]+)$`)
 
 // TaskKey is a task's key as TaskByKey reads it, written one way

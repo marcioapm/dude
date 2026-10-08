@@ -3,7 +3,7 @@
  */
 
 import type { ZodType } from "zod";
-import { ROLE_MODEL_REMOVED, TIER_MODEL_MESSAGE } from "@dude/domain";
+import { PROJECT_KEY_MESSAGE, ROLE_MODEL_REMOVED, TIER_MODEL_MESSAGE } from "@dude/domain";
 
 export class HttpError extends Error {
   constructor(
@@ -72,7 +72,8 @@ export async function parseBody<T>(request: Request, schema: ZodType<T>): Promis
   const result = schema.safeParse(payload);
   if (!result.success) {
     // Messages that say what to send instead are passed on in the message itself.
-    const named = result.error.issues.filter((issue) => issue.message === ROLE_MODEL_REMOVED || issue.message === TIER_MODEL_MESSAGE);
+    const named = result.error.issues.filter((issue) =>
+      issue.message === ROLE_MODEL_REMOVED || issue.message === TIER_MODEL_MESSAGE || issue.message === PROJECT_KEY_MESSAGE);
     const message = named.length
       ? `request body failed validation: ${named.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`
       : "request body failed validation";

@@ -75,6 +75,21 @@ is one phase of work, executed as one lux Run. A single *attempt* at a work
 item is several Runs — one per phase — and each is shown as an agent in the
 UI.
 
+**A task's key** is its project's key and a number counting up within the
+project (`BILL-12`). People, agents and a brainstorm session's checkouts
+(`repos/<KEY>/<name>`) name a project by its key alone, so **a project's key
+is unique in its organisation**, ignoring case (`projects_key_idx`,
+migration 095). It is 2 to 6 letters or digits starting with a letter
+(`PROJECT_KEY` in `packages/domain/src/projectKeys.ts`), chosen when the
+project is made and fixed after; no route changes it. Creating a project
+with a key another has is a 409 that names the holder and suggests a free
+one. With no key given, dude takes the first free one of
+`projectKeyCandidates(slug)`: the slug's first four letters (`billing-api`:
+`BILL`); then its words' initials padded with the letters after the last
+(`billing-worker`: `BWOR`); then the first with 2 to 9, then 10 to 99
+(`BILL2`). The new-project dialog prefills the same key and offers the
+suggestion on a 409.
+
 A task gets a new attempt only by **Start over** (a new branch, the whole
 pipeline again); **Try again** is a new Run in the same attempt. The task
 page shows one attempt at a time, picked in its header when there is more

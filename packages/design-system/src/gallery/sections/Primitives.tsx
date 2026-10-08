@@ -139,6 +139,8 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Input label="Branch" mono defaultValue="feat/webhook-retry" leading={<Icon name="git-branch" size={12} />} />
             <Input label="Budget" defaultValue="2.50" leading="$" trailing="USD" hint="Per-session hard limit" />
             <Input label="Repository URL" defaultValue="git@github" error="Must be an https:// or ssh:// URL" />
+            <Input label="Key" mono defaultValue="BILL" error="BILL is already the key of Billing API; pick another"
+              errorAction={{ label: "Use BLED", onClick: () => undefined }} />
             <Input label="Disabled" defaultValue="Not editable" disabled />
             <Input size="sm" placeholder="Filter events…" leading={<Icon name="search" size={12} />} aria-label="Filter events" />
             <Input size="title" label="Title" labelNote="required" placeholder="What should change?" />
