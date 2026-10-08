@@ -34,11 +34,12 @@ def test_the_longest_suite_gets_a_shard_to_itself_when_it_outweighs_the_rest():
     assert ["suites/test_a.py"] in shards
 
 
-def test_a_suite_with_no_recorded_duration_weighs_the_default():
-    # Two unknown suites against one recorded at twice the default: one shard each side.
-    suites = ["suites/test_new1.py", "suites/test_new2.py", "suites/test_old.py"]
-    shards = shard.split(suites, 2, {"suites/test_old.py": 2 * shard.DEFAULT_SECONDS})
-    assert sorted(shards) == [["suites/test_new1.py", "suites/test_new2.py"], ["suites/test_old.py"]]
+def test_a_suite_with_no_recorded_duration_weighs_30_seconds():
+    # Weighed at 30 s the new suite balances the two 20 s ones; weighed at 0 or 1 s
+    # it would join one of them.
+    suites = ["suites/test_a.py", "suites/test_b.py", "suites/test_new.py"]
+    shards = shard.split(suites, 2, {"suites/test_a.py": 20, "suites/test_b.py": 20})
+    assert sorted(shards) == [["suites/test_a.py", "suites/test_b.py"], ["suites/test_new.py"]]
 
 
 def test_shards_are_close_in_recorded_time():
@@ -65,9 +66,41 @@ def test_a_shard_that_is_not_n_of_m_is_refused(spec):
         shard.parse_shard(spec)
 
 
-def test_the_recorded_durations_name_only_suites_that_exist():
-    recorded = json.loads(shard.SUITE_SECONDS_FILE.read_text())
-    assert set(recorded) <= set(shard.all_suites())
+def test_every_suite_on_disk_is_in_some_shard_whatever_the_durations_file_says(tmp_path):
+    (tmp_path / "suites").mkdir()
+    for name in ("test_a.py", "test_new.py", "helpers.py"):
+        (tmp_path / "suites" / name).write_text("")
+    durations = tmp_path / "seconds.json"
+    durations.write_text(json.dumps({"suites/test_a.py": 50, "suites/test_gone.py": 99}))
+    suites = shard.all_suites(tmp_path)
+    assert suites == ["suites/test_a.py", "suites/test_new.py"]
+    placed = [s for b in shard.split(suites, 3, shard.suite_seconds(durations)) for s in b]
+    assert sorted(placed) == suites
+
+
+def test_no_durations_file_means_no_recorded_durations(tmp_path):
+    assert shard.suite_seconds(tmp_path / "missing.json") == {}
+
+
+@pytest.mark.parametrize("args", [
+    ["--junitxml", "/tmp/r.xml"], ["--junitxml=/tmp/r.xml"], ["--basetemp", "/tmp"], ["--junitxml", "suites-report.xml"],
+    ["-k", "chat"], ["-x", "-q"], [],
+])
+def test_option_values_are_not_suites_named_beside_a_shard(args):
+    assert shard.shard_suites("2/3", args, SUITES, SECONDS) == shard.split(SUITES, 3, SECONDS)[1]
+
+
+@pytest.mark.parametrize("arg", ["suites", "suites/", "./suites", "./suites/", str(shard.TESTS_DIR / "suites"),
+                                 "../tests/suites", f"{shard.TESTS_DIR}/../tests/suites", f"{shard.TESTS_DIR}/../../{shard.TESTS_DIR.parent.name}/tests/suites",
+                                 "suites/test_a.py", "suites/test_a.py::test_x", "test_a.py"])
+def test_a_suite_named_beside_a_shard_is_refused(arg):
+    with pytest.raises(SystemExit, match="picks its own suites"):
+        shard.shard_suites("1/2", ["-x", arg], SUITES, SECONDS)
+
+
+def test_shard_n_is_the_nth_share():
+    shares = shard.split(SUITES, 4, SECONDS)
+    assert [shard.shard_suites(f"{n}/4", [], SUITES, SECONDS) for n in (1, 2, 3, 4)] == shares
 
 
 def test_seconds_are_summed_per_suite_file_from_a_junit_report(tmp_path):
