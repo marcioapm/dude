@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentEgressSchema, egressProblem } from "../src/index.ts";
+import { agentEgressSchema, egressAllows, egressProblem } from "../src/index.ts";
 
 describe("an egress entry", () => {
   test("takes what lux takes: anywhere, an address, a range, a hostname, and a wildcard over a domain of two labels or more", () => {
@@ -21,6 +21,18 @@ describe("an egress entry", () => {
 });
 
 describe("an agent egress list", () => {
+  test("allows a name as lux does: itself, under a wildcard but not its apex, or anywhere", () => {
+    const list = ["pypi.org", "*.github.com", "10.0.0.0/8"];
+    expect(egressAllows(list, "pypi.org")).toBe(true);
+    expect(egressAllows(list, "PyPI.org.")).toBe(true);
+    expect(egressAllows(list, "files.pythonhosted.org")).toBe(false);
+    expect(egressAllows(list, "api.github.com")).toBe(true);
+    expect(egressAllows(list, "a.b.github.com")).toBe(true);
+    expect(egressAllows(list, "github.com")).toBe(false);
+    expect(egressAllows(list, "evilgithub.com")).toBe(false);
+    expect(egressAllows(["*"], "anything.example")).toBe(true);
+    expect(egressAllows(["*.com"], "a.com")).toBe(false);
+  });
   test("is lowercased, trimmed and each entry once", () => {
     expect(agentEgressSchema.parse([" GitHub.com", "github.com", "*.GitHub.com", "10.0.0.0/8"])).toEqual(["github.com", "*.github.com", "10.0.0.0/8"]);
   });

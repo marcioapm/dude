@@ -113,6 +113,19 @@ const egressEntries = z
 /** An agent egress list as stored: lowercased, each entry once. */
 export const agentEgressSchema = egressEntries.transform((list) => [...new Set(list.map((e) => e.toLowerCase()))]);
 
+/**
+ * Whether a list lets a Run look a name up, as lux decides: "*", the name
+ * itself, or a wildcard over a domain the name is under (never the domain
+ * itself). Addresses and ranges admit no name. Mirrors lux's HostMatches.
+ */
+export function egressAllows(list: readonly string[], name: string): boolean {
+  const n = name.toLowerCase().replace(/\.$/, "");
+  return list.some((e) => {
+    const rule = e.toLowerCase();
+    return rule === "*" || rule === n || (validWildcard(rule) && n.endsWith(rule.slice(1)) && n.length > rule.length - 1);
+  });
+}
+
 /** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
 export const previewSettingsSchema = z.object({
   /**
