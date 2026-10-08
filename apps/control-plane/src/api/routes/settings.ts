@@ -53,6 +53,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { config } from "../../config.ts";
 import { checkSizes, listSizes } from "./machines.ts";
 import { checkTiers, listTiers } from "./models.ts";
 import { checkImages, imageIds } from "./images.ts";
@@ -83,12 +84,29 @@ function constant<T>(path: string): (ctx: RequestContext) => Promise<T> {
 }
 
 const factoryPolicy = constant<FullDeliveryPolicy>("/internal/delivery-defaults");
+
+type NetworkDefaults = { operator: string[]; always: string[]; model: string | null };
+let lastDefaults: { from: string; at: number; value: NetworkDefaults } | null = null;
 /**
  * Under every list: the operator's (agent.egress), and the model's host and
- * dude's tools. Read on each request: it is configuration, not the build's.
+ * dude's tools. Configuration, which changes only when the orchestrator
+ * restarts: read again after a minute, and while the orchestrator cannot
+ * answer its last answer serves, so every settings page and save does not
+ * fail with it.
  */
-const networkDefaults = (ctx: RequestContext) =>
-  fromOrchestrator<{ operator: string[]; always: string[]; model: string | null }>(ctx, "/internal/network/defaults");
+async function networkDefaults(ctx: RequestContext): Promise<NetworkDefaults> {
+  const from = config().string("DUDE_ORCHESTRATOR_URL") ?? "";
+  const last = lastDefaults?.from === from ? lastDefaults : null;
+  if (last && Date.now() - last.at < 60_000) return last.value;
+  try {
+    const value = await fromOrchestrator<NetworkDefaults>(ctx, "/internal/network/defaults");
+    lastDefaults = { from, at: Date.now(), value };
+    return value;
+  } catch (err) {
+    if (last) return last.value;
+    throw err;
+  }
+}
 const builtinPrompts = constant<Record<PromptRole, string>>("/internal/prompts/builtin");
 
 export interface Layers {

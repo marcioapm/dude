@@ -12,7 +12,7 @@
  * The tests run in order on one database and share its state.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { SQL } from "bun";
 import { join } from "node:path";
 import { promptRoleSchema } from "@dude/domain";
@@ -51,6 +51,7 @@ let otherKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 /** What the orchestrator says sits under every list. */
 const defaults = { operator: ["mirror.internal"], always: ["llm.example", "dude’s tools"], model: "llm.example" };
+let orchestratorDown = false;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const body = async (res: Response): Promise<Json> => res.json();
@@ -88,7 +89,9 @@ beforeAll(async () => {
     port: 0,
     fetch(req) {
       const path = new URL(req.url).pathname;
-      if (path === "/internal/network/defaults") return Response.json(defaults);
+      if (path === "/internal/network/defaults") {
+        return orchestratorDown ? new Response("restarting", { status: 503 }) : Response.json(defaults);
+      }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5 });
@@ -219,6 +222,25 @@ describe("names refused recently", () => {
       return tx`SELECT name FROM agent_egress_refusals WHERE organization_id = ${ORG}`;
     });
     expect(leaked.length).toBe(0);
+  });
+});
+
+describe("while the orchestrator is down", () => {
+  test("settings and saves still answer, with the operator's list and what is always reachable as it last said", async () => {
+    await orgNetwork();
+    orchestratorDown = true;
+    // Past the minute a read is kept: the next one fails, and the last serves.
+    setSystemTime(new Date(Date.now() + 5 * 60_000));
+    try {
+      const res = await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { network: { egress: ["pypi.org"] } });
+      expect(res.status).toBe(200);
+      const network = (await body(res)).network;
+      expect([network.operator, network.always]).toEqual([["mirror.internal"], ["llm.example", "dude’s tools"]]);
+      expect((await call(memberKey, "GET", "/v1/settings/organization")).status).toBe(200);
+    } finally {
+      setSystemTime();
+      orchestratorDown = false;
+    }
   });
 });
 
