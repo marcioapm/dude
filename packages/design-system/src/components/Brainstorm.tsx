@@ -36,8 +36,9 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
   // Set when Enter or Escape ends the edit: the button that replaces the field takes the focus back.
-  // A blur leaves it unset, so the focus stays wherever it went.
+  // A blur, or a save that resolves after the focus moved elsewhere, leaves it unset.
   const refocus = useRef(false);
   useEffect(() => {
     if (editing || !refocus.current) return;
@@ -66,6 +67,12 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
     refocus.current = fromKeyboard;
     setEditing(false);
   };
+  // While a save is pending the disabled field may drop the focus to the body; any other element
+  // holding it means the user moved on, and a late save must not pull the focus back.
+  const focusLeftAlone = () => {
+    const active = document.activeElement;
+    return !active || active === document.body || active === field.current || active === field.current?.parentElement;
+  };
   const save = async () => {
     const next = draft.trim().replace(/\s+/g, " ");
     if (!next || next === title) {
@@ -75,7 +82,7 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
     setBusy(true);
     try {
       await onRename(next);
-      close(true);
+      close(focusLeftAlone());
     } catch {
       // The caller says why; the field stays open with what was typed.
     } finally {
@@ -83,7 +90,7 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
     }
   };
   return (
-    <input className={styles["titleInput"]} aria-label="Session name" data-testid="session-title-input" autoFocus
+    <input ref={field} className={styles["titleInput"]} aria-label="Session name" data-testid="session-title-input" autoFocus
       // As wide as the name being typed (and the placeholder's room), up to the header's line.
       size={Math.max(draft.length, untitled.length) + 2}
       value={draft} maxLength={maxLength} disabled={busy} placeholder={untitled}

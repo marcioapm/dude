@@ -504,6 +504,43 @@ def test_ending_a_title_edit_from_the_keyboard_gives_the_focus_back_to_the_title
     assert console_errors == []
 
 
+def test_a_slow_rename_gives_the_focus_back_only_if_it_was_not_moved_meanwhile(gallery_page: Page, console_errors: list):
+    """A save that resolves late refocuses the title when the focus was left alone (the disabled field drops
+    it to the page), and leaves it where the user put it when they moved to another field meanwhile."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    slow = gallery_page.locator("#bs-title [data-theme]").first.get_by_test_id("slow-title")
+    title = slow.get_by_test_id("session-title")
+    field = slow.get_by_test_id("session-title-input")
+    other = slow.get_by_role("textbox", name="Another field")
+    finish = slow.get_by_role("button", name="Finish the save")
+
+    def save_pending(name: str) -> None:
+        title.focus()
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_focused()
+        field.fill(name)
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_disabled()
+        expect(finish).to_be_enabled()
+
+    # Focus moved to another field while the save is pending: it stays there once the save resolves.
+    save_pending("Moved away")
+    other.focus()
+    other.press_sequentially("typing")
+    # A dispatched click resolves the save without moving the focus to the button.
+    finish.dispatch_event("click")
+    expect(title).to_have_text("Moved away")
+    expect(other).to_be_focused()
+    other.press_sequentially(" on")
+    expect(other).to_have_value("typing on")
+    # Focus left alone: the title takes it back.
+    save_pending("Left alone")
+    finish.dispatch_event("click")
+    expect(title).to_have_text("Left alone")
+    expect(title).to_be_focused()
+    assert console_errors == []
+
+
 def _title_fits(title) -> dict:
     """A SessionTitle's words, as Chrome laid them out: whether they are cut, and the space around them."""
     return title.evaluate("""el => {
