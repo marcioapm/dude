@@ -889,11 +889,12 @@ func (p *Previews) startPending(ctx context.Context, r previewRun) error {
 }
 
 // cancel ends the lux Run of a preview a person stopped. Cancelled, not
-// stopped: nothing about a finished preview is worth keeping. A lost one
-// too: lux can resume a lost Run, so it holds a snapshot until cancelled.
+// stopped: nothing about a finished preview is worth keeping. Every one lux
+// has not ended for good: lux keeps a stopped, failed, lost or succeeded
+// Run to resume, with its storage, until it is terminated.
 func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 	p.unfollow(r.ID)
-	if !lux.Terminal(r.LuxState) || r.LuxState == "stopped" || r.LuxState == "lost" {
+	if !lux.Terminated(r.LuxState) {
 		if err := p.Lux.Cancel(ctx, r.LuxRunID); err != nil {
 			if le, ok := lux.AsError(err); !ok || le.Retryable() {
 				return err

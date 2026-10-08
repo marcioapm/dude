@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -50,7 +51,7 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	}
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`, org)
 	task := func(n int, status string) string {
-		id := "wi_" + org + "_" + status
+		id := fmt.Sprintf("wi_%s_%s_%d", org, status, n)
 		exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ($1, $2, 'prj_'||$2, $3, 'T', 'G', $4::text::task_status)`,
 			id, org, n, status)
 		return id
@@ -65,17 +66,23 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	preview("run_aborted", task(2, "aborted"), "paused", "stopped")
 	preview("run_lost", task(3, "review"), "completed", "lost")
 	preview("run_live", task(4, "running"), "paused", "stopped")
+	// Stopped previews whose lux Run lux still keeps to resume (failed,
+	// succeeded) are cancelled; one lux has ended for good is not.
+	preview("run_failed", task(6, "review"), "completed", "failed")
+	preview("run_succeeded", task(7, "review"), "completed", "succeeded")
+	preview("run_terminated", task(8, "review"), "completed", "terminated")
 
 	fake := &cancelLux{}
 	p := &Previews{Service: &Service{DB: app, Lux: fake, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
 	if _, err := p.Sweep(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := fake.Cancelled(), []string{"lux_run_aborted", "lux_run_done", "lux_run_lost"}; !slices.Equal(got, want) {
+	if got, want := fake.Cancelled(), []string{"lux_run_aborted", "lux_run_done", "lux_run_failed", "lux_run_lost", "lux_run_succeeded"}; !slices.Equal(got, want) {
 		t.Errorf("cancelled %v, want %v", got, want)
 	}
 	for id, want := range map[string]string{"run_done": "completed/cancel", "run_aborted": "completed/cancel",
-		"run_lost": "completed/cancel", "run_live": "paused/pause"} {
+		"run_lost": "completed/cancel", "run_live": "paused/pause", "run_failed": "completed/cancel",
+		"run_succeeded": "completed/cancel", "run_terminated": "completed/cancel"} {
 		var got string
 		if err := owner.QueryRow(ctx, `SELECT status::text || '/' || COALESCE(lux_stop_reason, '') FROM runs WHERE id = $1`, id).Scan(&got); err != nil {
 			t.Fatal(err)
@@ -95,14 +102,14 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	if _, err := p.Sweep(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(fake.Cancelled()); n != 3 {
+	if n := len(fake.Cancelled()); n != 5 {
 		t.Errorf("a second sweep cancelled again: %v", fake.Cancelled())
 	}
 
 	// A task taken up again after the sweep read it as over keeps its
 	// preview, in dude and in lux.
 	retried := "wi_" + org + "_retried"
-	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ($1, $2, 'prj_'||$2, 5, 'T', 'G', 'running')`, retried, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ($1, $2, 'prj_'||$2, 9, 'T', 'G', 'running')`, retried, org)
 	preview("run_retried", retried, "running", "running")
 	if err := p.endWithTask(ctx, previewRun{ID: "run_retried", Org: org, ProjectID: "prj_" + org, TaskID: retried,
 		Status: "running", LuxRunID: "lux_run_retried", LuxState: "running", TaskEnded: true}); err != nil {
@@ -112,12 +119,12 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	if err := owner.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = 'run_retried'`).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "running" || len(fake.Cancelled()) != 3 {
+	if status != "running" || len(fake.Cancelled()) != 5 {
 		t.Errorf("a retried task's preview is %s; cancelled %v", status, fake.Cancelled())
 	}
 
 	// And a task that is over takes no new one.
-	if _, err := p.StartPreview(ctx, org, "wi_"+org+"_done", ""); !isRefusal(err, 409, "task_finished") {
+	if _, err := p.StartPreview(ctx, org, fmt.Sprintf("wi_%s_done_1", org), ""); !isRefusal(err, 409, "task_finished") {
 		t.Errorf("a preview of a finished task = %v", err)
 	}
 }

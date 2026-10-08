@@ -974,10 +974,14 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 	if len(changed) != 1 || changed[0] != "FACTORY.md" {
 		t.Errorf("changed paths in target = %v", changed)
 	}
-	// A finished phase's lux Run is stopped, not cancelled: its workspace and
-	// session are kept.
-	if r := w.lux.Runs()[0]; r.Stopped != 1 || r.Cancelled {
-		t.Errorf("lux run stopped=%d cancelled=%v", r.Stopped, r.Cancelled)
+	// A finished phase's lux Run is stopped, so its exit is collected, then
+	// terminated: nothing resumes a completed phase, and lux would keep it.
+	w.until("the finished phase's lux run to be terminated", func() bool {
+		r := w.lux.Runs()[0]
+		return r.Stopped == 1 && r.Cancelled
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID); n != 1 {
+		t.Errorf("the finished phase's Run is not recorded as terminated in lux")
 	}
 }
 

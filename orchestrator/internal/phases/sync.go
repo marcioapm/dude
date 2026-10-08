@@ -443,6 +443,9 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.wakeConductors(ctx); err != nil {
 		s.Log.Warn("waking conductors failed", "error", err)
 	}
+	if err := s.retireCompleted(ctx); err != nil {
+		s.Log.Warn("terminating completed Runs in lux failed", "error", err)
+	}
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
@@ -1355,8 +1358,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 
-	// Stopped rather than cancelled: the workspace and the agent's session
-	// are kept, so a person can still look at or resume a finished phase.
+	// Stopped rather than cancelled: its exit is collected as any stop's
+	// is (artifacts, the final diff); retireCompleted terminates it after.
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return true, err
 	}
@@ -1589,9 +1592,11 @@ func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
+// cancel ends the lux Run of a failed or aborted Run: every one lux has not
+// ended for good, since lux keeps a stopped, failed, lost or succeeded Run
+// to resume, and its storage with it, until it is terminated.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
-	if r.LuxRunID != "" && !lux.Terminated(r.LuxState) && r.LuxState != "succeeded" && r.LuxState != "failed" {
+	if r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
 		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
 			return err
 		}
@@ -1602,6 +1607,54 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		return err
 	})
 }
+
+// retireBatch bounds how many completed Runs one sweep terminates in lux.
+const retireBatch = 100
+
+// retireCompleted terminates the lux Run of every completed phase Run and
+// ended conductor: nothing in dude resumes one (only a failed or aborted
+// Run is kept, and a conductor's next message starts another), and lux
+// keeps a stopped or succeeded Run, and its storage, for 90 days. finish
+// stops it rather than terminating it so its exit is collected as any
+// stop's is; it is terminated once the artifacts sweep has collected that
+// exit (artifacts_due_at cleared).
+func (s *Syncer) retireCompleted(ctx context.Context) error {
+	type done struct{ ID, Org, LuxRunID string }
+	var todo []done
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.lux_run_id FROM runs r
+			WHERE `+retirable+` AND `+sweptRuns+` ORDER BY r.ended_at LIMIT $1`, retireBatch)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[done])
+		return err
+	}); err != nil {
+		return err
+	}
+	var errs []error
+	for _, d := range todo {
+		// A refusal (unknown, already terminated) is as good as done.
+		if err := s.Lux.Cancel(ctx, d.LuxRunID); err != nil {
+			if le, ok := lux.AsError(err); !ok || le.Retryable() {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
+			return err
+		}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// retirable (SQL, over runs r): a completed Run whose lux Run dude has not
+// terminated, its last exit collected. Served by runs_retirable_idx (092).
+const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
+	AND r.artifacts_due_at IS NULL)`
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
 // here: lux asks the agent to end its turn cleanly before the container stops.

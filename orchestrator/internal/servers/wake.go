@@ -677,9 +677,10 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		}
 	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		// A Run lux will not resume: a new one now.
+		// A Run lux will not resume: a new one now, this one terminated so
+		// lux drops whatever it kept of it.
 		p.Log.Warn("lux refused to resume a preview; submitting a new run", "run", r.ID, "error", le.Message)
-		return p.replaceWoken(ctx, r, false)
+		return p.replaceWoken(ctx, r, true)
 	}
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)

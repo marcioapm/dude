@@ -84,3 +84,72 @@ func TestAKeptRunThatSucceededInLuxIsKept(t *testing.T) {
 		})
 	}
 }
+
+// A failed or aborted Run nobody keeps has its lux Run cancelled whatever
+// state lux left it in — failed and succeeded included, which lux keeps to
+// resume — and only one lux has ended for good, by either name, is not.
+func TestAnEndedRunNotKeptIsCancelledInLux(t *testing.T) {
+	for _, status := range []string{"failed", "aborted"} {
+		for _, luxState := range []string{"failed", "succeeded", "stopped", "lost", "running", "terminated", "cancelled"} {
+			t.Run(status+"/"+luxState, func(t *testing.T) {
+				w := newResumeWorld(t)
+				r, fake := endedRun(t, w, status, luxState, false)
+				if err := w.s.end(w.ctx, r); err != nil {
+					t.Fatal(err)
+				}
+				var want []string
+				if !lux.Terminated(luxState) {
+					want = []string{"cancel lrun_1"}
+				}
+				if got := fake.Calls(); !slices.Equal(got, want) {
+					t.Errorf("asked lux %v, want %v", got, want)
+				}
+				if got := w.stopReason(); got != "cancel" {
+					t.Errorf("lux_stop_reason %q, want cancel", got)
+				}
+			})
+		}
+	}
+}
+
+// A completed Run's lux Run is terminated once its exit is collected, and
+// once only; one still being collected, a kept failed one, and a branch
+// preview's (ended by the preview loop) are left alone.
+func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
+	w := newResumeWorld(t)
+	fake := &callLux{}
+	w.s.Lux = fake
+	w.exec(`UPDATE runs SET status = 'completed', lux_state = 'stopped', lux_stop_reason = 'complete', ended_at = now(),
+		artifacts_due_at = NULL WHERE id = $1`, w.run.ID)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state,
+			lux_stop_reason, ended_at)
+		VALUES ('run_due', $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'completed', 'lrun_due', 'stopped', 'complete', now()),
+		       ('run_kept', $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'failed', 'lrun_kept', 'stopped', 'kept', now()),
+		       ('run_conductor', $1, 'prj_'||$1, 'wi_'||$1, 1, NULL, 'completed', 'lrun_cond', 'succeeded', 'complete', now())`,
+		w.run.Org)
+	w.exec(`UPDATE runs SET role = 'conductor', kind = 'agent' WHERE id = 'run_conductor'`)
+	// Still collecting run_due's exit; run_kept is kept until it expires.
+	w.exec(`UPDATE runs SET artifacts_due_at = now() WHERE id = 'run_due'`)
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id IN ($1, 'run_kept', 'run_conductor')`, w.run.ID)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_p'||$1, $1, 'prj_'||$1, 2, 'T', 'G')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status, lux_run_id, lux_state, ended_at)
+		VALUES ('run_preview', $1, 'prj_'||$1, 'wi_p'||$1, 1, 'preview', 'completed', 'lrun_preview', 'stopped', now())`, w.run.Org)
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_preview'`)
+
+	if err := w.s.retireCompleted(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := fake.Calls()
+	slices.Sort(got)
+	if want := []string{"cancel lrun_1", "cancel lrun_cond"}; !slices.Equal(got, want) {
+		t.Errorf("terminated %v, want %v", got, want)
+	}
+	// Collected now: its turn comes; and nothing is asked twice.
+	w.exec(`UPDATE runs SET artifacts_due_at = NULL WHERE id = 'run_due'`)
+	if err := w.s.retireCompleted(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Calls(); len(got) != 3 || got[2] != "cancel lrun_due" {
+		t.Errorf("after the second pass, asked lux %v", got)
+	}
+}
