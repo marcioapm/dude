@@ -36,11 +36,19 @@ func goldenInput(model string) (AgentConfig, specInput) {
 // What dude sends lux for a phase Run, byte for byte: a change to the spec
 // shows up here as a diff to read, not as a silent change on the wire.
 func TestTheSpecIsTheGoldenOne(t *testing.T) {
-	for name, model := range map[string]string{"opencode": "claude-opus-5-5", "scripted": "fake/scripted", "registry": "claude-opus-5-5"} {
+	for name, model := range map[string]string{"opencode": "claude-opus-5-5", "scripted": "fake/scripted", "registry": "claude-opus-5-5",
+		"network": "claude-opus-5-5"} {
 		t.Run(name, func(t *testing.T) {
 			c, in := goldenInput(model)
 			if name == "registry" {
 				in.Registry = &RegistryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
+			}
+			if name == "network" {
+				// The operator's floor, then the Run's own list: a host, a
+				// wildcard, an address, a range, one the operator already
+				// has, and one lux would refuse.
+				c.Egress = []string{"mirror.internal"}
+				in.Egress = []string{"pypi.org", "*.github.com", "10.0.0.5", "10.60.0.0/16", "mirror.internal", "*.com"}
 			}
 			got, err := json.MarshalIndent(buildSpec(c, in), "", "  ")
 			if err != nil {
