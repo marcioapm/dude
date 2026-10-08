@@ -24,7 +24,8 @@ import threading
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, query, wait_until
+from helpers import ApiClient, execute, query, sign_in, wait_until
+from playwright.sync_api import Page, expect
 
 
 def _person(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
@@ -55,6 +56,36 @@ def _said(client: ApiClient, session: str) -> list[str]:
 
 def _tool(name: str, args: dict) -> str:
     return f"tool: {name} {json.dumps(args)}"
+
+
+def test_a_stuck_brainstorm_turn_stops_once_and_every_member_sees_the_notice(
+        client: ApiClient, env, owner_dsn: str, page: Page, web_url: str, org: dict):
+    tier = client.tier_for("fake/stall")
+    assert client.patch("/v1/settings/organization", {"roles": {"brainstorm": {"tier": tier}}}).status_code == 200
+    session = client.post("/v1/brainstorms", {"title": "Stuck tool call"}).json()["id"]
+    reader, reader_client = _person(client, env, "Stuck Reader")
+    assert client.post(f"/v1/brainstorms/{session}/people", {"people": [reader["id"]], "role": "read"}).status_code == 200
+    assert reader_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    run = client.post(f"/v1/brainstorms/{session}/chat", {"text": "Read the worker"}).json()["runId"]
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND open_tool_calls_at <> '{}'", (run,)),
+               timeout=30, message="the brainstorm never hung in its tool call")
+    # Like F6, advance the persisted clock instead of waiting ten real minutes.
+    execute(owner_dsn, """UPDATE runs SET open_tool_calls_at =
+        (SELECT jsonb_object_agg(k, to_jsonb(now() - interval '11 minutes')) FROM jsonb_object_keys(open_tool_calls_at) k)
+        WHERE id = %s""", (run,))
+    stopped = wait_until(lambda: [e for e in client.events(sessionId=session, limit=1000)
+                                 if e["eventType"] == "session.turn_stopped"],
+                         timeout=30, message="the stuck turn was not stopped within a sweep")
+    assert len(stopped) == 1 and stopped[0]["payload"]["tool"] == "task"
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND turn_done_at IS NOT NULL", (run,)),
+               timeout=30, message="the interrupted turn never ended")
+    assert [e["eventId"] for e in reader_client.events(sessionId=session, limit=1000)
+            if e["eventType"] == "session.turn_stopped"] == [stopped[0]["eventId"]]
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/sessions/{session}")
+    notice = page.locator('[data-kind="stopped"]')
+    expect(notice).to_have_count(1, timeout=30_000)
+    expect(notice).to_contain_text("Stopped Brainstorm's turn: task was open for 10 min.")
 
 
 def test_a_session_reads_two_projects_proposes_and_files_as_the_person_with_no_trace(client: ApiClient, env, owner_dsn: str,

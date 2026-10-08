@@ -67,10 +67,8 @@ type Syncer struct {
 	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
 	ConductorWarm time.Duration
 	// How long reasons to wake a conductor are gathered after the last
-	// arrived before one note delivers them (0: WakeWindow), and how long
-	// a conductor may sleep with a Run of its own in flight before it is
-	// woken once to say what it waits for (0: SafetyAfter).
-	WakeWindow, SafetyAfter time.Duration
+	// arrived before one note delivers them (0: WakeWindow).
+	WakeWindow time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -256,6 +254,85 @@ const quiet = `(r.status = 'running' AND r.lux_state = 'running' AND r.agent_bus
 // quietSince (SQL): when the agent last did anything, or was nudged.
 const quietSince = `GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at)`
 
+// stallFrom (SQL) is what the no-progress rules read: the Run, its project
+// and organization (the role's time limit), and whether its task has a live
+// conductor. Its parameters: $1 a conducted task's window and $2 how long a
+// report of unchanged facts waits, in seconds (delivery.StallWindow,
+// StallSameFacts).
+var stallFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
+	CROSS JOIN LATERAL (SELECT EXISTS (SELECT 1 FROM runs c WHERE c.task_id = r.task_id AND ` +
+	strings.ReplaceAll(delivery.LiveConductor, "r.", "c.") + ` AND NOT COALESCE(` + strings.ReplaceAll(delivery.Ending, "r.", "c.") +
+	`, false)) AS conducted) lc`
+
+// stallWindow (SQL, over stallFrom): how long a Run may make no progress
+// before it is reported: a conducted task's window, else its role's time
+// limit — the project's, the organization's, for a fixer then the
+// implementer's, else delivery.DefaultTimeLimitMinutes — never under
+// delivery.MinTimeLimitMinutes.
+var stallWindow = fmt.Sprintf(`(CASE WHEN lc.conducted THEN $1::float8 ELSE 60 * GREATEST(%d, COALESCE(
+	(p.agent_models->(%[3]s)->>'timeLimitMinutes')::float8, (o.default_agent_models->(%[3]s)->>'timeLimitMinutes')::float8,
+	CASE WHEN r.phase = 'fix' THEN COALESCE((p.agent_models->'implementer'->>'timeLimitMinutes')::float8,
+		(o.default_agent_models->'implementer'->>'timeLimitMinutes')::float8) END,
+	%[2]d)) END)`, delivery.MinTimeLimitMinutes, delivery.DefaultTimeLimitMinutes,
+	`CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
+		WHEN 'simplify' THEN 'simplifier' WHEN 'test' THEN 'qa_browser' ELSE 'investigator' END`)
+
+// stalledCall, stalledFiles and stalledSilent (SQL, over stallFrom) are the
+// three ways a Run makes no progress: a tool call open for the whole
+// window; for a Run that changes code, no change to its files (no new diff,
+// no commit) in it; or, with no tool call open, its agent silent for the
+// whole window (silentSince). An open call is stalledCall's, measured from
+// the call, however long the agent has been silent.
+var (
+	stalledCall = `EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
+		WHERE oc.value::timestamptz <= now() - make_interval(secs => ` + stallWindow + `))`
+	stalledFiles  = `(` + changesCode + ` AND r.files_changed_at <= now() - make_interval(secs => ` + stallWindow + `))`
+	stalledSilent = `(r.open_tool_calls_at = '{}' AND ` + silentSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
+)
+
+// silentSince (SQL, over runs r): where the agent's silence starts on the
+// Run's running clock: its last activity (agent_active_at), else, before
+// any, files_changed_at. Both are moved on by any time the Run spent not
+// running (luxEvent), so now() minus this is running time alone. A
+// person's resume clears agent_active_at and dates the files then.
+// run_stalled (migration 085) repeats it.
+const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
+
+// noProgress (SQL, over stallFrom): a live phase Run that made no progress
+// for its window. One waiting on a person, or whose turn is over, is not
+// held up by itself.
+var noProgress = `(r.status = 'running' AND r.phase IS NOT NULL AND r.lux_state = 'running' AND r.control = 'none'
+	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND (` + stalledCall + ` OR ` + stalledFiles + ` OR ` + stalledSilent + `))`
+
+const brainstormCallLimit = 10 * time.Minute
+
+const brainstormCalls = `(SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k)`
+
+const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.session_id IS NOT NULL
+	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none' AND r.turn_done_at IS NULL
+	AND EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
+		WHERE oc.value::timestamptz <= now() - make_interval(secs => $1::float8))
+	AND (r.stuck_interrupted_at IS NULL OR r.stuck_fingerprint IS DISTINCT FROM ` + brainstormCalls + `))`
+
+// changesCode (SQL, over runs r): a phase whose commits are published
+// (delivery.Publishes): implement, fix, simplify.
+const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
+
+// stallFacts (SQL, over stallFrom) identifies what a report said: the calls
+// open, the diff's checksum and, while it is silent, when its silence began.
+// A Run reported only for its files is busy, and its activity is not a
+// change of facts.
+var stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
+	|| '|' || COALESCE((SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id), '')
+	|| '|' || CASE WHEN ` + stalledSilent + ` THEN COALESCE(extract(epoch FROM ` + silentSince + `)::text, '') ELSE '' END)`
+
+// stallDue (SQL, over stallFrom): a Run with no progress is reported now if
+// it never was; under a conductor, again once its facts changed and the
+// window passed, or $2 passed; to an owner who left it, never.
+var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.conducted AND (
+	r.stall_reported_at <= now() - make_interval(secs => $2::float8)
+	OR r.stall_reported_at <= now() - make_interval(secs => $1::float8) AND r.stall_fingerprint IS DISTINCT FROM ` + stallFacts + `)))`
+
 // unreadGraceSecs (SQL): how long a sent directive the agent has not read
 // holds a finished turn open. lux answers in well under a second; this
 // bounds a receipt that never comes, so the Run is still collected.
@@ -353,8 +430,15 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 // Runs that need attention is the job; each is then handled in its own
 // organization's scope.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+	if err := s.interruptBrainstorms(ctx); err != nil {
+		return 0, err
+	}
 	if err := s.handOverUnheard(ctx); err != nil {
 		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+	}
+	// Before the wakes: a stalled report joins the note it is due with.
+	if err := s.reportStalls(ctx); err != nil {
+		s.Log.Warn("reporting stalled runs failed", "error", err)
 	}
 	if err := s.wakeConductors(ctx); err != nil {
 		s.Log.Warn("waking conductors failed", "error", err)
@@ -385,6 +469,60 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	}
 	wg.Wait()
 	return int(handled.Load()), nil
+}
+
+const stuckTurnNudge = "A tool call of yours was open for 10 minutes, so dude stopped your turn. " +
+	"Tell the people in the session briefly what you were doing and that it got stuck, then carry on or ask them."
+
+func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
+	type found struct{ ID, Org, SessionID string }
+	var due []found
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.session_id FROM runs r WHERE `+stuckBrainstorm,
+			brainstormCallLimit.Seconds())
+		if err != nil {
+			return err
+		}
+		due, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, r := range due {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+				return err
+			}
+			var fingerprint, tool string
+			var openSecs float64
+			err := tx.QueryRow(ctx, `SELECT `+brainstormCalls+`, COALESCE((SELECT payload->>'tool' FROM events
+					WHERE run_id = r.id AND event_type = 'agent.tool.called' AND payload->>'callId' = oc.key
+					ORDER BY cursor LIMIT 1), 'tool'), extract(epoch FROM now() - oc.value::timestamptz)
+				FROM runs r CROSS JOIN LATERAL (SELECT * FROM jsonb_each_text(r.open_tool_calls_at)
+					ORDER BY value::timestamptz, key LIMIT 1) oc
+				WHERE r.id = $2 AND `+stuckBrainstorm, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &tool, &openSecs)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			ref := delivery.RunRef{Org: r.Org, SessionID: r.SessionID, RunID: r.ID}
+			id, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: stuckTurnNudge, Interrupt: true, Scope: "turn"})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_interrupted_at = now(), stuck_fingerprint = $2 WHERE id = $1`,
+				r.ID, fingerprint); err != nil {
+				return err
+			}
+			return delivery.SessionEvent(ctx, tx, ref, delivery.EvSessionTurnStopped, ledger.ActorSystem, "dude",
+				map[string]any{"runId": r.ID, "tool": tool, "openSecs": openSecs, "directiveId": id})
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // advance moves one Run on by whatever its state calls for. Returns whether
@@ -511,26 +649,19 @@ func (r phaseRun) ref() delivery.RunRef {
 }
 
 // Waking conductors (delivery.WakeConductorTx): reasons are gathered for
-// WakeWindow after the last, and a conductor asleep for SafetyAfter with a
-// Run of its own in flight is woken once.
-const (
-	WakeWindow  = 15 * time.Second
-	SafetyAfter = 30 * time.Minute
-)
+// WakeWindow after the last arrived.
+const WakeWindow = 15 * time.Second
 
 // wakeBatch bounds each kind of work one sweep takes up for wakes.
 const wakeBatch = 200
 
 // wakeConductors records the reasons the syncer sees — a Run a conductor
-// started failed; a conductor long asleep with a Run of its own in flight —
-// and delivers each task's pending reasons to its conductor as one note.
+// started failed — and delivers each task's pending reasons to its
+// conductor as one note.
 func (s *Syncer) wakeConductors(ctx context.Context) error {
-	window, safety := s.WakeWindow, s.SafetyAfter
+	window := s.WakeWindow
 	if window == 0 {
 		window = WakeWindow
-	}
-	if safety == 0 {
-		safety = SafetyAfter
 	}
 	type found struct{ Kind, Org, TaskID, RunID string }
 	var todo []found
@@ -538,13 +669,8 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 		// Reasons to record, then the tasks whose reasons can be delivered
 		// now, oldest reason first: each its own bounded batch, so neither
 		// crowds out the other, and tasks that must wait are not selected.
-		// SafetyNet's NOT EXISTS keeps Runs already recorded out of its batch.
-		rows, err := tx.Query(ctx, `
-			(SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.FailedForConductor+` LIMIT $2)
-			UNION ALL
-			(SELECT 'safety', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.SafetyNet+`
-				ORDER BY r.turn_done_at LIMIT $2)`,
-			safety.Seconds(), wakeBatch)
+		rows, err := tx.Query(ctx, `SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r
+			WHERE `+delivery.FailedForConductor+` LIMIT $1`, wakeBatch)
 		if err != nil {
 			return err
 		}
@@ -566,11 +692,8 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 	woken := map[string]bool{}
 	for _, f := range todo {
 		err := s.DB.InOrg(ctx, f.Org, func(tx pgx.Tx) error {
-			switch f.Kind {
-			case "failed":
+			if f.Kind == "failed" {
 				return delivery.RecordFailedTx(ctx, tx, f.Org, f.TaskID, f.RunID)
-			case "safety":
-				return delivery.RecordSafetyTx(ctx, tx, f.Org, f.TaskID, f.RunID)
 			}
 			if woken[f.TaskID] {
 				return nil
@@ -823,7 +946,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
-	var briefing, conductorNote string
+	var briefing, conductorNote, restartNote, tierOverride string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -833,14 +956,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
-				COALESCE((SELECT prompt FROM runs WHERE id = $2), ''), COALESCE((SELECT conductor_note FROM runs WHERE id = $2), '')
+				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.tier_override, '')
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
+			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
-			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote); err != nil {
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &tierOverride); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
 		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
+		// A restart on another tier runs on it, whatever the role's says.
+		if tierOverride != "" {
+			settings.Tier = tierOverride
+		}
 		// The images the prompt numbers, as submit sends them.
 		if taskImages, err = delivery.PromptAttachments(ctx, tx, r.ID); err != nil {
 			return err
@@ -923,7 +1051,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model, in.ModelTier, in.Effort, in.TimeLimitMinutes = tier.Model, tier.Name, settings.Effort, settings.TimeLimitMinutes
+	in.Model, in.ModelTier, in.Effort = tier.Model, tier.Name, settings.Effort
 	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
@@ -939,7 +1067,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r), ConductorNote: conductorNote, Images: delivery.PromptImages(taskImages),
+		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -1356,6 +1484,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 				  AND head_sha IS DISTINCT FROM $3`, r.TaskID, repo.ID, res.Commit, branch); err != nil {
 				return err
 			}
+			if _, err := tx.Exec(ctx, `UPDATE runs SET files_changed_at = now() WHERE id = $1`, r.ID); err != nil {
+				return err
+			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
 				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
 		}); err != nil {
@@ -1569,6 +1700,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
+			-- A person's resume is a fresh window. Its wait for a host is
+			-- time away from running, which the stream's running then
+			-- excludes (luxEvent).
+			files_changed_at = now(),
+			left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,
@@ -2012,39 +2148,13 @@ func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, 
 const (
 	UnreadRunFinished = "the run finished before the agent read it"
 	UnreadRunFailed   = "the run failed before the agent read it"
-	UnreadRunAborted  = "the run was aborted before the agent read it"
+	UnreadRunAborted  = delivery.UnreadRunAborted
 )
 
-// FailUnreadTx fails what the agent of Run r, ending in this transaction,
-// never read and now never will: each directive neither delivered nor
-// failed gets run.directive.failed with why, its wake reasons go back to
-// pending, and a conductor's steer wakes its conductor (SteerSettledTx).
-// A receipt that lands after still delivers it (directiveReceipt). at is
-// the events' time; zero is now.
+// FailUnreadTx is delivery.FailUnreadTx: what the agent of Run r, ending
+// in this transaction, never read fails.
 func FailUnreadTx(ctx context.Context, tx pgx.Tx, r delivery.RunRef, at time.Time, why string) error {
-	rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
-		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`, r.RunID, why)
-	if err != nil {
-		return err
-	}
-	unread, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return err
-	}
-	for _, id := range unread {
-		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": why})
-		ev.Source, ev.OccurredAt = ledger.SourceRunner, at
-		if _, err := ledger.Append(ctx, tx, ev); err != nil {
-			return err
-		}
-		if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
-			return err
-		}
-		if err := delivery.SteerSettledTx(ctx, tx, r.Org, id, false, why); err != nil {
-			return err
-		}
-	}
-	return nil
+	return delivery.FailUnreadTx(ctx, tx, r, at, why)
 }
 
 // failUnread is FailUnreadTx for a phase Run the syncer ends. A conductor's

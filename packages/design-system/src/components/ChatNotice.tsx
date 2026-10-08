@@ -7,12 +7,13 @@ import styles from "./ChatNotice.module.css";
 /**
  * What the factory did to the session, as the transcript tells it — or,
  * in a task's Chat, a decision its delivery waits on, something that
- * happened that wakes nobody, or a commit the conductor published.
+ * happened that wakes nobody, a commit the conductor published, or a Run
+ * restarted in its place.
  */
-export type ChatNoticeKind = "parked" | "unparked" | "nudged" | "decision" | "notice" | "commit";
+export type ChatNoticeKind = "parked" | "unparked" | "nudged" | "decision" | "notice" | "commit" | "restart" | "stopped";
 
 const GLYPH: Record<ChatNoticeKind, IconName> = { parked: "pause", unparked: "retry", nudged: "clock", decision: "hand", notice: "info",
-  commit: "git-branch" };
+  commit: "git-branch", restart: "retry", stopped: "warning" };
 
 export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly kind: ChatNoticeKind;

@@ -43,6 +43,7 @@ const (
 	EvSessionProposed    = "session.proposed"
 	EvSessionFiled       = "session.filed"
 	EvSessionBriefed     = "session.briefed"
+	EvSessionTurnStopped = "session.turn_stopped"
 )
 
 // ErrNotMember is a session the person may not see: no such session, not

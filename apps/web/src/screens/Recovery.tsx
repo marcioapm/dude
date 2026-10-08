@@ -55,7 +55,7 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
   const attempt = Math.max(1, ...delivery.map((r) => r.attempt));
   const since = events.findLast((e) => e.eventType === "task.recovered" ||
     (e.eventType === "task.decided" && e.payload.action !== "stop"))?.occurredAt ?? "";
-  const ended = delivery.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
+  const ended = delivery.filter((r) => r.attempt === attempt && !r.replacedBy && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
   return run ? { run, ...howRunStopped(run, events, people) } : { run: null, by: null, why: null };

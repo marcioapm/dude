@@ -45,7 +45,7 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
@@ -59,10 +59,12 @@ import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
+import { StalledPanel, stalledForOwner } from "./StalledPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
+import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
@@ -493,13 +495,17 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
-      {item.escalation || stop || aside || problem ? (
+      {item.escalation || stop || aside || problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               onOpenRun={onOpenRun} onDecided={() => void load()} />
           ) : null}
+          {!earlier && !item.escalation ? stalledForOwner(item.runs).map((r) => (
+            <StalledPanel key={r.id} client={client} run={{ ...r, stalled: r.stalled! }} owner={item.owner} you={people.you}
+              onOpenRun={onOpenRun} onDone={() => void load()} />
+          )) : null}
           {stop ? (
             <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
               onOpenRun={onOpenRun} onChoose={setPickingUp} />
@@ -669,7 +675,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
                       title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
                       detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
-                      trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
+                      trailing={<>
+                        {run.stalled ? (
+                          <Badge tone="attention" size="sm" icon="warning" data-testid="session-stalled" title={run.stalled.text}>stalled</Badge>
+                        ) : null}
+                        <StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
+                      </>}><RunReplacement run={run} /></SessionItem>
                   );
                   // A tree over the attempt shown: each conductor (the
                   // task's), the Runs it started in this attempt under it;
@@ -913,7 +924,7 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={running} />}
       label={runLabel(run)}
       note={note}
-      status={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />}
+      status={<StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />}
       meta={heads.length === 0 ? undefined : heads.length === 1 ? heads[0]![1].slice(0, 7) : `${heads.length} repos`}
       metaTitle={heads.length > 0 ? heads.map(([repo, sha]) => `${repo} ${sha}`).join("\n") : undefined}
       duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={running} tone="muted" /> : "—"}
@@ -924,7 +935,7 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
           {plan.current ? <span className="planNow">{plan.current}</span> : null}
         </>
       ) : undefined}
-    />
+    ><RunReplacement run={run} /></StepRow>
   );
 }
 
