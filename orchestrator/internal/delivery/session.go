@@ -14,6 +14,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A brainstorm session: a conversation with an agent (role brainstorm)
@@ -108,15 +109,20 @@ func PersonName(ctx context.Context, tx pgx.Tx, personID string) (string, error)
 }
 
 // SessionRepo is a repository a session's agent has checked out:
-// repos/<project key>/<name>, named <key>-<name> in the lux spec, never
+// repos/<project key>/<name>, named SpecName in the lux spec, never
 // pushed.
 type SessionRepo struct {
 	ID, ProjectID, Key, Name, URL, DefaultBranch string
 }
 
-// SpecName is the repository's name in the lux spec: unique within the
-// Run, since names are unique only within a project.
-func (r SessionRepo) SpecName() string { return r.Key + "-" + r.Name }
+// SpecName is the repository's name in the lux spec: <key>-<name>, unique
+// within the Run since names are unique only within a project, made one
+// lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL).
+func (r SessionRepo) SpecName() string { return lux.SpecName(r.Key + "-" + r.Name) }
+
+// SessionSpecNameSQL is SpecName in SQL, over projects p and repositories
+// repo: what runs.lux_repositories holds for a session's checkout.
+const SessionSpecNameSQL = `lux_name(p.key_prefix || '-' || repo.name)`
 
 // SessionRepoPath is where it is checked out.
 func SessionRepoPath(key, name string) string { return "/workspace/repos/" + key + "/" + name }
