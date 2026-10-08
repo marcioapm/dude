@@ -983,6 +983,17 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 		r := w.lux.Runs()[0]
 		return r.Stopped == 1 && r.Cancelled
 	})
+	// Stopped first: a cancel first would end it before its exit is collected.
+	r := w.lux.Runs()[0]
+	var ends []string
+	for _, c := range w.lux.CallsOf(r.ID) {
+		if c == "stop" || c == "cancel" {
+			ends = append(ends, c)
+		}
+	}
+	if !slices.Equal(ends, []string{"stop", "cancel"}) {
+		t.Errorf("the finished phase's lux run was asked %v; want stop, then cancel", ends)
+	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID); n != 1 {
 		t.Errorf("the finished phase's Run is not recorded as terminated in lux")
 	}
