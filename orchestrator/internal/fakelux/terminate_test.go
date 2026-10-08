@@ -9,8 +9,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// post asks the fake for a Run's action by its raw path, as a client of the
-// newer endpoint would.
+// post asks the fake for a Run's action by its raw path: the lux client
+// has no Terminate.
 func post(t *testing.T, fake *Server, id, action string) int {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, "/v1/runs/"+id+"/"+action, nil)
