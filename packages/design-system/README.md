@@ -472,7 +472,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   without colour.
 - **`SidebarSessions`** sits above Projects in the sidebar: only the
   sessions you are in, each with the bulb glyph and the `SharedMark`'s
-  parts, then New session.
+  parts, then New session. The app passes it as `Sidebar`'s `sessions`
+  slot, so the sidebar draws it in place and knows nothing of sessions.
+- **`Sidebar waitingExtra`** adds what waits on you outside the tree —
+  session invitations and brainstorm questions put to you — to the
+  "Waiting on you" count, so one number answers "what needs me".
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
   title, because a private session's name must not reach people outside
@@ -1584,7 +1588,9 @@ sessions*):
   who is in it, what it reads, what it can do.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
-- **SidebarSessions** — your brainstorm sessions above the projects.
+- **SidebarSessions** — your brainstorm sessions above the projects, in
+  `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
+  questions in Waiting on you.
 
 ## What is deliberately not here
 
