@@ -309,21 +309,31 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 // refused records a name lux would not resolve for the Run's agent: counted
 // for its project's Network page, and said on the Run the first time. lux
 // reports each distinct lookup once, but a replayed stream reports it
-// again. What it answered is not kept.
+// again. What it answered is not kept. Past maxRefusedNames distinct names
+// a Run's are neither kept nor said: lux does not bound refused lookups,
+// and an agent resolving random names would fill the table and the Run.
 func (t *translator) refused(ctx context.Context, tx pgx.Tx, s *Syncer, name string) error {
 	if name == "" || len(name) > 253 {
 		return nil
 	}
 	role := delivery.PromptRoleFor(t.run.Phase, t.run.Role)
 	var first bool
-	if err := tx.QueryRow(ctx, `INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5)
+	err := tx.QueryRow(ctx, `INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
+		SELECT $1, $2, $3, NULLIF($4, ''), $5
+		WHERE (SELECT count(*) FROM agent_egress_refusals WHERE run_id = $1) < $6
 		ON CONFLICT (run_id, name) DO UPDATE SET count = agent_egress_refusals.count + 1, last_at = now()
-		RETURNING xmax = 0`, t.run.ID, name, t.run.Org, t.run.ProjectID, role).Scan(&first); err != nil || !first {
+		RETURNING xmax = 0`, t.run.ID, name, t.run.Org, t.run.ProjectID, role, maxRefusedNames).Scan(&first)
+	if err == pgx.ErrNoRows {
+		return nil // past the cap
+	}
+	if err != nil || !first {
 		return err
 	}
 	return s.event(ctx, tx, t.run, evNetworkRefused, ledger.ActorSystem, map[string]any{"name": name, "role": role})
 }
+
+// maxRefusedNames is how many distinct refused names a Run keeps.
+const maxRefusedNames = 100
 
 // ended: the container stopped without dude asking — the agent crashed,
 // timed out, or its host died. A phase whose turn was already done is

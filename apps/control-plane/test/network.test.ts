@@ -223,6 +223,18 @@ describe("names refused recently", () => {
     });
     expect(leaked.length).toBe(0);
   });
+
+  test("are the 200 most refused, however many there were", async () => {
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt) VALUES ('run_many', ${ORG}, ${PROJECT}, 'wi_net', 1)`;
+    await owner`INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
+      SELECT 'run_many', 'h' || lpad(i::text, 3, '0') || '.example.org', ${ORG}, ${PROJECT}, 'fixer' FROM generate_series(1, 600) i`;
+    try {
+      const refused = (await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/network/refused`))).refused;
+      expect(refused.map((r: Json) => r.name)).toEqual(Array.from({ length: 200 }, (_, i) => `h${String(i + 1).padStart(3, "0")}.example.org`));
+    } finally {
+      await owner`DELETE FROM runs WHERE id = 'run_many'`;
+    }
+  });
 });
 
 describe("while the orchestrator is down", () => {

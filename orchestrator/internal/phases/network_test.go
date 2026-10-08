@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -61,5 +62,23 @@ func TestARefusedLookupIsSaidOnceAndCountedForTheProject(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals WHERE name = 'api.github.com'`).Scan(&allowed)
 	if allowed != 0 {
 		t.Error("an allowed lookup was counted as refused")
+	}
+}
+
+// A Run's refused names stop being kept and said at the cap: lux bounds
+// none, and the table, the ledger and the Run's transcript would grow with
+// every random name an agent resolved.
+func TestARunsRefusedNamesStopAtTheCap(t *testing.T) {
+	w := newReceiptWorld(t)
+	for i := range maxRefusedNames + 1 {
+		w.dns(fmt.Sprintf("h%d.example.com", i), false)
+	}
+	var rows int
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM agent_egress_refusals WHERE run_id = $1`,
+		w.tr.run.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.events(evNetworkRefused); rows != maxRefusedNames || n != maxRefusedNames {
+		t.Errorf("%d rows, %d events; want %d of each", rows, n, maxRefusedNames)
 	}
 }
