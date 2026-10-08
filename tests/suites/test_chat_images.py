@@ -495,6 +495,7 @@ def test_an_image_dropped_on_the_criteria_goes_to_the_reviewers(
 def test_a_task_created_with_an_image_keeps_it_and_an_edit_can_take_it_out(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
+    _intercept_file_choosers(page)
     _open_new_task(page, web_url, org)
     page.get_by_test_id("task-title").fill("Saved with a picture")
     page.get_by_test_id("task-goal").fill("The header overlaps the menu on a narrow window.")
@@ -800,6 +801,17 @@ def _open_new_task(page: Page, web_url: str, org: dict) -> None:
     expect(page.get_by_test_id("task-title")).to_be_visible()
 
 
+def _intercept_file_choosers(page: Page) -> None:
+    """Turn on Playwright's file-chooser interception now, well before a press opens one.
+
+    The first `filechooser` listener turns it on with a message Playwright
+    does not wait on (`updateSubscription`, sent `send_no_reply`), so with
+    `expect_file_chooser` alone the press can be sent with it and win: Chrome
+    then opens its own picker, headless drops it, and no event comes.
+    """
+    page.on("filechooser", lambda _: None)
+
+
 @pytest.mark.ui
 def test_an_image_dropped_on_the_title_goes_to_the_end_of_the_goal(page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list):
     _open_new_task(page, web_url, org)
@@ -834,6 +846,7 @@ def test_text_alone_pastes_as_text_and_a_files_own_name_is_not_text(page: Page, 
 def test_attach_images_is_a_labelled_button_that_inserts_where_the_person_was_writing(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
+    _intercept_file_choosers(page)
     _open_new_task(page, web_url, org)
     attach = page.get_by_role("button", name="Attach images")
     expect(attach).to_be_visible()
