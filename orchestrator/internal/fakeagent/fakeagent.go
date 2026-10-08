@@ -175,6 +175,10 @@ const Brainstorm = "brainstorm"
 // BrainstormMessage heads the first message in a session agent's briefing.
 const BrainstormMessage = "## The first message\n\n"
 
+// brainstormLead is how a session agent's briefing names its session
+// (delivery.sessionBriefing): its title, quoted.
+const brainstormLead = "Brainstorm, this is the session "
+
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
 // arrived, and the input it answers, quoted back.
@@ -183,16 +187,25 @@ func ConductorReply(task, input string) string {
 	return fmt.Sprintf("Briefed on %q. You asked: %q. Read-only: I changed nothing.", task, said)
 }
 
+// BrainstormReply is the scripted session agent's answer to one input: a
+// session has no task, so it quotes the session's title from its briefing.
+func BrainstormReply(title, input string) string {
+	said, _, _ := strings.Cut(strings.TrimSpace(input), "\n")
+	return fmt.Sprintf("In the session %q. You asked: %q. Read-only: I changed nothing.", title, said)
+}
+
 // ConductorScript is the scripted conductor's first turn, from the
 // briefing dude wrote it: the reply to the message the briefing ends with.
 // It is the Run's prompt in place of the briefing, as every scripted
 // phase's script is (for a real lux, a lux-fake script). The tools the
-// message names (ConductorCalls) are called first.
+// message names (ConductorCalls) are called first. A session agent's
+// briefing names a session, not a task: its reply quotes the title.
 func ConductorScript(briefing string) string {
 	task := ""
 	if _, after, ok := strings.Cut(briefing, "## The task\n\n"); ok {
 		task, _, _ = strings.Cut(after, "\n")
 	}
+	title, session := sessionTitle(briefing)
 	message := ""
 	if i := strings.LastIndex(briefing, "'s message\n\n"); i >= 0 {
 		message = briefing[i+len("'s message\n\n"):]
@@ -208,7 +221,24 @@ func ConductorScript(briefing string) string {
 		}
 		fmt.Fprintf(&b, "http dude POST /tools/%s %s\n", c[0], c[1])
 	}
+	if session {
+		return b.String() + "echo " + BrainstormReply(title, message)
+	}
 	return b.String() + "echo " + ConductorReply(task, message)
+}
+
+// sessionTitle is the session's title a session agent's briefing opens
+// with, and whether it is one.
+func sessionTitle(briefing string) (string, bool) {
+	rest, ok := strings.CutPrefix(briefing, brainstormLead)
+	if !ok {
+		return "", false
+	}
+	var title string
+	if _, err := fmt.Sscanf(rest, "%q", &title); err != nil {
+		return "", true
+	}
+	return title, true
 }
 
 // localScript is a local call as lux-fake's script says it: write and
@@ -275,14 +305,17 @@ func ConductorCalls(input string) [][2]string {
 }
 
 // ConductorTurn is the scripted conductor's reply to a later input, from
-// its script (ConductorScript): the same task, the new input.
+// its script (ConductorScript): the same task or session, the new input.
 func ConductorTurn(script, input string) string {
 	first := script[strings.LastIndex(script, "echo ")+len("echo "):]
-	var task string
-	if _, err := fmt.Sscanf(first, "Briefed on %q.", &task); err != nil {
+	var named string
+	if _, err := fmt.Sscanf(first, "In the session %q.", &named); err == nil {
+		return BrainstormReply(named, input)
+	}
+	if _, err := fmt.Sscanf(first, "Briefed on %q.", &named); err != nil {
 		return first
 	}
-	return ConductorReply(task, input)
+	return ConductorReply(named, input)
 }
 
 // For is the agent's step for a phase Run. fixed says whether the tree it

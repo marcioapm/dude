@@ -145,7 +145,7 @@ func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map
 // Ending (SQL, over runs r): a live conductor whose container stopped
 // without dude asking. Nothing will resume it: it is ended (EndConductor),
 // by the syncer or by the next message in Chat, and nothing more is queued for it.
-const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost')
+const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost')
 	AND r.lux_stop_reason IS NULL AND r.control = 'none')`
 
 // EndConductor completes a conductor that can no longer be resumed, and

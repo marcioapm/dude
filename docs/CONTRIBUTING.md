@@ -75,6 +75,21 @@ is one phase of work, executed as one lux Run. A single *attempt* at a work
 item is several Runs — one per phase — and each is shown as an agent in the
 UI.
 
+**A task's key** is its project's key and a number counting up within the
+project (`BILL-12`). People, agents and a brainstorm session's checkouts
+(`repos/<KEY>/<name>`) name a project by its key alone, so **a project's key
+is unique in its organisation**, ignoring case (`projects_key_idx`,
+migration 095). It is 2 to 6 letters or digits starting with a letter
+(`PROJECT_KEY` in `packages/domain/src/projectKeys.ts`), chosen when the
+project is made and fixed after; no route changes it. Creating a project
+with a key another has is a 409 that names the holder and suggests a free
+one. With no key given, dude takes the first free one of
+`projectKeyCandidates(slug)`: the slug's first four letters (`billing-api`:
+`BILL`); then its words' initials padded with the letters after the last
+(`billing-worker`: `BWOR`); then the first with 2 to 9, then 10 to 99
+(`BILL2`). The new-project dialog prefills the same key and offers the
+suggestion on a 409.
+
 A task gets a new attempt only by **Start over** (a new branch, the whole
 pipeline again); **Try again** is a new Run in the same attempt. The task
 page shows one attempt at a time, picked in its header when there is more
@@ -387,6 +402,50 @@ raises one blocking finding unless the fixer's file is in its tree, the fixer
 and simplifier commit. `fake/hang` never finishes its turn, for steering and
 pausing. The fake lux plays it directly; a real lux runs it as a lux-fake
 script.
+
+### What CI runs
+
+`.github/workflows/ci.yml` runs on every pull request and every push to
+`main`; a newer push to the same pull request or branch cancels the older run.
+The `go`, `ts` and `e2e` jobs each have their own
+`pgvector/pgvector:pg17-trixie` on `localhost:5433`.
+
+| Job | Runs |
+| --- | --- |
+| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone takes about 14 minutes). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
+| `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
+| `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
+| `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |
+
+Expected skips in `go`: the podman tests in `internal/images` (they need
+`DUDE_PODMAN_TEST_REGISTRY`, set by `scripts/test-image-builder.sh`) and
+`TestRealEmbedderFindsByMeaning` (needs `DUDE_EMBEDDINGS_URL`/`_KEY`). In
+`e2e`: `test_publishing_preflight_contacts_test_gateway` (needs
+`DUDE_TEST_GITHUB_GIT_HOST`).
+
+**Shards** are whole suite files, split by `tests/shard.py` into six shares of
+the durations in `tests/.suite-seconds.json`; a suite missing from it weighs
+30 s. After adding a suite or changing one's length a lot, refresh the file
+from JUnit reports that together cover every suite, one shard at a time:
+
+```bash
+cd tests
+for n in 1 2 3 4 5 6; do uv run python run_tests.py --shard $n/6 --junitxml=/tmp/dude-e2e-$n.xml; done
+uv run python shard.py /tmp/dude-e2e-*.xml
+```
+
+Shard by job, never with `-n`: each xdist worker would start its own Vite on
+the same strict `DUDE_TEST_WEB_PORT`.
+
+**Manual, not in CI:**
+
+- The contract suites against a real lux (`run_tests.py --lux`).
+- `apps/web/test/browser_*.py`, against the Vite dev server.
+- Anything needing a real model (`DUDE_LLM_KEY`) or real embeddings.
+
+A hosted runner is not a build host: when a change touches the image builder,
+also run `scripts/test-image-builder.sh` by hand on one (rootless podman, cgroup
+v2, `cpu` and `memory` delegated to the user).
 
 ### Manual browser sign-in
 

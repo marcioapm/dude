@@ -190,7 +190,7 @@ def test_attach_and_sync_refusals_carry_the_codes_dude_branches_on(lux: Lux):
         assert lux.req("POST", f"/v1/runs/{runs[1]}/stop", {}).status_code in (200, 202)
         wait_until(lambda: state_of(lux, runs[1]) == "stopped", timeout=120, interval=1, message="never stopped")
         assert lux.req("POST", f"/v1/runs/{runs[1]}/cancel", {}).status_code in (200, 202)
-        wait_until(lambda: state_of(lux, runs[1]) == "cancelled", timeout=120, interval=1, message="never cancelled")
+        wait_until(lambda: state_of(lux, runs[1]) in ("cancelled", "terminated"), timeout=120, interval=1, message="never cancelled")
         over = lux.req("POST", f"/v1/servers/{b['id']}/attach", {"runId": runs[1]})
         assert over.status_code == 409 and over.json()["error"]["code"] == "finished", over.text
         resume = lux.req("POST", f"/v1/runs/{runs[1]}/resume", {})

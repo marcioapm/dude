@@ -184,7 +184,7 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     assert client.delete(f"/v1/tasks/{task['id']}/preview").status_code == 200
     wait_until(lambda: lux_api(env, "GET", f"/v1/servers/{sv['id']}").status_code == 404,
                timeout=60, interval=1, message="the server was never deleted")
-    wait_until(lambda: lux_api(env, "GET", f"/v1/runs/{lux_run}").json()["state"] == "cancelled",
+    wait_until(lambda: lux_api(env, "GET", f"/v1/runs/{lux_run}").json()["state"] in ("cancelled", "terminated"),
                timeout=60, interval=1, message="the Run was never cancelled")
     page.goto(sv["url"] + "/")
     expect(page.get_by_text("This preview is gone")).to_be_visible()

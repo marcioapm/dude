@@ -232,6 +232,62 @@ describe("activity", () => {
     expect(activity).toBe("tool");
     expect(turns[0]).toMatchObject({ status: "running" });
   });
+
+  // A real turn, in the order the orchestrator records it (a brainstorm's
+  // or a conductor's): the turn's totals arrive after its last message,
+  // then the turn ends. Whatever the order, nothing is thinking after it.
+  const realTurn = () => [
+    ev(EventTypes.PromptDelivered, { text: "where does metering go?" }),
+    ev(EventTypes.ToolCalled, { tool: "list_tasks", callId: "c1" }),
+    ev(EventTypes.ToolCompleted, { tool: "list_tasks", callId: "c1", status: "completed" }),
+    ev(EventTypes.ModelRequestCompleted, { tokens: { input: 10, output: 5 } }),
+    ev(EventTypes.AgentMessage, { text: "In the meter's rollup." }),
+    ev(EventTypes.ModelRequestCompleted, { turn: true, tokens: { input: 12, output: 7 } }),
+    ev(EventTypes.SessionStopped, { reason: "turn_complete" }),
+  ];
+
+  test("a turn's end leaves nothing thinking, one event at a time or all at once", () => {
+    const events = realTurn();
+    expect(snapshot(apply(emptyProjection(), events), "running")).toMatchObject({ activity: null, activeTool: null });
+    const live = emptyProjection();
+    for (const e of events) apply(live, [e]);
+    expect(snapshot(live, "running")).toMatchObject({ activity: null, activeTool: null });
+  });
+
+  test("the turn's closing totals alone end it, before the session stops", () => {
+    const events = realTurn().slice(0, -1);
+    expect(snapshot(apply(emptyProjection(), events), "running").activity).toBeNull();
+  });
+
+  test("a stopped session ends the turn when no totals closed it", () => {
+    const events = [
+      ev(EventTypes.PromptDelivered, { text: "go" }),
+      ev(EventTypes.ModelRequestCompleted, { tokens: { input: 1, output: 1 } }),
+      ev(EventTypes.SessionStopped, { reason: "turn_complete" }),
+    ];
+    expect(snapshot(apply(emptyProjection(), events), "running").activity).toBeNull();
+  });
+
+  test("between model requests of a turn, the agent is thinking", () => {
+    const events = realTurn();
+    const live = emptyProjection();
+    // After a tool's result and its model request, and again after the
+    // message before the closing totals: thinking, not idle.
+    apply(live, events.slice(0, 4));
+    expect(snapshot(live, "running").activity).toBe("thinking");
+    const next = emptyProjection();
+    apply(next, [...events.slice(0, 4), ev(EventTypes.ModelRequestCompleted, { tokens: { input: 1, output: 1 } })]);
+    expect(snapshot(next, "running").activity).toBe("thinking");
+  });
+
+  test("the next turn thinks again", () => {
+    const state = apply(emptyProjection(), realTurn());
+    apply(state, [
+      ev(EventTypes.PromptDelivered, { text: "and retries?" }),
+      ev(EventTypes.ModelRequestCompleted, { tokens: { input: 1, output: 1 } }),
+    ]);
+    expect(snapshot(state, "running").activity).toBe("thinking");
+  });
 });
 
 describe("usage", () => {

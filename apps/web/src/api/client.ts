@@ -655,6 +655,8 @@ export class ApiClient {
   createProject(input: {
     name: string;
     slug: string;
+    /** Omitted: the API derives one from the slug. */
+    key?: string;
     repositories?: Array<{ name: string; url: string; defaultBranch?: string }>;
   }): Promise<ProjectDetail> {
     return this.#request("POST", "/v1/projects", input);
