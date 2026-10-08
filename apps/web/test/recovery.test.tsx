@@ -12,7 +12,7 @@ import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
-import type { RecoverAction } from "../src/api/client.ts";
+import type { RecoverAction, Run } from "../src/api/client.ts";
 import type { PersistedEvent } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -53,6 +53,36 @@ const openTab = (page: HTMLElement, name: string) => act(async () => {
 });
 
 describe("a stopped task", () => {
+  for (const status of ["aborted", "failed"] as const) {
+    test(`a restarted Run is not the recovery stop when its replacement is ${status}`, async () => {
+      const client = new FixtureClient("a");
+      const { runId } = await client.restart(RUN_ID, "Read the files yourself.");
+      const task = await client.getTask(TASK_ID);
+      const events = await client.events({ taskId: TASK_ID });
+      const endedAt = new Date(Date.now() - 1000).toISOString();
+      client.getTask = async () => ({ ...task, status, runs: task.runs.map((r) => r.id === runId
+        ? { ...r, status, endedAt, error: status === "failed" ? "replacement host lost" : null }
+        : r) });
+      client.events = async () => ({ ...events, events: [...events.events, {
+        ...events.events[0]!, cursor: 20_000, eventId: "evt_replacement_stop", eventType: `run.${status}`,
+        runId, occurredAt: endedAt, actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" },
+        payload: { reason: "Stop the replacement." },
+      }], nextCursor: 20_000 });
+      const opened: string[] = [];
+      const page = await taskPage(client, { onOpenRun: (id) => { opened.push(id); } });
+      const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the replacement stop");
+      expect(notice.textContent).toContain(status === "failed" ? "The implement failed" : "Ana Ribeiro aborted the implement");
+      expect(notice.textContent).toContain(status === "failed" ? "replacement host lost" : "Stop the replacement.");
+      await click(notice.querySelector("[data-testid=stopped-run]")!);
+      expect(opened).toEqual([runId]);
+
+      const plain = await taskPage(stoppedAs("aborted"));
+      const plainNotice = await until(() => plain.querySelector<HTMLElement>("[data-testid=stopped]"), "the plain abort");
+      expect(plainNotice.textContent).toContain("Ana Ribeiro aborted the implement");
+      expect(plainNotice.textContent).toContain("rewriting the checkout's routing");
+    });
+  }
+
   test("says who stopped what and why, what it left, and offers the three ways back", async () => {
     const page = await taskPage(stoppedAs("aborted"));
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
@@ -150,6 +180,20 @@ describe("a task started over", () => {
   /** The Activity line that says `text`, once it is there. */
   const activityLine = (page: HTMLElement, text: string) =>
     until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes(text)), text);
+
+  test("an earlier attempt stopped at its failed replacement, not the restarted Run", async () => {
+    const client = restarted();
+    const { runId } = await client.restart("run_a1_fix", "Read the files yourself.");
+    const task = await client.getTask(TASK_ID);
+    const endedAt = new Date(Date.now() - 1000).toISOString();
+    client.getTask = async () => ({ ...task, runs: task.runs.map((r): Run => r.id === runId
+      ? { ...r, status: "failed", endedAt, error: "replacement host lost" } : r) });
+    const page = await onAttempt1(client);
+    expect(picker(page)?.textContent).toContain("FailedAttempt 1");
+    const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the set-aside notice");
+    expect(bar.textContent).toContain("stopped at Fix, failed");
+    expect(bar.textContent).not.toContain("aborted");
+  });
   /** What the page asked the URL to say: [tab, attempt, replace], in order. */
   function navigations() {
     const said: Array<[string | undefined, number | undefined, boolean]> = [];
