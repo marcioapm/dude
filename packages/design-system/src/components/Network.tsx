@@ -60,11 +60,10 @@ export interface RefusedHostsProps extends HTMLAttributes<HTMLDivElement> {
   readonly target: string;
   /** Allow one or several; absent for someone who may not change the list. */
   readonly onAllow?: ((names: string[]) => void) | undefined;
-  readonly disabled?: boolean | undefined;
 }
 
 /** Hosts agents tried and were refused, in the most Runs first, each with Allow, and Allow all. */
-export function RefusedHosts({ refused, target, onAllow, disabled, className, ...rest }: RefusedHostsProps) {
+export function RefusedHosts({ refused, target, onAllow, className, ...rest }: RefusedHostsProps) {
   return (
     <div className={cx(styles["refused"], className)} {...rest}>
       <Table density="compact">
@@ -86,7 +85,7 @@ export function RefusedHosts({ refused, target, onAllow, disabled, className, ..
               </Td>
               {onAllow ? (
                 <Td align="right">
-                  <Button size="sm" variant="secondary" leadingIcon="plus" disabled={disabled} onClick={() => onAllow([r.name])}>Allow</Button>
+                  <Button size="sm" variant="secondary" leadingIcon="plus" onClick={() => onAllow([r.name])}>Allow</Button>
                 </Td>
               ) : null}
             </Tr>
@@ -95,7 +94,7 @@ export function RefusedHosts({ refused, target, onAllow, disabled, className, ..
       </Table>
       {onAllow ? (
         <div className={styles["allowAll"]}>
-          <Button size="sm" variant="quiet" leadingIcon="plus" disabled={disabled} onClick={() => onAllow(refused.map((r) => r.name))}>
+          <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => onAllow(refused.map((r) => r.name))}>
             Allow all {refused.length}
           </Button>
           <span className={styles["allowAllNote"]}>Adds them to {target}’s list. The next Run on this project gets them.</span>
