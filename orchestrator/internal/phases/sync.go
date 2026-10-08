@@ -1554,12 +1554,14 @@ func pushRequest(r phaseRun) string {
 // end settles the lux Run of a failed or aborted Run. One worth resuming
 // (runs.keep) is stopped and kept until kept_until, its workspace and the
 // agent's conversation with it; then, or straight away for any other, it is
-// cancelled. A conductor is never kept: nothing resumes an ended one, and
-// the next message starts another.
+// cancelled. A succeeded lux Run is kept as a stopped one is: lux resumes
+// it (a lux from before refuses, and the resume fails it). A conductor is
+// never kept: nothing resumes an ended one, and the next message starts
+// another.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
-	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && !lux.Terminated(r.LuxState) && r.LuxState != "succeeded" {
+	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
 		err = s.keep(ctx, r)
 	} else {
 		// Not worth keeping, its time is up, or lux has nothing left to resume.
@@ -1672,7 +1674,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming (an earlier attempt got through and its answer
 		// was lost: lux's stream reports how it went) — or not resumable at
-		// all, cancelled or finished in lux, which fails it.
+		// all, ended in lux (or succeeded, on a lux from before succeeded
+		// resumed), which fails it.
 		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (lux.Terminated(cur.State) || cur.State == "succeeded") {
 			refused()
 			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)

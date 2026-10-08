@@ -539,8 +539,9 @@ type Server struct {
 	// NoSyncModes is a lux from before sync modes: a sync or resume naming
 	// fast-forward or fetch is refused with a 409.
 	NoSyncModes bool
-	// CancelledState is a lux from before the rename: a Run ended for good
-	// is "cancelled". By default it is "terminated", as lux reports now.
+	// CancelledState is a lux from before terminate: a Run ended for good
+	// is "cancelled", and a succeeded Run is final too. By default it is
+	// "terminated", and succeeded resumes as stopped does, as lux now.
 	CancelledState bool
 	// HoldPushes is a lux that accepts a push and never reports it: no
 	// git.push follows, until ReleasePushes.
@@ -879,6 +880,16 @@ func (s *Server) Crash(id string) {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		s.setState(run, "failed")
+	}
+}
+
+// Succeed ends a Run as lux does when its workload exits 0 on its own.
+func (s *Server) Succeed(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.busy = false
+		s.setState(run, "succeeded")
 	}
 }
 
@@ -1427,7 +1438,7 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		s.exited(run)
 		s.placementEnded(run, state, reason)
 	}
-	if state == "succeeded" || lux.Terminated(state) {
+	if lux.Terminated(state) || state == "succeeded" && s.CancelledState {
 		// Never runs again: its owner servers are detached, as lux does.
 		defer s.ownerRunEnded(run)
 	}
@@ -2087,14 +2098,16 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	// As lux's resumeRun: a Run resuming already answers as the first
 	// resume did; every other 409 means it was not resumed.
-	switch run.State {
-	case "stopped", "failed", "lost":
-	case "resuming":
+	resumable := run.State == "stopped" || run.State == "failed" || run.State == "lost" ||
+		run.State == "succeeded" && !s.CancelledState
+	switch {
+	case resumable:
+	case run.State == "resuming":
 		view := s.view(run)
 		s.mu.Unlock()
 		writeJSON(w, 202, view)
 		return
-	case "cancelled", "terminated", "succeeded":
+	case lux.Terminal(run.State):
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
 		return

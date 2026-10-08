@@ -540,9 +540,11 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 				p.Log.Warn("a preview's Run failed to start; submitting a new run", "run", r.ID, "luxRun", r.LuxRunID,
 					"state", lr.State, "startFailures", r.StartFailures)
 				cancel = true
-			case "stopped":
+			case "stopped", "succeeded":
+				// lux resumes a succeeded Run as a stopped one; a lux from
+				// before that refuses (409), and resumeWoken replaces it.
 				return p.resumeWoken(ctx, r, lr)
-			case "succeeded", "cancelled", "terminated":
+			case "cancelled", "terminated":
 				// Never runs again: a new one below.
 			default:
 				// On its way up or running already: its servers come with it.
