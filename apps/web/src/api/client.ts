@@ -11,6 +11,10 @@ import type { NavProject, NavTask } from "@dude/design-system";
 import { escalationWords } from "../escalation.ts";
 import type {
   AgentRole,
+  FileResult,
+  SessionDetail,
+  SessionLink,
+  SessionsList,
   TaskRepository,
   Decider,
   DeliveryPolicy,
@@ -1005,6 +1009,65 @@ export class ApiClient {
    */
   talk(taskId: string): Promise<ChatSent> {
     return this.#request("POST", `/v1/tasks/${taskId}/talk`, {});
+  }
+
+  // -- brainstorm sessions --------------------------------------------------
+
+  /** Your sessions, the invitations waiting on you, and questions put to you. */
+  sessions(): Promise<SessionsList> {
+    return this.#request("GET", "/v1/brainstorms");
+  }
+
+  getSession(id: string): Promise<SessionDetail> {
+    return this.#request("GET", `/v1/brainstorms/${encodeURIComponent(id)}`);
+  }
+
+  createSession(title: string, projects: SessionLink[] = []): Promise<{ id: string; title: string }> {
+    return this.#request("POST", "/v1/brainstorms", { title, projects });
+  }
+
+  /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
+  sessionChat(id: string, text: string): Promise<{ runId: string; created: boolean; questionId?: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text });
+  }
+
+  linkSession(id: string, projects: SessionLink[]): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/link`, { projects });
+  }
+
+  inviteToSession(id: string, people: string[], role: "chat" | "read"): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/people`, { people, role });
+  }
+
+  setSessionRole(id: string, person: string, role: "chat" | "read"): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/people/${encodeURIComponent(person)}/role`, { role });
+  }
+
+  removeFromSession(id: string, person: string): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/people/${encodeURIComponent(person)}/remove`);
+  }
+
+  /** Make someone else the owner; you keep chat or read, or leave. */
+  handOverSession(id: string, person: string, keep: "chat" | "read" | "leave"): Promise<{ id: string; pending: boolean }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/owner`, { person, keep });
+  }
+
+  acceptSession(id: string): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/accept`);
+  }
+
+  declineSession(id: string): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/decline`);
+  }
+
+  /** File items of the agent's proposal, as you. */
+  fileProposal(id: string, proposalId: string, items: number[]): Promise<FileResult> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/file`, { proposalId, items });
+  }
+
+  /** Say you have the session open (or no longer): its members see it, no one else. */
+  sessionOpen(id: string, open: boolean): Promise<{ open: boolean }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/open`, { open });
   }
 
   /**

@@ -309,7 +309,7 @@ var PromptRoleForPhase = map[string]string{
 
 // PromptRoles are the prompts a person can edit, in the order they are
 // shown.
-var PromptRoles = []string{"conductor", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
+var PromptRoles = []string{"conductor", "brainstorm", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
 
 // builtinInstructions is what each role is told to do, before the work it
 // is given: the part of a phase's prompt a person may rewrite (an
@@ -358,6 +358,17 @@ var builtinInstructions = map[string][]string{
 			"tests passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
+	"brainstorm": {"You think out loud with the members of this session about their projects: where something " +
+		"would live, what the smallest first slice is, what already exists. Answer with the evidence — the file and " +
+		"line in the linked checkouts, the task, the pull request, the finding.",
+		"Several people may write to you. Each message reaches you as \"Name: words\"; when several arrive together, " +
+			"answer each person by name. Ask one member something with ask_person and to: only they can answer it.",
+		"You read; you never change code, and you create nothing yourself. When work is agreed, put it on the " +
+			"proposal card (propose): new epics and tasks in a linked project, edits to an existing task's goal or " +
+			"criteria, a comment on a task. A member files what they keep, as themselves: an edit only on a task they own " +
+			"that has not started, so say whose task it is. Proposing again replaces the card.",
+		"Your checkouts are the linked projects' default branches, read only. Run `git fetch` and `git log` freely; " +
+			"never build, install or run tests: your machine is small."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
 		"finish — handing over code that does not build is not finishing."},
 	"reviewer": {"You may run the code, run the tests, and write throwaway scripts to check a hypothesis. " +
@@ -389,8 +400,8 @@ func BuiltinPrompt(role string) string {
 // PromptRoleFor is whose prompt and settings a Run runs with: its phase's,
 // or the conductor's for a task's conductor, which is no phase.
 func PromptRoleFor(phase, role string) string {
-	if phase == "" && role == RoleConductor {
-		return RoleConductor
+	if phase == "" && (role == RoleConductor || role == RoleBrainstorm) {
+		return role
 	}
 	return PromptRoleForPhase[phase]
 }

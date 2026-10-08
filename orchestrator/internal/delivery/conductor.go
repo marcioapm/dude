@@ -136,7 +136,8 @@ func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvChatMessage, OrganizationID: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: ref.RunID,
-		ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: ref.TaskID, Payload: payload,
+		SessionID: ref.SessionID, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator,
+		CorrelationID: ref.correlation(), Payload: payload,
 	})
 	return err
 }

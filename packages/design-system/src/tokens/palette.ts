@@ -207,6 +207,7 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
   reviewer: 40, // orange — scrutinises
   simplifier: 120, // green-yellow — prunes
   qa_browser: 350, // pink — pokes the UI
+  brainstorm: 80, // amber — thinks out loud
 };
 
 /**
@@ -224,6 +225,7 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
     reviewer: 0.66,
     simplifier: 0.86,
     qa_browser: 0.82,
+    brainstorm: 0.76,
   },
   light: {
     conductor: 0.42,
@@ -232,6 +234,7 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
     reviewer: 0.47,
     simplifier: 0.56,
     qa_browser: 0.57,
+    brainstorm: 0.5,
   },
 };
 

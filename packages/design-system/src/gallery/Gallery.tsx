@@ -18,6 +18,7 @@ import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
 import { ServersSection } from "./sections/Servers.tsx";
+import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
@@ -160,6 +161,15 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Brainstorm",
+    [
+      ["bs-proposal", "ProposalCard"],
+      ["bs-row", "SessionRow / SharedMark"],
+      ["bs-sidebar", "SidebarSessions"],
+      ["bs-rail", "SessionPeople / LinkedProjects"],
+    ],
+  ],
+  [
     "Servers",
     [
       ["sv-state", "ServerStateMark"],
@@ -276,6 +286,7 @@ function Shell() {
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
           <ServersSection mode={panes} />
+          <BrainstormSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>
