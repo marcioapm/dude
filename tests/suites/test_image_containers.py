@@ -184,11 +184,11 @@ def test_history_says_when_it_was_turned_on(page: Page, web_url: str, client: Ap
     expect(v2_item.get_by_test_id("version-flag")).to_have_text("Can run containers turned on")
     expect(history.locator("[data-version='1']").get_by_test_id("version-flag")).to_have_count(0)
     v2_item.click()
-    expect(history.get_by_test_id("flag-diff")).to_have_text("Can run containersoff→on")
+    expect(history.get_by_test_id("flag-diff")).to_have_text("Can run containers off → on")
     _shoot(page, "03-history")
     # v1, whole: the value alone.
     history.locator("[data-version='1']").click()
-    expect(history.get_by_test_id("flag-diff")).to_have_text("Can run containersoff")
+    expect(history.get_by_test_id("flag-diff")).to_have_text("Can run containers off")
     assert console_errors == []
 
 

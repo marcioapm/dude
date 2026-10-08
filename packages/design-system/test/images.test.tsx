@@ -211,6 +211,14 @@ describe("ImageHistory", () => {
     expect(flags).toEqual([["4", "Can run containers turned off"], ["3", "Can run containers turned off"], ["2", "Can run containers turned on"], ["1", ""]]);
   });
 
+  test("the property strip reads as words: off → on, or the value alone for a whole version", async () => {
+    const C = (id: string, n: number, can: boolean) => ({ ...V(id, n, "superseded", "FROM a\n"), canRunContainers: can });
+    await mount(<ImageHistory publishedId={null} versions={[C("v2", 2, true), C("v1", 1, false)]} />);
+    expect(host!.querySelector("[data-testid='flag-diff']")!.textContent).toBe("Can run containers off → on");
+    await act(async () => host!.querySelector<HTMLButtonElement>("[data-version='1']")!.click());
+    expect(host!.querySelector("[data-testid='flag-diff']")!.textContent).toBe("Can run containers off");
+  });
+
   test("a long history reads each version a bounded number of times, not once per row", async () => {
     const n = 2000;
     const list = Array.from({ length: n }, (_, i) => ({ ...V(`v${n - i}`, n - i, i % 7 === 3 ? "cancelled" : "superseded", "FROM a\n"), canRunContainers: i % 2 === 0 }));
