@@ -33,9 +33,11 @@ func main() {
 	idleCheck := flag.Duration("idle-check", 0, "how often idle servers are looked for (default 100ms)")
 	oldPools := flag.Bool("old-pools", false, "list pools as a lux before host sizes: no hostSize, hostSizeFrom, instanceType or isDefault")
 	memoryShare := flag.Float64("memory-share", 0.95, "report each placement's memoryLimit as this share of the memory its spec asks for; 0 reports none, as an older lux")
+	cancelledState := flag.Bool("cancelled-state", false, "report a Run ended for good as cancelled, as a lux before terminated")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
+	srv.CancelledState = *cancelledState
 	srv.PreviewDomain, srv.IdleCheck = *previewDomain, *idleCheck
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
 	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt

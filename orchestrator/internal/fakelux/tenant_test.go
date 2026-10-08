@@ -227,7 +227,7 @@ func TestAttachAndResumeRefusalsAreLuxs(t *testing.T) {
 	if err := c.Cancel(ctx, runB); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "cancelled", func() bool { r, _ := c.Get(ctx, runB); return r.State == "cancelled" })
+	waitFor(t, "cancelled", func() bool { r, _ := c.Get(ctx, runB); return r.State == "terminated" })
 	if _, err := c.AttachServer(ctx, two, runB); !isLux(err, 409, "finished") {
 		t.Errorf("attach to a cancelled Run: %v", err)
 	}

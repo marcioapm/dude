@@ -542,7 +542,7 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 				cancel = true
 			case "stopped":
 				return p.resumeWoken(ctx, r, lr)
-			case "succeeded", "cancelled":
+			case "succeeded", "cancelled", "terminated":
 				// Never runs again: a new one below.
 			default:
 				// On its way up or running already: its servers come with it.
@@ -1004,7 +1004,7 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 // end applied then is not acknowledged: the wake stays wanted, released.
 func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string, started bool) error {
 	const kept = `(CASE WHEN $3 THEN lux_start_event > $5 ELSE lux_after_event > $7 END)`
-	const keptEnd = `(NOT $3 AND lux_after_event > $7 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
+	const keptEnd = `(NOT $3 AND lux_after_event > $7 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated'))`
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET
 			wake_wanted_at = CASE WHEN `+keptEnd+` THEN wake_wanted_at END,
@@ -1012,7 +1012,7 @@ func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string,
 			next_attempt_at = CASE WHEN `+keptEnd+` THEN now() END,
 			lux_state = CASE WHEN `+kept+` THEN lux_state WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
 			status = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running' THEN 'running'::run_status
-				WHEN `+kept+` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled') THEN status
+				WHEN `+kept+` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated') THEN status
 				WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
 			active_since = CASE WHEN (CASE WHEN `+kept+` THEN lux_state ELSE $2 END) = 'running'
 				THEN COALESCE(active_since, now()) ELSE active_since END,

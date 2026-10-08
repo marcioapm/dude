@@ -835,7 +835,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		// of this start was applied (kept), the applied lux_state stands
 		// over the answer; an end applied leaves the preview parked.
 		const kept = `lux_start_event > $5`
-		const ended = `(` + kept + ` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled'))`
+		const ended = `(` + kept + ` AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled', 'terminated'))`
 		var resumed bool
 		err := tx.QueryRow(ctx, `UPDATE runs SET
 			lux_state = CASE WHEN `+kept+` THEN lux_state ELSE $4 END,
@@ -901,7 +901,8 @@ func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 		}
 	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', lux_state = 'cancelled' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel',
+			lux_state = CASE WHEN lux_state IN ('cancelled', 'terminated') THEN lux_state ELSE 'cancelled' END WHERE id = $1`, r.ID)
 		return err
 	})
 }
