@@ -473,9 +473,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
   chat, Can read, Invited), `LinkedProjects` (each project and its
-  repositories, read only; "No project linked yet" when none) and
-  `Capabilities` (what it can and cannot do, each line a check or a cross
-  as well as words).
+  repositories, read only; "No project linked yet" when none), **Files**
+  and `Capabilities` (what it can and cannot do, each line a check or a
+  cross as well as words).
+- **A session's files are what its agent published** — a design note, a
+  diagram, a table, a CSV — written into `$LUX_ARTIFACTS` as any agent
+  does, and listed for its members alone. The rail's **Files** block has
+  their count beside its label and **`PublishedFiles`**: each file's kind
+  glyph and its own name (the folder in the tooltip), "v3" when published
+  again, newest first, "N more" past eight; Download all (a zip) once
+  there are two. Picking one opens the **same viewer as a task's Files**
+  (`FileViewer` over an `ArtifactPreview`), with its versions. Nothing
+  published yet says so in the block. The agent says in Chat what it
+  published; the Chat shows no file card of its own, as a task's does not.
 - **Presence is said in words, not colour alone.** Who has the session
   open now takes the online dot on their face *and* "· here" after their
   role.
@@ -1601,6 +1611,8 @@ sessions*):
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.
+- **PublishedFiles** — the rail's Files: what the session's agent
+  published, each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
 - **SidebarSessions** — your brainstorm sessions above the projects, in

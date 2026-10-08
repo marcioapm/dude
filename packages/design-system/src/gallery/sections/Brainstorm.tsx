@@ -5,7 +5,7 @@ import { StatusMark } from "../../components/StatusMark.tsx";
 import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
-import { SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
+import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { people } from "../navFixtures.ts";
 
 const P = people;
@@ -135,6 +135,29 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read linked code, tasks, PRs, findings", "Propose epics and tasks · you file them"]}
                   cannot={["Change code, push, start or steer work", "Touch projects you didn't link"]} />
+              </SessionRailBlock>
+            </SessionRail>
+          </div>
+        </Panes>
+      </Block>
+      <Block id="bs-files" title="PublishedFiles"
+        note="The rail's Files: what the session's agent published for its members, newest first, each by its kind's glyph and name, a version mark when published again. Picking one opens it in the task's file viewer (FileViewer, ArtifactPreview). Long lists end in “N more”.">
+        <Panes mode={mode}>
+          <div style={{ width: 300 }}>
+            <SessionRail>
+              <SessionRailBlock label="Files 4">
+                <PublishedFiles onOpen={() => undefined} files={[
+                  { name: "design/metering.md", contentType: "text/markdown", versions: 3 },
+                  { name: "usage-by-kind.csv", contentType: "text/csv" },
+                  { name: "flow.svg", contentType: "image/svg+xml" },
+                  { name: "rollup.json", contentType: "application/json" },
+                ]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Files, many">
+                <PublishedFiles onOpen={() => undefined} max={2} files={[
+                  { name: "a.md", contentType: "text/markdown" }, { name: "b.md", contentType: "text/markdown" },
+                  { name: "c.md", contentType: "text/markdown" },
+                ]} />
               </SessionRailBlock>
             </SessionRail>
           </div>

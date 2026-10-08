@@ -207,6 +207,12 @@ func (s *Server) localCall(run *Run, tool, args string) {
 		s.workspaceGit(run, []string{"commit", "-q", "-m", in.Message})
 	case fakeagent.LocalGit:
 		s.workspaceGit(run, in.Args)
+	case fakeagent.LocalArtifact:
+		// Collected when its container next stops, as lux does.
+		if run.published == nil {
+			run.published = map[string]string{}
+		}
+		run.published[in.Path] = in.Content
 	}
 	run.edits++
 	id := fmt.Sprintf("local_%d", run.edits)

@@ -350,6 +350,66 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     assert "Billing" not in page.title()
 
 
+def _published(client: ApiClient, session: str, name: str) -> dict:
+    """Ask the session's agent to publish a file, after its first turn, and wait until it is listed
+    (collected when the brainstorm parks after its warm period)."""
+    said = len(_said(client, session))
+    client.post(f"/v1/brainstorms/{session}/chat",
+                {"text": "write it up\n" + _tool("artifact", {"path": name, "content": "# Metering\n\nCount each run once."})})
+    wait_until(lambda: len(_said(client, session)) > said, timeout=60, message="the agent never answered")
+    return wait_until(lambda: next((a for a in client.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"]
+                                    if a["name"] == name), None), timeout=90, message=f"{name} was never listed")
+
+
+def test_a_sessions_files_are_what_its_agent_published_for_its_members_alone(client: ApiClient, env):
+    _scripted_brainstorm(client)
+    reader, reader_client = _person(client, env, "Rita Reader")
+    otto, otto_client = _person(client, env, "Otto Other")
+    boss, boss_client = _person(client, env, "Bea Boss", role="admin")
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/people", {"people": [reader["id"]], "role": "read"})
+    reader_client.post(f"/v1/brainstorms/{session}/accept")
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    art = _published(client, session, "design.md")
+    assert (art["sessionId"], art["taskId"], art["role"]) == (session, None, "brainstorm")
+
+    # A member reads it, and the session's zip has it.
+    for who in (client, reader_client):
+        assert [a["name"] for a in who.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"]] == ["design.md"]
+        assert "Count each run once." in who.get(f"/v1/artifacts/{art['id']}/content").text
+        zipped = who.get(f"/v1/brainstorms/{session}/artifacts.zip")
+        assert zipped.status_code == 200 and b"design.md" in zipped.content
+    # Anyone else, an admin included, is told the session does not exist.
+    for who in (otto_client, boss_client):
+        for path, params in ((f"/v1/artifacts", {"sessionId": session}), (f"/v1/artifacts/{art['id']}/content", None),
+                             (f"/v1/brainstorms/{session}/artifacts.zip", None)):
+            res = who.get(path, params=params)
+            assert res.status_code == 404, (path, res.status_code)
+            assert "design.md" not in res.text and "Count each run" not in res.text
+    # Its artifact.created is on the session: members only.
+    assert [e for e in client.events(sessionId=session, limit=1000) if e["eventType"] == "artifact.created"]
+    assert not [e for e in otto_client.events(limit=1000) if e["eventType"] == "artifact.created" and e["sessionId"] == session]
+
+
+@pytest.mark.ui
+def test_the_session_rail_lists_its_files_and_one_opens_in_the_viewer(client: ApiClient, page: Page, web_url: str, org: dict):
+    _scripted_brainstorm(client)
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    _published(client, session, "design.md")
+    sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
+    files = page.get_by_test_id("session-files")
+    expect(files.get_by_test_id("session-files-count")).to_have_text("1", timeout=15_000)
+    files.locator('[data-name="design.md"]').click()
+    viewer = page.get_by_test_id("file-viewer")
+    expect(viewer).to_be_visible()
+    expect(viewer.get_by_test_id("file-content")).to_contain_text("Count each run once.")
+    page.keyboard.press("Escape")
+    expect(viewer).to_have_count(0)
+
+
 def _listen(who: ApiClient, frames: list, ready: threading.Event, stop: threading.Event) -> None:
     """Every frame of the organisation's live stream, as `who`'s browser hears it."""
     with requests.get(f"{who.base_url}/v1/events/stream", params={"live": "1", "key": who.api_key},

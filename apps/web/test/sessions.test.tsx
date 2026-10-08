@@ -15,6 +15,7 @@ import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
+import type { Artifact } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -90,7 +91,9 @@ class SessionClient extends FixtureClient {
 async function sessionPage(client: SessionClient) {
   const { container, unmount } = await mount(
     <PeopleProvider client={client}>
-      <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+      <ToastProvider>
+        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+      </ToastProvider>
     </PeopleProvider>,
   );
   mounted.push(unmount);
@@ -320,7 +323,9 @@ describe("a brainstorm session's page", () => {
     const client = new Gone(detail("chat"));
     const { container, unmount } = await mount(
       <PeopleProvider client={client}>
-        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        <ToastProvider>
+          <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        </ToastProvider>
       </PeopleProvider>,
     );
     mounted.push(unmount);
@@ -435,6 +440,53 @@ describe("a session's name", () => {
     expect(client.made).toBe(1);
     expect(opened).toEqual(["ssn_new"]);
     expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+});
+
+describe("a session's files", () => {
+  const art = (id: string, name: string, version: number, versions: number, contentType = "text/markdown"): Artifact => ({
+    id, taskId: null, sessionId: SESSION, runId: RUN, name, contentType, sizeBytes: 40, sha256: "x", epoch: 1, createdAt: at(30 - version),
+    phase: null, role: "brainstorm", version, versions });
+
+  class FilesClient extends SessionClient {
+    artifacts: Artifact[] = [];
+    asked = 0;
+    override listSessionArtifacts() {
+      this.asked++;
+      return Promise.resolve({ artifacts: this.artifacts });
+    }
+    override artifactContent(id: string) {
+      return Promise.resolve(new Blob([`# ${id}\n\nThe design.`], { type: "text/markdown" }));
+    }
+  }
+
+  test("the rail lists what its agent published, with a count; one opens in the files' viewer, and a new one is read as it is recorded", async () => {
+    const client = new FilesClient(detail("read"));
+    client.artifacts = [art("art_d2", "design.md", 2, 2), art("art_csv", "usage.csv", 1, 1, "text/csv"), art("art_d1", "design.md", 1, 2)];
+    const page = await sessionPage(client);
+    const block = await until(() => page.querySelector("[data-testid=session-files] [data-testid=published-files]"), "the files");
+    expect(page.querySelector("[data-testid=session-files-count]")!.textContent).toBe("2");
+    expect([...block.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["design.mdv2", "usage.csv"]);
+    await click(block.querySelector("[data-name='design.md']")!);
+    const viewer = await until(() => document.querySelector("[data-testid=file-viewer]"), "the viewer");
+    await until(() => viewer.querySelector("[data-testid=file-content]")?.textContent?.includes("The design.") || null, "its content");
+    expect(viewer.textContent).toContain("art_d2");
+    expect(viewer.querySelectorAll("[data-testid=viewer-version]")).toHaveLength(2);
+
+    const asked = client.asked;
+    client.artifacts = [art("art_n", "notes.md", 1, 1), ...client.artifacts];
+    await act(async () => {
+      emit({ ...ev("artifact.created", { artifactId: "art_n", name: "notes.md" }, { type: "agent", id: RUN }), eventId: "evt_art_n", cursor: 9999 });
+    });
+    await until(() => page.querySelector("[data-testid=session-files-count]")?.textContent === "3" || null, "the new file");
+    expect(client.asked).toBeGreaterThan(asked);
+  });
+
+  test("nothing published yet says so", async () => {
+    const page = await sessionPage(new FilesClient(detail("owner")));
+    await settle();
+    expect(page.querySelector("[data-testid=session-files]")!.textContent).toContain("Nothing published yet");
+    expect(page.querySelector("[data-testid=session-files-count]")).toBeNull();
   });
 });
 

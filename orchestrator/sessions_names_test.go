@@ -37,6 +37,39 @@ func TestASessionStartsUntitled(t *testing.T) {
 	}
 }
 
+// A file the brainstorm writes into $LUX_ARTIFACTS mid-conversation is
+// collected when its container stops, as any agent's: recorded on its
+// Run, its artifact.created on the session (so only members see it) and on
+// no task. (Who may read its bytes: TestASessionsArtifactsAreItsMembersAlone.)
+func TestABrainstormsPublishedFileIsItsSessions(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "metering"})
+	run := s.started(id)
+	// The scripted agent does its own work in the container from a later message.
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "write it up\n" +
+		`tool: artifact {"path":"design.md","content":"# Metering\n\nCount each run once."}`})
+	s.until("the second turn", func() bool {
+		v := s.luxRun(run)
+		return v != nil && len(v.inputs) > 0 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, run) == 1
+	})
+	mustExec(t, s.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, run)
+	var artifact string
+	s.until("the file recorded", func() bool {
+		s.pump()
+		_ = s.owner.QueryRow(context.Background(), `SELECT id FROM artifacts WHERE run_id = $1 AND name = 'design.md'`, run).Scan(&artifact)
+		return artifact != ""
+	})
+	if n := s.count(`SELECT count(*) FROM events WHERE event_type = 'artifact.created' AND session_id = $1 AND run_id = $2
+		AND task_id IS NULL AND payload->>'artifactId' = $3`, id, run, artifact); n != 1 {
+		t.Errorf("artifact.created on the session: %d, want 1", n)
+	}
+	if status, out := s.as(s.marcio, "GET", "/internal/artifacts/"+artifact+"/content", nil); status != 200 {
+		t.Errorf("its owner reading the file: %d %v", status, out)
+	}
+}
+
 // A member who can chat renames the session: one session.renamed by them,
 // and the agent's name_session refuses from then on. A reader cannot, and
 // someone not in it is told it does not exist.
