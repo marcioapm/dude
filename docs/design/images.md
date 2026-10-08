@@ -25,6 +25,9 @@ are in `packages/domain/src/images.ts`.
     in `failed`, `superseded` or `cancelled`.
   - `user_ref` is the image without the dude layer, by digest. Children
     build `FROM` it.
+  - `can_run_containers` (migration 090): Runs in it may start containers
+    (see [Can run containers](#can-run-containers)). Each version keeps its
+    own, like its Containerfile.
 - **`image_version_parents`**: the images a version is built `FROM`,
   resolved when it is saved, and the parent version its build used.
   Saving refuses an unknown `image:<name>` and a cycle.
@@ -123,11 +126,18 @@ A **finish** job builds this Containerfile:
 ```
 FROM <user_ref>
 COPY --from=<layer> /rootfs/ /
-RUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]
+RUN /bin/sh /usr/local/share/dude/setup.sh && <agent's subordinate ids>
 ENV OPENCODE_CONFIG=… DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent
 ```
+
+The same step gives `agent` lines in `/etc/subuid` and `/etc/subgid` when
+it has none (`images.SubIDs`): `agent:1:999` and `agent:1001:64535` for uid
+1000, every id but 0 and its own below 65536. lux runs each Run in a user
+namespace of 65536 ids, so a range above it (useradd's `100000:65536`)
+could not be mapped inside a Run. Where another name holds uid 1000 first
+(`node`), the lines are by uid. An image's own lines are kept.
 
 It pushes `<repository>:<version>-<layer digest, 12 hex>` and records the
 result in `image_finals`. The dude layer (`DUDE_LAYER_IMAGE`) is a `FROM
@@ -156,6 +166,43 @@ aiverse builds it.
 out of memory at a step, the timeout, a missing base, no `/bin/sh`, no
 git, a failed push, or a full disk. A failed build never touches the
 published version.
+
+## Can run containers
+
+A version marked "Can run containers" lets Runs in it start containers
+with rootless Podman or Docker (lux's `sandbox.nestedContainers`; lux
+`docs/runspec.md`, "Nested containers").
+
+- **Where it comes from.** It is saved with the draft. A new draft starts
+  from the published version's value; a new image whose Containerfile is
+  `FROM image:<x>` starts from x's published value; a base rebuild keeps the
+  child's. The editor warns before a build when the box is on, no
+  instruction names `podman` or `docker`, and no `FROM` is a library image
+  that can (`lacksContainerEngine`).
+- **The check.** A build or finish of such a version checks its final image,
+  after the dude layer and before the push (stage `checking`): the image
+  Runs get, with `agent` and its subordinate ids on it. The builder runs
+  itself, a static binary (`dude-image-builder containers-check`), in the
+  image, offline, as root, and looks for an engine (`podman`, or
+  `dockerd-rootless`), `fuse-overlayfs`, `newuidmap` and `newgidmap` able to
+  gain `CAP_SETUID`/`CAP_SETGID` (a file capability, or setuid root), and
+  `agent`'s `/etc/subuid` and `/etc/subgid` lines within 65536 ids. Missing
+  any, the job fails with one sentence ("Can't run containers: the image
+  has no podman or rootless Docker, …"), nothing of the final is pushed, and
+  the published version stays. `image_builds.containers_check` keeps
+  `{passed, detail}`, `check_seconds` its time.
+- **Runs.** Every Run, agent or preview, asks lux for nested containers
+  when the image it resolved can: a library image as its published version
+  says, recorded in `runs.image` as `canRunContainers`; an image typed by
+  hand never; `DUDE_AGENT_IMAGE` when `agent.nested_containers` says so. lux
+  keeps it in the Run's stored spec, so a resume asks for what it started
+  with. lux places such a Run only on a host that offers nested containers;
+  while it has none, the Run's servers view carries lux's reason
+  (`run.waitingReason`) and the Run page and a preview's Servers tab say it.
+- **Previews keep their containers.** A preview whose image can run
+  containers gets a state volume at `/home/agent/.local/share`, with
+  `XDG_DATA_HOME` set to it, over each engine's store, so its images,
+  containers and data survive sleep. Agent Runs do not.
 
 ## Resolving a Run's image
 
@@ -210,7 +257,7 @@ not the log's. The build page polls `GET /v1/images/builds/:id?after=<n>`
 and gets only the chunks ending after byte n, the first cut at n, while
 the kept log still reaches back to n; otherwise the whole kept log.
 
-`runs.image` records `{imageId, name, versionId, version, ref, layer}` once
+`runs.image` records `{imageId, name, versionId, version, ref, layer, canRunContainers}` once
 the image is resolved, and nothing rewrites it. Resumes therefore use the
 same digest, and the Run's page shows the image and version next to its
 machine size.
