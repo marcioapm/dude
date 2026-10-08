@@ -298,9 +298,13 @@ func TestAnAgentRunsWaitForAHostReachesItsPage(t *testing.T) {
 		do   func()
 		want string
 	}{
-		{"none to a reason", func() { w.lux.Wait(luxID, "waiting for capacity: 1 host in its pool does not support nested containers") },
+		{"none to a reason", func() {
+			w.lux.Wait(luxID, "waiting for capacity: 1 host in its pool does not support nested containers")
+		},
 			"waiting for capacity: 1 host in its pool does not support nested containers"},
-		{"a reason to another", func() { w.lux.Wait(luxID, "waiting for capacity: 2 hosts in its pool do not support nested containers") },
+		{"a reason to another", func() {
+			w.lux.Wait(luxID, "waiting for capacity: 2 hosts in its pool do not support nested containers")
+		},
 			"waiting for capacity: 2 hosts in its pool do not support nested containers"},
 		{"a reason to none", func() { w.lux.Place(luxID) }, ""},
 	} {
