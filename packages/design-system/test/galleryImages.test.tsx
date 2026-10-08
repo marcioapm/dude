@@ -41,4 +41,13 @@ test("Can run containers renders in dark and light, comfortable and compact", as
     expect([...pane.querySelectorAll("[data-testid=version-flag]")].map((f) => f.textContent!.trim())).toEqual(
       ["Can run containers turned off", "Can run containers turned on"]);
   }
+  // Each pane's box is described by its own pane's hint and warning: no id repeats across panes.
+  const ids = [...host.querySelectorAll("#i-containers [id]")].map((e) => e.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const pane of panes) {
+    const described = [...pane.querySelectorAll("[role=checkbox][aria-describedby]")]
+      .flatMap((b) => b.getAttribute("aria-describedby")!.split(" "));
+    expect(described.length).toBeGreaterThanOrEqual(5);
+    for (const id of described) expect(pane.contains(document.getElementById(id))).toBe(true);
+  }
 });
