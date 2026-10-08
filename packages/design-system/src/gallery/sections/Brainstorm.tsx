@@ -6,6 +6,7 @@ import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, 
 import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { ScreenHeader } from "../../components/ScreenHeader.tsx";
 import { Button } from "../../primitives/Button.tsx";
+import { Input } from "../../primitives/Input.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { people } from "../navFixtures.ts";
@@ -40,6 +41,21 @@ function Card({ readOnly }: { readonly readOnly?: boolean }) {
 function TitleDemo({ initial }: { readonly initial: string | null }) {
   const [title, setTitle] = useState(initial);
   return <SessionTitle title={title} onRename={async (t) => setTitle(t)} />;
+}
+
+/** A rename whose save waits on "Finish the save", as a slow request would, beside another field to move to meanwhile. */
+function SlowTitleDemo() {
+  const [title, setTitle] = useState<string | null>("Usage-based billing");
+  const [pending, setPending] = useState<(() => void) | null>(null);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }} data-testid="slow-title">
+      <SessionTitle title={title} onRename={(t) => new Promise<void>((resolve) => {
+        setPending(() => () => { setTitle(t); setPending(null); resolve(); });
+      })} />
+      <Button size="sm" variant="secondary" disabled={!pending} onClick={() => pending?.()}>Finish the save</Button>
+      <Input aria-label="Another field" placeholder="Another field" size="sm" />
+    </div>
+  );
 }
 
 export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
@@ -77,6 +93,8 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <TitleDemo initial="Usage-based billing" />
             <Label>a reader</Label>
             <SessionTitle title="Usage-based billing" />
+            <Label>a slow save: the title takes the focus back only if it was not moved meanwhile</Label>
+            <SlowTitleDemo />
             <Label>in a screen's header, as the session screen draws it</Label>
             <div style={{ width: "100%" }} data-testid="title-in-header">
               <ScreenHeader fillTitle title={<TitleDemo initial="Billing v2" />}
