@@ -22,9 +22,12 @@ func (s *Server) stallRoutes(mux *http.ServeMux) {
 // so the task's locks can be taken in their order before the Run's.
 func runTask(r *http.Request, tx pgx.Tx, runID string) (string, error) {
 	var taskID string
-	err := tx.QueryRow(r.Context(), `SELECT task_id FROM runs WHERE id = $1`, runID).Scan(&taskID)
+	err := tx.QueryRow(r.Context(), `SELECT COALESCE(task_id, '') FROM runs WHERE id = $1`, runID).Scan(&taskID)
 	if db.IsNotFound(err) {
 		return "", fail(http.StatusNotFound, "not_found", "run %s not found", runID)
+	}
+	if err == nil && taskID == "" {
+		return "", fail(http.StatusConflict, "conflict", "run %s is not a task's phase Run", runID)
 	}
 	return taskID, err
 }

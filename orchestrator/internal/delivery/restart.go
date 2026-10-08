@@ -53,7 +53,7 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	var findingIDs, blocking []string
 	var feedback json.RawMessage
 	var conductorRun, conductorNote string
-	err = tx.QueryRow(ctx, `SELECT task_id, COALESCE(phase::text, ''), COALESCE(category, ''), status::text,
+	err = tx.QueryRow(ctx, `SELECT COALESCE(task_id, ''), COALESCE(phase::text, ''), COALESCE(category, ''), status::text,
 			COALESCE(role::text, ''), attempt, finding_ids, blocking_severities, pr_feedback,
 			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, '')
 		FROM runs WHERE id = $1 FOR UPDATE`, in.RunID).
