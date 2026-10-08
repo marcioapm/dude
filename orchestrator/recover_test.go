@@ -458,16 +458,10 @@ func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 // resumed all the same fails rather than waiting for ever: whether lux
 // calls the end terminated, or cancelled as before the rename.
 func TestARunCancelledInLuxIsNotResumed(t *testing.T) {
-	for _, old := range []bool{false, true} {
-		t.Run(map[bool]string{false: "terminated", true: "cancelled"}[old], func(t *testing.T) {
-			runCancelledInLux(t, old)
-		})
-	}
+	eachLux(t, "terminated", "cancelled", runCancelledInLux)
 }
 
-func runCancelledInLux(t *testing.T, cancelledState bool) {
-	w := newWorld(t)
-	w.lux.CancelledState = cancelledState
+func runCancelledInLux(t *testing.T, w *world, _ bool) {
 	wi, runID := w.aborted()
 	w.lux.CancelInLux(w.lux.Runs()[0].ID)
 	// Resumed before dude heard of the cancel: lux refuses, and it fails.
@@ -488,16 +482,10 @@ func runCancelledInLux(t *testing.T, cancelledState bool) {
 // from before, which refuses, fails it as it does an ended one, and it is
 // let go.
 func TestAKeptRunThatSucceededInLuxIsResumedWhereLuxCan(t *testing.T) {
-	for _, old := range []bool{false, true} {
-		t.Run(map[bool]string{false: "resumable", true: "final"}[old], func(t *testing.T) {
-			runSucceededInLux(t, old)
-		})
-	}
+	eachLux(t, "resumable", "final", runSucceededInLux)
 }
 
-func runSucceededInLux(t *testing.T, cancelledState bool) {
-	w := newWorld(t)
-	w.lux.CancelledState = cancelledState
+func runSucceededInLux(t *testing.T, w *world, cancelledState bool) {
 	wi, runID := w.aborted()
 	// Kept already (aborted waits for it); its workload then exits 0. dude
 	// follows no kept Run's feed, so only the resume finds it succeeded.
