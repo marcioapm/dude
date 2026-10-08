@@ -399,6 +399,9 @@ def _title_uncut(page: Page) -> None:
 def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_renames_it(
         client: ApiClient, page: Page, web_url: str, org: dict):
     _scripted_brainstorm(client)
+    # Warm for the whole test (the organisation's policy: a session has no project), so the agent is
+    # not parked after its turn, and only the turn's end can clear Thinking.
+    assert client.patch("/v1/settings/organization", {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"], at="#/sessions")
     page.get_by_test_id("sessions").get_by_test_id("new-session").click()
