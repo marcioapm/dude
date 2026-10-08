@@ -134,7 +134,7 @@ export { FlowSteps, NameChips, TierChip, TierLine, TierMark, TierTip } from "./T
 export type { FlowStep, TierChipProps, TierTone } from "./Tiers.tsx";
 export { CodeEditor } from "./CodeEditor.tsx";
 export type { CodeEditorProps, CodeDiagnostic, CodeCompletion, CodeCompletionContext } from "./CodeEditor.tsx";
-export { ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";
+export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";

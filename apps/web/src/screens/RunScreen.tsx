@@ -42,11 +42,12 @@ import {
   AttachDropZone,
   ImageViewer,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
+import { Badge, Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
+import { useWaitingReason, WaitingForHost } from "../waiting.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
@@ -222,6 +223,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // (lux took the Run) or a stream that came back asks again.
   const askAgain = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
   const { url: terminalUrl, memoryLimit } = useTerminalUrl(client, runId, run?.status === "running", askAgain);
+  // lux took the Run and has no host for it yet: why, as lux says it.
+  const waitingReason = useWaitingReason(client, runId, run?.status === "scheduled", askAgain);
 
   useEffect(() => {
     if (!taskId) return;
@@ -384,6 +387,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {run.model ? <RunTierChip tier={run.modelTier} model={run.model} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
+        {waitingReason ? <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
@@ -605,6 +609,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               pinned={
                 run.preparingImage ? (
                   <PreparingImage preparing={run.preparingImage} />
+                ) : waitingReason ? (
+                  <WaitingForHost reason={waitingReason} onRunPage />
                 ) : conversation.plan.length > 0 ? (
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null

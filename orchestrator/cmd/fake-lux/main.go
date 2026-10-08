@@ -32,6 +32,7 @@ func main() {
 	previewDomain := flag.String("preview-domain", "", "the domain servers' preview URLs are under (none: previews off)")
 	idleCheck := flag.Duration("idle-check", 0, "how often idle servers are looked for (default 100ms)")
 	oldPools := flag.Bool("old-pools", false, "list pools as a lux before host sizes: no hostSize, hostSizeFrom, instanceType or isDefault")
+	noNestedHost := flag.Bool("no-nested-host", false, "no host offers nested containers: a Run asking for them waits, saying so in its stateReason")
 	memoryShare := flag.Float64("memory-share", 0.95, "report each placement's memoryLimit as this share of the memory its spec asks for; 0 reports none, as an older lux")
 	flag.Parse()
 
@@ -40,6 +41,7 @@ func main() {
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
 	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt
 	srv.MemoryShare = *memoryShare
+	srv.NoNestedHost = *noNestedHost
 	if *oldPools {
 		srv.Pools = fakelux.OldPools()
 	}
