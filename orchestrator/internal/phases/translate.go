@@ -180,6 +180,15 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 	return nil
 }
 
+// backFromAway (SQL, over runs) is a stall clock column moved on by the
+// time the Run was away from running (left_running_at), capped at now();
+// NULL stays NULL (LEAST alone would make it now()), and a Run never away
+// keeps it.
+func backFromAway(col string) string {
+	return `CASE WHEN ` + col + ` IS NULL OR left_running_at IS NULL THEN ` + col +
+		` ELSE LEAST(` + col + ` + (now() - left_running_at), now()) END`
+}
+
 // luxEvent handles lux's own lifecycle events.
 func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	var d map[string]any
@@ -191,16 +200,23 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A Run lux is moving to another host stops on the way, and is
 		// resumed by lux itself: recorded as resuming, not over.
 		state := lux.Recorded(str("state"), str("reason"))
-		// A placement that enters running (lux_state was anything else: a
-		// first start, or a resume after however long a wait for a host)
-		// dates its files now: what "no change for so long", and silence
-		// before the agent's first activity (silentSince), count from. A
-		// placement goes running → stopping → exited, never back to running
-		// (lux.Placement.State), so every such entry is a new placement.
+		// The stall clocks count only time running. Leaving running stamps
+		// left_running_at; the next entry into running moves each clock on
+		// by the time away, capped at now, so a move between hosts keeps
+		// the running time before it and drops its wait. The clocks: no
+		// change in files (files_changed_at), the agent's last activity
+		// (agent_active_at), and the last report (stall_reported_at, so
+		// run_stalled still compares like with like). Open calls are not
+		// moved: the new placement's first idle clears them (activity).
+		// A first start, never away, dates its files now.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
-			files_changed_at = CASE WHEN $2 = 'running' AND lux_state IS DISTINCT FROM 'running' THEN now()
-				WHEN $2 = 'running' THEN COALESCE(files_changed_at, now()) ELSE files_changed_at END,
+			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
+				ELSE files_changed_at END,
+			agent_active_at = CASE WHEN $2 = 'running' THEN `+backFromAway("agent_active_at")+` ELSE agent_active_at END,
+			stall_reported_at = CASE WHEN $2 = 'running' THEN `+backFromAway("stall_reported_at")+` ELSE stall_reported_at END,
+			left_running_at = CASE WHEN $2 = 'running' THEN NULL
+				WHEN lux_state = 'running' THEN now() ELSE left_running_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
