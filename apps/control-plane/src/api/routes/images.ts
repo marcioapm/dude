@@ -212,7 +212,10 @@ async function detail(ctx: RequestContext, id: string): Promise<ImageDetail> {
     const builds = (await scope.sql`
       SELECT ${scope.sql.unsafe(BUILD_COLUMNS)} FROM ${scope.sql.unsafe(BUILD_FROM)}
       WHERE i.id = ${id} ORDER BY b.requested_at DESC, b.id DESC LIMIT 100`) as ImageBuild[];
-    return { image, versions, builds, builder: await builderInfo(scope), canEdit: await isOrgAdmin(ctx) };
+    const previewedBy = (await scope.sql`
+      SELECT p.id, p.name FROM projects p JOIN organizations o ON o.id = p.organization_id
+      WHERE COALESCE(p.preview_image_id, p.runtime_image_id, o.default_image_id) = ${id} ORDER BY p.name`) as Array<{ id: string; name: string }>;
+    return { image, previewedBy, versions, builds, builder: await builderInfo(scope), canEdit: await isOrgAdmin(ctx) };
   });
 }
 

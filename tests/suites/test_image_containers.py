@@ -11,6 +11,7 @@ browser tests save the pages they reach, light and dark.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,9 @@ def test_a_preview_on_an_image_that_can_keeps_its_engine_store(client: ApiClient
 # ---------------------------------------------------------------------------
 
 
+OFF_WARNING = "New previews of this image can’t run containers. Previews already running keep theirs until they start a fresh run."
+
+
 def _library(client: ApiClient, dsn: str) -> dict:
     """The mockup's library: agents-podman and abs-preview FROM it, both
     able; node-22 that cannot; and abs-preview with a draft v2."""
@@ -122,8 +126,7 @@ def test_the_library_says_which_images_can_run_containers_and_the_box_is_saved_w
     expect(page.get_by_test_id("image-fact-containers")).to_have_text("Can run them")
     header = page.locator(".imageHeadActions")
     expect(header.get_by_test_id("can-run-containers")).to_have_text("Can run containers")
-    field = page.get_by_test_id("can-run-containers-field")
-    expect(field.get_by_role("checkbox")).to_be_checked()
+    expect(page.get_by_role("checkbox", name="Can run containers", exact=True)).to_be_checked()
     expect(page.get_by_test_id("containers-hint")).to_have_count(0)
     _shoot(page, "02-image-containers")
 
@@ -131,13 +134,14 @@ def test_the_library_says_which_images_can_run_containers_and_the_box_is_saved_w
     page.goto(f"{web_url}#/org/settings/images/{lib['node']}")
     expect(page.get_by_test_id("image-fact-containers")).to_have_text("No")
     expect(page.locator(".imageHeadActions").get_by_test_id("can-run-containers")).to_have_count(0)
-    box = page.get_by_test_id("can-run-containers-field").get_by_role("checkbox")
+    box = page.get_by_role("checkbox", name="Can run containers", exact=True)
     expect(box).not_to_be_checked()
     _shoot(page, "02b-image-off")
     box.click()
     expect(page.get_by_test_id("containers-changed")).to_have_text("Can run containers turned on")
     expect(page.get_by_test_id("containers-hint")).to_have_text(
         "This Containerfile doesn’t install podman or Docker. The build will fail its container check unless the base has them.")
+    expect(box).to_have_accessible_description(re.compile("unless the base has them\\.$"))
     page.get_by_test_id("image-note").fill("Run containers for the e2e suite")
     _shoot(page, "02c-image-on-hint")
     page.get_by_test_id("save-draft").click()
@@ -149,24 +153,32 @@ def test_the_library_says_which_images_can_run_containers_and_the_box_is_saved_w
 
 
 @pytest.mark.ui
-def test_turning_it_off_where_previews_use_it_warns_they_lose_their_containers(
+def test_turning_it_off_where_previews_run_it_says_new_previews_cannot(
         page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list):
     lib = _library(client, owner_dsn)
     project = client.create_project(name="abs", slug=f"abs-{os.urandom(3).hex()}")
     client.put(f"/v1/projects/{project['id']}/preview-settings", {"imageId": lib["abs"]})
     sign_in(page, web_url, org["api_key"], at=f"#/org/settings/images/{lib['abs']}")
-    box = page.get_by_test_id("can-run-containers-field").get_by_role("checkbox")
+    box = page.get_by_role("checkbox", name="Can run containers", exact=True)
     expect(box).to_be_checked()
     expect(page.get_by_test_id("containers-off-warning")).to_have_count(0)
     box.click()
-    expect(page.get_by_test_id("containers-off-warning")).to_have_text("Previews of this image lose their saved containers on their next wake.")
+    warning = page.get_by_test_id("containers-off-warning")
+    expect(warning).to_have_text(OFF_WARNING)
+    # The box is described by the warning beside it.
+    expect(box).to_have_accessible_description(re.compile(re.escape(OFF_WARNING) + "$"))
     expect(page.get_by_test_id("containers-changed")).to_have_text("Can run containers turned off")
     _shoot(page, "02d-image-off-warning")
-    # agents-podman is named by no preview: no warning.
+    # agents-podman is what no project's previews run: no warning.
     page.goto(f"{web_url}#/org/settings/images/{lib['podman']}")
-    page.get_by_test_id("can-run-containers-field").get_by_role("checkbox").click()
+    page.get_by_role("checkbox", name="Can run containers", exact=True).click()
     expect(page.get_by_test_id("containers-changed")).to_have_text("Can run containers turned off")
     expect(page.get_by_test_id("containers-off-warning")).to_have_count(0)
+    # A project whose previews pick no image run its runtime image: agents-podman now warns too.
+    client.create_project(name="tools", slug=f"tools-{os.urandom(3).hex()}", runtimeImageId=lib["podman"])
+    page.reload()
+    page.get_by_role("checkbox", name="Can run containers", exact=True).click()
+    expect(page.get_by_test_id("containers-off-warning")).to_have_text(OFF_WARNING)
     assert console_errors == []
 
 

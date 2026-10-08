@@ -12,7 +12,7 @@
  * "/history" or "/builds", or "builds/<build id>".
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   Breadcrumb,
   BuildQueueStrip,
@@ -413,6 +413,7 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
   // Saved with the draft, like its Containerfile; a new draft starts from the published version's.
   const savedContainers = draft?.canRunContainers ?? published?.canRunContainers ?? base?.canRunContainers ?? false;
   const [containers, setContainers] = useState(savedContainers);
+  const fieldId = useId();
   const [refused, setRefused] = useState<string | null>(null);
   const { busy, problem, save } = useSave();
   const names = useMemo(() => (library?.images ?? []).map((i) => i.name), [library]);
@@ -424,8 +425,9 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
   // The draft against the version it is from: "Can run containers turned on".
   const flipped = (draft || dirty) && containers !== (base?.canRunContainers ?? false) ? (containers ? "on" : "off") : null;
   const noEngine = containers && lacksContainerEngine(text, (library?.images ?? []).map((i) => ({ name: i.name, canRunContainers: Boolean(i.published?.canRunContainers) })));
-  // Turning it off where previews use it now: their kept containers go at their next wake.
-  const previewsLose = !containers && Boolean(image.published?.canRunContainers) && image.usedBy.some((u) => u.kind === "preview");
+  // Turning it off where previews run it: a sleeping preview resumes what it was
+  // submitted with, so only a fresh run gets the new version.
+  const previewsLose = !containers && Boolean(image.published?.canRunContainers) && detail.previewedBy.length > 0;
   const next = (versions.reduce((n, v) => Math.max(n, v.number ?? 0), 0) || 0) + 1;
   const ahead = (library?.queue ?? []).length;
   const counts = base ? draftCounts(base.containerfile, text) : null;
@@ -490,17 +492,18 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
         <div className="imageContainers" data-testid="can-run-containers-field">
           <Checkbox checked={containers} disabled={!canEdit} onCheckedChange={(c) => setContainers(c === true)}
             label="Can run containers"
-            description="Runs in this image can start containers inside with podman or Docker. dude checks the build can, and fails it if not." />
+            description="Runs in this image can start containers inside with podman or Docker. dude checks the build can, and fails it if not."
+            aria-describedby={[noEngine ? `${fieldId}-hint` : null, previewsLose ? `${fieldId}-warning` : null].filter(Boolean).join(" ")} />
           {noEngine ? (
-            <p className="imageContainersHint" data-testid="containers-hint">
+            <p className="imageContainersHint" id={`${fieldId}-hint`} data-testid="containers-hint">
               <Icon name="warning" size={12} />
               This Containerfile doesn’t install podman or Docker. The build will fail its container check unless the base has them.
             </p>
           ) : null}
           {previewsLose ? (
-            <p className="imageContainersHint" data-testid="containers-off-warning">
+            <p className="imageContainersHint" id={`${fieldId}-warning`} data-testid="containers-off-warning">
               <Icon name="warning" size={12} />
-              Previews of this image lose their saved containers on their next wake.
+              New previews of this image can’t run containers. Previews already running keep theirs until they start a fresh run.
             </p>
           ) : null}
         </div>
