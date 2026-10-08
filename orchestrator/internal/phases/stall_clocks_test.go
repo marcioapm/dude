@@ -102,7 +102,7 @@ func TestEachEntryIntoRunningMovesTheClocksOnce(t *testing.T) {
 		files, active := w.clock("files_changed_at"), w.clock("agent_active_at")
 		w.follow(running(epoch))
 		if away := w.clock("left_running_at"); away != nil {
-			t.Fatalf("move %d: still away from running since %v once running", epoch-1, away)
+			t.Errorf("move %d: still away from running since %v once running", epoch-1, away)
 		}
 		movedFiles, movedActive := w.clock("files_changed_at"), w.clock("agent_active_at")
 		if d := movedFiles.Sub(*files); d < 10*time.Minute || d > 11*time.Minute {
