@@ -118,11 +118,12 @@ type SessionRepo struct {
 // SpecName is the repository's name in the lux spec: <key>-<name>, unique
 // within the Run since names are unique only within a project, made one
 // lux takes (lux.SpecName; SQL's lux_name, SessionSpecNameSQL). Keys are
-// upper case, so it is always rewritten and always carries the hash of
-// <key>-<name>; with a session's keys distinct (SameKey) and names unique
-// per project, two of its repositories share a spec name only if their
-// 32-bit hash suffixes and truncated prefixes collide. Nothing else guards
-// against that.
+// unique in an organisation (projects_key_idx, migration 092) and names
+// per project, so <key>-<name> is distinct for every repository a session
+// can link. Keys are upper case, so the spec name is always rewritten and
+// carries the hash of <key>-<name>: two repositories share one only if
+// their 32-bit hash suffixes and truncated prefixes collide. Nothing else
+// guards against that.
 func (r SessionRepo) SpecName() string { return lux.SpecName(r.Key + "-" + r.Name) }
 
 // SessionSpecNameSQL is SpecName in SQL, over projects p and repositories
@@ -156,26 +157,6 @@ func SessionProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]Linked
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[LinkedProject])
-}
-
-// SameKey says why a session's linked projects cannot run, "" when they
-// can: two of them share a key. Its checkouts (repos/<key>/<name>), their
-// spec names and the projects its agent proposes work in are told apart by
-// key alone, so two projects under one key would share a checkout or read
-// each other's. The control plane refuses such links; this is the guard
-// for any that reach a spec anyway.
-func SameKey(projects []LinkedProject) string {
-	seen := map[string]string{}
-	for _, p := range projects {
-		key := strings.ToUpper(p.Key)
-		if first, ok := seen[key]; ok {
-			a, b := min(first, p.Name), max(first, p.Name)
-			return fmt.Sprintf("%s and %s both use the key %s; a session tells its projects apart by key, so link one of them.",
-				a, b, key)
-		}
-		seen[key] = p.Name
-	}
-	return ""
 }
 
 // HeldBack (SQL, over directives d): a message held while the agent waits

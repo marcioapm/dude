@@ -84,41 +84,22 @@ func TestASessionLinkingAnyProjectGetsAValidSpec(t *testing.T) {
 	}
 }
 
-// A session whose linked projects share a key — two "api" repositories
-// under BILL would be one spec name and one checkout path — never reaches
-// lux: its agent fails before submit, saying which projects and which key.
-// The control plane refuses such links; this is the orchestrator's guard
-// for any that get past it.
-func TestASessionWhoseProjectsShareAKeyIsRefusedBeforeSubmit(t *testing.T) {
+// Two projects of a session are never under one key: the organisation's
+// keys are unique ignoring case (projects_key_idx), so billing-worker
+// cannot be BILL beside billing-api. Linked together, each holding a
+// repository named api, they get distinct spec names and checkout paths,
+// both under their own key, and the agent starts.
+func TestTwoLinkedProjectsAlwaysGetDistinctSpecNamesAndPaths(t *testing.T) {
 	s := newSessionWorld(t)
 	mustExec(t, s.owner, `UPDATE projects SET key_prefix = 'BILL', name = 'Billing API' WHERE id = $1`, s.project)
-	mustExec(t, s.owner, `UPDATE projects SET key_prefix = 'bill', name = 'Billing Worker' WHERE id = $1`, s.webProject)
-	mustExec(t, s.owner, `UPDATE repositories SET name = 'api' WHERE id = ANY($1)`, []string{s.repoID, s.webRepo})
-	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Billing", "projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
-		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})["id"].(string)
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "where does metering go?"})
-	var run string
-	s.until("the session's agent to fail", func() bool {
-		var status string
-		run, status = s.brainstorm(id)
-		return status == "failed"
-	})
-	want := "Billing API and Billing Worker both use the key BILL; a session tells its projects apart by key, so link one of them."
-	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND error = $2 AND lux_run_id IS NULL`, run, want); n != 1 {
-		var why string
-		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, run).Scan(&why)
-		t.Errorf("failed with %q, want %q and no lux Run", why, want)
+	for _, key := range []string{"BILL", "bill", "Bill"} {
+		_, err := s.owner.Exec(context.Background(), `UPDATE projects SET key_prefix = $2 WHERE id = $1`, s.webProject, key)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "projects_key_idx" {
+			t.Fatalf("a second project keyed %s: %v, want projects_key_idx to refuse it", key, err)
+		}
 	}
-	if v := s.luxRun(run); v != nil {
-		t.Errorf("submitted to lux: %+v", v.spec.Git)
-	}
-}
-
-// A session linking two projects with distinct keys starts, each project's
-// checkout under its own key.
-func TestASessionWhoseProjectsHaveDistinctKeysStarts(t *testing.T) {
-	s := newSessionWorld(t)
+	mustExec(t, s.owner, `UPDATE projects SET key_prefix = 'BWOR', name = 'Billing Worker' WHERE id = $1`, s.webProject)
 	mustExec(t, s.owner, `UPDATE repositories SET name = 'api' WHERE id = ANY($1)`, []string{s.repoID, s.webRepo})
 	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Billing", "projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
@@ -128,11 +109,14 @@ func TestASessionWhoseProjectsHaveDistinctKeysStarts(t *testing.T) {
 	if v == nil || v.spec.Git == nil {
 		t.Fatalf("spec %+v", v)
 	}
-	var paths []string
+	var names, paths []string
 	for _, r := range v.spec.Git.Repositories {
-		paths = append(paths, r.Path)
+		names, paths = append(names, r.Name), append(paths, r.Path)
 	}
-	if !slices.Equal(paths, []string{"/workspace/repos/BL/api", "/workspace/repos/WC/api"}) {
+	if want := []string{lux.SpecName("BILL-api"), lux.SpecName("BWOR-api")}; !slices.Equal(names, want) || names[0] == names[1] {
+		t.Errorf("spec names %v, want %v, distinct", names, want)
+	}
+	if !slices.Equal(paths, []string{"/workspace/repos/BILL/api", "/workspace/repos/BWOR/api"}) {
 		t.Errorf("checked out at %v", paths)
 	}
 }

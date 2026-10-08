@@ -675,10 +675,6 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if errors.As(err, &noModel) {
 		return s.fail(ctx, r, string(noModel))
 	}
-	var sameKey errSameKey
-	if errors.As(err, &sameKey) {
-		return s.fail(ctx, r, string(sameKey))
-	}
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
