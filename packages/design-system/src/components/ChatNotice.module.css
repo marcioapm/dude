@@ -18,6 +18,15 @@
   height: 1px;
   background: var(--ds-color-border-subtle);
 }
+.root[data-kind="stopped"] {
+  color: var(--ds-tone-danger-fg);
+}
+.root[data-kind="stopped"] .rule {
+  background: var(--ds-tone-danger-border);
+}
+.root[data-kind="stopped"] .by {
+  color: inherit;
+}
 .body {
   display: inline-flex;
   align-items: center;
