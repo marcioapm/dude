@@ -209,6 +209,16 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// run_stalled still compares like with like). Open calls are not
 		// moved: the new placement's first idle clears them (activity).
 		// A first start, never away, dates its files now.
+		// A silent report's facts end in its silence's start (stallFacts):
+		// when that is the silence the clocks move on, it moves with them,
+		// so a move is not a change of facts. Another silence stays put.
+		var facts, since *string
+		if state == "running" {
+			if err := tx.QueryRow(ctx, `SELECT r.stall_fingerprint, extract(epoch FROM `+silentSince+`)::text
+				FROM runs r WHERE r.id = $1 AND r.left_running_at IS NOT NULL`, t.run.ID).Scan(&facts, &since); err != nil && err != pgx.ErrNoRows {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
@@ -220,6 +230,12 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
+		}
+		if facts != nil && since != nil && strings.HasSuffix(*facts, "|"+*since) {
+			if _, err := tx.Exec(ctx, `UPDATE runs r SET stall_fingerprint = $2 || extract(epoch FROM `+silentSince+`)::text
+				WHERE r.id = $1`, t.run.ID, strings.TrimSuffix(*facts, *since)); err != nil {
+				return err
+			}
 		}
 		if state == "running" {
 			t.resumeRunning(ctx, tx, s, f.Epoch)
