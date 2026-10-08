@@ -3,13 +3,11 @@
  * actually use it*, executed against the live token values rather than
  * inspected by eye. This is the automated half of the README's "How the
  * colours were chosen" contract: the four chromatic tone foregrounds, the
- * six role foregrounds, the text ladder and the accent all clear their
+ * six role colour slots, the text ladder and the accent all clear their
  * documented floors on the surfaces they are drawn on, in both themes.
  *
- * Full CVD (protan/deutan) simulation and ΔE pair-distance checks are not
- * implemented anywhere in this repo; this test covers the WCAG contrast
- * half, which is the part that is mechanically checkable without a
- * simulation library.
+ * The other half, CVD (protan/deutan) simulation and ΔE pair distance, is
+ * `paletteDistance.test.ts`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -122,6 +120,9 @@ describe("tones on the new surfaces", () => {
 });
 
 describe("role colours on the new surfaces", () => {
+  test("the brainstorm wears the conductor's colour in both modes", () => {
+    for (const mode of MODES) expect(roleColors[mode].brainstorm, mode).toEqual(roleColors[mode].conductor);
+  });
   test("every role fg clears 4.5:1 on its theme's surface", () => {
     for (const mode of MODES) {
       const surface = themeColors[mode].surface;

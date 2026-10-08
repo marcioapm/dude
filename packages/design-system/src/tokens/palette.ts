@@ -191,33 +191,51 @@ export const tones: Record<"light" | "dark", Record<ToneName, ToneInstance>> = {
 };
 
 // ---------------------------------------------------------------------------
-// Agent role colors — categorical identity, never status. Six fixed slots in
-// a fixed order. Identity is carried primarily by the glyph and initial in
-// AgentAvatar; color is the secondary cue.
+// Agent role colors — categorical identity, never status. Six colour slots
+// in a fixed order. Identity is carried primarily by the glyph (and, for the
+// conversation agents, the round shape) in AgentAvatar; color is the
+// secondary cue.
 // ---------------------------------------------------------------------------
 
 export type AgentRoleName = AgentRole;
 
 export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = ALL_AGENT_ROLES;
 
-const ROLE_HUES: Record<AgentRoleName, number> = {
+/**
+ * Roles that wear another role's colour instead of a slot of their own. The
+ * brainstorm is a conversation agent like the conductor: no seventh hue at
+ * this chroma and lightness clears the pair bar against all six slots in
+ * both modes, and the free hues near 80 read as the attention tone. Its
+ * glyph and label tell it apart.
+ */
+export const ROLE_COLOUR_OF = { brainstorm: "conductor" } as const satisfies Partial<Record<AgentRoleName, AgentRoleName>>;
+
+/** A role that owns a colour slot. */
+export type RoleColourSlot = Exclude<AgentRoleName, keyof typeof ROLE_COLOUR_OF>;
+
+/** The role whose colour `role` wears: itself, unless it borrows one. */
+export function roleColourSlot(role: AgentRoleName): RoleColourSlot {
+  return (ROLE_COLOUR_OF as Partial<Record<AgentRoleName, RoleColourSlot>>)[role] ?? (role as RoleColourSlot);
+}
+
+const ROLE_HUES: Record<RoleColourSlot, number> = {
   conductor: 300, // violet — conducts, sits above the others
   investigator: 232, // blue — reads and searches
   implementer: 170, // teal — builds
   reviewer: 40, // orange — scrutinises
   simplifier: 120, // green-yellow — prunes
   qa_browser: 350, // pink — pokes the UI
-  brainstorm: 80, // amber — thinks out loud
 };
 
 /**
- * Per-role lightness, found by search so that all 15 pairs clear CVD ΔE >= 8
+ * Per-slot lightness, found by search so that all 15 pairs clear CVD ΔE >= 8
  * and normal-vision ΔE >= 15 in each mode (OKLab ×100, Machado protan and
  * deutan) while every fg stays >= 4.5:1 on its surface, with hues fixed and
  * lightness moved as little as possible. Lightness varies on purpose: it
  * is what keeps violet/blue and teal/green apart under deutan simulation.
+ * `test/paletteDistance.test.ts` enforces the bar.
  */
-const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
+const ROLE_L: Record<"light" | "dark", Record<RoleColourSlot, number>> = {
   dark: {
     conductor: 0.66,
     investigator: 0.82,
@@ -225,7 +243,6 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
     reviewer: 0.66,
     simplifier: 0.86,
     qa_browser: 0.82,
-    brainstorm: 0.76,
   },
   light: {
     conductor: 0.42,
@@ -234,7 +251,6 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
     reviewer: 0.47,
     simplifier: 0.56,
     qa_browser: 0.57,
-    brainstorm: 0.5,
   },
 };
 
@@ -245,7 +261,7 @@ export interface RoleColor {
   readonly onSolid: string;
 }
 
-function roleColor(role: AgentRoleName, mode: "light" | "dark"): RoleColor {
+function roleColor(role: RoleColourSlot, mode: "light" | "dark"): RoleColor {
   const h = ROLE_HUES[role];
   const l = ROLE_L[mode][role];
   if (mode === "dark") {
@@ -264,15 +280,19 @@ function roleColor(role: AgentRoleName, mode: "light" | "dark"): RoleColor {
   };
 }
 
+function roleColorsFor(mode: "light" | "dark"): Record<AgentRoleName, RoleColor> {
+  const slots = Object.fromEntries(
+    (Object.keys(ROLE_HUES) as RoleColourSlot[]).map((r) => [r, roleColor(r, mode)]),
+  ) as Record<RoleColourSlot, RoleColor>;
+  return Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, slots[roleColourSlot(r)]])) as Record<
+    AgentRoleName,
+    RoleColor
+  >;
+}
+
 export const roleColors: Record<"light" | "dark", Record<AgentRoleName, RoleColor>> = {
-  light: Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, roleColor(r, "light")])) as Record<
-    AgentRoleName,
-    RoleColor
-  >,
-  dark: Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, roleColor(r, "dark")])) as Record<
-    AgentRoleName,
-    RoleColor
-  >,
+  light: roleColorsFor("light"),
+  dark: roleColorsFor("dark"),
 };
 
 // ---------------------------------------------------------------------------
