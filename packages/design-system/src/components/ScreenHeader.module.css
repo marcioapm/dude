@@ -41,6 +41,21 @@
 .fill .actions {
   flex-shrink: 0;
 }
+/* A phone: the title keeps the first line to itself, and the meta and
+   actions, which do not shrink, wrap under it rather than leave it 0px. */
+@media (max-width: 559.98px) {
+  .fill {
+    flex-wrap: wrap;
+  }
+  .fill .titleFill {
+    flex-basis: 100%;
+  }
+  .fill .meta {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+}
 .actions {
   display: inline-flex;
   flex-wrap: wrap;

@@ -442,6 +442,45 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     assert "Billing" not in page.title()
 
 
+@pytest.mark.ui
+def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
+        client: ApiClient, env, page: Page, web_url: str, org: dict):
+    """At 375px the shared marker, the model and Share wrap under the name, which keeps a line with
+    room for at least "New session"."""
+    _scripted_brainstorm(client)
+    ana, ana_client = _person(client, env, "Ana Nunes")
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    assert client.post(f"/v1/brainstorms/{session}/people", {"people": [ana["id"]], "role": "chat"}).status_code == 200
+    assert ana_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
+    wait_until(lambda: client.get(f"/v1/brainstorms/{session}").json()["session"]["run"], timeout=60, message="no Run")
+    page.set_viewport_size({"width": 375, "height": 800})
+    sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
+    header = page.get_by_test_id("session-screen").locator("header").first
+    expect(header.get_by_test_id("share-open")).to_be_visible(timeout=15_000)
+    expect(header.get_by_label("Shared with 1")).to_be_visible()
+    expect(header).to_contain_text("Brainstorm · fake/scripted")
+    m = header.evaluate("""h => {
+        const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
+        const probe = words.cloneNode(false);
+        probe.textContent = 'New session';
+        probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
+        h.append(probe);
+        const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,
+                   room: title.getBoundingClientRect().width, need: probe.getBoundingClientRect().width,
+                   words: words.getBoundingClientRect().width, cut: words.scrollWidth > words.clientWidth,
+                   text: words.textContent, titleBottom: title.getBoundingClientRect().bottom,
+                   metaTop: title.nextElementSibling.getBoundingClientRect().top,
+                   shareRight: h.querySelector('[data-testid=share-open]').getBoundingClientRect().right};
+        probe.remove();
+        return r;
+    }""")
+    assert m["overflow"] <= 0, m
+    assert (m["text"], m["cut"]) == ("New session", False) and m["words"] > 0, m
+    assert m["room"] > m["need"] > 0, m
+    assert m["metaTop"] >= m["titleBottom"] and m["shareRight"] <= m["header"], m
+
+
 def _published(client: ApiClient, session: str, name: str) -> dict:
     """Ask the session's agent to publish a file, after its first turn, and wait until it is listed
     (collected when the brainstorm parks after its warm period)."""

@@ -470,7 +470,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   agent's `name_session` refuses. In the header (`ScreenHeader fillTitle`)
   the name takes the line's free width, shown and edited: it is cut, with
   an ellipsis and the whole name in its tooltip, only when the line is
-  genuinely too short for it. The wash behind a nameable title sits past
+  genuinely too short for it. Under 560px (a phone) the meta and actions,
+  which never shrink, wrap onto a line of their own under the title, so a
+  shared session's marker, model and Share cannot squeeze it to nothing.
+  The wash behind a nameable title sits past
   its edge by a translate, not a negative margin, which would lay the
   button out narrower than its words and cut even "New session". The Chat says who named it, a
   `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
