@@ -454,10 +454,14 @@ func TestAResumedAgentIsToldTheTaskChanged(t *testing.T) {
 	}
 }
 
-// A kept Run an operator cancelled in lux is not offered to resume, and
-// one resumed all the same fails rather than waiting for ever.
+// A kept Run an operator ended in lux is not offered to resume, and one
+// resumed all the same fails rather than waiting for ever: whether lux
+// calls the end terminated, or cancelled as before the rename.
 func TestARunCancelledInLuxIsNotResumed(t *testing.T) {
-	w := newWorld(t)
+	eachLux(t, "terminated", "cancelled", runCancelledInLux)
+}
+
+func runCancelledInLux(t *testing.T, w *world, _ bool) {
 	wi, runID := w.aborted()
 	w.lux.CancelInLux(w.lux.Runs()[0].ID)
 	// Resumed before dude heard of the cancel: lux refuses, and it fails.
@@ -471,6 +475,53 @@ func TestARunCancelledInLuxIsNotResumed(t *testing.T) {
 	w.until("its lux run to be let go, not kept", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID) == 1
 	})
+}
+
+// A kept Run whose lux Run then succeeded (its workload exited 0) is still
+// offered to resume. A lux that resumes a succeeded Run resumes it; a lux
+// from before, which refuses, fails it as it does an ended one, and it is
+// let go.
+func TestAKeptRunThatSucceededInLuxIsResumedWhereLuxCan(t *testing.T) {
+	eachLux(t, "resumable", "final", runSucceededInLux)
+}
+
+func runSucceededInLux(t *testing.T, w *world, cancelledState bool) {
+	wi, runID := w.aborted()
+	// Kept already (aborted waits for it); its workload then exits 0. dude
+	// follows no kept Run's feed, so only the resume finds it succeeded.
+	w.lux.Succeed(w.lux.Runs()[0].ID)
+	if s := w.lux.Runs()[0].State; s != "succeeded" {
+		t.Fatalf("the fake's Run is %s, want succeeded", s)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, runID); n != 1 {
+		t.Fatalf("the aborted Run is not kept")
+	}
+	if got, _ := w.options(wi); len(got) == 0 || got[0] != "resume" {
+		t.Fatalf("a kept Run lux ended succeeded offers %v; want resume first", got)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	if !cancelledState {
+		w.until("the same lux Run resumed", func() bool {
+			return w.lux.Runs()[0].Resumed == 1 &&
+				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('running', 'completed')`, runID) == 1
+		})
+		if n := len(w.lux.Runs()); n != 1 {
+			t.Errorf("%d lux runs; want the succeeded one resumed, not replaced", n)
+		}
+		return
+	}
+	w.until("the resume to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'
+			AND error = 'cannot resume: lux says the run is succeeded'`, runID) == 1
+	})
+	w.until("its lux run to be let go, not kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Resumed != 0 || !r.Cancelled {
+		t.Errorf("the old lux's succeeded Run: resumed %d, cancelled %v; want let go in lux", r.Resumed, r.Cancelled)
+	}
 }
 
 // A reviewer still waiting for room when the review was aborted does not

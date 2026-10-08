@@ -443,7 +443,7 @@ func secretValues(rawSpec json.RawMessage, given []lux.Secret) map[string]string
 // runLive: lux edits a Run's servers in any state but a terminal one.
 func runLive(state string) bool {
 	switch state {
-	case "succeeded", "failed", "cancelled":
+	case "succeeded", "failed", "cancelled", "terminated":
 		return false
 	}
 	return true
