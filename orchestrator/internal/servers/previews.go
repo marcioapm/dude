@@ -44,8 +44,10 @@ type Previews struct {
 	*Service
 	Forges delivery.Forges
 	// The image when neither the project's preview settings, the project
-	// nor its organization name one (DUDE_AGENT_IMAGE).
-	DefaultImage string
+	// nor its organization name one (DUDE_AGENT_IMAGE), and whether it can
+	// run containers (agent.nested_containers).
+	DefaultImage           string
+	DefaultImageContainers bool
 	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
 	// "" turns the library off.
 	Layer string
@@ -322,6 +324,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	var machine *delivery.Machine
 	var image string
 	var got *images.RunImage
+	var nested bool
 	var outcome error
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
@@ -344,6 +347,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		site.Fallback = p.DefaultImage
 		var err error
 		image, got, err = images.Choose(ctx, tx, site, p.Layer, r.ID, r.ImageBuildID)
+		nested = site.Containers(got, p.DefaultImageContainers)
 		if err, outcome = images.Settle(err); err != nil || outcome != nil {
 			return err
 		}
@@ -434,6 +438,9 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	}
 	login.Apply(&spec)
 	phases.MachineSpec(machine, &spec)
+	if nested {
+		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+	}
 	return spec, branch, machine, got, nil
 }
 
