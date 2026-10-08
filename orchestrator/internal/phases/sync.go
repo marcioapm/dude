@@ -1291,12 +1291,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	}); err != nil {
 		return nil, err
 	}
-	// By the name lux reports, the spec's (lux.SpecName); the task's own
-	// name for each is repo.Name.
-	byName := map[string]delivery.Repository{}
-	for _, repo := range repos {
-		byName[lux.SpecName(repo.Name)] = repo
-	}
+	byName := repositoriesBySpecName(repos)
 
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub

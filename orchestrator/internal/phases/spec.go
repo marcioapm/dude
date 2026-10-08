@@ -216,6 +216,15 @@ func repoRefs(repos []specRepo) map[string]string {
 	return refs
 }
 
+// repositoriesBySpecName maps lux's reported names back to dude's repositories.
+func repositoriesBySpecName(repos []delivery.Repository) map[string]delivery.Repository {
+	byName := make(map[string]delivery.Repository, len(repos))
+	for _, repo := range repos {
+		byName[lux.SpecName(repo.Name)] = repo
+	}
+	return byName
+}
+
 // RepoPath is where a repository is checked out in the container, given
 // its name or its name in the spec (lux.SpecName leaves that as it is): a
 // name lux would refuse is checked out under the one the spec gives it.
