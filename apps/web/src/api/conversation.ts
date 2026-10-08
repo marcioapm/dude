@@ -739,8 +739,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           }
         }
         // Between model requests the agent is thinking, unless a tool is
-        // outstanding.
-        if (!state.activeTool) state.activity = "thinking";
+        // outstanding. The turn's closing totals (`turn: true`) come after
+        // its last message: the turn is over, nothing is thinking.
+        if (payload.turn === true) {
+          state.activity = null;
+          state.activeTool = null;
+        } else if (!state.activeTool) state.activity = "thinking";
+        break;
+      }
+
+      case EventTypes.SessionStopped: {
+        // The harness ended the turn (turn_complete, or any other reason):
+        // the agent is idle until something starts its next one.
+        state.activity = null;
+        state.activeTool = null;
         break;
       }
 

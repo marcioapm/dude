@@ -128,6 +128,30 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelector("[data-testid=session-rail]")!.textContent).toContain("billing");
   });
 
+  test("the agent's turn over, nothing is thinking: its closing totals and its end clear it", async () => {
+    const agent = { type: "agent", id: RUN } as const;
+    const turn = [
+      ev("chat.message", { text: "where does metering go?" }, { type: "human", id: YOU }),
+      ev("session.briefed", { text: "Brainstorm, this is the session.\n\n## The first message\n\nMárcio: where does metering go?" }),
+      ev("agent.prompt.delivered", { text: "Brainstorm, this is the session." }, agent),
+      ev("agent.tool.called", { tool: "list_tasks", callId: "c1" }, agent),
+      ev("agent.tool.completed", { tool: "list_tasks", callId: "c1", status: "completed" }, agent),
+      ev("agent.model.request.completed", { tokens: { input: 10, output: 5 } }, agent),
+    ];
+    const thinking = await sessionPage(new SessionClient(detail("owner"), turn));
+    await until(() => thinking.querySelector("[data-testid=session-screen] [data-activity=thinking]"), "thinking mid-turn");
+    const ended = [...turn,
+      ev("agent.message", { text: "In the meter's rollup." }, agent),
+      ev("agent.model.request.completed", { turn: true, tokens: { input: 12, output: 7 } }, agent),
+      ev("agent.session.stopped", { reason: "turn_complete" }, agent),
+    ];
+    const page = await sessionPage(new SessionClient(detail("owner"), ended));
+    await until(() => (page.textContent ?? "").includes("In the meter's rollup.") || null, "the answer");
+    await settle();
+    // A count, not toBeNull: bun's toBeNull passes a happy-dom element.
+    expect(page.querySelectorAll("[data-testid=session-screen] [data-activity]").length).toBe(0);
+  });
+
   test("a message goes to the session's chat", async () => {
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);
