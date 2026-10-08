@@ -493,22 +493,18 @@ func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
 				return err
 			}
-			var fingerprint, callID string
+			var fingerprint, tool string
 			var openSecs float64
-			err := tx.QueryRow(ctx, `SELECT `+brainstormCalls+`, oc.key, extract(epoch FROM now() - oc.value::timestamptz)
+			err := tx.QueryRow(ctx, `SELECT `+brainstormCalls+`, COALESCE((SELECT payload->>'tool' FROM events
+					WHERE run_id = r.id AND event_type = 'agent.tool.called' AND payload->>'callId' = oc.key
+					ORDER BY cursor LIMIT 1), 'tool'), extract(epoch FROM now() - oc.value::timestamptz)
 				FROM runs r CROSS JOIN LATERAL (SELECT * FROM jsonb_each_text(r.open_tool_calls_at)
 					ORDER BY value::timestamptz, key LIMIT 1) oc
-				WHERE r.id = $2 AND `+stuckBrainstorm, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &callID, &openSecs)
+				WHERE r.id = $2 AND `+stuckBrainstorm, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &tool, &openSecs)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			if err != nil {
-				return err
-			}
-			var tool string
-			if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'tool' FROM events WHERE run_id = $1
-				AND event_type = 'agent.tool.called' AND payload->>'callId' = $2 ORDER BY cursor LIMIT 1), 'tool')`,
-				r.ID, callID).Scan(&tool); err != nil {
 				return err
 			}
 			ref := delivery.RunRef{Org: r.Org, SessionID: r.SessionID, RunID: r.ID}
