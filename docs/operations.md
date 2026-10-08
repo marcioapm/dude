@@ -199,8 +199,8 @@ submitted (`phases.RunEgress`, `egress` in `internal/phases/spec.go`):
 leaves its organisation's `*` out with the rest of that list. An entry is a
 hostname, an address, a CIDR range or a lux wildcard `*.example.com` (every
 name under `example.com`, not `example.com` itself: list the apex too).
-The API refuses anything lux would; the orchestrator leaves out one saved
-before it did rather than failing the Run. A change reaches Runs submitted
+The API refuses anything lux would, and the orchestrator refuses to start
+on an `agent.egress` entry lux would. A change reaches Runs submitted
 after it: lux cannot change a live Run's rules, and a Run keeps what it was
 submitted with (`runs.network`) through its resumes. A session's agent gets
 its organisation's list.

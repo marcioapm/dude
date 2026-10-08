@@ -45,10 +45,10 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 			}
 			if name == "network" {
 				// The operator's floor, then the Run's own list: a host, a
-				// wildcard, an address, a range, one the operator already
-				// has, and one lux would refuse.
+				// wildcard, an address, a range, and one the operator
+				// already has.
 				c.Egress = []string{"mirror.internal"}
-				in.Egress = []string{"pypi.org", "*.github.com", "10.0.0.5", "10.60.0.0/16", "mirror.internal", "*.com"}
+				in.Egress = []string{"pypi.org", "*.github.com", "10.0.0.5", "10.60.0.0/16", "mirror.internal"}
 			}
 			got, err := json.MarshalIndent(buildSpec(c, in), "", "  ")
 			if err != nil {

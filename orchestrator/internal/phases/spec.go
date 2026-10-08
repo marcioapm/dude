@@ -74,7 +74,7 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 		ToolsURL:     cfg.String("DUDE_TOOLS_URL"),
 		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),
 		ToolsKey:     []byte(cfg.String("DUDE_TOOLS_KEY")),
-		Egress:       cfg.List("DUDE_AGENT_EGRESS"),
+		Egress:       slices.Clone(cfg.List("DUDE_AGENT_EGRESS")),
 
 		NestedContainers: cfg.Bool("DUDE_AGENT_NESTED_CONTAINERS"),
 	}
@@ -84,6 +84,14 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 	if c.LLMURL != "" {
 		if err := ValidateHTTPURL(c.LLMURL); err != nil {
 			return c, fmt.Errorf("%s: %w", cfg.Label("DUDE_LLM_URL"), err)
+		}
+	}
+	// Refused here, not left out of a Run: with no model's host, a floor
+	// left empty would make every Run unrestricted.
+	for i, e := range c.Egress {
+		c.Egress[i] = strings.ToLower(e)
+		if _, ok := lux.ParseEgressRule(c.Egress[i]); e != "*" && !ok {
+			return c, fmt.Errorf("%s: %q: not a hostname, address, range or *.<domain> lux takes", cfg.Label("DUDE_AGENT_EGRESS"), e)
 		}
 	}
 	return c, nil
@@ -426,13 +434,14 @@ var colourEnv = map[string]string{
 // rule once, in that order. "*" in either list turns filtering off. With
 // nothing listed anywhere and no model's host, filtering is off rather than
 // leaving an agent that cannot reach its own model; the tools alone
-// restrict nothing. An entry lux would refuse (the API refuses them, so
-// only one saved before it did) is left out rather than failing the Run.
+// restrict nothing. Every entry is one lux takes (LoadAgentConfig refuses
+// others in the operator's list, the API in the Run's own); were one not,
+// lux would refuse the Run rather than run it with less listed.
 func egress(c AgentConfig, own []string) *lux.Network {
 	n := &lux.Network{}
 	seen := map[lux.EgressRule]bool{}
 	add := func(entry string) {
-		if r, ok := lux.ParseEgressRule(strings.ToLower(entry)); ok && !seen[r] {
+		if r, _ := lux.ParseEgressRule(strings.ToLower(entry)); !seen[r] {
 			seen[r] = true
 			n.Egress = append(n.Egress, r)
 		}

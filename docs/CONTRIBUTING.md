@@ -309,7 +309,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   at least two labels, no port or path; it matches names under the domain,
   not the domain itself). The API refuses others (`egressProblem` in
   `@dude/domain`), the fake lux refuses them in lux's words, and the
-  orchestrator leaves out any saved before it did (`lux.ParseEgressRule`).
+  orchestrator leaves out a preview's saved before it did and refuses to
+  start on one in `agent.egress` (`lux.ParseEgressRule`).
   Previews and agents share the rule; an agent's list is its organisation's
   and project's (operations, "Agent network").
 
