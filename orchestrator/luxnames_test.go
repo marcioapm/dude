@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -256,5 +257,97 @@ func TestATaskRepositoryLuxWouldRefuseByNameIsDelivered(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND repository_id = $2`, wi, w.repoID); n != 1 {
 		t.Errorf("%d pull requests on the repository", n)
+	}
+}
+
+// specOfRun is the spec lux was given for a dude Run.
+func (w *world) specOfRun(runID string) lux.Spec {
+	for _, r := range w.lux.Runs() {
+		var spec lux.Spec
+		if json.Unmarshal(r.Spec, &spec) == nil && spec.Labels["dude.run"] == runID {
+			return spec
+		}
+	}
+	return lux.Spec{}
+}
+
+// A reviewer of a task whose repository lux would refuse by name
+// (Target.API) is restarted on another tier: the fake lux, which refuses
+// such names, starts the new Run, whose spec names the repository and
+// places its checkout and workdir exactly as the Run it replaces did.
+func TestARestartedRunKeepsItsRepositorysSpecNameAndCheckout(t *testing.T) {
+	w := conducting(t)
+	const name = "Target.API"
+	mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, name)
+	w.onModel("reviewer", "llm-review")
+	w.hangingReviews(taskCall)
+	task := w.task()
+	w.conductedReview(task)
+	stuck := w.reviewersOpen(task, 2)[0]
+	w.onModel("implementer", "llm-big")
+	out := w.must(task, "restart_run", `{"run":"`+stuck+`","note":"again","tier":"`+onModelTier("llm-big")+`"}`)
+	fresh, _ := out["run"].(string)
+	w.until("the restarted reviewer accepted by lux", func() bool {
+		var status, why string
+		_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, fresh).
+			Scan(&status, &why)
+		if status == "failed" {
+			t.Fatalf("the restarted reviewer failed: %s", why)
+		}
+		return w.luxRunOf(fresh) != ""
+	})
+	before, after := w.specOfRun(stuck), w.specOfRun(fresh)
+	if after.Labels["dude.model"] != "llm-big" {
+		t.Errorf("the restart runs on %q, want llm-big", after.Labels["dude.model"])
+	}
+	if before.Git == nil || after.Git == nil || len(before.Git.Repositories) != 1 || len(after.Git.Repositories) != 1 {
+		t.Fatalf("git before %+v, after %+v", before.Git, after.Git)
+	}
+	was, is := before.Git.Repositories[0], after.Git.Repositories[0]
+	want := lux.SpecName(name)
+	if is.Name != want || was.Name != want || !lux.NameRe.MatchString(is.Name) {
+		t.Errorf("spec names %q then %q, want %q both times", was.Name, is.Name, want)
+	}
+	if is.Path != "/workspace/repos/"+want || is.Path != was.Path || after.Workload.Workdir != before.Workload.Workdir {
+		t.Errorf("checked out at %s (workdir %s), the replaced Run at %s (workdir %s)", is.Path, after.Workload.Workdir,
+			was.Path, before.Workload.Workdir)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_repositories = ARRAY[$2]`, fresh, want); n != 1 {
+		t.Errorf("the restarted Run does not hold %s", want)
+	}
+}
+
+// A stalled reviewer of a task whose repository lux would refuse by name,
+// in a call reading a file at the path its spec gave the checkout: its
+// owner's report names that file at that path.
+func TestAStallReportNamesAFileInARepositoryLuxWouldRefuseByName(t *testing.T) {
+	w := newWorld(t)
+	const name = "Target.API"
+	mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, name)
+	w.hangingReviews(taskCall)
+	reviewer := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := reviewer(spec)
+		if len(b.OpenCalls) == 1 {
+			// It reads a file where its spec checked the repository out.
+			workload, _ := spec["workload"].(map[string]any)
+			input, _ := json.Marshal(map[string]string{"filePath": fmt.Sprint(workload["workdir"]) + "/auth/session.go"})
+			b.OpenCalls = [][3]string{{"read", "read", string(input)}}
+		}
+		return b
+	}
+	wi := w.task()
+	w.deliver(wi)
+	runs := w.reviewersOpen(wi, 2)
+	mustExec(t, w.owner, `UPDATE runs SET open_tool_calls_at = '{}' WHERE id = $1`, runs[1])
+	w.openSince(runs[0], 3*time.Hour)
+	w.pump()
+	if n := w.stalls(runs[0]); n != 1 {
+		t.Fatalf("%d reports, want 1", n)
+	}
+	_, text := w.stallOf(runs[0])
+	file := "/workspace/repos/" + lux.SpecName(name) + "/auth/session.go"
+	if !strings.Contains(text, "`read` \""+file+"\"") {
+		t.Errorf("the report does not name %s:\n%s", file, text)
 	}
 }
