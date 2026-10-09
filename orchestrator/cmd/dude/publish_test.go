@@ -11,11 +11,11 @@ import (
 	"testing"
 )
 
-// publishes publishes path as name through an older lux's $LUX_ARTIFACTS
-// and returns what dude publish reports.
-func publishes(t *testing.T, path, name string) (string, int64) {
+// publishes publishes path as name, with description, through an older
+// lux's $LUX_ARTIFACTS and returns what dude publish reports.
+func publishes(t *testing.T, path, name, description string) (string, int64) {
 	t.Helper()
-	raw, err := publish(path, name, "")
+	raw, err := publish(path, name, description)
 	if err != nil {
 		t.Fatalf("publish %s: %v", path, err)
 	}
@@ -33,18 +33,22 @@ func publishes(t *testing.T, path, name string) (string, int64) {
 // per line, to args, prints answer and exits with code.
 func fakeShim(t *testing.T, answer string, code int) (args string) {
 	t.Helper()
-	dir := t.TempDir()
-	args = filepath.Join(dir, "args")
-	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + args + "; done\n" +
-		"printf '%s\\n' '" + answer + "'\nexit " + strconv.Itoa(code) + "\n"
-	shim := filepath.Join(dir, "lux-shim")
+	args = filepath.Join(t.TempDir(), "args")
+	useShim(t, "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> "+args+"; done\n"+
+		"printf '%s\\n' '"+answer+"'\nexit "+strconv.Itoa(code)+"\n")
+	return args
+}
+
+// useShim makes script the lux-shim dude publish runs, for this test.
+func useShim(t *testing.T, script string) {
+	t.Helper()
+	shim := filepath.Join(t.TempDir(), "lux-shim")
 	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	old := luxShim
 	luxShim = shim
 	t.Cleanup(func() { luxShim = old })
-	return args
 }
 
 // On a lux with artifact-publish ($LUX_ARTIFACTS unset), dude publish is
@@ -117,14 +121,7 @@ func TestAFileNamedLikeAFlagIsPublished(t *testing.T) {
 // which main prints and exits 1 with.
 func TestALuxShimKilledByASignalIsDudesError(t *testing.T) {
 	t.Setenv("LUX_ARTIFACTS", "")
-	dir := t.TempDir()
-	shim := filepath.Join(dir, "lux-shim")
-	if err := os.WriteFile(shim, []byte("#!/bin/sh\nkill -KILL $$\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := luxShim
-	luxShim = shim
-	t.Cleanup(func() { luxShim = old })
+	useShim(t, "#!/bin/sh\nkill -KILL $$\n")
 	err := run([]string{"publish", "notes.md"}, &strings.Builder{})
 	var passed shimFailed
 	if err == nil || errors.As(err, &passed) || !strings.Contains(err.Error(), "lux-shim publish: signal: killed") {
@@ -135,14 +132,9 @@ func TestALuxShimKilledByASignalIsDudesError(t *testing.T) {
 // lux-shim's refusal is dude publish's: the CLI built and run, its stderr
 // and exit status are lux-shim's own.
 func TestALuxShimRefusalIsPassedThrough(t *testing.T) {
-	dir := t.TempDir()
-	shim := filepath.Join(dir, "lux-shim")
-	script := "#!/bin/sh\necho 'lux-shim publish: description has a control character' >&2\nexit 3\n"
-	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(dir, "dude")
-	build := exec.Command("go", "build", "-ldflags", "-X main.luxShim="+shim, "-o", bin, ".")
+	useShim(t, "#!/bin/sh\necho 'lux-shim publish: description has a control character' >&2\nexit 3\n")
+	bin := filepath.Join(t.TempDir(), "dude")
+	build := exec.Command("go", "build", "-ldflags", "-X main.luxShim="+luxShim, "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -169,16 +161,9 @@ func TestPublishingAFileCopiesItIntoAnOlderLuxsArtifacts(t *testing.T) {
 	if err := os.WriteFile(src, []byte("# notes\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := publish(src, "", "dropped on an older lux")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Published string `json:"published"`
-		Bytes     int64  `json:"bytes"`
-	}
-	if err := json.Unmarshal(raw, &got); err != nil || got.Published != "notes.md" || got.Bytes != 8 {
-		t.Fatalf("published %s; want notes.md, 8 bytes", raw)
+	name, n := publishes(t, src, "", "dropped on an older lux")
+	if name != "notes.md" || n != 8 {
+		t.Fatalf("published %q, %d bytes; want notes.md, 8", name, n)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "notes.md")); string(b) != "# notes\n" {
 		t.Fatalf("the published file holds %q", b)
@@ -203,7 +188,7 @@ func TestPublishingAFileAlreadyInTheArtifactsKeepsItsBytes(t *testing.T) {
 	// As agents run it (by its own path, no --name), and by a hard link
 	// under another name.
 	for _, c := range []struct{ path, name string }{{video, ""}, {link, "walkthrough.webm"}} {
-		name, n := publishes(t, c.path, c.name)
+		name, n := publishes(t, c.path, c.name, "")
 		if name != "walkthrough.webm" || n != int64(len(want)) {
 			t.Fatalf("publishing %s: published %q, %d bytes; want walkthrough.webm, %d", c.path, name, n, len(want))
 		}
@@ -225,7 +210,7 @@ func TestPublishingOverADifferentArtifactReplacesIt(t *testing.T) {
 	if err := os.WriteFile(src, []byte("new report"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	name, n := publishes(t, src, "report.md")
+	name, n := publishes(t, src, "report.md", "")
 	if name != "report.md" || n != 10 {
 		t.Fatalf("published %q, %d bytes; want report.md, 10", name, n)
 	}
