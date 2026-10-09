@@ -357,10 +357,12 @@ const brainstormNamingNote = "Name the session with name_session once its subjec
 
 // brainstormPublishNote is how the agent hands the members a document. Its
 // files are listed beside the session, for its members alone.
-const brainstormPublishNote = "To give the members a document — a design note, a diagram, a table, a CSV — write it " +
-	"into the directory named by the LUX_ARTIFACTS environment variable (for example `$LUX_ARTIFACTS/design.md`, " +
-	"`$LUX_ARTIFACTS/usage.csv`). Each appears in the session's Files, Markdown rendered, for its members only. " +
-	"Say in your reply what you published and why. Never copy code there."
+const brainstormPublishNote = "To give the members a document — a design note, a diagram, a table, a CSV — run " +
+	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish design.md --name design.md " +
+	"--description \"Invoice PDF export design\"`, `dude publish usage.csv --name usage.csv --description \"Usage per " +
+	"customer, last 30 days\"`); the description is one short line saying what the file is for. Each appears in the " +
+	"session's Files at once, Markdown rendered, for its members only; the same name again is a new version. " +
+	"Say in your reply what you published and why. Never publish code."
 
 // SessionHandOver settles what members sent an ended brainstorm and it
 // never read: each goes, in order and with its writer, to the session's

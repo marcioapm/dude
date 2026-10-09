@@ -2,15 +2,20 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
-// publishes publishes path as name and returns what dude publish reports.
+// publishes publishes path as name through an older lux's $LUX_ARTIFACTS
+// and returns what dude publish reports.
 func publishes(t *testing.T, path, name string) (string, int64) {
 	t.Helper()
-	raw, err := publish(path, name)
+	raw, err := publish(path, name, "")
 	if err != nil {
 		t.Fatalf("publish %s: %v", path, err)
 	}
@@ -24,16 +29,107 @@ func publishes(t *testing.T, path, name string) (string, int64) {
 	return got.Published, got.Bytes
 }
 
-func TestPublishingAFileCopiesItIntoTheArtifacts(t *testing.T) {
+// fakeShim stands in for /.lux/bin/lux-shim: it writes its arguments, one
+// per line, to args, prints answer and exits with code.
+func fakeShim(t *testing.T, answer string, code int) (args string) {
+	t.Helper()
+	dir := t.TempDir()
+	args = filepath.Join(dir, "args")
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + args + "; done\n" +
+		"printf '%s\\n' '" + answer + "'\nexit " + strconv.Itoa(code) + "\n"
+	shim := filepath.Join(dir, "lux-shim")
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := luxShim
+	luxShim = shim
+	t.Cleanup(func() { luxShim = old })
+	return args
+}
+
+// On a lux with artifact-publish ($LUX_ARTIFACTS unset), dude publish is
+// lux-shim publish with the name and description, and its answer is
+// lux-shim's.
+func TestPublishingRunsLuxShimPublish(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	answer := `{"id":"art_aaaaaaaaaaaaaaaa","name":"design/notes.md","size":8,"sha256":"ab"}`
+	args := fakeShim(t, answer, 0)
+	raw, err := publish("/workspace/notes.md", "design/notes.md", "Why the export streams")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want map[string]any
+	_ = json.Unmarshal([]byte(answer), &want)
+	if err := json.Unmarshal(raw, &got); err != nil || got["id"] != want["id"] || got["name"] != want["name"] {
+		t.Fatalf("dude publish answered %s; want lux-shim's %s", raw, answer)
+	}
+	b, _ := os.ReadFile(args)
+	if got := strings.Split(strings.TrimSpace(string(b)), "\n"); strings.Join(got, "|") !=
+		"publish|/workspace/notes.md|--name|design/notes.md|--description|Why the export streams" {
+		t.Fatalf("lux-shim was run with %q", got)
+	}
+}
+
+// Without --name or --description, neither flag is passed: lux-shim names
+// the file by its base name.
+func TestPublishingWithoutANamePassesNoFlags(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	args := fakeShim(t, `{"id":"art_aaaaaaaaaaaaaaaa","name":"notes.md","size":1,"sha256":"ab"}`, 0)
+	if _, err := publish("notes.md", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(args); string(b) != "publish\nnotes.md\n" {
+		t.Fatalf("lux-shim was run with %q", b)
+	}
+}
+
+// lux-shim's refusal is dude publish's: the CLI built and run, its stderr
+// and exit status are lux-shim's own.
+func TestALuxShimRefusalIsPassedThrough(t *testing.T) {
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "lux-shim")
+	script := "#!/bin/sh\necho 'lux-shim publish: description has a control character' >&2\nexit 3\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "dude")
+	build := exec.Command("go", "build", "-ldflags", "-X main.luxShim="+shim, "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	cmd := exec.Command(bin, "publish", "notes.md", "--description", "x")
+	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS=")
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 3 {
+		t.Fatalf("dude publish exited %v; want lux-shim's 3", err)
+	}
+	if stderr.String() != "lux-shim publish: description has a control character\n" || stdout.String() != "" {
+		t.Fatalf("stdout %q, stderr %q; want lux-shim's words alone on stderr", stdout.String(), stderr.String())
+	}
+}
+
+func TestPublishingAFileCopiesItIntoAnOlderLuxsArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("LUX_ARTIFACTS", dir)
+	// Never run on an older lux: one that is would fail the test.
+	fakeShim(t, "", 9)
 	src := filepath.Join(t.TempDir(), "notes.md")
 	if err := os.WriteFile(src, []byte("# notes\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	name, n := publishes(t, src, "")
-	if name != "notes.md" || n != 8 {
-		t.Fatalf("published %q, %d bytes; want notes.md, 8", name, n)
+	raw, err := publish(src, "", "dropped on an older lux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Published string `json:"published"`
+		Bytes     int64  `json:"bytes"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || got.Published != "notes.md" || got.Bytes != 8 {
+		t.Fatalf("published %s; want notes.md, 8 bytes", raw)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "notes.md")); string(b) != "# notes\n" {
 		t.Fatalf("the published file holds %q", b)

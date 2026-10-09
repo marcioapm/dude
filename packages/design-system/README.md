@@ -497,7 +497,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and `Capabilities` (what it can and cannot do, each line a check or a
   cross as well as words).
 - **A session's files are what its agent published** — a design note, a
-  diagram, a table, a CSV — written into `$LUX_ARTIFACTS` as any agent
+  diagram, a table, a CSV — with `dude publish` as any agent
   does, and listed for its members alone. The rail's **Files** block has
   their count beside its label and **`PublishedFiles`**: each file's kind
   glyph and its own name (the folder in the tooltip), "v3" when published
