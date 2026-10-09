@@ -70,7 +70,7 @@ func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each role's other fields ride along with the rename: a time limit,
-	// which no later migration touches (096 deletes every role's effort).
+	// which no later migration touches (098 deletes every role's effort).
 	mustExec(t, owner, `UPDATE organizations SET default_agent_models = default_agent_models
 		|| jsonb_build_object('orchestrator', jsonb_build_object('tier', $1::text, 'timeLimitMinutes', 60))
 		|| '{"reviewer":{"tier":"mtr_kept","timeLimitMinutes":45}}' WHERE id = 'org_plain'`, coder)

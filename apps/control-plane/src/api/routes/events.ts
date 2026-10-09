@@ -11,8 +11,8 @@
 import type { PersistedEvent } from "@dude/domain";
 import { eventBus } from "../../events/bus.ts";
 import * as ledger from "../../events/ledger.ts";
-import { canSee } from "../../events/visibility.ts";
-import { intParam, json } from "../http.ts";
+import { canSee, mayReadSession } from "../../events/visibility.ts";
+import { intParam, json, notFound } from "../http.ts";
 import type { RequestContext } from "../router.ts";
 import type { Router } from "../router.ts";
 
@@ -25,9 +25,20 @@ function filtersFrom(url: URL) {
   };
 }
 
+/**
+ * A read of one brainstorm session's ledger is its members': anyone else
+ * is told the session does not exist, as its own routes tell them, rather
+ * than handed an empty ledger. Every event is still filtered per reader.
+ */
+async function requireSession(principal: RequestContext["principal"], sessionId: string | undefined): Promise<void> {
+  if (!(await mayReadSession(principal.organizationId, principal.personId, sessionId))) throw notFound(`session ${sessionId} not found`);
+}
+
 async function listEvents({ url, principal }: RequestContext): Promise<Response> {
+  const filters = filtersFrom(url);
+  await requireSession(principal, filters.sessionId);
   const events = await ledger.query(principal.organizationId, {
-    ...filtersFrom(url),
+    ...filters,
     after: intParam(url, "after", { min: 0 }),
     limit: intParam(url, "limit", { min: 1, max: 1000 }),
     viewer: principal.personId,
@@ -53,8 +64,9 @@ const BACKFILL_PAGE = 1000;
 /** The longest a session-authenticated stream stays open before it must authenticate again. */
 export const SESSION_STREAM_MS = 10 * 60_000;
 
-function streamEvents({ url, principal, request }: RequestContext): Response {
+async function streamEvents({ url, principal, request }: RequestContext): Promise<Response> {
   const filter = { organizationId: principal.organizationId, ...filtersFrom(url) };
+  await requireSession(principal, filter.sessionId);
   /*
    * `after` is explicit; `Last-Event-ID` is what the browser sends by itself.
    *

@@ -445,6 +445,40 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   reads as needs-you.
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
+  A session has no task, so its composer's placeholder is its own,
+  "Message the brainstorm…", never the task Chat's "Ask about this task…";
+  an answer keeps "Type your answer…".
+- **The same bar as an agent session**, under the header: a `Segmented`
+  switch between **Conversation** and **Events** (with its count), from
+  the same parts as the Run screen's. There is no Changes: a session
+  changes no code. **Events** is the session's ledger — every event of
+  every Run it had, and its own `session.*` events — in the `EventStream`
+  of `EventRow`s an agent session's Events uses, each opening onto its
+  payload. Its members' alone: anyone else is told the session does not
+  exist.
+- **A session starts untitled and names itself.** New session (the list's,
+  the sidebar's) makes one at once — no dialog, no title, nothing linked —
+  and opens it with the composer focused; its owner links projects from the
+  rail. Until it is named it reads **"New session"** everywhere it is
+  listed or headed (`sessionTitle` in `@dude/domain`). Its agent names it
+  once the subject is clear (`name_session`, one line of at most 60
+  characters), and again only if the subject clearly changes.
+- **`SessionTitle`** is the name in the session's header: untitled, "New
+  session" in muted ink. For a member who can chat it is a button that
+  edits the name in place — Enter saves, Escape cancels, and either gives
+  the focus back to the name (a blur cancels and leaves it where it went); a reader's is
+  plain words. **A person's name wins**: once someone has named it, the
+  agent's `name_session` refuses. In the header (`ScreenHeader fillTitle`)
+  the name takes the line's free width, shown and edited: it is cut, with
+  an ellipsis and the whole name in its tooltip, only when the line is
+  genuinely too short for it. Under 560px (a phone) the meta and actions,
+  which never shrink, wrap onto a line of their own under the title, so a
+  shared session's marker, model and Share cannot squeeze it to nothing.
+  The wash behind a nameable title sits past
+  its edge by a translate, not a negative margin, which would lay the
+  button out narrower than its words and cut even "New session". The Chat says who named it, a
+  `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
+  unsigned, "Ana renamed it “…”".
 - **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
   comments, each saying where it goes, an edit with its text Now and
   After. Filing acts as whoever presses File (`filingAs`): the footer says
@@ -459,9 +493,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
   chat, Can read, Invited), `LinkedProjects` (each project and its
-  repositories, read only; "No project linked yet" when none) and
-  `Capabilities` (what it can and cannot do, each line a check or a cross
-  as well as words).
+  repositories, read only; "No project linked yet" when none), **Files**
+  and `Capabilities` (what it can and cannot do, each line a check or a
+  cross as well as words).
+- **A session's files are what its agent published** — a design note, a
+  diagram, a table, a CSV — written into `$LUX_ARTIFACTS` as any agent
+  does, and listed for its members alone. The rail's **Files** block has
+  their count beside its label and **`PublishedFiles`**: each file's kind
+  glyph and its own name (the folder in the tooltip), "v3" when published
+  again, newest first, "N more" past eight; Download all (a zip) once
+  there are two. Picking one opens the **same viewer as a task's Files**
+  (`FileViewer` over an `ArtifactPreview`), with its versions. Nothing
+  published yet says so in the block. The agent says in Chat what it
+  published; the Chat shows no file card of its own, as a task's does not.
 - **Presence is said in words, not colour alone.** Who has the session
   open now takes the online dot on their face *and* "· here" after their
   role.
@@ -479,8 +523,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   "Waiting on you" count, so one number answers "what needs me".
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
-  title, because a private session's name must not reach people outside
-  it. The same words stand for where a question waits in the inbox.
+  title — named or "New session" — because a private session's name must
+  not reach people outside it. The same words stand for where a question
+  waits in the inbox.
 
 ### Images in a conversation
 
@@ -1589,8 +1634,12 @@ sessions*):
 
 - **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
   as whoever presses File.
+- **SessionTitle** — the session's name in its header: "New session"
+  muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.
+- **PublishedFiles** — the rail's Files: what the session's agent
+  published, each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
 - **SidebarSessions** — your brainstorm sessions above the projects, in

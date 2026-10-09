@@ -635,7 +635,7 @@ Run as the secrets `opencode_auth` and `opencode_config`
   [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
 - A Run keeps the URL, model and tier settings it started with (lux keeps
   the spec's env); only the key is supplied again on each resume.
-- Since migration 096 a role has no effort of its own: its tier's is sent.
+- Since migration 098 a role has no effort of its own: its tier's is sent.
   The migration deletes `effort` from every role config; tiers there before
   keep the model's default until an admin sets one in Models.
 

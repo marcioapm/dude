@@ -182,8 +182,16 @@ const Brainstorm = "brainstorm"
 const BrainstormMessage = "## The first message\n\n"
 
 // brainstormLead is how a session agent's briefing names its session
-// (delivery.sessionBriefing): its title, quoted.
-const brainstormLead = "Brainstorm, this is the session "
+// (delivery.sessionBriefing): its title, quoted; brainstormUntitled, how it
+// opens before the session has one.
+const (
+	brainstormLead     = "Brainstorm, this is the session "
+	brainstormUntitled = "Brainstorm, this is a new session"
+)
+
+// UntitledSession is what the scripted reply calls a session not named yet,
+// as people see it (delivery.UntitledSession).
+const UntitledSession = "New session"
 
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
@@ -234,8 +242,11 @@ func ConductorScript(briefing string) string {
 }
 
 // sessionTitle is the session's title a session agent's briefing opens
-// with, and whether it is one.
+// with, "New session" for one not named yet, and whether it is one.
 func sessionTitle(briefing string) (string, bool) {
+	if strings.HasPrefix(briefing, brainstormUntitled) {
+		return UntitledSession, true
+	}
 	rest, ok := strings.CutPrefix(briefing, brainstormLead)
 	if !ok {
 		return "", false
@@ -259,6 +270,8 @@ func localScript(name, args string) string {
 		return fmt.Sprintf("write %s %s\n", in.Path, strings.ReplaceAll(in.Content, "\n", " "))
 	case LocalCommit:
 		return "commit " + in.Message + "\n"
+	case LocalArtifact:
+		return fmt.Sprintf("write %s/%s %s\n", PublishedDir, in.Path, strings.ReplaceAll(in.Content, "\n", " "))
 	}
 	return ""
 }
@@ -272,17 +285,21 @@ const ConductorCallPrefix = "tool: "
 // The scripted conductor's own work in its checkout, named as tools in a
 // message (ConductorCalls) but done in the container rather than called
 // on dude: write {"path","content"} writes a file in its first
-// repository, commit {"message"} commits everything there, and git
-// {"args"} runs git there (the fake lux only).
+// repository, commit {"message"} commits everything there, git
+// {"args"} runs git there (the fake lux only), and artifact
+// {"path","content"} publishes a file for people into $LUX_ARTIFACTS.
 const (
-	LocalWrite  = "write"
-	LocalCommit = "commit"
-	LocalGit    = "git"
+	LocalWrite    = "write"
+	LocalCommit   = "commit"
+	LocalGit      = "git"
+	LocalArtifact = "artifact"
 )
 
 // Local says whether a call is the scripted conductor's own work in its
-// checkout rather than one of dude's tools.
-func Local(name string) bool { return name == LocalWrite || name == LocalCommit || name == LocalGit }
+// container rather than one of dude's tools.
+func Local(name string) bool {
+	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+}
 
 // ConductorCalls are the tool calls an input asks the scripted conductor
 // for, in order: each line "tool: NAME {json}" ([name, JSON arguments]).

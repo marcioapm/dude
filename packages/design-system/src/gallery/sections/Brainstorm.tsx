@@ -2,9 +2,13 @@ import { useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
-import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { ScreenHeader } from "../../components/ScreenHeader.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { Input } from "../../primitives/Input.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
-import { SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
+import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { people } from "../navFixtures.ts";
 
 const P = people;
@@ -34,6 +38,26 @@ function Card({ readOnly }: { readonly readOnly?: boolean }) {
   );
 }
 
+function TitleDemo({ initial }: { readonly initial: string | null }) {
+  const [title, setTitle] = useState(initial);
+  return <SessionTitle title={title} onRename={async (t) => setTitle(t)} />;
+}
+
+/** A rename whose save waits on "Finish the save", as a slow request would, beside another field to move to meanwhile. */
+function SlowTitleDemo() {
+  const [title, setTitle] = useState<string | null>("Usage-based billing");
+  const [pending, setPending] = useState<(() => void) | null>(null);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }} data-testid="slow-title">
+      <SessionTitle title={title} onRename={(t) => new Promise<void>((resolve) => {
+        setPending(() => () => { setTitle(t); setPending(null); resolve(); });
+      })} />
+      <Button size="sm" variant="secondary" disabled={!pending} onClick={() => pending?.()}>Finish the save</Button>
+      <Input aria-label="Another field" placeholder="Another field" size="sm" />
+    </div>
+  );
+}
+
 export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="brainstorm" title="Brainstorm sessions"
@@ -56,6 +80,33 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
                 <AgentAvatar role="conductor" size="md" /><AgentAvatar role="brainstorm" size="md" /><StatusMark status="awaiting_input" />
               </span>],
             ]} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="bs-title" title="SessionTitle"
+        note="A session's name in its header. Untitled until its agent or a member names it: “New session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>untitled, can chat</Label>
+            <TitleDemo initial={null} />
+            <Label>named, can chat (press it)</Label>
+            <TitleDemo initial="Usage-based billing" />
+            <Label>a reader</Label>
+            <SessionTitle title="Usage-based billing" />
+            <Label>a slow save: the title takes the focus back only if it was not moved meanwhile</Label>
+            <SlowTitleDemo />
+            <Label>in a screen's header, as the session screen draws it</Label>
+            <div style={{ width: "100%" }} data-testid="title-in-header">
+              <ScreenHeader fillTitle title={<TitleDemo initial="Billing v2" />}
+                meta={<><SharedMark owner={P["marcio"]} label="Shared with 2" /><span>Brainstorm · claude-opus-5-5</span></>}
+                actions={<Button size="sm" variant="secondary">Share</Button>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial={null} />} meta={<span>Brainstorm</span>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial={"Usage-based billing for experiment runs, with a dedupe on run id ".repeat(4).trim()} />}
+                meta={<span>Brainstorm</span>} />
+            </div>
+            <Label>in the Chat</Label>
+            <ChatNotice kind="renamed" by="Brainstorm" text="Named it “Usage-based billing”" at={Date.now() - 60_000} />
+            <ChatNotice kind="renamed" text="Ana renamed it “Billing v2”" at={Date.now()} />
           </Col>
         </Panes>
       </Block>
@@ -113,6 +164,29 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read linked code, tasks, PRs, findings", "Propose epics and tasks · you file them"]}
                   cannot={["Change code, push, start or steer work", "Touch projects you didn't link"]} />
+              </SessionRailBlock>
+            </SessionRail>
+          </div>
+        </Panes>
+      </Block>
+      <Block id="bs-files" title="PublishedFiles"
+        note="The rail's Files: what the session's agent published for its members, newest first, each by its kind's glyph and name, a version mark when published again. Picking one opens it in the task's file viewer (FileViewer, ArtifactPreview). Long lists end in “N more”.">
+        <Panes mode={mode}>
+          <div style={{ width: 300 }}>
+            <SessionRail>
+              <SessionRailBlock label="Files 4">
+                <PublishedFiles onOpen={() => undefined} files={[
+                  { name: "design/metering.md", contentType: "text/markdown", versions: 3 },
+                  { name: "usage-by-kind.csv", contentType: "text/csv" },
+                  { name: "flow.svg", contentType: "image/svg+xml" },
+                  { name: "rollup.json", contentType: "application/json" },
+                ]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Files, many">
+                <PublishedFiles onOpen={() => undefined} max={2} files={[
+                  { name: "a.md", contentType: "text/markdown" }, { name: "b.md", contentType: "text/markdown" },
+                  { name: "c.md", contentType: "text/markdown" },
+                ]} />
               </SessionRailBlock>
             </SessionRail>
           </div>

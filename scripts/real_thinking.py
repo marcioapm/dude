@@ -37,7 +37,7 @@ DEFAULT_URL = "https://llmproxy.absmartly-dev.com/v1"
 # skips a trivial one, and gpt-6-sol sends a reasoning item with no summary
 # when it has little to reason about.
 QUESTION = (
-    "Read migrations/096_tier_effort.sql. Reason it through step by step before answering: "
+    "Read migrations/098_tier_effort.sql. Reason it through step by step before answering: "
     "which of these headers objects does model_tier_headers_valid accept, and why each? "
     '{"X-Team":"a"}, {"X Team":"a"}, {"a":1}, {"a":"b\\nc"}, {"~ok":""}. Change nothing.'
 )

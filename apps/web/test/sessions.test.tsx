@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, SessionDetail, SessionsList } from "@dude/domain";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -15,6 +15,7 @@ import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
+import type { Artifact } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -42,7 +43,7 @@ function detail(role: "owner" | "chat" | "read", over: Partial<SessionDetail> = 
   const other = role === "owner" ? ANA : ME;
   return {
     session: {
-      id: SESSION, title: "Usage-based billing", createdAt: at(0),
+      id: SESSION, title: "Usage-based billing", titledBy: "agent", createdAt: at(0),
       people: [
         { person: ref(owner), role: "owner", accepted: true, becomesOwner: false, open: true },
         { person: ref(other), role: role === "owner" ? "chat" : role, accepted: true, becomesOwner: false, open: false },
@@ -63,10 +64,15 @@ class SessionClient extends FixtureClient {
     super("a");
   }
   sent: string[] = [];
+  renamed: string[] = [];
   filed: number[][] = [];
   fileResult: FileResult | null = null;
   override getSession(): Promise<SessionDetail> {
     return Promise.resolve(this.detail);
+  }
+  override renameSession(_id: string, title: string) {
+    this.renamed.push(title);
+    return Promise.resolve({ id: SESSION, title });
   }
   protected override ledgerFor(q: LedgerQuery): PersistedEvent[] {
     if (q.sessionId !== SESSION) return super.ledgerFor(q);
@@ -85,7 +91,9 @@ class SessionClient extends FixtureClient {
 async function sessionPage(client: SessionClient) {
   const { container, unmount } = await mount(
     <PeopleProvider client={client}>
-      <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+      <ToastProvider>
+        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+      </ToastProvider>
     </PeopleProvider>,
   );
   mounted.push(unmount);
@@ -196,6 +204,11 @@ describe("a brainstorm session's page", () => {
   });
 
   test("a message goes to the session's chat", async () => {
+    const placeholder = async (d: SessionDetail) =>
+      (await sessionPage(new SessionClient(d))).querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!.placeholder;
+    // A session has no task: its composer says who it writes to, not the task Chat's words.
+    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm…");
+    expect(await placeholder(detail("owner"))).not.toContain("task");
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);
     await write(page, "also, can the panel show cost estimates?");
@@ -227,6 +240,7 @@ describe("a brainstorm session's page", () => {
     ]);
     const page = await sessionPage(mine);
     const form = await until(() => page.querySelector("[data-testid=session-screen] form[data-mode=answer]"), "the answer composer");
+    expect(form.querySelector("textarea")!.placeholder).toBe("Type your answer…");
     const chip = [...form.querySelectorAll("button")].find((b) => b.textContent === "Experiment runs only")!;
     await click(chip);
     await settle();
@@ -370,13 +384,228 @@ describe("a brainstorm session's page", () => {
     const client = new Gone(detail("chat"));
     const { container, unmount } = await mount(
       <PeopleProvider client={client}>
-        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        <ToastProvider>
+          <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        </ToastProvider>
       </PeopleProvider>,
     );
     mounted.push(unmount);
     const shown = await until(() => container.querySelector("[data-testid=not-found]"), "not found");
     expect(shown.textContent).toContain("you're not in it");
     expect(container.querySelector("[data-testid=session-screen]")).toBeNull();
+  });
+});
+
+describe("a session's name", () => {
+  const untitled = (role: "owner" | "chat" | "read") => {
+    const d = detail(role);
+    return { ...d, session: { ...d.session, title: null, titledBy: null, messages: 0 } };
+  };
+
+  test("untitled, its header says New session, muted, and a new one opens with the composer focused", async () => {
+    const client = new SessionClient(untitled("owner"));
+    const page = await sessionPage(client);
+    const title = page.querySelector("[data-testid=session-title]")!;
+    expect(title.textContent).toBe("New session");
+    expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
+    expect(document.activeElement).toBe(page.querySelector("[data-testid=session-screen] textarea"));
+  });
+
+  test("a member who can chat renames it in place: Enter saves, Escape cancels", async () => {
+    const client = new SessionClient(detail("chat"));
+    const page = await sessionPage(client);
+    await click(page.querySelector("[data-testid=session-title]")!);
+    let input = await until(() => page.querySelector<HTMLInputElement>("[data-testid=session-title-input]"), "the name field");
+    expect(input.value).toBe("Usage-based billing");
+    await type(input, "Throwaway");
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(page.querySelector("[data-testid=session-title]")!.textContent).toBe("Usage-based billing");
+    expect(client.renamed).toEqual([]);
+
+    await click(page.querySelector("[data-testid=session-title]")!);
+    input = await until(() => page.querySelector<HTMLInputElement>("[data-testid=session-title-input]"), "the name field again");
+    await type(input, "  Billing   v2 ");
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    await settle();
+    expect(client.renamed).toEqual(["Billing v2"]);
+    expect(page.querySelector("[data-testid=session-title]")!.textContent).toBe("Billing v2");
+  });
+
+  test("a reader reads its name and cannot rename it", async () => {
+    const client = new SessionClient(untitled("read"));
+    const page = await sessionPage(client);
+    const title = page.querySelector("[data-testid=session-title]")!;
+    expect(title.tagName).not.toBe("BUTTON");
+    expect(title.textContent).toBe("New session");
+    await click(title);
+    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(document.activeElement).not.toBe(page.querySelector("[data-testid=session-screen] textarea"));
+  });
+
+  test("the Chat says who named it: the agent, or the person by name", async () => {
+    const client = new SessionClient(detail("owner"), [
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, { type: "agent", id: RUN }),
+      ev("session.renamed", { title: "Billing v2", by: ANA.id }, { type: "human", id: ANA.id }),
+    ]);
+    const page = await sessionPage(client);
+    const notices = await until(() => {
+      const found = [...page.querySelectorAll("[data-kind=renamed]")];
+      return found.length === 2 ? found : null;
+    }, "both renames");
+    expect(notices[0]!.textContent).toContain("Brainstorm: Named it “Usage metering”");
+    expect(notices[1]!.textContent).toContain(`${ANA.name.split(" ")[0]} renamed it “Billing v2”`);
+  });
+
+  test("untitled in the list, the sidebar's list and the inbox: New session", async () => {
+    const summary = { id: SESSION, title: null, role: "owner" as const, createdAt: at(0), owner: ref(ME), shared: false, projects: [],
+      runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0) };
+    const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
+    const client = new SessionClient(detail("owner"));
+    const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} /></ToastProvider>);
+    mounted.push(list.unmount);
+    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
+
+    const inbox = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <InboxScreen client={client} projects={[]} onSelect={() => {}} onOpenSession={() => {}} onChanged={() => {}} sessions={{
+            sessions: [],
+            invitations: [{ id: SESSION, title: null, role: "chat", becomesOwner: false, invitedAt: at(0), invitedBy: ref(ME), people: [ref(ME)],
+              projects: [], messages: 0 }],
+            questions: [{ id: "q_u", prompt: "Which window?", options: [], askedAt: at(1), sessionId: SESSION, title: null }],
+          }} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(inbox.unmount);
+    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: New session");
+    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in New session");
+  });
+
+  test("New session starts one at once, untitled and linked to nothing, and opens it", async () => {
+    const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
+    class Creating extends SessionClient {
+      made = 0;
+      override createSession() {
+        this.made++;
+        return Promise.resolve({ id: "ssn_new", title: null });
+      }
+    }
+    const client = new Creating(detail("owner"));
+    const opened: string[] = [];
+    const { container, unmount } = await mount(<ToastProvider><SessionsScreen client={client} sessions={[]} onOpen={(id) => opened.push(id)} /></ToastProvider>);
+    mounted.push(unmount);
+    await click(container.querySelector("[data-testid=new-session]")!);
+    await settle();
+    expect(client.made).toBe(1);
+    expect(opened).toEqual(["ssn_new"]);
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+});
+
+describe("a session's files", () => {
+  const art = (id: string, name: string, version: number, versions: number, contentType = "text/markdown"): Artifact => ({
+    id, taskId: null, sessionId: SESSION, runId: RUN, name, contentType, sizeBytes: 40, sha256: "x", epoch: 1, createdAt: at(30 - version),
+    phase: null, role: "brainstorm", version, versions });
+
+  class FilesClient extends SessionClient {
+    artifacts: Artifact[] = [];
+    asked = 0;
+    override listSessionArtifacts() {
+      this.asked++;
+      return Promise.resolve({ artifacts: this.artifacts });
+    }
+    override artifactContent(id: string) {
+      return Promise.resolve(new Blob([`# ${id}\n\nThe design.`], { type: "text/markdown" }));
+    }
+  }
+
+  test("the rail lists what its agent published, with a count; one opens in the files' viewer, and a new one is read as it is recorded", async () => {
+    const client = new FilesClient(detail("read"));
+    client.artifacts = [art("art_d2", "design.md", 2, 2), art("art_csv", "usage.csv", 1, 1, "text/csv"), art("art_d1", "design.md", 1, 2)];
+    const page = await sessionPage(client);
+    const block = await until(() => page.querySelector("[data-testid=session-files] [data-testid=published-files]"), "the files");
+    expect(page.querySelector("[data-testid=session-files-count]")!.textContent).toBe("2");
+    expect([...block.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["design.mdv2", "usage.csv"]);
+    await click(block.querySelector("[data-name='design.md']")!);
+    const viewer = await until(() => document.querySelector("[data-testid=file-viewer]"), "the viewer");
+    await until(() => viewer.querySelector("[data-testid=file-content]")?.textContent?.includes("The design.") || null, "its content");
+    expect(viewer.textContent).toContain("art_d2");
+    expect(viewer.querySelectorAll("[data-testid=viewer-version]")).toHaveLength(2);
+
+    const asked = client.asked;
+    client.artifacts = [art("art_n", "notes.md", 1, 1), ...client.artifacts];
+    await act(async () => {
+      emit({ ...ev("artifact.created", { artifactId: "art_n", name: "notes.md" }, { type: "agent", id: RUN }), eventId: "evt_art_n", cursor: 9999 });
+    });
+    await until(() => page.querySelector("[data-testid=session-files-count]")?.textContent === "3" || null, "the new file");
+    expect(client.asked).toBeGreaterThan(asked);
+  });
+
+  test("nothing published yet says so", async () => {
+    const page = await sessionPage(new FilesClient(detail("owner")));
+    await settle();
+    expect(page.querySelector("[data-testid=session-files]")!.textContent).toContain("Nothing published yet");
+    expect(page.querySelector("[data-testid=session-files-count]")).toBeNull();
+  });
+});
+
+describe("a session's events", () => {
+  // What arrives once the turn is over: its name (name_session, called in
+  // the turn but recorded with its rename) and the file lux collects when
+  // the container stops. Neither is the agent working, and a trip through
+  // Events and back reads the same ledger.
+  test("a rename and a published file after the turn's end start no Thinking, through Events and back", async () => {
+    const agent = { type: "agent", id: RUN } as const;
+    const client = new SessionClient(detail("owner"), [
+      ev("chat.message", { text: "metering" }, { type: "human", id: YOU }),
+      ev("agent.prompt.delivered", { text: "metering" }, agent),
+      ev("agent.tool.called", { tool: "name_session", callId: "n1" }, agent),
+      ev("agent.tool.completed", { tool: "name_session", callId: "n1", status: "completed" }, agent),
+      // Between requests, mid-turn: the agent is thinking until the turn's totals and end say otherwise.
+      ev("agent.model.request.completed", { tokens: { input: 1, output: 1 } }, agent),
+      ev("agent.message", { text: "Named it; the note is in Files." }, agent),
+      ev("agent.model.request.completed", { turn: true, tokens: { input: 1, output: 1 } }, agent),
+      ev("agent.session.stopped", { reason: "turn_complete" }, agent),
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, agent),
+      ev("artifact.created", { artifactId: "art_1", name: "design.md" }, agent),
+    ]);
+    const page = await sessionPage(client);
+    await until(() => page.querySelector("[data-kind=renamed]"), "the rename notice");
+    await settle();
+    const activity = () => page.querySelectorAll("[data-testid=session-screen] [data-activity]").length;
+    expect(activity()).toBe(0);
+    const bar = page.querySelector("[data-testid=session-view]")!;
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Events"))!);
+    await until(() => page.querySelector("[data-testid=event-log]"), "the ledger");
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent === "Conversation")!);
+    await until(() => page.querySelector("[data-kind=renamed]"), "the conversation again");
+    await settle();
+    expect(activity()).toBe(0);
+  });
+
+  test("the switch is Conversation | Events (count), with no Changes; Events lists every Run's events and the session's own", async () => {
+    const other = "run_brainstorm2";
+    const client = new SessionClient(detail("read"), [
+      ev("chat.message", { text: "first" }, { type: "human", id: YOU }),
+      ev("session.renamed", { title: "Usage metering", by: "agent" }, { type: "agent", id: RUN }),
+      { ...ev("agent.message", { text: "from the second Run" }, { type: "agent", id: other }), runId: other },
+      { ...ev("session.linked", { projects: [] }, { type: "human", id: YOU }), runId: null },
+    ]);
+    const page = await sessionPage(client);
+    const bar = await until(() => page.querySelector("[data-testid=session-view]"), "the switch");
+    const options = [...bar.querySelectorAll("button")].map((b) => b.textContent);
+    expect(options).toEqual(["Conversation", "Events4"]);
+    expect(page.querySelector("[data-testid=event-log]")).toBeNull();
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Events"))!);
+    const log = await until(() => page.querySelector("[data-testid=event-log]"), "the ledger");
+    expect(page.querySelector("[data-testid=session-composer]")).toBeNull();
+    const rows = log.textContent ?? "";
+    for (const type of ["chat.message", "session.renamed", "agent.message", "session.linked"]) expect(rows).toContain(type);
+    expect(rows).toContain("from the second Run");
+    await click([...bar.querySelectorAll("button")].find((b) => b.textContent === "Conversation")!);
+    await until(() => page.querySelector("[data-testid=session-composer]"), "the conversation again");
   });
 });
 
