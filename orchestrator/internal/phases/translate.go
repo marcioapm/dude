@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -139,6 +140,17 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
+	// Legacy tasks used their original one-based position as identity.
+	for i, task := range h.claudeTasks {
+		id, _ := task["id"].(string)
+		if id == "" {
+			id = strconv.Itoa(i + 1)
+			task["id"] = id
+		}
+		if n, err := strconv.Atoi(id); err == nil {
+			h.claudeTaskNext = max(h.claudeTaskNext, n)
+		}
+	}
 	if j.CodexTurn != nil {
 		h.codexTurn = *j.CodexTurn
 	}
