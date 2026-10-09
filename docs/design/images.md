@@ -199,6 +199,13 @@ with rootless Podman or Docker (lux's `sandbox.nestedContainers`; lux
   with. lux places such a Run only on a host that offers nested containers;
   while it has none, the Run's servers view carries lux's reason
   (`run.waitingReason`) and the Run page and a preview's Servers tab say it.
+- **What a Run records.** At submit, every Run records whether it may start
+  containers (`runs.can_run_containers`), from the stored spec lux returns:
+  for a retried submit lux had already taken, the first submit's sandbox. A
+  resume keeps it; a preview's new generation records its own. The Run
+  page's header then says "Can run containers"; a Run not yet submitted, or
+  from before this was recorded, has `canRunContainers: null` and shows
+  nothing.
 - **Previews keep their containers.** A preview whose image can run
   containers gets a state volume at `/home/agent/.local/share`, with
   `XDG_DATA_HOME` set to it, over each engine's store, so its images,

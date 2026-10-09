@@ -59,6 +59,8 @@ type Usage struct {
 type StoredSpec struct {
 	Image   Image          `json:"image"`
 	Secrets []StoredSecret `json:"secrets"`
+	// lux always returns it, {} when the Run may not relax its container.
+	Sandbox *Sandbox `json:"sandbox"`
 }
 
 // StoredSecret is a secret the Run declared, as lux stores it: no value,
@@ -266,6 +268,16 @@ type HostSize struct {
 type Sandbox struct {
 	// Requires a host offering nested containers and an image with the engine.
 	NestedContainers bool `json:"nestedContainers,omitempty"`
+}
+
+// NestedContainers is whether the lux Run may start containers inside it:
+// its stored spec's sandbox, which for a submit lux had already taken under
+// the same key is the first submit's; sent's only when lux returned none.
+func (r Run) NestedContainers(sent Spec) bool {
+	if sb := r.Spec.Sandbox; sb != nil {
+		return sb.NestedContainers
+	}
+	return sent.Sandbox != nil && sent.Sandbox.NestedContainers
 }
 
 type Image struct {
