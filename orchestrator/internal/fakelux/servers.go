@@ -51,7 +51,9 @@ type server struct {
 	// The environment its process last started with, beyond the fake's own
 	// (processEnv).
 	StartEnv map[string]string
-	log      []logLine
+	// The command its process last started with.
+	StartCommand []string
+	log          []logLine
 	// Bumped on every start or stop, so a pending "ready" of an earlier
 	// start does nothing.
 	gen int
@@ -190,6 +192,9 @@ func (s *Server) startServer(run *Run, sv *server) {
 	gen, epoch := sv.gen, run.Epoch
 	sv.ExitCode, sv.Error, sv.StopReason, sv.StoppedEpoch = nil, "", "", nil
 	s.setServer(run, sv, lux.ServerStarting)
+	if sv.tenant != nil {
+		s.tenantCalls = append(s.tenantCalls, "start "+sv.tenant.ID)
+	}
 	if sv.Command == nil {
 		return // someone else serves the port: ready when it opens
 	}
@@ -197,6 +202,7 @@ func (s *Server) startServer(run *Run, sv *server) {
 	// The environment its process gets, as lux's shim builds it: the Run's
 	// (its spec's env and env secrets), then the server's own over it.
 	sv.StartEnv = s.processEnv(run, sv)
+	sv.StartCommand = slices.Clone(sv.Command)
 	if strings.Contains(strings.Join(sv.Command, " "), runMarker) {
 		s.runCommand(run, sv)
 	}
@@ -352,6 +358,19 @@ func (s *Server) ServerEnv(id, name string) map[string]string {
 	if run := s.runs[id]; run != nil {
 		if sv := run.server(name); sv != nil {
 			return maps.Clone(sv.StartEnv)
+		}
+	}
+	return nil
+}
+
+// ServerCommand is the command a Run's server's process last started
+// with: nil if it never started.
+func (s *Server) ServerCommand(id, name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		if sv := run.server(name); sv != nil {
+			return slices.Clone(sv.StartCommand)
 		}
 	}
 	return nil

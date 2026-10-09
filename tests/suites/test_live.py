@@ -3,9 +3,10 @@
 The scripted agent's fake/live implementer writes files into its checkout
 without committing them and keeps working; it saves notes and a
 screenshot as it goes. So while it works, the orchestrator's reads of its
-checkout (through lux's exec) are its diff; pausing it stops its container,
-which runs the Run's beforeStop hook — the final diff — and collects what
-it saved; resumed, it finishes, saving its notes again, a second version.
+checkout (through lux's exec) are its diff, and what it saved is listed as
+it is published; pausing it stops its container, which runs the Run's
+beforeStop hook — the final diff; resumed, it finishes, saving its notes
+again, a second version.
 
 Everything here is through the public API and the built web app, against
 the fake lux (which runs the hook and exec in a real git checkout).
@@ -92,8 +93,8 @@ def test_a_pause_leaves_the_final_diff_and_what_the_session_saved_with_its_versi
     task, run = _live_task(client, forge_project, "Save things")
     wait_until(lambda: _diff_paths(client, run["id"]), timeout=30, message="no live diff")
 
-    # A pause stops the container: lux's beforeStop hook leaves the final
-    # diff, and what it saved so far is collected.
+    # A pause stops the container: lux's beforeStop hook publishes the final
+    # diff, which is never one of the files.
     assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code in (200, 202)
     wait_until(lambda: client.get(f"/v1/runs/{run['id']}/diff").json()["final"], timeout=30,
                message="no final diff after the pause")

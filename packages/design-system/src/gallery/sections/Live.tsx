@@ -77,8 +77,8 @@ function LiveDemo() {
 const T = Date.now();
 const GALLERY: GalleryFile[] = [
   { name: "revenue-chart.png", versions: [3, 2, 1].map((v) => ({ id: `png${v}`, name: "revenue-chart.png", contentType: "image/png", sizeBytes: 84_000, createdAt: T - (4 - v) * 3_600_000, role: "implementer" as const, session: "Implement", version: v })) },
-  { name: "session.webm", versions: [{ id: "webm", name: "session.webm", contentType: "video/webm", sizeBytes: 4_800_000, createdAt: T - 2_400_000, role: "reviewer", session: "Review · browser", version: 1 }] },
-  { name: "DECISION.md", versions: [2, 1].map((v) => ({ id: `md${v}`, name: "DECISION.md", contentType: "text/markdown", sizeBytes: 3_200, createdAt: T - 6_600_000, role: "implementer" as const, session: "Implement", version: v })) },
+  { name: "session.webm", versions: [{ id: "webm", name: "session.webm", contentType: "video/webm", sizeBytes: 4_800_000, createdAt: T - 2_400_000, role: "reviewer", session: "Review · browser", version: 1, description: "The sign-in flow, end to end" }] },
+  { name: "DECISION.md", versions: [2, 1].map((v) => ({ id: `md${v}`, name: "DECISION.md", contentType: "text/markdown", sizeBytes: 3_200, createdAt: T - 6_600_000, role: "implementer" as const, session: "Implement", version: v, description: "Why the chart uses visx" })) },
   { name: "coverage.html", versions: [{ id: "html", name: "coverage.html", contentType: "text/html", sizeBytes: 212_000, createdAt: T - 6_600_000, role: "implementer", session: "Implement", version: 1 }] },
 ];
 
@@ -134,7 +134,7 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="l-files" title="FileGallery / FileViewer" note="Everything a task's sessions saved: images and video as a gallery, documents as rows, each opening in the viewer with its versions down the side, prev/next on ← →, copy for text, and download — or all of them as a zip. HTML opens only in a sandboxed frame.">
+      <Block id="l-files" title="FileGallery / FileViewer" note="Everything a task's sessions saved: images and video as a gallery, documents as rows, each with what its agent said it is for as a secondary line under its name when it said, each opening in the viewer with its versions down the side, prev/next on ← →, copy for text, and download — or all of them as a zip. HTML opens only in a sandboxed frame.">
         <Panes mode={mode}>
           <Col>
             <FilesDemo />
