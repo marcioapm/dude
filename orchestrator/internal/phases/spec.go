@@ -129,10 +129,13 @@ type specInput struct {
 	// tier's name (recorded on the Run and as a label).
 	Model, ModelTier string
 	// The tier's reasoning effort, "" for the model's own, and its extra
-	// OpenCode model options and request headers.
+	// model options (OpenCode's; for another harness, its args) and
+	// request headers.
 	Effort  string
 	Options map[string]any
 	Headers map[string]string
+	// The role's harness (delivery.Harness*); "" is OpenCode.
+	Harness string
 	Prompt  string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
@@ -357,12 +360,18 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
 	}
 
-	// The scripted agent, for tests: lux-fake speaking ACP, following the
-	// script fakeagent writes for this phase. The model is a label too, so a
-	// stand-in for lux can play the same agent without parsing the script.
+	// The scripted agent, for tests: lux-fake following the script
+	// fakeagent writes for this phase, speaking ACP — or, for a role on
+	// Claude Code or Codex, that harness's protocol, which lux-fake speaks
+	// when its adapter runs it. The model is a label too, so a stand-in for
+	// lux can play the same agent without parsing the script.
 	if fakeagent.Is(in.Model) {
 		spec.Labels["dude.harness"] = harnessScripted
 		spec.Workload.Adapter = "acp"
+		if in.Harness == delivery.HarnessClaudeCode || in.Harness == delivery.HarnessCodex {
+			spec.Labels["dude.harness"] = in.Harness
+			spec.Workload.Adapter = in.Harness
+		}
 		spec.Workload.Command = []string{"lux-fake"}
 		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
@@ -377,11 +386,24 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 
 	spec.Env = maps.Clone(colourEnv)
-	// The image's OpenCode config defines the two providers, reading the URL
-	// and key from these; the Run adds its model, declared under the
-	// provider its name goes through with its tier's options and headers,
-	// all of which OpenCode deep-merges over that file
-	// (OPENCODE_CONFIG_CONTENT).
+	switch in.Harness {
+	case delivery.HarnessClaudeCode:
+		claudeCodeWorkload(c, in, &spec)
+	case delivery.HarnessCodex:
+		codexWorkload(c, in, &spec)
+	default:
+		openCodeWorkload(c, in, &spec)
+	}
+	spec.Network = egress(c, in.Egress)
+	return spec
+}
+
+// openCodeWorkload: the image's OpenCode config defines the two providers,
+// reading the URL and key from DUDE_LLM_URL and DUDE_LLM_KEY; the Run adds
+// its model, declared under the provider its name goes through with its
+// tier's options and headers, all of which OpenCode deep-merges over that
+// file (OPENCODE_CONFIG_CONTENT).
+func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if c.LLMURL != "" {
 		spec.Env["DUDE_LLM_URL"] = c.LLMURL
 	}
@@ -389,8 +411,162 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
-	spec.Network = egress(c, in.Egress)
-	return spec
+}
+
+// claudeCodeWorkload runs Claude Code on the tier's model, against the
+// proxy's Anthropic Messages API. Its session lives in $HOME/.claude, under
+// the home state volume every Run has.
+//
+// Thinking is asked for summarized (--thinking-display, a flag Claude Code
+// does not list): without it, thinking comes back with empty text, and no
+// setting or variable does the same. Effort none turns thinking off; an
+// unset effort leaves the model's own.
+func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
+	spec.Labels["dude.harness"] = delivery.HarnessClaudeCode
+	spec.Workload.Adapter = delivery.HarnessClaudeCode
+	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized"}
+	switch in.Effort {
+	case "":
+	case "none":
+		cmd = append(cmd, "--thinking", "disabled")
+	default:
+		cmd = append(cmd, "--effort", in.Effort)
+	}
+	spec.Workload.Command = append(cmd, HarnessArgs(in.Options)...)
+	if c.LLMURL != "" {
+		spec.Env["ANTHROPIC_BASE_URL"] = anthropicBaseURL(c.LLMURL)
+	}
+	// Shell commands stay in the foreground, where the turn waits for them
+	// and lux sees them; nothing updates the binary or calls home.
+	spec.Env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+	spec.Env["DISABLE_AUTOUPDATER"] = "1"
+	spec.Env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+	if len(in.Headers) > 0 {
+		var lines []string
+		for _, name := range slices.Sorted(maps.Keys(in.Headers)) {
+			lines = append(lines, name+": "+in.Headers[name])
+		}
+		spec.Env["ANTHROPIC_CUSTOM_HEADERS"] = strings.Join(lines, "\n")
+	}
+	if c.LLMKey != "" {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "ANTHROPIC_API_KEY", Value: c.LLMKey, As: "env"})
+	}
+}
+
+// anthropicBaseURL is the proxy's URL as Claude Code takes it: without the
+// /v1 it adds to every path itself.
+func anthropicBaseURL(llmURL string) string {
+	return strings.TrimSuffix(strings.TrimRight(llmURL, "/"), "/v1")
+}
+
+// codexWorkload runs Codex on the tier's model through a provider of its
+// own, "dude": the proxy's Responses API (the only one the proxy passes
+// reasoning summaries on), keyed by OPENAI_API_KEY, which lux also writes
+// as Codex's auth.json. Its session lives in $HOME/.codex, under the home
+// state volume.
+//
+// Codex sends reasoning only for a model it knows does summaries, and it
+// does not know the proxy's names: model_supports_reasoning_summaries says
+// so. Effort none or unset sends no effort.
+func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
+	spec.Labels["dude.harness"] = delivery.HarnessCodex
+	spec.Workload.Adapter = delivery.HarnessCodex
+	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
+		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
+	if len(in.Headers) > 0 {
+		var kv []string
+		for _, name := range slices.Sorted(maps.Keys(in.Headers)) {
+			kv = append(kv, tomlString(name)+"="+tomlString(in.Headers[name]))
+		}
+		provider += ", http_headers={" + strings.Join(kv, ", ") + "}"
+	}
+	provider += "}"
+	cmd := []string{"codex",
+		"-c", "approval_policy=" + tomlString("never"),
+		"-c", "sandbox_mode=" + tomlString("danger-full-access"),
+		"-c", "check_for_update_on_startup=false",
+		"-c", "model=" + tomlString(in.Model),
+		"-c", "model_provider=" + tomlString("dude"),
+		"-c", "model_providers.dude=" + provider,
+		"-c", "model_reasoning_summary=" + tomlString("auto"),
+		"-c", "model_supports_reasoning_summaries=true",
+	}
+	if in.Effort != "" && in.Effort != "none" {
+		cmd = append(cmd, "-c", "model_reasoning_effort="+tomlString(in.Effort))
+	}
+	spec.Workload.Command = append(cmd, HarnessArgs(in.Options)...)
+	if c.LLMKey != "" {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "OPENAI_API_KEY", Value: c.LLMKey, As: "env"})
+	}
+}
+
+// tomlString is s as a TOML basic string: a JSON string is one for any
+// text without DEL or other control characters JSON leaves raw.
+func tomlString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// HarnessArgs are a tier's extra command-line arguments for Claude Code or
+// Codex: its options' "args", a list of strings, appended to the command.
+// Anything else in options is OpenCode's and means nothing to them
+// (IgnoredOptions names it).
+func HarnessArgs(options map[string]any) []string {
+	list, _ := options["args"].([]any)
+	var out []string
+	for _, a := range list {
+		if s, ok := a.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// IgnoredOptions are the keys of a tier's options a Run on harness does
+// not use: every key but "args" on Claude Code or Codex, none on OpenCode.
+func IgnoredOptions(harness string, options map[string]any) []string {
+	if harness != delivery.HarnessClaudeCode && harness != delivery.HarnessCodex {
+		return nil
+	}
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(options)) {
+		if k != "args" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// harnessMisfit is why the role's harness cannot run its tier's model, the
+// reason its Run fails with; "" when it can. The scripted agent stands in
+// for any harness.
+func harnessMisfit(settings delivery.RoleSettings, tier delivery.Tier, role string) string {
+	if fakeagent.Is(tier.Model) {
+		return ""
+	}
+	return delivery.HarnessFits(settings.HarnessName(), tier.Model, tier.Name, delivery.RoleName(role),
+		llm.Provider(tier.Model) == llm.ProviderAnthropic)
+}
+
+// submittedHarness is the harness a resumed Run goes on with: the one it
+// was submitted on (runs.harness), whatever its role says now, since lux
+// resumes the command the spec named. A scripted Run, or one from before
+// the column was kept, takes the role's.
+func submittedHarness(ranOn, role string) string {
+	switch ranOn {
+	case delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex:
+		return ranOn
+	}
+	return role
+}
+
+// logIgnoredOptions says which of the tier's options a Run on Claude Code
+// or Codex leaves out (only "args" means anything to them).
+func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
+	if ignored := IgnoredOptions(in.Harness, in.Options); len(ignored) > 0 && s.Log != nil {
+		s.Log.Info("the tier's options other than args are OpenCode's; ignored on this harness",
+			"run", r.ID, "harness", in.Harness, "tier", in.ModelTier, "ignored", ignored)
+	}
 }
 
 // openCodeConfig is a Run's model and its tier's settings as OpenCode
