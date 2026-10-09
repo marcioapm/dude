@@ -75,6 +75,52 @@ func (w *world) changes(runID string) []map[string]any {
 	return out
 }
 
+// stageHold is a lux Run held at a stage boundary until release is closed.
+type stageHold struct {
+	epoch   int
+	stage   string
+	release chan struct{}
+}
+
+// holdStages has every stage boundary of the fake lux wait for the test:
+// next takes the next one, which must be epoch's stage. Set before any Run.
+func (w *world) holdStages() (next func(epoch int, stage string) stageHold) {
+	w.t.Helper()
+	reached := make(chan stageHold, 32)
+	done := make(chan struct{})
+	w.t.Cleanup(func() { close(done) })
+	w.lux.OnStage = func(epoch int, stage string) {
+		h := stageHold{epoch, stage, make(chan struct{})}
+		reached <- h
+		select {
+		case <-h.release:
+		case <-done:
+		}
+	}
+	return func(epoch int, stage string) stageHold {
+		w.t.Helper()
+		var h stageHold
+		w.until("held at "+stage, func() bool {
+			select {
+			case h = <-reached:
+				return true
+			default:
+				return false
+			}
+		})
+		if h.epoch != epoch || h.stage != stage {
+			w.t.Fatalf("held at %d %s, want %d %s", h.epoch, h.stage, epoch, stage)
+		}
+		return h
+	}
+}
+
+// stageChanges is how many servers.changed notifications of a lux stage
+// the run has had.
+func (w *world) stageChanges(runID string) int {
+	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'servers.changed' AND payload->>'change' = 'stage'`, runID)
+}
+
 func TestPreviewAuthoritativeStages(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("legacy=%v", legacy), func(t *testing.T) {
@@ -82,22 +128,7 @@ func TestPreviewAuthoritativeStages(t *testing.T) {
 			w.previews.Minute = time.Hour
 			w.lux.LegacyStages = legacy
 			w.lux.ServerReadyAfter = 300 * time.Millisecond
-			type boundary struct {
-				epoch   int
-				stage   string
-				release chan struct{}
-			}
-			reached := make(chan boundary, 20)
-			done := make(chan struct{})
-			defer close(done)
-			w.lux.OnStage = func(epoch int, stage string) {
-				b := boundary{epoch, stage, make(chan struct{})}
-				reached <- b
-				select {
-				case <-b.release:
-				case <-done:
-				}
-			}
+			next := w.holdStages()
 			setup := "npm ci"
 			w.recipe("web", 3000, "npm run dev", "", &setup, true)
 			wi := w.task()
@@ -106,95 +137,134 @@ func TestPreviewAuthoritativeStages(t *testing.T) {
 				t.Fatal(code, out)
 			}
 			runID := out["run"].(map[string]any)["id"].(string)
-			view := func() map[string]any {
+			servers := func() map[string]any {
 				code, out := w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
 				if code != 200 {
 					t.Fatal(code, out)
 				}
-				return out["run"].(map[string]any)
+				return out
+			}
+			view := func() map[string]any { return servers()["run"].(map[string]any) }
+			// Each held boundary is exactly one stage notification more than
+			// the last; a lux without stages sends none.
+			notified := 0
+			notifiedOnce := func(stage string) {
+				t.Helper()
+				if legacy {
+					if n := w.stageChanges(runID); n != 0 {
+						t.Fatalf("legacy lux: %d stage notifications at %s", n, stage)
+					}
+					return
+				}
+				w.until("the "+stage+" notification", func() bool { return w.stageChanges(runID) >= notified+1 })
+				notified++
+			}
+			// held checks the view at a held boundary against lux's stage.
+			held := func(h stageHold, want string) {
+				t.Helper()
+				notifiedOnce(h.stage)
+				v := view()
+				lr, err := w.previews.Lux.Get(context.Background(), v["luxRunId"].(string))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if legacy {
+					if v["previewStageSince"] != nil {
+						t.Fatalf("legacy timer at %s: %v", h.stage, v)
+					}
+				} else if want != "" && (v["previewStage"] != want || lr.StageSince == nil || v["previewStageSince"] != lr.StageSince.Format(time.RFC3339Nano)) {
+					t.Fatalf("stage %s: %v, lux %+v", h.stage, v, lr)
+				}
+				if n := w.stageChanges(runID); !legacy && n != notified {
+					t.Fatalf("%d stage notifications at %s, want %d", n, h.stage, notified)
+				}
+				close(h.release)
 			}
 			checkStart := func(epoch int) {
+				t.Helper()
 				for _, stage := range []string{"waiting", "image", "volumes", "repositories", "container", "running"} {
-					var b boundary
-					w.until("held at "+stage, func() bool {
-						select {
-						case b = <-reached:
-							return true
-						default:
-							return false
-						}
-					})
-					if b.epoch != epoch || b.stage != stage {
-						t.Fatalf("boundary %+v", b)
-					}
-					v := view()
-					lr, err := w.previews.Lux.Get(context.Background(), v["luxRunId"].(string))
-					if err != nil {
-						t.Fatal(err)
-					}
-					if legacy {
-						if v["previewStageSince"] != nil {
-							t.Fatalf("legacy timer: %v", v)
-						}
-					} else if stage != "running" {
-						want := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container"}[stage]
-						if v["previewStage"] != want || v["previewStageSince"] != lr.StageSince.Format(time.RFC3339Nano) {
-							t.Fatalf("stage %s: %v, lux %+v", stage, v, lr)
-						}
-					}
-					close(b.release)
+					// running is the servers' to time (setup/starting/ready).
+					want := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container"}[stage]
+					held(next(epoch, stage), want)
 				}
 			}
 			checkStart(1)
-			w.until("setup", func() bool { return view()["previewStage"] == "setup" })
-			_, out = w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
-			v := out["run"].(map[string]any)
-			if !legacy && v["previewStageSince"] != serverNamed(out, "web")["since"] {
-				t.Fatalf("setup: %v", out)
+			var setupOut map[string]any
+			w.until("setup", func() bool {
+				setupOut = servers()
+				return setupOut["run"].(map[string]any)["previewStage"] == "setup"
+			})
+			if since := setupOut["run"].(map[string]any)["previewStageSince"]; legacy && since != nil || !legacy && since != serverNamed(setupOut, "web")["since"] {
+				t.Fatalf("setup: %v", setupOut)
 			}
 			w.until("ready", func() bool { return view()["previewStage"] == "ready" })
 			mustExec(t, w.owner, `UPDATE runs SET started_at = now() - interval '34 minutes' WHERE id = $1`, runID)
 			luxID := view()["luxRunId"].(string)
 			go w.lux.Migrate(luxID)
-			var b boundary
-			w.until("stopping", func() bool {
-				select {
-				case b = <-reached:
-					return true
-				default:
-					return false
-				}
-			})
-			if b.stage != "stopping" {
-				t.Fatal(b)
-			}
-			if !legacy && view()["previewStage"] != "stopping" {
-				t.Fatal(view())
-			}
-			close(b.release)
+			// A move is stopping, then waiting on the next placement: never stopped.
+			held(next(1, "stopping"), "stopping")
 			checkStart(2)
 			w.until("ready after move", func() bool { return view()["previewStage"] == "ready" })
 			w.previews.Minute = time.Millisecond
 			w.until("parked", func() bool { return view()["state"] == "paused" && w.lux.State(luxID) == "stopped" })
 			w.previews.Minute = time.Hour
+			if v := view(); v["previewStage"] != nil || v["previewStageSince"] != nil {
+				t.Fatalf("parked: %v", v)
+			}
+			if !legacy {
+				// The park's stopping and stopped, unheld.
+				notified += 2
+				w.until("the park's notifications", func() bool { return w.stageChanges(runID) >= notified })
+			}
 			code, out = w.do("POST", "/internal/runs/"+runID+"/servers/start-all", nil)
 			if code != 200 {
 				t.Fatal(code, out)
 			}
 			checkStart(3)
-			w.until("ready after warm resume", func() bool { return view()["previewStage"] == "ready" })
-			_, out = w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
-			v = out["run"].(map[string]any)
-			if !legacy && v["previewStageSince"] != serverNamed(out, "web")["readySince"] {
-				t.Fatalf("ready timer: %v", out)
-			}
-			if !legacy {
-				w.until("stage notification", func() bool {
-					return slices.ContainsFunc(w.changes(runID), func(p map[string]any) bool { return p["change"] == "stage" })
-				})
+			var readyOut map[string]any
+			w.until("ready after warm resume", func() bool {
+				readyOut = servers()
+				return readyOut["run"].(map[string]any)["previewStage"] == "ready"
+			})
+			if since := readyOut["run"].(map[string]any)["previewStageSince"]; legacy && since != nil || !legacy && since != serverNamed(readyOut, "web")["readySince"] {
+				t.Fatalf("ready timer: %v", readyOut)
 			}
 		})
 	}
+}
+
+// A wakeable preview's view takes lux's stage too: woken, held while its
+// volumes restore, it says so with lux's own time.
+func TestAWakeablePreviewShowsLuxsStage(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	next := w.holdStages()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	task, runID := w.declare()
+	w.lux.RequestServer(w.serverID(runID, "web"), "/")
+	close(next(1, "waiting").release)
+	close(next(1, "image").release)
+	h := next(1, "volumes")
+	// dude records the lux Run from its submit's answer, which may trail the hold.
+	var v map[string]any
+	w.until("the woken Run in the view", func() bool {
+		code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+		if code != 200 {
+			t.Fatal(code, out)
+		}
+		v = out["run"].(map[string]any)
+		id, _ := v["luxRunId"].(string)
+		return id != ""
+	})
+	luxID := v["luxRunId"].(string)
+	lr, err := w.previews.Lux.Get(context.Background(), luxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v["wakeable"] != true || v["previewStage"] != "volumes" || lr.StageSince == nil || v["previewStageSince"] != lr.StageSince.Format(time.RFC3339Nano) {
+		t.Fatalf("wakeable view %v, lux %+v", v, lr)
+	}
+	close(h.release)
 }
 
 func TestAWorkingAgentsServersAreItsRunsThroughLux(t *testing.T) {

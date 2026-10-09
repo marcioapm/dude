@@ -163,6 +163,63 @@ func TestAPreviewsStageFollowsLuxAndItsServers(t *testing.T) {
 	}
 }
 
+func TestPreviewProgress(t *testing.T) {
+	setupOf := func(n string) bool { return n == "web" }
+	t0 := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	at := func(s int) *time.Time { v := t0.Add(time.Duration(s) * time.Second); return &v }
+	ready := func(name string, s int, fromSpec bool) lux.Server {
+		sv := srv(name, lux.ServerReady, fromSpec)
+		sv.ReadySince, sv.Since = at(s), at(s)
+		return sv
+	}
+	starting := func(name string, s int) lux.Server {
+		sv := srv(name, lux.ServerStarting, true)
+		sv.Since = at(s)
+		return sv
+	}
+	stageRun := func(stage string) lux.Run { return lux.Run{Stage: stage, StageSince: at(-100)} }
+	for _, c := range []struct {
+		name          string
+		status, state string
+		run           lux.Run
+		list          []lux.Server
+		stage         string // "" for nil
+		since         *time.Time
+	}{
+		{"a lux without stages is coarse with no timer", "running", "starting", lux.Run{}, nil, "cloning", nil},
+		{"waiting", "scheduled", "submitted", stageRun("waiting"), nil, "scheduling", at(-100)},
+		{"image", "running", "starting", stageRun("image"), nil, "image", at(-100)},
+		{"volumes", "running", "starting", stageRun("volumes"), nil, "volumes", at(-100)},
+		{"repositories is cloning", "running", "starting", stageRun("repositories"), nil, "cloning", at(-100)},
+		{"container", "running", "starting", stageRun("container"), nil, "container", at(-100)},
+		{"stopping while running", "running", "stopping", stageRun("stopping"), nil, "stopping", at(-100)},
+		// A park: dude's status is paused, so the preview shows no stage at
+		// all, even while lux is still stopping it.
+		{"stopping while paused is nothing", "paused", "stopping", stageRun("stopping"), nil, "", nil},
+		{"an unknown stage is coarse with no timer", "running", "starting", stageRun("draining"), []lux.Server{ready("web", 5, true)}, "cloning", nil},
+		{"a resting stage while running is coarse with no timer", "running", "running", stageRun("failed"), []lux.Server{ready("web", 5, true)}, "ready", nil},
+		{"stopped while running is coarse with no timer", "running", "stopped", stageRun("stopped"), nil, "scheduling", nil},
+		{"running with no servers is ready with no timer", "running", "running", stageRun("running"), nil, "ready", nil},
+		{"running before state running goes by servers", "running", "starting", stageRun("running"), []lux.Server{starting("api", 7)}, "starting", at(7)},
+		{"setup times the setup server only", "running", "running", stageRun("running"), []lux.Server{starting("api", 9), starting("web", 4)}, "setup", at(4)},
+		{"ready is the latest server's readySince", "running", "running", stageRun("running"),
+			[]lux.Server{ready("a", 1, true), ready("b", 3, true), ready("c", 2, true)}, "ready", at(3)},
+		{"a server not from the spec is ignored", "running", "running", stageRun("running"),
+			[]lux.Server{ready("a", 1, true), ready("docs", 50, false)}, "ready", at(1)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stage, since := previewProgress(c.status, c.state, c.run, c.list, setupOf)
+			got := ""
+			if stage != nil {
+				got = *stage
+			}
+			if got != c.stage || !reflect.DeepEqual(since, c.since) {
+				t.Errorf("previewProgress = %q %v, want %q %v", got, since, c.stage, c.since)
+			}
+		})
+	}
+}
+
 func TestMovedIsSaidOnlyWhenTheMoveStoppedEveryServer(t *testing.T) {
 	at := time.Date(2026, 9, 28, 14, 32, 0, 0, time.UTC)
 	migrated, byHand := "migrated", "stopped"

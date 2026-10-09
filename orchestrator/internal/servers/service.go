@@ -316,19 +316,28 @@ func phaseLabel(phase string) string {
 	return "Agent"
 }
 
-// previewProgress keeps infrastructure timing in lux and process timing in servers.
+// luxStages is the preview stage each of lux's infrastructure stages shows
+// as; lux's stageSince is its timer. running is refined by servers, and
+// lux's resting or unknown stages fall back to Stage with no timer.
+var luxStages = map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes",
+	"repositories": "cloning", "container": "container", "stopping": "stopping"}
+
+// previewProgress is a preview's stage and since when: infrastructure
+// timing from lux's stage, process timing from its servers. A lux without
+// stages (run.Stage "") gives Stage's coarse label and no timer.
 func previewProgress(status, state string, run lux.Run, list []lux.Server, withSetup func(string) bool) (*string, *time.Time) {
 	coarse := Stage(status, state, list, withSetup)
 	if coarse == nil || run.Stage == "" {
 		return coarse, nil
 	}
-	mapped := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container", "stopping": "stopping"}
-	if stage, ok := mapped[run.Stage]; ok {
+	if stage, ok := luxStages[run.Stage]; ok {
 		return &stage, run.StageSince
 	}
 	if run.Stage != "running" {
 		return coarse, nil
 	}
+	// lux's stage=running precedes state=running (state is starting until
+	// luxd sees the shim up); servers decide setup/starting/ready.
 	coarse = Stage(status, "running", list, withSetup)
 	var since *time.Time
 	for _, sv := range list {
@@ -359,7 +368,8 @@ func previewProgress(status, state string, run lux.Run, list []lux.Server, withS
 // host, or moving to another), cloning (its container starting: image,
 // checkout), setup (a server that starts after a setup step is starting),
 // starting (its servers are), ready (every server its spec starts is). Nil
-// for a preview that is parked or over.
+// for a preview that is parked or over. previewProgress refines it with
+// lux's stage when lux reports one.
 func Stage(status, luxState string, list []lux.Server, withSetup func(name string) bool) *string {
 	stage := func(s string) *string { return &s }
 	switch status {

@@ -46,6 +46,7 @@ export interface ServersSectionProps {
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
 function runMark(run: ServersRun & { waitingReason?: string | null }) {
   if (run.waitingReason && runIsLive(run)) return <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting</Badge>;
+  if (run.kind === "preview" && run.previewStage === "stopping" && runIsLive(run)) return <StatusMark status="running" size="sm" label="Stopping" />;
   if (run.kind === "preview" && run.previewStage && run.previewStage !== "ready" && runIsLive(run)) return <StatusMark status="starting" size="sm" />;
   const known = (ALL_STATUSES as readonly string[]).includes(run.state);
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;

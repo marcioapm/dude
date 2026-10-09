@@ -302,17 +302,30 @@ func (s *Server) Migrate(id string) {
 	run.Calls = append(run.Calls, "migrate")
 	run.busy = false
 	s.setStateWith(run, "stopping", "migrate")
-	s.mu.Unlock()
 	if s.OnStage != nil {
-		s.OnStage(run.Epoch, "stopping")
+		// Only a test holding the boundary splits the move; otherwise it is
+		// one change, as lux's transaction is. A stop or terminate meanwhile
+		// wins: the move is then over.
+		epoch := run.Epoch
+		s.mu.Unlock()
+		s.OnStage(epoch, "stopping")
+		s.mu.Lock()
+		if run.State != "stopping" || run.Epoch != epoch {
+			s.mu.Unlock()
+			return
+		}
 	}
-	s.mu.Lock()
 	s.setStateWith(run, "stopped", "migrate")
+	// The resume is the same change as the placement's end, so its waiting
+	// stage starts there (lux: "since its placement ended").
+	ended := time.Now()
+	if p := run.currentPlacement(); p != nil && p.ExitedAt != nil {
+		ended = *p.ExitedAt
+	}
 	run.Epoch++
 	run.starts++
 	run.moveNext = true
-	accepted := time.Now()
-	run.acceptedAt = &accepted
+	run.acceptedAt = &ended
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
