@@ -2,6 +2,7 @@ package phases
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -169,6 +170,29 @@ func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	if got := submittedHarness("scripted", delivery.HarnessClaudeCode); got != delivery.HarnessClaudeCode {
 		t.Errorf("scripted: got %s", got)
 	}
+}
+
+// Prints the command, env and secret names buildSpec gives a phase Run on
+// a harness, as JSON, for running the real CLI with them
+// (scripts/real_harnesses.py). Only when DUDE_PRINT_HARNESS_SPEC is
+// "HARNESS MODEL [EFFORT]"; the LLM URL is DUDE_LLM_URL, and the key is a
+// placeholder the script replaces.
+func TestPrintAHarnessSpec(t *testing.T) {
+	args := strings.Fields(os.Getenv("DUDE_PRINT_HARNESS_SPEC"))
+	if len(args) < 2 {
+		t.Skip("DUDE_PRINT_HARNESS_SPEC not set")
+	}
+	in := specInput{Phase: delivery.PhaseImplement, Harness: args[0], Model: args[1], ModelTier: "Probe"}
+	if len(args) > 2 {
+		in.Effort = args[2]
+	}
+	spec := buildSpec(AgentConfig{LLMURL: os.Getenv("DUDE_LLM_URL"), LLMKey: "<key>"}, in)
+	secrets := map[string]any{}
+	for _, s := range spec.Secrets {
+		secrets[s.Name] = map[string]string{"value": s.Value, "as": s.As, "path": s.Path}
+	}
+	b, _ := json.Marshal(map[string]any{"adapter": spec.Workload.Adapter, "command": spec.Workload.Command, "env": spec.Env, "secrets": secrets})
+	fmt.Println("HARNESS_SPEC=" + string(b))
 }
 
 // The scripted agent plays a role on Claude Code or Codex through that

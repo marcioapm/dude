@@ -103,6 +103,12 @@
         "value": "Bearer tok_golden"
       },
       {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"auto\"\nmodel_supports_reasoning_summaries=true\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
+      },
+      {
         "name": "OPENAI_API_KEY",
         "value": "sk-golden",
         "as": "env"
@@ -252,6 +258,12 @@
         "value": "Bearer tok_golden"
       },
       {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"auto\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
+      },
+      {
         "name": "OPENAI_API_KEY",
         "value": "sk-golden",
         "as": "env"
@@ -397,6 +409,12 @@
       {
         "name": "DUDE_TOOLS_AUTH",
         "value": "Bearer tok_golden"
+      },
+      {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"auto\"\nmodel_supports_reasoning_summaries=true\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
       },
       {
         "name": "OPENAI_API_KEY",
