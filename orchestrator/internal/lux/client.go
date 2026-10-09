@@ -135,6 +135,13 @@ const (
 	PublishedPrefix = "/.lux/artifacts/"
 )
 
+// Every Run and server dude submits carries AppLabel=App: lux names the tool
+// behind a cost by it.
+const (
+	AppLabel = "app"
+	App      = "dude"
+)
+
 // Terminal says whether lux will report nothing more without a resume.
 func Terminal(state string) bool {
 	switch state {
