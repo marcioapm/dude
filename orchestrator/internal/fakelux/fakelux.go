@@ -1645,6 +1645,11 @@ func (s *Server) view(run *Run) map[string]any {
 	// as normalized and a credential marked runnerOnly (lux's Normalize).
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	// lux's RunSpec.Sandbox is a struct: a Run that asked for nothing is
+	// returned with "sandbox": {}, never without it.
+	if _, ok := spec["sandbox"]; !ok && spec != nil {
+		spec["sandbox"] = map[string]any{}
+	}
 	runnerOnly := runnerOnlySecrets(run.Spec)
 	if secrets, ok := spec["secrets"].([]any); ok {
 		for _, sec := range secrets {
@@ -2230,13 +2235,8 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
 		// Added to the Run's spec, as lux does, and cloned before it starts:
 		// each reported with the resume's request id.
-	var spec map[string]any
-	_ = json.Unmarshal(run.Spec, &spec)
-	// lux's RunSpec.Sandbox is a struct: a Run that asked for nothing is
-	// returned with "sandbox": {}, never without it.
-	if _, ok := spec["sandbox"]; !ok && spec != nil {
-		spec["sandbox"] = map[string]any{}
-	}
+		var spec map[string]any
+		_ = json.Unmarshal(run.Spec, &spec)
 		var added []lux.Repository
 		raw, _ := json.Marshal(in.Git.Repositories)
 		_ = json.Unmarshal(raw, &added)
