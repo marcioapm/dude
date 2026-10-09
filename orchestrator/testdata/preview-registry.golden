@@ -1,6 +1,7 @@
 {
   "name": "preview <task>",
   "labels": {
+    "app": "dude",
     "dude.kind": "preview",
     "dude.org": "<org>",
     "dude.run": "<run>",

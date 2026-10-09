@@ -245,8 +245,10 @@ hostname back.
 
 - **Declaring a preview** creates its servers (`wake: request`, `lifetime:
   owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
-  labels `dude.org`, `dude.project`, `dude.task`, `dude.preview`) and
-  nothing else: no Run, no host.
+  labels `app=dude`, `dude.org`, `dude.project`, `dude.task`,
+  `dude.preview`) and nothing else: no Run, no host. Every Run and server
+  dude submits carries `app=dude`, so lux can name dude as the tool behind
+  a cost.
 - **Opening a URL** (signed in to lux's previews) shows lux's waking page,
   and lux tells dude on its event feed (`GET /v1/events`). dude resumes the
   preview's Run, every checkout synced to the task's branch, or, the first

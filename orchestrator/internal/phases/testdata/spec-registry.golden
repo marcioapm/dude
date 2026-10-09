@@ -1,6 +1,7 @@
 {
   "name": "implement wi_1",
   "labels": {
+    "app": "dude",
     "dude.harness": "opencode",
     "dude.model": "claude-opus-5-5",
     "dude.model_tier": "Coder",
