@@ -572,7 +572,18 @@ reads a stalled Run's processes with `ps -eo pid,ppid,etime,pcpu,args` in
 its container. An image without it still works, but its stall reports
 cannot list processes and report that they could not be read.
 
-dude gives every real agent Run these, and nothing else about its model:
+It carries the three harnesses a role can run on (Agents › role ›
+Harness), each installed system-wide, outside the agent's home volume, with
+self-update off. The dev image (`images/runtime/Dockerfile`) pins them:
+
+| Harness | Binary | Version in the dev image | lux adapter |
+| --- | --- | --- | --- |
+| OpenCode | `opencode` | 1.18.34 | `opencode` |
+| Claude Code | `claude` | 2.1.207 | `claude-code` |
+| Codex | `codex` | 0.144.1 | `codex` |
+
+dude gives every real agent Run on OpenCode these, and nothing else about
+its model:
 
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
   orchestrator's variables of the same names;
@@ -652,6 +663,52 @@ The only names that are not the proxy's are the test harness models
 `fake/live`, and `fake/ask`, implemented by `orchestrator/internal/fakeagent`.
 These are deterministic test/demo agents, not production image providers;
 arbitrary `fake/<model>` values are not accepted.
+
+#### Claude Code and Codex
+
+A role on **Claude Code** (lux adapter `claude-code`) runs
+
+    claude --model <model> --permission-mode bypassPermissions --thinking-display summarized [--effort <e> | --thinking disabled] [<args>…]
+
+with `ANTHROPIC_BASE_URL` (`llm.url` without its `/v1`, which Claude Code
+adds), `ANTHROPIC_API_KEY` (a lux env secret, the `llm.key`),
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `DISABLE_AUTOUPDATER=1`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and the tier's headers as
+`ANTHROPIC_CUSTOM_HEADERS` (`Name: value` lines). `--thinking-display
+summarized` is a flag Claude Code does not list: without it thinking comes
+back with empty text, and no setting or variable does the same. Effort
+`none` turns thinking off; no effort sends no `--effort`.
+
+A role on **Codex** (lux adapter `codex`) runs Codex on a provider of its
+own, `dude`: the proxy's Responses API (`wire_api = "responses"`, the only
+one the proxy passes reasoning summaries on) at `llm.url`, keyed by
+`OPENAI_API_KEY` (a lux env secret; lux also writes Codex's `auth.json`
+from it), with the tier's headers as the provider's `http_headers`,
+`approval_policy = "never"`, `sandbox_mode = "danger-full-access"` (the
+container is the sandbox), `model_reasoning_summary = "auto"`,
+`model_supports_reasoning_summaries = true` (Codex does not know the
+proxy's model names, and otherwise sends no reasoning) and
+`model_reasoning_effort` unless the effort is `none` or unset. These are
+both `-c` overrides on the command and a `$HOME/.codex/config.toml` file
+secret (`CODEX_CONFIG`): Codex 0.144 drops every `-c` given before
+`app-server` once one follows it, and lux's adapter adds its MCP servers
+there.
+
+Both keep their session under the agent's home (`~/.claude`, `~/.codex`),
+which is a state volume, as lux requires. A tier's `options` are OpenCode
+model options; on Claude Code and Codex only `{"args": ["…"]}` is used,
+appended to the command, and any other key is logged as ignored.
+
+Claude Code takes only Anthropic models (`claude-*`), Codex only OpenAI's;
+OpenCode takes both. A role whose harness cannot run its tier's model fails
+its Run when it is built, saying so; the settings page warns of it beside
+the Harness field and saves it all the same. The scripted `fake/*` models
+play a role on Claude Code or Codex with lux-fake speaking that harness's
+protocol.
+
+`scripts/real_harnesses.py` runs the real `claude` and `codex` with exactly
+the command, env and secrets dude builds, on a read-only question in this
+repository, and shows what dude's translator makes of their output.
 
 ### Upgrading from DUDE_OPENCODE_*
 

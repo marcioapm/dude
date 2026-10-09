@@ -290,6 +290,7 @@ export const SETTINGS: SettingsResponse = {
   roles: Object.fromEntries(SETTINGS_ROLES.map((role) => [role, {
     tier: { value: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", source: "organization", organization: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", ...(role === "fixer" ? { followsImplementer: true } : {}) },
     timeLimitMinutes: { value: null, source: "organization" },
+    harness: { value: "opencode", source: "organization", organization: "opencode", ...(role === "fixer" ? { followsImplementer: true } : {}) },
     machineSize: { value: null, source: "organization", organization: null },
     image: { value: null, source: "organization", organization: null },
     enabled: role === "simplifier" || role === "qa_browser" ? { value: role === "simplifier", source: "organization" } : null,

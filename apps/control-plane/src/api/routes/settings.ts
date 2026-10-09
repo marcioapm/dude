@@ -23,6 +23,7 @@ import {
   newId,
   promptRoleSchema,
   resolveMachineSize,
+  resolveHarness,
   resolveRoleImage,
   resolveTier,
   ROLE_ENABLED_BY,
@@ -301,6 +302,16 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         ...(layers.project ? { organization: resolveTier(role, { organization: layers.org.agentModels }, tiers).tierId } : {}),
       };
     };
+    /** The harness, by the one rule (resolveHarness), shaped as the machine is. */
+    const harness = (role: SettingsRole): RoleSettings["harness"] => {
+      const { harness: value, from } = resolveHarness(role, { project: layers.project?.agentModels, organization: layers.org.agentModels });
+      return {
+        value,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: resolveHarness(role, { organization: layers.org.agentModels }).harness } : {}),
+      };
+    };
     const roles = Object.fromEntries(
       SETTINGS_ROLES.map((role): [SettingsRole, RoleSettings] => {
         const enabledBy = ROLE_ENABLED_BY[role as keyof typeof ROLE_ENABLED_BY];
@@ -310,6 +321,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
           role,
           {
             tier: tier(role),
+            harness: harness(role),
             timeLimitMinutes: timeLimit(field(role, "timeLimitMinutes")),
             machineSize: machine(role),
             image: image(role),
