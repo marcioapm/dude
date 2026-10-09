@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -58,11 +59,16 @@ func (t *translator) claudeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ 
 		// a resumed one starts again from zero, so a total lower than the
 		// last is a new process's.
 		t.claudeCost = line.TotalCostUSD
-		if line.IsError && line.Result != "" {
-			t.turnError = line.Result
+		if e := line.failure(); e != "" {
+			t.turnError = e
 		}
+		return t.claudeTurnHalf(ctx, tx, s, "result", nil)
 	case "turn_end":
-		return t.claudeTurnEnd(ctx, tx, s, f.Event.Data)
+		var end struct {
+			Usage *claudeUsage `json:"usage"`
+		}
+		_ = json.Unmarshal(f.Event.Data, &end)
+		return t.claudeTurnHalf(ctx, tx, s, "turn_end", end.Usage)
 	}
 	return nil
 }
@@ -78,10 +84,30 @@ type claudeLine struct {
 	ToolUseResult json.RawMessage `json:"tool_use_result"`
 	// An assistant line Claude Code wrote itself for a failed request
 	// (model_not_found…), its text the reason.
-	Error        string  `json:"error"`
-	IsError      bool    `json:"is_error"`
-	Result       string  `json:"result"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
+	Error        string   `json:"error"`
+	IsError      bool     `json:"is_error"`
+	Subtype      string   `json:"subtype"`
+	Result       string   `json:"result"`
+	Errors       []string `json:"errors"`
+	TerminalWhy  string   `json:"terminal_reason"`
+	TotalCostUSD float64  `json:"total_cost_usd"`
+}
+
+// failure is why a result line says its turn failed, "" for one that did
+// not. A success-subtype error carries its reason in result, the error_*
+// subtypes in errors. A turn aborted by an interrupt (aborted_streaming,
+// aborted_tools) is an error to Claude Code and not a failure to dude.
+func (l claudeLine) failure() string {
+	if !l.IsError || l.TerminalWhy == "aborted_streaming" || l.TerminalWhy == "aborted_tools" {
+		return ""
+	}
+	if l.Result != "" {
+		return l.Result
+	}
+	if len(l.Errors) > 0 {
+		return strings.Join(l.Errors, "; ")
+	}
+	return "Claude Code ended the turn as failed (" + cmp.Or(l.Subtype, "no reason given") + ")"
 }
 
 type claudeBlock struct {
@@ -281,25 +307,51 @@ func (t *translator) claudePlan(name string, input map[string]any) ([]any, bool)
 	return todos, true
 }
 
+// claudeTurnHalf records one half of a Claude turn's end. lux relays a
+// result line as claude.turn_end (the usage), the agent going idle, then
+// claude.result (the cost, and the failure if any): the turn ends on the
+// second half, whichever it is, with a batch between them or not. The idle
+// between them is held until then, so a failed turn is failed before its
+// idle could mark it done.
+func (t *translator) claudeTurnHalf(ctx context.Context, tx pgx.Tx, s *Syncer, half string, usage *claudeUsage) error {
+	// The same half again: the last turn's other half never came (its
+	// process ended between them). That turn ends with what it had.
+	if t.claudeHalf == half {
+		if err := t.claudeTurnEnd(ctx, tx, s); err != nil {
+			return err
+		}
+	}
+	if half == "turn_end" {
+		t.claudeUsage = usage
+	}
+	if t.claudeHalf == "" {
+		if err := t.flush(ctx, tx, s); err != nil {
+			return err
+		}
+		t.claudeHalf = half
+		return nil
+	}
+	return t.claudeTurnEnd(ctx, tx, s)
+}
+
 // claudeTurnEnd: the turn's tokens, as Claude Code's result line counts
 // them for this turn, and its cost, the change in the process's running
 // total. A turn that ended on a failed request fails the Run, as an ACP
-// turn that answered with an error does.
-func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer, data json.RawMessage) error {
+// turn that answered with an error does; one that did not runs the idle
+// held for it.
+func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	if err := t.flush(ctx, tx, s); err != nil {
 		return err
 	}
-	var end struct {
-		Usage *claudeUsage `json:"usage"`
-	}
-	_ = json.Unmarshal(data, &end)
+	usage, idle := t.claudeUsage, t.claudeIdle
+	t.claudeHalf, t.claudeUsage, t.claudeIdle = "", nil, false
 	cost := t.claudeCost - t.claudeCostSeen
 	if t.claudeCost < t.claudeCostSeen {
 		cost = t.claudeCost
 	}
 	t.claudeCostSeen = t.claudeCost
 	payload := map[string]any{"turn": true, "contextTokens": t.usage.context}
-	if u := end.Usage; u != nil {
+	if u := usage; u != nil {
 		t.usage.input += u.InputTokens
 		t.usage.output += u.OutputTokens
 		t.usage.cacheRead += u.CacheRead
@@ -316,6 +368,9 @@ func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer, da
 	if e := t.turnError; e != "" {
 		t.turnError = ""
 		return t.turnFailed(ctx, tx, s, e)
+	}
+	if idle {
+		return t.idle(ctx, tx, s)
 	}
 	return nil
 }

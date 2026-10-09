@@ -61,9 +61,11 @@ func (s *Server) agent(run *Run, update map[string]any) {
 }
 
 // turnEnd records the end of the agent's turn: the prompt's response, as
-// the ACP adapter relays it, or each harness's own. data is ACP's
-// ({stopReason, usage?, error?}). Callers hold s.mu.
-func (s *Server) turnEnd(run *Run, data map[string]any) {
+// the ACP adapter relays it, or each harness's own, and with idle the agent
+// going idle after it. data is ACP's ({stopReason, usage?, error?}).
+// Claude Code's result line is relayed as lux does: claude.turn_end, the
+// idle, then the line itself as claude.result. Callers hold s.mu.
+func (s *Server) turnEnd(run *Run, data map[string]any, idle bool) {
 	switch run.dialect() {
 	case dialectClaude:
 		s.sayFlush(run)
@@ -85,8 +87,12 @@ func (s *Server) turnEnd(run *Run, data map[string]any) {
 			result["usage"], end["usage"] = usage, usage
 		}
 		result["total_cost_usd"] = say.cost
-		s.recordEvent(run, "claude.result", result)
 		s.recordEvent(run, "claude.turn_end", end)
+		if idle {
+			s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		}
+		s.recordEvent(run, "claude.result", result)
+		return
 	case dialectCodex:
 		s.sayFlush(run)
 		say := run.say()
@@ -115,6 +121,9 @@ func (s *Server) turnEnd(run *Run, data map[string]any) {
 		say.turn++
 	default:
 		s.recordEvent(run, "acp.turn_end", data)
+	}
+	if idle {
+		s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	}
 }
 
