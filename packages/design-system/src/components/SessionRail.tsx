@@ -131,7 +131,7 @@ export function PublishedFiles({ files, onOpen, max = 8 }: {
               </span>
               {(f.versions ?? 1) > 1 ? <span className={styles["version"]}>v{f.versions}</span> : null}
             </span>
-            {f.description ? <span className={styles["fileDescription"]} data-testid="published-file-description">{f.description}</span> : null}
+            {f.description ? <span className={styles["fileDescription"]} title={f.description} data-testid="published-file-description">{f.description}</span> : null}
           </button>
         </li>
       ))}
