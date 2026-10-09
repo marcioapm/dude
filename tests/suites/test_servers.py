@@ -184,6 +184,20 @@ def test_a_preview_whose_run_never_starts_stops_trying_and_says_why(client: ApiC
         lux_fake(env, f"/fake/fail-starts?label=dude.preview%3D{run['id']}&n=0")
 
 
+def test_a_recipe_edited_after_a_preview_was_declared_reaches_its_next_wake(client: ApiClient, forge_project: dict, env):
+    pid = forge_project["id"]
+    task, _, web = _asleep_preview(client, pid, "Edit my recipe")
+    edited = {**WEB, "env": [*WEB["env"], {"name": "S3_BRIDGE", "value": "versitygw"}]}
+    assert client.put(f"/v1/projects/{pid}/servers/web", edited).status_code == 200
+    # Asleep: nothing reaches lux until the preview is opened.
+    assert "S3_BRIDGE" not in lux_get(env, f"/v1/servers/{web['id']}")["env"]
+
+    lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"]["previewStage"] == "ready",
+               timeout=60, message="the preview never woke")
+    assert lux_get(env, f"/v1/servers/{web['id']}")["env"] == {"PORT": "3000", "S3_BRIDGE": "versitygw"}
+
+
 def lux_get(env, path: str) -> dict:
     res = requests.get(env.lux_url + path, headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
     res.raise_for_status()

@@ -38,6 +38,11 @@ type TenantServer struct {
 	// How long without a request before server.idle: a Go duration
 	// ("45m0s") or seconds; 0 is never.
 	IdleAfter json.RawMessage `json:"idleAfter"`
+	// What its process starts with: nil command for a port only.
+	Port    int               `json:"port"`
+	Command []string          `json:"command"`
+	Workdir string            `json:"workdir"`
+	Env     map[string]string `json:"env"`
 
 	Raw json.RawMessage `json:"-"`
 }
@@ -92,6 +97,15 @@ type CreateServer struct {
 	Lifetime    string            `json:"lifetime,omitempty"`
 	ExpireAfter string            `json:"expireAfter,omitempty"`
 	RunID       string            `json:"runId,omitempty"`
+}
+
+// PatchServer is PATCH /v1/servers/{id}'s body (lux's PatchServerInput):
+// only the fields given change, at the server's next start.
+type PatchServer struct {
+	Port    *int               `json:"port,omitempty"`
+	Command *[]string          `json:"command,omitempty"`
+	Workdir *string            `json:"workdir,omitempty"`
+	Env     *map[string]string `json:"env,omitempty"`
 }
 
 // SyncRef moves one repository of a Run (its spec's name) to a ref.
@@ -207,6 +221,7 @@ type Servers interface {
 	// ListServers filters by hostname and labels ("k=v").
 	ListServers(ctx context.Context, hostname string, labels ...string) ([]TenantServer, error)
 	DeleteServer(ctx context.Context, id string) error
+	PatchServer(ctx context.Context, id string, in PatchServer) (TenantServer, error)
 	AttachServer(ctx context.Context, id, runID string) (TenantServer, error)
 	DetachServer(ctx context.Context, id string) error
 	// SyncRun moves a running Run's checkouts.
@@ -247,6 +262,12 @@ func (c *HTTPClient) ListServers(ctx context.Context, hostname string, labels ..
 
 func (c *HTTPClient) DeleteServer(ctx context.Context, id string) error {
 	return c.do(ctx, "DELETE", "/v1/servers/"+url.PathEscape(id), nil, nil, nil)
+}
+
+func (c *HTTPClient) PatchServer(ctx context.Context, id string, in PatchServer) (TenantServer, error) {
+	var s TenantServer
+	err := c.do(ctx, "PATCH", "/v1/servers/"+url.PathEscape(id), in, nil, &s)
+	return s, err
 }
 
 func (c *HTTPClient) AttachServer(ctx context.Context, id, runID string) (TenantServer, error) {
