@@ -1,4 +1,4 @@
--- 099_artifact_descriptions.sql — what a published file is for.
+-- 102_artifact_descriptions.sql — what a published file is for.
 --
 -- lux#77's `lux-shim publish --description TEXT` (dude publish
 -- --description) carries one short line saying what the file is for. lux
