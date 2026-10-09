@@ -66,7 +66,7 @@
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "color.ui",
     "GIT_CONFIG_VALUE_0": "always",
-    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-opus-5-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-opus-5-5\":{}}}}}",
+    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-opus-5-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-opus-5-5\":{\"options\":{\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
     "PY_COLORS": "1",
     "TERM": "xterm-256color"
   },

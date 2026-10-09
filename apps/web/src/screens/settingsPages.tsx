@@ -1,6 +1,6 @@
 /**
  * The pages the organization's settings and a project's share: an agent
- * role (its model tier, effort, time limit, machine, whether it runs, and its prompt),
+ * role (its model tier, time limit, machine, whether it runs, and its prompt),
  * and delivery. On a project each value says where it comes from — "From
  * Acme", or "Overridden" with what it overrides and Reset — and a change
  * is stored as an override; on the organization it is the default every
@@ -30,7 +30,6 @@ import {
 import { formatTimestamp, plural } from "@dude/design-system";
 import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
-  EFFORTS,
   PROMPT_VARIABLES,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
@@ -50,7 +49,8 @@ import {
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { deliveryPatch, deliveryValues, effortLabel, TIME_LIMITS, timeLimitLabel } from "../settings.ts";
+import { deliveryPatch, deliveryValues, TIME_LIMITS, timeLimitLabel } from "../settings.ts";
+import { tierEffortLabel } from "../tiers.ts";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { INHERIT_TIER, tierOption } from "./ModelsSettings.tsx";
 import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
@@ -141,19 +141,6 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
       ) : null}
       <SettingFields>
         <TierField scope={scope} role={role} tiers={tiers} tiersProblem={tiersProblem ?? null} onManageTiers={onManageTiers} />
-        <SettingField
-          label="Reasoning effort"
-          source={<Source scope={scope} setting={r.effort} reset={() => void set({ effort: null }, "Effort reset")} />}
-        >
-          <Select
-            aria-label="Reasoning effort"
-            disabled={!canEdit}
-            value={r.effort.value ?? NONE}
-            onValueChange={(v) => void set({ effort: v === NONE ? null : (v as (typeof EFFORTS)[number]) }, "Effort saved")}
-            options={[{ value: NONE, label: effortLabel(null) }, ...EFFORTS.map((e) => ({ value: e, label: effortLabel(e) }))]}
-            hint={project ? undefined : "The proxy drops it for models that don’t reason"}
-          />
-        </SettingField>
         {role === "conductor" ? null : (
           <SettingField
             label="Time limit without progress"
@@ -173,7 +160,7 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
       </SettingFields>
       {images ? <RoleImageField scope={scope} role={role} images={images} onManageImages={onManageImages} /> : null}
       {role === "fixer" ? (
-        <SettingsNote icon="info">The fixer runs on the implementer’s tier, effort, time limit, machine and image unless you give it its own.</SettingsNote>
+        <SettingsNote icon="info">The fixer runs on the implementer’s tier, time limit, machine and image unless you give it its own.</SettingsNote>
       ) : null}
       <PromptSection scope={scope} role={role} onHistory={() => setHistory(true)} />
       {history ? (
@@ -221,7 +208,11 @@ function TierField({ scope, role, tiers, tiersProblem, onManageTiers }: {
   let footer: ReactNode = project ? `Tiers are ${orgName}’s — ask an admin to change one` : "Only admins change tiers.";
   if (onManageTiers) footer = <TextButton onClick={onManageTiers} data-testid="manage-tiers">Manage tiers in Models</TextButton>;
   let hint: ReactNode;
-  if (!project && current) hint = current.model ? <>Requests <code>{current.model}</code></> : `${current.name} names no model yet`;
+  if (!project && current) {
+    hint = current.model
+      ? <span data-testid="role-tier-requests">Requests <code>{current.model}</code> · {tierEffortLabel(current.effort).toLowerCase()}</span>
+      : `${current.name} names no model yet`;
+  }
   return (
     <SettingField
       label="Model"

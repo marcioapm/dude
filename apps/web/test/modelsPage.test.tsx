@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { ModelTiersResponse, SettingsResponse } from "@dude/domain";
+import type { ModelTestInput, ModelTiersResponse, SettingsResponse } from "@dude/domain";
 import { act, click, mount, until } from "./dom.ts";
 import type { Member } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
@@ -29,13 +29,12 @@ const press = (el: Element) =>
   act(async () => void el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
 
 class TestingClient extends FixtureClient {
-  tested: Array<[string, string | null]> = [];
-  override testModel(model: string, tierId: string | null) {
-    this.tested.push([model, tierId]);
-    return Promise.resolve({ model, results: [
-      { efforts: ["high", "max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null },
-      { efforts: ["low"], sent: "low", ok: false, latencyMs: 30, status: 404, error: "no such model" },
-    ] });
+  tested: ModelTestInput[] = [];
+  override testModel(input: ModelTestInput) {
+    this.tested.push(input);
+    return Promise.resolve({ model: input.model, result: input.effort === "none"
+      ? { sent: { reasoning: { summary: "auto" } }, ok: false, latencyMs: 300, status: 200, error: "'none' is not supported with this model." }
+      : { sent: { thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: input.effort } }, ok: true, latencyMs: 1200, status: 200, error: null } });
   }
 }
 
@@ -76,10 +75,12 @@ function byLabel<T extends HTMLElement>(within: ParentNode, text: string): T | n
 }
 
 describe("the Models page", () => {
-  test("lists each tier with the model it requests, who changed it, and who uses it; one with none says Not set", async () => {
+  test("lists each tier with the model it requests, its effort, who changed it, and who uses it; one with none says Not set", async () => {
     const container = await page();
     const row = (name: string) => container.querySelector<HTMLElement>(`[data-tier="${name}"]`)!;
     expect(row("Thinker").querySelector("[data-model-cell]")?.textContent).toBe("claude-fable-5-1");
+    expect(row("Thinker").querySelector("[data-effort-cell]")?.textContent).toBe("High");
+    expect(row("Fast").querySelector("[data-effort-cell]")?.textContent).toBe("Model’s default");
     expect(row("Coder").textContent).toContain("Writes and fixes code for hours at a time.");
     expect(row("Coder").textContent).toContain("2 agents");
     expect(row("Fast").querySelector("[data-model-cell]")?.textContent).toBe("Not set");
@@ -96,7 +97,7 @@ describe("the Models page", () => {
   test("the edit dialog offers the proxy's names; one it does not list warns, and Save reads Save anyway", async () => {
     const container = await page();
     const dialog = await menuItem(container, "Coder", "Change model…");
-    expect(dialog.textContent).toContain("On Coder now: Implementer, Fixer, at effort high.");
+    expect(dialog.textContent).toContain("On Coder now: Implementer, Fixer.");
     const chips = [...dialog.querySelectorAll<HTMLButtonElement>("[aria-label='Names the proxy knows'] button")];
     expect(chips.map((c) => c.textContent)).toEqual(["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"]);
     expect(chips[0]!.getAttribute("aria-pressed")).toBe("true");
@@ -117,22 +118,47 @@ describe("the Models page", () => {
     expect(button(dialog, "Save")).toBeDefined();
   });
 
-  test("Send a test message tries the tier's model and shows each effort's answer, with who sends it", async () => {
+  test("Send a test message sends the tier's model and effort once, and shows its answer and what was sent", async () => {
     const client = new TestingClient("a");
-    // The fixer at max: an effort the answer covers, but not the first it names.
-    const tiers = { ...TIERS, tiers: MODEL_TIERS.map((t) => t.id !== "mtr_coder" ? t
-      : { ...t, usedBy: t.usedBy.map((u) => (u.role === "fixer" ? { ...u, effort: "max" as const } : u)) }) };
-    const container = await page(client, tiers);
+    const container = await page(client);
     const dialog = await menuItem(container, "Coder", "Send a test message");
-    const results = await until(() => {
-      const r = dialog.querySelectorAll("[data-testid=model-tier-test-result]");
-      return r.length === 2 ? [...r] : null;
-    }, "the test's answers");
-    expect(client.tested).toEqual([["claude-opus-5-5", "mtr_coder"]]);
-    expect(results.map((r) => [r.getAttribute("data-ok"), r.textContent])).toEqual([
-      ["true", "claude-opus-5-5 answered (efforts high, max) in 1.2 s (Implementer, Fixer)."],
-      ["false", "claude-opus-5-5 (effort low): the proxy answered 404 — no such model."],
-    ]);
+    const result = await until(() => dialog.querySelector("[data-testid=model-tier-test-result]"), "the test's answer");
+    expect(client.tested).toEqual([{ model: "claude-opus-5-5", effort: "medium", options: null, headers: null }]);
+    expect([result.getAttribute("data-ok"), result.textContent]).toEqual(["true",
+      "claude-opus-5-5 answered in 1.2 s (sent {\"thinking\":{\"type\":\"adaptive\",\"display\":\"summarized\"},\"output_config\":{\"effort\":\"medium\"}})."]);
+  });
+
+  test("the dialog's effort and options are what the test sends and Save saves; a refused effort shows the proxy's words", async () => {
+    const saved: unknown[] = [];
+    class Saving extends TestingClient {
+      override updateModelTier(id: string, input: Parameters<FixtureClient["updateModelTier"]>[1]) {
+        saved.push([id, input]);
+        return Promise.resolve(TIERS);
+      }
+    }
+    const client = new Saving("a");
+    const container = await page(client);
+    const dialog = await menuItem(container, "Coder", "Change model…");
+    await press(byLabel<HTMLButtonElement>(dialog, "Reasoning effort")!);
+    await click(await until(() => [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent === "None"), "None"));
+    expect(dialog.textContent).toContain("On Claude models, None turns thinking off. GPT models reason at their default.");
+    const options = byLabel<HTMLTextAreaElement>(dialog, "OpenCode model options")!;
+    const type = (el: HTMLTextAreaElement, text: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await type(options, "{not json");
+    expect(dialog.textContent).toContain("A JSON object, like {\"key\": \"value\"}");
+    expect(button(dialog, "Save")!.disabled).toBe(true);
+    await type(options, "{\"sendReasoning\": true}");
+    await click(button(dialog, "Send a test message")!);
+    const result = await until(() => dialog.querySelector("[data-testid=model-tier-test-result]"), "the test's answer");
+    expect(client.tested.at(-1)).toEqual({ model: "claude-opus-5-5", effort: "none", options: { sendReasoning: true }, headers: null });
+    expect(result.getAttribute("data-ok")).toBe("false");
+    expect(result.textContent).toContain("the proxy answered 200 — 'none' is not supported with this model.");
+    await click(button(dialog, "Save")!);
+    expect(saved).toEqual([["mtr_coder", { name: "Coder", description: "Writes and fixes code for hours at a time.", model: "claude-opus-5-5",
+      effort: "none", options: { sendReasoning: true }, headers: null }]]);
   });
 
   test("removing a tier in use lists who uses it and asks where they go", async () => {
@@ -239,6 +265,13 @@ describe("a role's tier", () => {
     expect(document.body.textContent).not.toContain("Only admins change tiers.");
     await click(button(document, "Manage tiers in Models")!);
     expect(pages).toEqual(["models"]);
+  });
+
+  test("on the organisation, the role reads the model and effort its tier requests, and has no effort of its own", async () => {
+    const { container } = await organizationRole(ADMIN);
+    const requests = await until(() => container.querySelector("[data-testid=role-tier-requests]"), "what the tier requests");
+    expect(requests.textContent).toBe("Requests claude-fable-5-1 · high");
+    expect(container.querySelector("[aria-label='Reasoning effort']")).toBeNull();
   });
 
   test("on the organisation, a member is told only admins change tiers", async () => {

@@ -68,4 +68,11 @@ describe("TierChip", () => {
     expect(chip.getAttribute("aria-label")).toBe("Model: llm-anthropic/claude-sonnet-5");
     expect(chip.textContent).toBe("llm-anthropic/claude-sonnet-5");
   });
+
+  test("an effort asked for follows the model; none at the model's default", async () => {
+    await mount(<TierChip tier="Coder" model="claude-sonnet-5" effort="medium" data-testid="chip" />);
+    const chip = host!.querySelector<HTMLButtonElement>('[data-testid="chip"]')!;
+    expect(chip.textContent).toBe("Coder ·claude-sonnet-5· medium");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-sonnet-5 at effort medium");
+  });
 });

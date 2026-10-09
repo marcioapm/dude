@@ -694,7 +694,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Lookups: lookups, Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+	return Behaviour{Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
 		Publish: published, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }

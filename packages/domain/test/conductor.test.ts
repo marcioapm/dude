@@ -5,6 +5,7 @@ import {
   SETTINGS_ROLE_LABEL,
   isConductor,
   resolveMachineSize,
+  ROLE_EFFORT_REMOVED,
   runLabel,
   settingsPatchSchema,
 } from "../src/index.ts";
@@ -16,10 +17,13 @@ describe("the conductor's settings", () => {
     expect(SETTINGS_ROLE_DESCRIPTION.conductor.length).toBeGreaterThan(10);
   });
 
-  test("its tier, effort, time limit and machine can be set, and its warm minutes", () => {
-    const patch = { roles: { conductor: { tier: "mtr_thinker", effort: "low", timeLimitMinutes: 30, machineSize: "msz_s" } },
+  test("its tier, time limit and machine can be set, and its warm minutes; an effort is the tier's", () => {
+    const patch = { roles: { conductor: { tier: "mtr_thinker", timeLimitMinutes: 30, machineSize: "msz_s" } },
       delivery: { conductorWarmMinutes: 3 } };
     expect(settingsPatchSchema.safeParse(patch).success).toBe(true);
+    const effort = settingsPatchSchema.safeParse({ roles: { conductor: { effort: "low" } } });
+    expect(effort.success).toBe(false);
+    expect(effort.error?.issues[0]?.message).toBe(ROLE_EFFORT_REMOVED);
     expect(settingsPatchSchema.safeParse({ delivery: { conductorWarmMinutes: 0 } }).success).toBe(false);
     expect(settingsPatchSchema.safeParse({ roles: { orchestrator: { tier: "mtr_thinker" } } }).success).toBe(false);
   });

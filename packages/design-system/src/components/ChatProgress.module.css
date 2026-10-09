@@ -26,7 +26,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-compact);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
@@ -90,7 +90,7 @@
    ActivityIndicator sweep, so the two rhythms line up in a transcript. */
 .track {
   position: absolute;
-  left: calc(var(--ds-space-6) + 16px + var(--ds-space-8));
+  left: calc(var(--ds-space-8) + 16px + var(--ds-space-8));
   right: var(--ds-space-8);
   bottom: 0;
   height: 2px;
