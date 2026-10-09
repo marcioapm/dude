@@ -160,12 +160,12 @@ def claude(spec: dict, key: str, home: str, mcp: str) -> list:
             continue
         m = json.loads(line)
         if m.get("type") == "result":
-            # lux relays a result line as claude.turn_end (its usage) first,
-            # then the line itself (lux internal/adapter/claude.go).
+            # lux relays usage, idle, then the result line itself.
             turn_end = {}
             if m.get("usage") is not None:
                 turn_end["usage"] = m["usage"]
             records.append({"type": "claude.turn_end", "data": turn_end})
+            records.append({"type": "lux.activity", "data": {"activity": "idle"}})
             records.append({"type": "claude.result", "data": m})
             break
         records.append({"type": "claude." + m.get("type", ""), "data": m})
