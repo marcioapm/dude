@@ -34,9 +34,9 @@ import (
 func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, err error) {
 	var recipes []Recipe
 	var settings PreviewSettings
-	// Every server dude recorded for the preview, by name, gone ones too:
-	// one lux lost (attachAll, the feed) is not made again here.
-	recorded := map[string]bool{}
+	// Every server dude recorded for the preview, gone ones too: one lux
+	// lost (attachAll, the feed) is not made again here.
+	var recorded []recordedServer
 	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
@@ -47,29 +47,23 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 			WHERE t.id = $1`, r.TaskID).Scan(&of.TaskKey, &of.ProjectSlug); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT name FROM preview_servers WHERE run_id = $1`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT name, lux_server_id, deleted_at IS NULL FROM preview_servers WHERE run_id = $1`, r.ID)
 		if err != nil {
 			return err
 		}
-		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
+		if recorded, err = pgx.CollectRows(rows, pgx.RowToStructByPos[recordedServer]); err != nil {
 			return err
-		}
-		for _, n := range names {
-			recorded[n] = true
 		}
 		return loadSettings(ctx, tx, r.ProjectID, &settings)
 	}); err != nil {
 		return false, err
 	}
-	have, err := p.previewServers(ctx, r.Org, r.ID)
-	if err != nil {
-		return false, err
-	}
+	live := slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.Live })
 	// What lux has of them, by id: what each recipe is compared with. A
 	// first declare has nothing to compare (createServer looks for its own).
 	var inLux []lux.TenantServer
-	if len(have) > 0 || r.Status != "pending" {
+	if live || r.Status != "pending" {
+		var err error
 		if inLux, err = p.Lux.ListServers(ctx, "", "dude.preview="+r.ID); err != nil {
 			return false, err
 		}
@@ -86,19 +80,30 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 	for _, rc := range recipes {
 		wanted[rc.Name] = rc.Autostart
 	}
-	live, dropped := 0, 0
-	for _, sv := range have {
-		if !wanted[sv.Name] {
+	kept, dropped := 0, 0
+	for _, sv := range recorded {
+		switch {
+		case !sv.Live:
+		case !wanted[sv.Name]:
 			if err := p.dropServer(ctx, r, sv.LuxID); err != nil {
 				return false, err
 			}
 			dropped++
+		default:
+			kept++
+		}
+	}
+	// The servers lux has for the preview that dude had no row of and no
+	// recipe wants: a delete in dropServer that did not reach lux. One
+	// dropped above is in recorded, so it is not deleted twice; one a
+	// recipe wants is adopted instead (createServer).
+	for _, ts := range byID {
+		if wanted[ts.Name] || slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.LuxID == ts.ID }) {
 			continue
 		}
-		live++
-	}
-	if err := p.dropOrphans(ctx, r, inLux, wanted); err != nil {
-		return false, err
+		if err := p.Lux.DeleteServer(ctx, ts.ID); err != nil && !lux.IsNotFound(err) {
+			return false, err
+		}
 	}
 	for _, rc := range recipes {
 		if !rc.Autostart {
@@ -109,39 +114,40 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 			p.Log.Warn("a preview server lux would refuse was left out", "run", r.ID, "server", rc.Name, "error", err)
 			continue
 		}
-		i := slices.IndexFunc(have, func(s previewServer) bool { return s.Name == rc.Name })
-		le, refused := (*lux.Error)(nil), false
+		i := slices.IndexFunc(recorded, func(s recordedServer) bool { return s.Name == rc.Name })
 		switch {
-		case i >= 0:
+		case i >= 0 && recorded[i].Live:
 			// One lux no longer has is left alone: its server.deleted
 			// (the feed) ends the preview, and attachAll records it gone.
-			if cur, ok := byID[have[i].LuxID]; ok {
+			if cur, ok := byID[recorded[i].LuxID]; ok {
 				err = p.updateServer(ctx, r, cur, in)
 			}
-			// 422 is a recipe lux will not take; a 409 (the server
-			// attached or detached meanwhile) is tried again.
-			le, refused = lux.AsError(err)
-			refused = refused && le.Status == http.StatusUnprocessableEntity
-		case !recorded[rc.Name]:
+		case i < 0:
 			if err = p.addServer(ctx, r, of, in, settings); err == nil {
-				live++
+				kept++
 			}
-			le, refused = lux.AsError(err)
-			refused = refused && !le.Retryable()
 		}
-		if refused {
+		// A refusal no retry changes fails the preview, as lux's answer
+		// to a submit does.
+		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			return true, p.fail(ctx, r.previewRun, fmt.Sprintf("lux refused preview server %s: %s", rc.Name, le.Message))
 		}
 		if err != nil {
 			return false, err
 		}
 	}
-	if dropped > 0 && live == 0 {
+	if dropped > 0 && kept == 0 {
 		// Its last server dropped: nothing is left to open, as when lux
 		// deletes one (Feed.Apply).
 		return true, p.complete(ctx, r, "no server starts in previews", ledger.ActorSystem, r.ID)
 	}
 	return false, nil
+}
+
+// recordedServer is a preview_servers row; Live: not marked deleted.
+type recordedServer struct {
+	Name, LuxID string
+	Live        bool
 }
 
 // updateServer PATCHes the fields in which a preview server's recipe
@@ -153,9 +159,21 @@ func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantSe
 	}
 	// Names only: env values may be credentials.
 	p.Log.Info("a preview server's recipe changed; updating it in lux", "run", r.ID, "server", in.Name, "fields", changed)
-	_, err := p.Lux.PatchServer(ctx, cur.ID, patch)
-	if lux.IsNotFound(err) {
-		return nil
+	return patchServer(ctx, p.Lux, cur.ID, patch)
+}
+
+// patchServer sends a PATCH. A server lux no longer has is left to the
+// feed; a 409 (attached or detached meanwhile) is returned as an error
+// that is not lux's refusal, so the wake is tried again.
+func patchServer(ctx context.Context, c lux.Servers, id string, patch lux.PatchServer) error {
+	_, err := c.PatchServer(ctx, id, patch)
+	if le, ok := lux.AsError(err); ok {
+		switch le.Status {
+		case http.StatusNotFound:
+			return nil
+		case http.StatusConflict:
+			return fmt.Errorf("patching lux server %s: %v", id, le)
+		}
 	}
 	return err
 }
@@ -196,7 +214,7 @@ func serverPatch(cur lux.TenantServer, in lux.ServerInput) (lux.PatchServer, []s
 // dropServer deletes a preview server whose recipe is gone. Its row goes
 // first, so the server.deleted lux then reports is of no preview's server
 // and ends nothing (Feed.Apply); a delete in lux that fails leaves an
-// orphan dropOrphans deletes on the next wake.
+// orphan the next reconcile deletes, or endInLux when the preview ends.
 func (p *Previews) dropServer(ctx context.Context, r wakeRun, id string) error {
 	p.Log.Info("a preview server's recipe was removed or no longer starts in previews; deleting it", "run", r.ID, "server", id)
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -207,33 +225,6 @@ func (p *Previews) dropServer(ctx context.Context, r wakeRun, id string) error {
 	}
 	if err := p.Lux.DeleteServer(ctx, id); err != nil && !lux.IsNotFound(err) {
 		return err
-	}
-	return nil
-}
-
-// dropOrphans deletes the servers lux has for the preview (its dude.preview
-// label) that dude has no row of and no recipe wants: those whose delete
-// in dropServer did not reach lux. One a recipe wants is adopted instead
-// (createServer).
-func (p *Previews) dropOrphans(ctx context.Context, r wakeRun, inLux []lux.TenantServer, wanted map[string]bool) error {
-	var ids []string
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT lux_server_id FROM preview_servers WHERE run_id = $1`, r.ID)
-		if err != nil {
-			return err
-		}
-		ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
-	}); err != nil {
-		return err
-	}
-	for _, sv := range inLux {
-		if wanted[sv.Name] || slices.Contains(ids, sv.ID) {
-			continue
-		}
-		if err := p.Lux.DeleteServer(ctx, sv.ID); err != nil && !lux.IsNotFound(err) {
-			return err
-		}
 	}
 	return nil
 }
@@ -266,13 +257,11 @@ func (p *Previews) addServer(ctx context.Context, r wakeRun, of PreviewOf, in lu
 		}
 		return nil
 	}
-	// An adopted server (a create whose answer was lost, or one dropOrphans
-	// spared) may be of an older recipe.
+	// An adopted server (a create whose answer was lost, or a leftover a
+	// recipe wants again) may be of an older recipe.
 	if patch, changed := serverPatch(sv, in); len(changed) > 0 {
 		p.Log.Info("an adopted preview server is of an older recipe; updating it in lux", "run", r.ID, "server", in.Name, "fields", changed)
-		if _, err := p.Lux.PatchServer(ctx, sv.ID, patch); err != nil && !lux.IsNotFound(err) {
-			return err
-		}
+		return patchServer(ctx, p.Lux, sv.ID, patch)
 	}
 	return nil
 }

@@ -8,9 +8,11 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -49,7 +51,7 @@ func patchedBeforeStart(t *testing.T, calls []string, id, fields string) {
 		}
 	}
 	if patch < 0 || start < 0 || patch > start || n != 1 {
-		t.Fatalf("lux saw %v; want one PATCH of %s to %s, before its start", calls, fields, id)
+		t.Errorf("lux saw %v; want one PATCH of %s to %s, before its start", calls, fields, id)
 	}
 }
 
@@ -112,28 +114,104 @@ func TestARecipeEditReachesTheNextWakeOnEveryPath(t *testing.T) {
 	}
 }
 
-// A wake with the recipes as they were sends lux no PATCH.
+// A wake with the recipes as they were sends lux no PATCH, also when only
+// the project's preview settings (idle timeout, egress) changed meanwhile.
 func TestAnUnchangedRecipeIsNotPatched(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	setup := "npm ci"
-	w.recipe("web", 3000, "npm run dev", "apps/web", &setup, true)
-	_, runID := w.declare()
-	web := w.serverID(runID, "web")
-	w.open(web)
-	w.running(runID, "web")
-	w.lux.Idle(web)
-	w.until("parked", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
-	})
-	w.open(web)
-	for _, c := range w.lux.TenantCalls() {
-		if strings.HasPrefix(c, "patch ") {
-			t.Fatalf("lux saw %q for recipes nobody changed; all calls %v", c, w.lux.TenantCalls())
-		}
+	for _, change := range []string{"nothing", "preview settings"} {
+		t.Run(change, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			setup := "npm ci"
+			w.recipe("web", 3000, "npm run dev", "apps/web", &setup, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			w.open(web)
+			w.running(runID, "web")
+			w.lux.Idle(web)
+			w.until("parked", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+			})
+			if change == "preview settings" {
+				mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"idleTimeoutMinutes":5,"egress":["registry.npmjs.org"]}'
+					WHERE id = $1`, w.project)
+			}
+			w.open(web)
+			for _, c := range w.lux.TenantCalls() {
+				if strings.HasPrefix(c, "patch ") {
+					t.Fatalf("lux saw %q for recipes nobody changed; all calls %v", c, w.lux.TenantCalls())
+				}
+			}
+			if r := w.luxRuns()[0]; r.Resumed != 1 {
+				t.Fatalf("resumed %d times", r.Resumed)
+			}
+		})
 	}
-	if r := w.luxRuns()[0]; r.Resumed != 1 {
-		t.Fatalf("resumed %d times", r.Resumed)
+}
+
+// Each field of a recipe edited on its own reaches lux as a PATCH of the
+// field lux holds it in, before the server starts; what lux stores and
+// what the process starts with are the new value. The log names the
+// fields, never an env value.
+func TestEachRecipeFieldReachesLux(t *testing.T) {
+	const sentinel = "s3cr3t-7c1f9a"
+	for _, tc := range []struct {
+		field, edit, fields string
+		check               func(t *testing.T, w *world, sv lux.TenantServer, luxRun string)
+	}{
+		{"setup", `UPDATE project_servers SET setup = 'npm ci' WHERE project_id = $1 AND name = 'web'`, "command",
+			func(t *testing.T, w *world, sv lux.TenantServer, luxRun string) {
+				setup := "npm ci"
+				if want := servers.ShellCommand(&setup, "npm run dev"); !slices.Equal(sv.Command, want) {
+					t.Errorf("lux's command %v; want %v", sv.Command, want)
+				}
+				if started := strings.Join(w.lux.ServerCommand(luxRun, "web"), " "); !strings.Contains(started, "npm ci && npm run dev") {
+					t.Errorf("the process started as %q", started)
+				}
+			}},
+		{"port", `UPDATE project_servers SET port = 3001 WHERE project_id = $1 AND name = 'web'`, "port",
+			func(t *testing.T, w *world, sv lux.TenantServer, luxRun string) {
+				if sv.Port != 3001 {
+					t.Errorf("lux's port %d", sv.Port)
+				}
+			}},
+		{"workdir", `UPDATE project_servers SET workdir = 'apps/web' WHERE project_id = $1 AND name = 'web'`, "workdir",
+			func(t *testing.T, w *world, sv lux.TenantServer, luxRun string) {
+				if want := servers.Workdir("target", "apps/web"); sv.Workdir != want {
+					t.Errorf("lux's workdir %q; want %q", sv.Workdir, want)
+				}
+			}},
+		{"env", `UPDATE project_servers SET env = '[{"name":"PORT","value":"1"},{"name":"S3_SECRET","value":"` + sentinel + `"}]'
+			WHERE project_id = $1 AND name = 'web'`, "env",
+			func(t *testing.T, w *world, sv lux.TenantServer, luxRun string) {
+				if sv.Env["S3_SECRET"] != sentinel {
+					t.Errorf("lux's env %v", sv.Env)
+				}
+				if env := w.lux.ServerEnv(luxRun, "web"); env["S3_SECRET"] != sentinel {
+					t.Errorf("the process started with %v", env)
+				}
+			}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			logs := &lockedBuffer{}
+			w.previews.Log = slog.New(slog.NewTextHandler(logs, nil))
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			mark := len(w.lux.TenantCalls())
+			mustExec(t, w.owner, tc.edit, w.project)
+			w.open(web)
+			patchedBeforeStart(t, w.tenantCallsOf(web, mark), web, tc.fields)
+			sv, _ := w.lux.TenantServer(web)
+			tc.check(t, w, sv, w.luxRuns()[0].ID)
+			if !strings.Contains(logs.String(), "fields=["+tc.fields+"]") {
+				t.Errorf("the log does not name the field changed:\n%s", logs.String())
+			}
+			if strings.Contains(logs.String(), sentinel) {
+				t.Errorf("an env value reached the log:\n%s", logs.String())
+			}
+		})
 	}
 }
 
@@ -156,6 +234,7 @@ func TestRecipesRemovedAndAddedReachTheNextWake(t *testing.T) {
 			}
 			w.recipe("docs", 5000, "npm run docs", "docs", nil, true)
 			mark := len(w.lux.TenantCalls())
+			c := w.refusing()
 
 			w.open(web)
 			if _, ok := w.lux.TenantServer(api); ok {
@@ -173,6 +252,9 @@ func TestRecipesRemovedAndAddedReachTheNextWake(t *testing.T) {
 			}
 			if !slices.Contains(calls, "delete "+api) {
 				t.Errorf("lux saw %v; want api deleted", calls)
+			}
+			if n := c.deletesOf(api); n != 1 {
+				t.Errorf("api's DELETE was sent %d times; want once", n)
 			}
 			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
 				t.Errorf("the preview did not live on:\n%s", w.describeRuns())
@@ -232,5 +314,217 @@ func TestAnAdoptedServerTakesTheCurrentRecipe(t *testing.T) {
 	}
 	if !slices.Contains(w.lux.TenantCalls(), fmt.Sprintf("patch %s command", old.ID)) {
 		t.Errorf("lux saw %v; want only its command patched", w.lux.TenantCalls())
+	}
+}
+
+// refusingLux is the world's lux client, answering in lux's stead: each
+// PATCH the next of patches (nil: lux answers), and a DELETE of a server
+// in deletes once. deleted counts the DELETEs asked, by id.
+type refusingLux struct {
+	lux.Client
+	mu      sync.Mutex
+	patches []error
+	deletes map[string]error
+	deleted map[string]int
+	refused int
+}
+
+func (c *refusingLux) PatchServer(ctx context.Context, id string, in lux.PatchServer) (lux.TenantServer, error) {
+	c.mu.Lock()
+	var err error
+	if len(c.patches) > 0 {
+		err, c.patches = c.patches[0], c.patches[1:]
+	}
+	if err != nil {
+		c.refused++
+	}
+	c.mu.Unlock()
+	if err != nil {
+		return lux.TenantServer{}, err
+	}
+	return c.Client.PatchServer(ctx, id, in)
+}
+
+func (c *refusingLux) DeleteServer(ctx context.Context, id string) error {
+	c.mu.Lock()
+	err := c.deletes[id]
+	delete(c.deletes, id)
+	c.deleted[id]++
+	if err != nil {
+		c.refused++
+	}
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return c.Client.DeleteServer(ctx, id)
+}
+
+func (c *refusingLux) deletesOf(id string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deleted[id]
+}
+
+func (c *refusingLux) refusals() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refused
+}
+
+func (w *world) refusing() *refusingLux {
+	c := &refusingLux{Client: w.previews.Lux, deletes: map[string]error{}, deleted: map[string]int{}}
+	w.previews.Lux = c
+	return c
+}
+
+// letGo: what lux answered let the preview's wake (or declare) go, to
+// be tried again later, without failing the preview; it is made due now.
+func (w *world) letGo(runID string) {
+	w.t.Helper()
+	w.until("the attempt let go", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at > now() AND wake_claimed_at IS NULL`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID); n != 0 {
+		w.t.Fatalf("the preview failed:\n%s", w.describeRuns())
+	}
+	mustExec(w.t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+}
+
+// What lux answers a PATCH decides the wake: a refusal no retry changes
+// (any 4xx but 409) fails the preview before anything starts; a 409 (the
+// server attached or detached meanwhile) lets the wake go and the next
+// one PATCHes what is still different, before the servers start.
+func TestWhatLuxAnswersAPatchDecidesTheWake(t *testing.T) {
+	conflict := &lux.Error{Status: 409, Code: "conflict", Message: "the server changed meanwhile"}
+	for _, tc := range []struct {
+		name    string
+		patches []error
+		edit    string // web's env
+		reason  string // the preview fails with; "": it is retried
+	}{
+		{"422", []error{&lux.Error{Status: 422, Code: "invalid_server", Message: "server.port: need 1-65535"}}, `[{"name":"A","value":"1"}]`,
+			"lux refused preview server web: server.port: need 1-65535"},
+		{"403", []error{&lux.Error{Status: 403, Code: "forbidden", Message: "not this key's server"}}, `[{"name":"A","value":"1"}]`,
+			"lux refused preview server web: not this key's server"},
+		{"422 from lux's own check", nil, `[{"name":"NOT-A-NAME","value":"1"}]`,
+			`lux refused preview server web: server.env: invalid name "NOT-A-NAME"`},
+		{"409 on the first of two", []error{conflict}, `[{"name":"A","value":"1"}]`, ""},
+		{"409 on the second of two", []error{nil, conflict}, `[{"name":"A","value":"1"}]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("api", 4000, "go run .", "", nil, true)
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			api, web := w.serverID(runID, "api"), w.serverID(runID, "web")
+			c := w.refusing()
+			c.patches = tc.patches
+			mark := len(w.lux.TenantCalls())
+			w.editRecipe("web", "npm run dev -- --new", tc.edit)
+			if tc.reason == "" {
+				w.editRecipe("api", "go run ./cmd/api", `[{"name":"B","value":"2"}]`)
+			}
+			w.lux.RequestServer(web, "/")
+
+			if tc.reason != "" {
+				w.until("the preview to fail", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
+				})
+				if got := w.str(`SELECT error FROM runs WHERE id = $1`, runID); got != tc.reason {
+					t.Errorf("error %q; want %q", got, tc.reason)
+				}
+				if n := len(w.luxRuns()); n != 0 {
+					t.Errorf("%d lux runs submitted for a preview lux refused", n)
+				}
+				for _, call := range w.lux.TenantCalls()[mark:] {
+					if strings.HasPrefix(call, "start ") || strings.HasPrefix(call, "patch ") {
+						t.Errorf("lux saw %v", w.lux.TenantCalls()[mark:])
+						break
+					}
+				}
+				return
+			}
+			w.until("lux's 409", func() bool { return c.refusals() == 1 })
+			w.letGo(runID)
+			w.until("both served", func() bool {
+				a, _ := w.lux.TenantServer(api)
+				b, _ := w.lux.TenantServer(web)
+				return a.State == lux.SrvReady && b.State == lux.SrvReady
+			})
+			patchedBeforeStart(t, w.tenantCallsOf(api, mark), api, "command,env")
+			patchedBeforeStart(t, w.tenantCallsOf(web, mark), web, "command,env")
+			luxRun := w.luxRuns()[0].ID
+			if env := w.lux.ServerEnv(luxRun, "web"); env["A"] != "1" {
+				t.Errorf("web started with %v", env)
+			}
+			if env := w.lux.ServerEnv(luxRun, "api"); env["B"] != "2" {
+				t.Errorf("api started with %v", env)
+			}
+		})
+	}
+}
+
+// A 409 on the PATCH of a server adopted on declare is tried again, not a
+// refusal: the next pass PATCHes it to the recipe.
+func TestAConflictPatchingAnAdoptedServerIsTriedAgain(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev -- --new", "", nil, true)
+	c := w.refusing()
+	c.patches = []error{&lux.Error{Status: 409, Code: "conflict", Message: "the server changed meanwhile"}}
+	task, runID := w.startPreview()
+	old, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
+		Command: servers.ShellCommand(nil, "npm run dev"), Workdir: servers.Workdir("target", ""), Env: map[string]string{"PORT": "1"},
+		Hostname: servers.PreviewHostname(previewDomain, "web", w.previewOf(task), ""), Wake: "request", Lifetime: "owner",
+		Labels: map[string]string{"dude.preview": runID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.until("lux's 409", func() bool { return c.refusals() == 1 })
+	w.letGo(runID)
+	w.until("asleep", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	sv, _ := w.lux.TenantServer(old.ID)
+	if want := servers.ShellCommand(nil, "npm run dev -- --new"); !slices.Equal(sv.Command, want) {
+		t.Fatalf("command %v; want %v (calls %v)", sv.Command, want, w.lux.TenantCalls())
+	}
+}
+
+// A server whose recipe was removed, and whose delete in lux failed, is
+// deleted all the same: by the next wake, or when the preview ends.
+func TestADroppedServerLuxDidNotDeleteIsDeletedLater(t *testing.T) {
+	for _, then := range []string{"next wake", "preview ends"} {
+		t.Run(then, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			w.recipe("api", 4000, "go run .", "", nil, true)
+			task, runID := w.declare()
+			web, api := w.serverID(runID, "web"), w.serverID(runID, "api")
+			c := w.refusing()
+			c.deletes[api] = &lux.Error{Status: 503, Code: "unavailable", Message: "try again"}
+			mustExec(t, w.owner, `DELETE FROM project_servers WHERE project_id = $1 AND name = 'api'`, w.project)
+			w.lux.RequestServer(web, "/")
+			w.until("lux's 503", func() bool { return c.refusals() == 1 })
+			if _, ok := w.lux.TenantServer(api); !ok {
+				t.Fatal("api was deleted in lux all the same")
+			}
+			if then == "next wake" {
+				w.letGo(runID)
+				w.until("web served", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+			} else {
+				if code, _ := w.do("DELETE", "/internal/tasks/"+task+"/preview", nil); code != 200 {
+					t.Fatal(code)
+				}
+				mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+				w.until("its servers deleted", func() bool { _, ok := w.lux.TenantServer(web); return !ok })
+			}
+			if _, ok := w.lux.TenantServer(api); ok {
+				t.Errorf("api is still in lux; calls %v", w.lux.TenantCalls())
+			}
+		})
 	}
 }
