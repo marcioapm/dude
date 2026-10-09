@@ -151,6 +151,8 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunRestarted,
   EventTypes.RunPaused,
   EventTypes.RunResumed,
+  // A resume moved it to the size its settings name now (runs.machine).
+  EventTypes.RunResized,
   // Waiting for its image, then handed to lux: "Preparing image" comes and goes.
   EventTypes.RunImagePreparing,
   EventTypes.RunLeaseAcquired,
@@ -1246,9 +1248,10 @@ function RunTierChip({ tier, model, effort, role, phase }: { tier: string | null
 }
 
 /**
- * The machine the Run ran on, as it was when it started: its size's name
- * and spec, where the size came from, and — when lux reports it — the
- * memory its container actually got.
+ * The machine the Run runs on: its size's name and spec as it started or
+ * last resumed, where the size came from, and — when lux reports it — the
+ * memory its container actually got. A size changed meanwhile reaches it
+ * at its next resume; what kept it from one is the record's note.
  */
 function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNullable<RunDetail["machine"]>; memoryLimit: number | null; role: AgentRole; phase: string | null }) {
   const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
@@ -1262,7 +1265,9 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
     <MachineChip name={machine.name} spec={machineSpec(machine)} data-testid="run-machine"
       tooltip={
         <MachineTip name={machine.name}>
-          {from} Fixed when the session started — editing {machine.name} now changes the next session, not this one.
+          {from} Set when the session started or last resumed — a change to its size reaches it when it next resumes.
+          {machine.diskKept ? ` lux kept its ${machine.diskGiB} GiB disk rather than ${machine.diskKept.requestedGiB}${machine.diskKept.reason ? `: ${machine.diskKept.reason}` : ""}.` : null}
+          {machine.note ? ` ${machine.note}` : null}
           {limit ? ` It asked for ${asked} GiB and got ${gib(limit)}: every run on its host gives up the same share to Linux.` : null}
           {machine.pool ? ` Pool ${machine.pool}.` : null}
         </MachineTip>

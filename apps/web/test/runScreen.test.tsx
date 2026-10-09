@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { click, mount, until } from "./dom.ts";
+import { click, emitForTest, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RUN_ID } from "../src/fixtures/data.ts";
 import { PreparingImage, RunScreen } from "../src/screens/RunScreen.tsx";
@@ -62,7 +62,7 @@ describe("the session's machine", () => {
     expect(page.querySelector("[data-testid=run-machine]")).toBeNull();
   });
 
-  const FIXED = "Fixed when the session started — editing Large now changes the next session, not this one.";
+  const FIXED = "Set when the session started or last resumed — a change to its size reaches it when it next resumes.";
   for (const [from, phase, role, says] of [
     ["project", "implement", "implementer", "From its project’s settings for the Implementer."],
     ["organization", "review", "reviewer", "From the organisation’s settings for the Reviewer."],
@@ -75,6 +75,30 @@ describe("the session's machine", () => {
       expect(await machineTip(page)).toBe(`Machine: Large${says} ${FIXED}`);
     });
   }
+
+  test("a resume that moved the Run to another size shows it, read again on run.resized", async () => {
+    class Resized extends RunClient {
+      machine: NonNullable<RunDetail["machine"]> = LARGE;
+      override async getRun(id: string): Promise<RunDetail> {
+        return { ...(await super.getRun(id)), machine: this.machine };
+      }
+    }
+    const client = new Resized({});
+    const page = await session({ client });
+    await until(() => machineChip(page), "Large");
+    client.machine = { ...LARGE, sizeId: "msz_tiny", name: "Tiny", cpus: 0.5, memoryMiB: 1024, diskGiB: 20, from: "project",
+      diskKept: { requestedGiB: 5, reason: "its saved state used up to 8.0 GiB" } };
+    await emitForTest("run.resized", { machine: client.machine });
+    const chip = await until(() => machineChip(page, "Machine: Tiny, 0.5 CPUs · 1 GiB · 20 GiB"), "the chip saying Tiny");
+    expect(chip.textContent).toBe("Tiny0.5 CPUs · 1 GiB · 20 GiB");
+    expect(await machineTip(page, "Machine: Tiny, 0.5 CPUs · 1 GiB · 20 GiB")).toContain("lux kept its 20 GiB disk rather than 5: its saved state used up to 8.0 GiB.");
+  });
+
+  test("a size the resume could not move it to: the tooltip says why", async () => {
+    const note = "Its settings now name Big, in another pool: a stopped Run cannot change pools, so it keeps Large. A new Run gets Big.";
+    const page = await session({ client: new RunClient({ machine: { ...LARGE, note } }) });
+    expect(await machineTip(page)).toContain(` ${note}`);
+  });
 });
 
 /** The machine chip, by its role and its exact accessible name. */
@@ -163,8 +187,8 @@ describe("whether the session can start containers", () => {
 });
 
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
-async function machineTip(page: HTMLElement): Promise<string> {
-  const chip = await until(() => machineChip(page), "the machine chip");
+async function machineTip(page: HTMLElement, name?: string): Promise<string> {
+  const chip = await until(() => machineChip(page, name), "the machine chip");
   const { act } = await import("react");
   await act(async () => chip.focus());
   const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");

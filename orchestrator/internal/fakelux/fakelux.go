@@ -166,6 +166,11 @@ type Run struct {
 	at map[string]string
 	// A resume's sync, applied when its placement starts.
 	pendingSync []lux.SyncRef
+	// The resize of the resume it is resuming from; nil when that resume
+	// asked for none, or lux resumed it itself (a move).
+	pendingResize *resize
+	// Each accepted resume's resources, as received; nil for none.
+	ResumeResources []json.RawMessage
 
 	// Its servers (servers.go).
 	servers []*server
@@ -358,6 +363,10 @@ type placement struct {
 	// container gone, its snapshot taken, then uploaded.
 	StopRequestedAt, ExitedAt, SnapshotDoneAt, UploadedAt *time.Time
 	SnapshotBytes                                         int64
+	// The memory its spec asked for when it was placed (a later resize is
+	// the next placement's), and the peak disk use reported at its exit.
+	memory   int64
+	peakDisk *int64
 }
 
 // newPlacement is lux assigning the Run's current epoch a host, now: the
@@ -373,7 +382,8 @@ func (s *Server) newPlacement(run *Run) *placement {
 	if accepted == nil {
 		accepted = &now
 	}
-	p := &placement{Epoch: run.Epoch, HostName: host, State: "assigned", AcceptedAt: accepted, AssignedAt: &now}
+	p := &placement{Epoch: run.Epoch, HostName: host, State: "assigned", AcceptedAt: accepted, AssignedAt: &now,
+		memory: specResources(run.Spec).Memory}
 	run.placements = append(run.placements, p)
 	return p
 }
@@ -625,6 +635,14 @@ type Server struct {
 	// given, reported as each placement's memoryLimit (a newer lux); zero
 	// reports none, as today's lux.
 	MemoryShare float64
+	// DiskUse is the peak disk use, in bytes, each placement reports at
+	// its exit (a lost one reports none); zero is 512 MiB. A resume's
+	// smaller disk applies only down to it plus max(25%, 1 GiB).
+	DiskUse int64
+	// NoResize is a lux from before resizing on resume (lux#51): a
+	// resume's resources may carry only disk, applied as asked, and
+	// anything else in them is an unknown field (400).
+	NoResize bool
 	// Starts still to fail, by spec label "key=value" (FailStarts), and
 	// the state each ends in.
 	failStarts map[string]int
@@ -1637,6 +1655,12 @@ func (s *Server) exited(run *Run) {
 	if p.WorkloadStartedAt == nil {
 		return // never started: lux sends no snapshot for it
 	}
+	if run.State != "lost" {
+		// The exit status carries the final disk sample; a lost host
+		// reports none.
+		peak := s.peakDisk(run)
+		p.peakDisk = &peak
+	}
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		s.mu.Lock()
@@ -1703,7 +1727,6 @@ func head(repo, ref string) string {
 func (s *Server) view(run *Run) map[string]any {
 	placements := []any{}
 	host := ""
-	limit := s.memoryLimit(run)
 	for _, p := range run.placements {
 		view := map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
 			"acceptedAt": p.AcceptedAt, "assignedAt": p.AssignedAt, "imageReadyAt": p.ImageReadyAt,
@@ -1719,8 +1742,11 @@ func (s *Server) view(run *Run) map[string]any {
 		if p.SnapshotDoneAt != nil {
 			view["snapshotBytes"] = p.SnapshotBytes
 		}
-		if limit != nil {
+		if limit := s.memoryLimit(p); limit != nil {
 			view["memoryLimit"] = *limit
+		}
+		if p.peakDisk != nil {
+			view["peakDiskBytes"] = *p.peakDisk
 		}
 		placements = append(placements, view)
 		if p.Epoch == run.Epoch && p.ExitedAt == nil {
@@ -1756,6 +1782,9 @@ func (s *Server) view(run *Run) map[string]any {
 	}
 	out := map[string]any{"id": run.ID, "state": run.State, "stateReason": run.StateReason, "epoch": run.Epoch, "sessionId": run.SessionID,
 		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
+	if id := s.poolOf(run); id != "" {
+		out["poolId"] = id
+	}
 	if !s.LegacyStages {
 		out["stage"], out["stageSince"], out["stageReason"] = run.stage, run.stageSince, run.stageReason
 	}
@@ -2265,23 +2294,64 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		Git       *struct {
 			Repositories []map[string]any `json:"repositories"`
 		} `json:"git"`
-		Sync []lux.SyncRef `json:"sync"`
+		Sync      []lux.SyncRef  `json:"sync"`
+		Resources *resizeRequest `json:"resources"`
 	}
 	body, _ := io.ReadAll(r.Body)
-	_ = json.Unmarshal(body, &in)
 	var raw struct {
-		Secrets json.RawMessage `json:"secrets"`
+		Secrets   json.RawMessage `json:"secrets"`
+		Resources json.RawMessage `json:"resources"`
 	}
 	_ = json.Unmarshal(body, &raw)
+	if err := json.Unmarshal(body, &in); err != nil {
+		// lux decodes the body strictly: a size it cannot read is a 400.
+		writeErr(w, 400, "bad_request", "invalid JSON body: "+err.Error())
+		return
+	}
+	if s.NoResize && in.Resources != nil && (in.Resources.CPUs != nil || in.Resources.Memory != nil) {
+		// A lux from before lux#51: its resources took only disk, and its
+		// decoder refuses an unknown field.
+		field := "cpus"
+		if in.Resources.CPUs == nil {
+			field = "memory"
+		}
+		writeErr(w, 400, "bad_request", fmt.Sprintf("invalid JSON body: json: unknown field %q", field))
+		return
+	}
+	var requested lux.Resources
+	var problem string
+	if in.Resources != nil && !s.NoResize {
+		requested, problem = in.Resources.requested()
+	}
 	s.mu.Lock()
 	// As lux's resumeRun: a Run resuming already answers as the first
-	// resume did; every other 409 means it was not resumed.
+	// resume did; every other 409 means it was not resumed. Its resources
+	// are checked, then compared with what the resume it waits on asked
+	// for: the same get that resume's resize, none get none, others are
+	// refused.
 	resumable := run.State == "stopped" || run.State == "failed" || run.State == "lost" ||
 		run.State == "succeeded" && !s.CancelledState
 	switch {
 	case resumable:
 	case run.State == "resuming":
+		if problem != "" {
+			s.mu.Unlock()
+			writeErr(w, 422, "invalid_spec", problem)
+			return
+		}
 		view := s.view(run)
+		if requested != (lux.Resources{}) {
+			var first lux.Resources
+			if run.pendingResize != nil {
+				first = run.pendingResize.Requested
+			}
+			if requested != first {
+				s.mu.Unlock()
+				writeErr(w, 409, "not_resumable", "run is resuming already with other resources: they can only change before it is resumed")
+				return
+			}
+			view["resize"] = run.pendingResize
+		}
 		s.mu.Unlock()
 		writeJSON(w, 202, view)
 		return
@@ -2304,6 +2374,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if msg := s.syncModeProblem(in.Sync); msg != "" {
 		s.mu.Unlock()
 		writeErr(w, 409, "sync_mode_unsupported", msg)
+		return
+	}
+	if problem != "" {
+		s.mu.Unlock()
+		writeErr(w, 422, "invalid_spec", problem)
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
@@ -2346,6 +2421,26 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		git["repositories"] = repos
 		run.Spec, _ = json.Marshal(spec)
 	}
+	var rz *resize
+	switch {
+	case in.Resources == nil:
+	case s.NoResize:
+		// Before lux#51: a disk asked for is written as it is, larger or
+		// smaller, with nothing said in the answer.
+		if d := int64(in.Resources.Disk); d < 0 {
+			s.mu.Unlock()
+			writeErr(w, 422, "invalid_request", "resources.disk must not be negative")
+			return
+		} else if d > 0 {
+			cur := specResources(run.Spec)
+			cur.Disk = d
+			s.setResources(run, cur)
+		}
+	default:
+		rz = s.resize(run, *in.Resources, requested)
+	}
+	run.pendingResize = rz
+	run.ResumeResources = append(run.ResumeResources, raw.Resources)
 	run.Resumed++
 	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
@@ -2375,6 +2470,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(run.Spec, &spec)
 	epoch, start := run.assigning, run.starts
 	view := s.view(run)
+	if rz != nil {
+		view["resize"] = rz
+	}
 	s.mu.Unlock()
 	go s.play(run, epoch, start, spec, true)
 	writeJSON(w, 202, view)
