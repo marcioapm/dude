@@ -78,22 +78,34 @@ interface ArtifactRow {
 /** Whose files: a task's Runs', or a brainstorm session's. */
 type Owner = { taskId: string } | { sessionId: string };
 
-/** The artifacts of a task's or a session's Runs, newest first, each with its version among those of its name. */
+/** Versions listed of each name, newest first; `versions` still counts them all. */
+const VERSIONS_LISTED = 50;
+
+/**
+ * The artifacts of a task's or a session's Runs, newest first, each with its
+ * version among those of its name: every name, with at most its
+ * VERSIONS_LISTED latest versions.
+ */
 async function artifactsOf(organizationId: string, owner: Owner): Promise<ArtifactRow[]> {
   const taskId = "taskId" in owner ? owner.taskId : null;
   const sessionId = "sessionId" in owner ? owner.sessionId : null;
   const rows = await withOrg(organizationId, async ({ sql }) => (await sql`
-    SELECT a.id, r.task_id AS "taskId", r.session_id AS "sessionId", a.run_id AS "runId", a.name,
-      a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.description, a.epoch,
-      a.created_at AS "createdAt", r.phase::text AS phase, r.role::text AS role,
-      row_number() OVER (PARTITION BY a.name ORDER BY a.created_at, a.epoch, a.id)::int AS version,
-      count(*) OVER (PARTITION BY a.name)::int AS versions
-    FROM artifacts a JOIN runs r ON r.id = a.run_id
-    -- dude's own (the final diff its beforeStop hook leaves) is never a
-    -- file for people; the collector keeps it out, and so does this.
-    WHERE (r.task_id = ${taskId} OR r.session_id = ${sessionId}) AND a.name NOT LIKE '.dude-%'
-    ORDER BY a.created_at DESC, a.epoch DESC, a.id DESC
-    LIMIT 500`) as ArtifactRow[]);
+    SELECT id, "taskId", "sessionId", "runId", name, "contentType", "sizeBytes", sha256, description, epoch,
+      "createdAt", phase, role, version, versions
+    FROM (
+      SELECT a.id, r.task_id AS "taskId", r.session_id AS "sessionId", a.run_id AS "runId", a.name,
+        a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.description, a.epoch,
+        a.created_at AS "createdAt", r.phase::text AS phase, r.role::text AS role,
+        row_number() OVER (PARTITION BY a.name ORDER BY a.created_at, a.epoch, a.id)::int AS version,
+        count(*) OVER (PARTITION BY a.name)::int AS versions,
+        row_number() OVER (PARTITION BY a.name ORDER BY a.created_at DESC, a.epoch DESC, a.id DESC) AS rank
+      FROM artifacts a JOIN runs r ON r.id = a.run_id
+      -- dude's own (the final diff its beforeStop hook leaves) is never a
+      -- file for people; the collector keeps it out, and so does this.
+      WHERE (r.task_id = ${taskId} OR r.session_id = ${sessionId}) AND a.name NOT LIKE '.dude-%'
+    ) listed
+    WHERE rank <= ${VERSIONS_LISTED}
+    ORDER BY "createdAt" DESC, epoch DESC, id DESC`) as ArtifactRow[]);
   return rows.map((a) => ({ ...a, contentType: artifactType(a.contentType, a.name) }));
 }
 
