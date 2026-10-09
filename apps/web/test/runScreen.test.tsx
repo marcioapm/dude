@@ -149,7 +149,7 @@ describe("whether the session can start containers", () => {
     expect((await until(() => badge(page), "the badge")).textContent).toBe("Can run containers");
   });
 
-  for (const [what, patch] of [["it recorded it cannot", { canRunContainers: false }], ["it recorded nothing", {}]] as const) {
+  for (const [what, patch] of [["it recorded it cannot", { canRunContainers: false }], ["it recorded nothing", { canRunContainers: null }]] as const) {
     test(`nothing when ${what}`, async () => {
       const page = await session({ client: new RunClient({ image: IMAGE, ...patch }) });
       await until(() => page.querySelector("[data-testid=run-image]"), "the image chip");
