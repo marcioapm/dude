@@ -342,3 +342,74 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     _shoot(page, "09b-waiting-run-narrow", width=1024)
     _shoot(page, "09b-waiting-run-wide", width=1920)
     assert all("409" in e for e in console_errors), console_errors
+
+
+@pytest.mark.ui
+def test_a_run_that_can_run_containers_says_so_in_its_header(
+        page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, forge_project: dict, console_errors: list):
+    image = _able(client, owner_dsn, "agents-podman")
+    pid = forge_project["id"]
+    client.patch(f"/v1/projects/{pid}", {"runtimeImageId": image["image"]["id"]})
+    task = client.create_task(pid, "Run the integration suite in podman")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    def submitted(task_id: str) -> dict:
+        return wait_until(lambda: (r := query(owner_dsn, "SELECT id, can_run_containers FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
+                                              (task_id,))) and r[0], timeout=60, message="the implementer never reached lux")
+
+    run = submitted(task["id"])
+    assert run["can_run_containers"] is True
+    assert client.get(f"/v1/runs/{run['id']}").json()["canRunContainers"] is True
+
+    sign_in(page, web_url, org["api_key"], at=f"#/session/{run['id']}")
+    expect(page.get_by_test_id("run-image")).to_contain_text("agents-podman")
+    header = page.locator("header").filter(has=page.get_by_test_id("run-image"))
+    badge = header.get_by_test_id("can-run-containers")
+    expect(badge).to_have_text("Can run containers")
+    expect(badge).to_have_attribute("aria-label", "Can run containers")
+    assert badge.get_attribute("title") is None
+    # After the image chip, in the same line of facts.
+    assert header.evaluate("""h => {
+        const img = h.querySelector('[data-testid=run-image]'), b = h.querySelector('[data-testid=can-run-containers]');
+        return Boolean(img.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }""")
+    # Nothing in the header is cut short, at the narrowest width the app lays out for and a wide one.
+    for width in (1024, 1440):
+        page.set_viewport_size({"width": width, "height": 1000})
+        clipped = header.evaluate("""h => [...h.querySelectorAll('*')]
+            .filter((e) => e.children.length === 0 && e.textContent.trim() && e.scrollWidth > e.clientWidth + 1)
+            .concat([...h.querySelectorAll('button, [data-testid]')].filter((e) => e.scrollWidth > e.clientWidth + 1))
+            .map((e) => e.textContent.trim())""")
+        assert clipped == [], f"clipped at {width}px: {clipped}"
+        box = badge.bounding_box()
+        assert box and box["x"] + box["width"] <= width, f"the badge leaves the page at {width}px: {box}"
+    _shoot(page, "12-run-can-run-containers-1440", width=1440)
+    _shoot(page, "12-run-can-run-containers-1024", width=1024)
+    # Its sentence is a tooltip, reached from the keyboard as the chips before it.
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    badge.focus()
+    tip = page.get_by_role("tooltip")
+    expect(tip).to_have_text("This Run can start containers inside it. Set when the session started; resuming keeps it.")
+    _shoot(page, "12-run-can-run-containers-tip-1440", width=1440)
+
+    # A Run on dude's fallback, with agent.nested_containers off: nothing.
+    plain = client.create_project(name="Plain", slug=f"plain-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
+    other = client.create_task(plain["id"], "Say hello")
+    assert client.post(f"/v1/tasks/{other['id']}/deliver").status_code == 201
+    cannot = submitted(other["id"])
+    assert cannot["can_run_containers"] is False
+    assert client.get(f"/v1/runs/{cannot['id']}").json()["canRunContainers"] is False
+    page.goto(f"{web_url}#/session/{cannot['id']}")
+    expect(page.get_by_test_id("run-screen")).to_be_visible()
+    # The header's facts are drawn (its model chip) before the badge's absence is read.
+    expect(page.get_by_test_id("run-model")).to_be_visible()
+    expect(page.get_by_test_id("can-run-containers")).to_have_count(0)
+
+    # A Run from before the column, which recorded nothing: null, and nothing shown.
+    execute(owner_dsn, "UPDATE runs SET can_run_containers = NULL WHERE id = %s", (run["id"],))
+    assert client.get(f"/v1/runs/{run['id']}").json()["canRunContainers"] is None
+    page.goto(f"{web_url}#/session/{run['id']}")
+    page.reload()
+    expect(page.get_by_test_id("run-image")).to_contain_text("agents-podman")
+    expect(page.get_by_test_id("run-model")).to_be_visible()
+    expect(page.get_by_test_id("can-run-containers")).to_have_count(0)
+    assert all("409" in e for e in console_errors), console_errors

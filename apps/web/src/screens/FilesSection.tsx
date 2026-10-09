@@ -34,7 +34,7 @@ export function filesOf(artifacts: readonly Artifact[]): GalleryFile[] {
   for (const a of artifacts) {
     const v: FileVersion = {
       id: a.id, name: a.name, contentType: a.contentType, sizeBytes: a.sizeBytes, createdAt: a.createdAt,
-      role: a.role ?? DEFAULT_RUN_ROLE, session: runLabel(a), version: a.version,
+      role: a.role ?? DEFAULT_RUN_ROLE, session: runLabel(a), version: a.version, description: a.description,
     };
     byName.set(a.name, [...(byName.get(a.name) ?? []), v]);
   }

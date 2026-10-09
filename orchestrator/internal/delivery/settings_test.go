@@ -111,7 +111,7 @@ func TestAnOrganizationsPromptReplacesTheBuiltInOnly(t *testing.T) {
 	}
 	// dude's brief is kept whatever the instructions say: the task, where
 	// to publish, the project's notes — last.
-	for _, want := range []string{org, "Greet people", "LUX_ARTIFACTS", "## Project notes\n\nUse bun."} {
+	for _, want := range []string{org, "Greet people", "dude publish FILE", "## Project notes\n\nUse bun."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, got)
 		}

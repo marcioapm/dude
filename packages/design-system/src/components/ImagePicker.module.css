@@ -208,3 +208,21 @@
     display: none;
   }
 }
+
+/* CanRunContainersBadge with a tooltip: a bare button around the badge, so it takes focus. */
+.badgeTrigger {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  font: inherit;
+}
+/* A step brighter while pointed at or its tip is open, as MachineChip is; the wash keeps the badge's tone underneath. */
+.badgeTrigger:hover > *,
+.badgeTrigger[data-state$="open"] > * {
+  background-image: linear-gradient(var(--ds-color-hover-wash), var(--ds-color-hover-wash));
+  color: var(--ds-color-text-primary);
+}

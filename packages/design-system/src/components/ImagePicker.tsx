@@ -3,6 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Kbd } from "../primitives/Kbd.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
 import styles from "./ImagePicker.module.css";
 
 /*
@@ -63,12 +64,29 @@ export function ImageStatusBadge({ status }: { readonly status: ImageChoiceView[
   );
 }
 
-/** "Can run containers": an image whose published version can, wherever it is listed. */
-export function CanRunContainersBadge({ size = "sm", lower }: { readonly size?: "sm" | "md" | undefined; readonly lower?: boolean | undefined }) {
-  return (
-    <Badge size={size} icon="cube" emphasis="tinted" data-testid="can-run-containers">
+/**
+ * "Can run containers": an image whose published version can, wherever it
+ * is listed. With tooltip it is a Run's, in its header: a focusable
+ * trigger, as MachineChip is.
+ */
+export function CanRunContainersBadge({ size = "sm", lower, tooltip }: {
+  readonly size?: "sm" | "md" | undefined;
+  readonly lower?: boolean | undefined;
+  readonly tooltip?: ReactNode | undefined;
+}) {
+  const badge = (
+    <Badge size={size} icon="cube" emphasis="tinted" data-testid={tooltip ? undefined : "can-run-containers"}>
       {lower ? "can run containers" : "Can run containers"}
     </Badge>
+  );
+  if (!tooltip) return badge;
+  return (
+    <Tooltip content={tooltip} side="bottom" keepOnPress>
+      <button type="button" className={styles["badgeTrigger"]} data-testid="can-run-containers"
+        aria-label="Can run containers">
+        {badge}
+      </button>
+    </Tooltip>
   );
 }
 

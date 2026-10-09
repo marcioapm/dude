@@ -550,8 +550,42 @@ func TestWhatAnAgentPublishesIsKeptWithTheTask(t *testing.T) {
 	}
 }
 
+// A file an agent publishes is listed with the task while it keeps working,
+// with what it said the file is for; published again, it is a second
+// version, also at once. Nothing waits for the Run to stop.
+func TestAFilePublishedMidTurnIsKeptAtOnceWithItsDescription(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	var runID, luxID string
+	w.until("the agent to be working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs
+			WHERE task_id = $1 AND status = 'running' AND agent_busy_at IS NOT NULL`, wi).Scan(&runID, &luxID)
+		return luxID != ""
+	})
+	w.lux.Publish(luxID, "design/notes.md", "# Notes\n", "Why the export streams rows")
+	w.until("the file, while the Run runs", func() bool {
+		return w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1 AND name = 'design/notes.md'
+			AND description = 'Why the export streams rows'`, runID) == 1
+	})
+	w.lux.Publish(luxID, "design/notes.md", "# Notes\n\nWith numbers.\n", "With the numbers")
+	w.until("its second version", func() bool {
+		return w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1 AND name = 'design/notes.md'`, runID) == 2
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND artifacts_due_at IS NULL`, runID); n != 1 {
+		t.Error("the Run stopped, or was swept, before its files were listed")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'artifact.created'
+		AND payload->>'description' = 'With the numbers'`, runID); n != 1 {
+		t.Errorf("%d artifact.created events for the second version", n)
+	}
+}
+
 func TestAPausedAgentsArtifactsAreCollectedAndItsNextExitsToo(t *testing.T) {
 	w := newWorld(t)
+	// The sweep's own path: an older lux collects $LUX_ARTIFACTS at each exit.
+	w.lux.LegacyArtifacts = true
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"},
 			Publish: map[string]string{"plan.md": "# Plan\n"}}
