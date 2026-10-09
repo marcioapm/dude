@@ -327,9 +327,9 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
 
   const sendTest = () => {
     if (!testable) return;
-    const input = tierInput(draft);
+    const { effort, options, headers } = tierInput(draft);
     setTest("sending");
-    client.testModel({ model, effort: input.effort, options: input.options, headers: input.headers })
+    client.testModel({ model, effort, options, headers })
       .then(setTest, (err: unknown) => setTest({ error: errorText(err) }));
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
