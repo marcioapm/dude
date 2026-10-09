@@ -545,7 +545,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 		at := slices.IndexFunc(settings, func(s string) bool { k, _, _ := strings.Cut(s, "="); return k == key })
 		nested := slices.ContainsFunc(settings, func(s string) bool {
 			k, _, _ := strings.Cut(s, "=")
-			return strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
+			return key == "model_providers.dude" || strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
 		})
 		if !ok || !codexKey.MatchString(key) || nested {
 			dropped = append(dropped, arg+" "+override)
