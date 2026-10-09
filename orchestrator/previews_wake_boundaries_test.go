@@ -169,6 +169,46 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 	}
 }
 
+// A woken preview whose Run fails to start is replaced by a new
+// generation; the image's published version stops being able to run
+// containers in between. The new generation asks lux as that version says
+// and records it, not the failed Run's value.
+func TestAPreviewReplacedAfterAFailedStartRecordsItsOwnContainers(t *testing.T) {
+	const nextFinal = "registry.test/dude/custom@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	w := newWorld(t)
+	w.wakeable()
+	w.useLayer(imageLayer)
+	w.canRunContainers(w.libraryImage("img_preview", "abs-preview", true), true)
+	mustExec(t, w.owner, `UPDATE projects SET preview_image_id = 'img_preview' WHERE id = $1`, w.project)
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	w.lux.FailStarts("dude.preview="+runID, 1)
+	w.lux.RequestServer(w.serverID(runID, "web"), "/")
+	w.untilPreview(runID, "the first start failed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1`, runID) == 1
+	})
+	// The replacement waits out workflow.Backoff(1), a second.
+	if n := len(w.luxRuns()); n != 1 || w.recordedContainers(runID) != "true" {
+		t.Fatalf("before the replacement: %d lux Runs, runs.can_run_containers %s; want 1, true", n, w.recordedContainers(runID))
+	}
+	failed := submitted(t, w.luxRuns()[0])
+	if !nested(&failed) {
+		t.Fatalf("the failed Run did not ask for nested containers")
+	}
+	w.publishNext("img_preview", nextFinal, false)
+	w.untilPreview(runID, "a new Run running", func() bool {
+		return len(w.luxRuns()) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running' AND lux_run_id = $2`,
+				runID, w.luxRuns()[1].ID) == 1
+	})
+	if replacement := submitted(t, w.luxRuns()[1]); nested(&replacement) || replacement.Image.Ref != nextFinal {
+		t.Errorf("the replacement: nested %v on %s, want false on %s", nested(&replacement), replacement.Image.Ref, nextFinal)
+	}
+	if got := w.recordedContainers(runID); got != "false" {
+		t.Errorf("the replacement's runs.can_run_containers = %s, want false", got)
+	}
+}
+
 // publishNext publishes version 2 of image, finished with imageLayer as
 // final, its "Can run containers" can; version 1 is superseded.
 func (w *world) publishNext(image, final string, can bool) {
