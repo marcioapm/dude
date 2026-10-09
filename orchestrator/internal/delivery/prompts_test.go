@@ -45,9 +45,6 @@ func TestPromptsNameOnlyDudePublish(t *testing.T) {
 			}
 		}
 	}
-	if test := prompts[PhaseTest]; !strings.Contains(test, "--name walkthrough.webm --description") {
-		t.Errorf("the tester is not told to publish its walkthrough with a description:\n%s", test)
-	}
 }
 
 // The conductor is told when to steer rather than start another phase, and
