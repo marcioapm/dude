@@ -18,7 +18,8 @@ describe("a role's harness", () => {
   test("is one of three, in a role's settings and in a settings change", () => {
     expect(harnessSchema.options).toEqual(["opencode", "claude-code", "codex"]);
     expect(agentModelConfigSchema.safeParse({ harness: "claude-code" }).success).toBe(true);
-    expect(agentModelConfigSchema.safeParse({ harness: "aider" }).success).toBe(false);
+    // A stored one that names no harness (an older or unknown value) reads as unset, the rest kept.
+    expect(agentModelConfigSchema.parse({ harness: "aider", tier: "mtr_1" })).toEqual({ harness: undefined, tier: "mtr_1" });
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "codex" } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: null } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "Codex" } } }).success).toBe(false);
