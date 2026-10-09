@@ -45,10 +45,10 @@ is a starting point; it needs the release's `dude` CLI, which
 `scripts/runtime-image.sh` builds before a local `docker build`.
 If the image runs containers (`agent.nested_containers`), its workload
 user's subordinate ids (`/etc/subuid`, `/etc/subgid`) must lie within
-0–65535, the ids a lux Run maps: dude's runtime image gives `agent`
-`agent:1:999` and `agent:1001:64535`; a custom image must do the same,
-since `useradd`'s default `100000:65536` cannot be mapped. dude checks this
-for library images when they build, never for `DUDE_AGENT_IMAGE`.
+0–65535, the ids a lux Run maps; `useradd`'s default `100000:65536` does
+not. The runtime image gives `agent` `agent:1:999` and `agent:1001:64535`.
+dude checks this for library images when they build, never for
+`DUDE_AGENT_IMAGE`.
 
 ### Private agent images
 
