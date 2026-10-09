@@ -520,18 +520,25 @@ func (c *lostAddAnswer) Retried() bool {
 }
 
 // lostSubmitAnswer passes a submit to lux, then, once, loses lux's answer
-// after running after: what changed before dude's retry.
+// after running after: what changed before dude's retry. retried is the
+// spec of the first submit after that.
 type lostSubmitAnswer struct {
 	lux.Client
-	after func()
+	after   func()
+	lost    bool
+	retried *lux.Spec
 }
 
 func (c *lostSubmitAnswer) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	if c.lost && c.retried == nil {
+		c.retried = &spec
+	}
 	r, err := c.Client.Submit(ctx, spec, key)
 	if err == nil && c.after != nil {
 		after := c.after
 		c.after = nil
 		after()
+		c.lost = true
 		return lux.Run{}, errors.New("the submit's answer was lost after lux accepted it")
 	}
 	return r, err
