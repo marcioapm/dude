@@ -561,3 +561,30 @@ func TestEventsAreListedAfterAnIdAPageAtATime(t *testing.T) {
 		t.Fatalf("unknown Run: %v", err)
 	}
 }
+
+// A Claude Code Run's turn ends as lux's claude adapter relays a result
+// line (lux internal/adapter/claude.go): claude.turn_end, the agent going
+// idle, then the line itself as claude.result.
+func TestAClaudeCodeTurnEndsAsLuxRelaysAResult(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Reply: "done"} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	run, err := lux.New(srv.URL, "k").Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "claude-code", Prompt: "go"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitRun(t, fake, run.ID, "the turn never ended", func(r *Run) bool { return r.turnsEnded > 0 })
+	var tail []string
+	for _, r := range fake.Records(run.ID) {
+		typ, _ := r["type"].(string)
+		if data, _ := r["data"].(map[string]any); typ == "lux.activity" {
+			typ += "." + data["activity"].(string)
+		}
+		if strings.HasPrefix(typ, "claude.turn_end") || strings.HasPrefix(typ, "claude.result") || len(tail) > 0 {
+			tail = append(tail, typ)
+		}
+	}
+	if want := []string{"claude.turn_end", "lux.activity.idle", "claude.result"}; !slices.Equal(tail, want) {
+		t.Errorf("the turn ends %v, want %v", tail, want)
+	}
+}

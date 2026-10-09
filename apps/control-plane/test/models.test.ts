@@ -131,6 +131,26 @@ test("project create and update refuse a role's model without changing anything"
   expect(absent.n).toBe(0);
 });
 
+test("legacy org and project harnesses resolve as unset and accept valid corrections", async () => {
+  await owner`UPDATE organizations SET default_agent_models = '{"reviewer":{"harness":"aider"}}' WHERE id = ${ORG}`;
+  await owner`UPDATE projects SET agent_models = '{"reviewer":{"harness":"aider"}}' WHERE id = ${PROJECT}`;
+  for (const path of paths) {
+    const read = await call("GET", path);
+    expect(read.status).toBe(200);
+    expect((await body(read)).roles.reviewer.harness.value).toBe("opencode");
+    const before = [...await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`];
+    const projectBefore = [...await owner`SELECT agent_models FROM projects WHERE id = ${PROJECT}`];
+    expect((await call("PATCH", path, { roles: { reviewer: { harness: "aider" } } })).status).toBe(400);
+    expect([...await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`]).toEqual(before);
+    expect([...await owner`SELECT agent_models FROM projects WHERE id = ${PROJECT}`]).toEqual(projectBefore);
+  }
+  for (const path of paths) {
+    const corrected = await call("PATCH", path, { roles: { reviewer: { harness: "claude-code" } } });
+    expect(corrected.status).toBe(200);
+    expect((await body(corrected)).roles.reviewer.harness.value).toBe("claude-code");
+  }
+});
+
 test("a stored model left over reads safely and is ignored: the role's tier is what it runs on", async () => {
   const legacy = { implementer: { model: "old-provider/old-model" } };
   await owner`UPDATE projects SET agent_models = ${legacy}::jsonb WHERE id = ${PROJECT}`;

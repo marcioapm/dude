@@ -44,12 +44,16 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		settings = delivery.ResolveRole(role, orgModels)
 		var err error
 		if stored != nil {
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort); err != nil {
+			var ranOn string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, '') FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
+			settings.Harness = submittedHarness(ranOn, settings.Harness)
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, role, settings); err != nil || noTier != "" {
 			return err
+		} else if noTier = harnessMisfit(settings, tier, role); noTier != "" {
+			return nil
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
@@ -75,6 +79,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	}
 	in.RunID, in.OrganizationID, in.SessionID, in.Role = r.ID, r.Org, r.SessionID, role
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
+	in.Harness = settings.HarnessName()
+	s.logIgnoredOptions(r, in)
 	if m, ok := sizes.ForRole(role, nil, orgModels); ok {
 		in.Machine = &m
 	}

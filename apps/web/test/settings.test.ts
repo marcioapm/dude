@@ -21,6 +21,7 @@ const delivery: DeliverySettings = {
 const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
   model: org("m"),
   timeLimitMinutes: org(null),
+  harness: org("opencode"),
   machineSize: org(null),
   image: org(null),
   enabled: null,
@@ -39,6 +40,7 @@ describe("settings helpers", () => {
     expect(roleChanged(role())).toBe(false);
     expect(roleChanged(role({ timeLimitMinutes: proj(45) }))).toBe(true);
     expect(roleChanged(role({ machineSize: proj("msz_xl") }))).toBe(true);
+    expect(roleChanged(role({ harness: proj("codex") }))).toBe(true);
     const withPrompt = (mode: "add" | "replace" | "inherit") =>
       role({ prompt: { organization: role().prompt.organization, project: { ...role().prompt.organization, mode } } });
     expect(roleChanged(withPrompt("inherit"))).toBe(false);

@@ -59,8 +59,36 @@ RUN python3 -m venv /opt/playwright-venv \
 # venv's site-packages are on the system Python's path.
 RUN echo /opt/playwright-venv/lib/python3.11/site-packages > /usr/lib/python3/dist-packages/playwright-venv.pth
 
-# The agent. Installed as root into /usr/local, so the agent cannot rewrite
-# its own binary and the home volume does not hide it.
+# The harnesses a role can run on. Installed as root into /usr/local, so
+# the agent cannot rewrite its own binary and the home volume does not hide
+# it. Claude Code and Codex are pinned, and come before OpenCode (unpinned),
+# so bumping OpenCode reuses this layer. Each npm platform package is a
+# standalone native binary (no Node): Claude Code's is the CLI itself,
+# Codex's a static musl build with the bubblewrap and ripgrep it ships.
+# Neither updates itself in a Run (dude sets DISABLE_AUTOUPDATER and
+# check_for_update_on_startup = false; the binaries are root's anyway).
+ARG CLAUDE_CODE_VERSION=2.1.207
+ARG CODEX_VERSION=0.144.1
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) claude_arch=linux-arm64; codex_arch=linux-arm64; codex_triple=aarch64-unknown-linux-musl ;; \
+      amd64) claude_arch=linux-x64;   codex_arch=linux-x64;   codex_triple=x86_64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /tmp/claude /tmp/codex /usr/local/lib/codex; \
+    curl -fsSL "https://registry.npmjs.org/@anthropic-ai/claude-code-${claude_arch}/-/claude-code-${claude_arch}-${CLAUDE_CODE_VERSION}.tgz" \
+      | tar -xz -C /tmp/claude --strip-components=1; \
+    install -m 0755 /tmp/claude/claude /usr/local/bin/claude; \
+    curl -fsSL "https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_VERSION}-${codex_arch}.tgz" \
+      | tar -xz -C /tmp/codex --strip-components=1; \
+    cp -r "/tmp/codex/vendor/${codex_triple}/." /usr/local/lib/codex/; \
+    chmod -R a+rX /usr/local/lib/codex; \
+    ln -s /usr/local/lib/codex/bin/codex /usr/local/bin/codex; \
+    ln -s /usr/local/lib/codex/codex-resources/bwrap /usr/local/bin/bwrap; \
+    rm -rf /tmp/claude /tmp/codex; \
+    claude --version; codex --version
+
+# OpenCode, the default harness, at its latest release.
 ARG OPENCODE_VERSION=latest
 RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
     && install -m 0755 /tmp/install/.opencode/bin/opencode /usr/local/bin/opencode \
