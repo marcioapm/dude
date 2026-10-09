@@ -127,6 +127,22 @@ export function currentRun(wi: NavTask): NavRun | null {
 }
 
 /**
+ * The pull request a task's row wears, where there is room for one: the
+ * open one, else the merged one, else the last closed. A retried task keeps
+ * every attempt's pull request, in the order they were opened; the first
+ * is the one most likely to be stale.
+ */
+export function currentPullRequest(wi: NavTask): PrChipPullRequest | null {
+  const rank = { open: 0, draft: 0, merged: 1, closed: 2 } as const;
+  let best: PrChipPullRequest | null = null;
+  for (const pr of wi.pullRequests ?? []) {
+    // Same rank: the later one wins (the list is in opening order).
+    if (!best || rank[pr.state] <= rank[best.state]) best = pr;
+  }
+  return best;
+}
+
+/**
  * Whether a task's asks are the viewer's to answer: theirs, or nobody's.
  * With no viewer every ask is, as before people.
  */
