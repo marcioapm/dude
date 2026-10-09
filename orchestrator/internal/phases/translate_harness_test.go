@@ -298,11 +298,45 @@ func TestARealCodexTurnIsTranslated(t *testing.T) {
 		t.Fatalf("turn ends = %v", ends)
 	}
 	tokens := ends[0].Payload["tokens"].(map[string]any)
-	if tokens["input"].(float64) <= 0 || tokens["output"].(float64) <= 0 || tokens["cacheRead"].(float64) <= 0 {
-		t.Errorf("turn end = %v", ends[0].Payload)
+	// The sums of the recording's 14 requests (its turn_end's total):
+	// 214784 input of which 139520 cached, counted apart.
+	if tokens["input"] != float64(75264) || tokens["cacheRead"] != float64(139520) || tokens["output"] != float64(1846) {
+		t.Errorf("turn end = %v, want input 75264, cacheRead 139520, output 1846", ends[0].Payload)
 	}
 	if n := len(w.tr.openCalls); n != 0 {
 		t.Errorf("%d calls left open", n)
+	}
+}
+
+// Each Codex turn's tokens are its own requests' sums: the next turn
+// starts again from zero, across a restart.
+func TestEachCodexTurnSumsItsOwnRequests(t *testing.T) {
+	w := newHarnessWorld(t)
+	request := func(in, cached, out int) map[string]any {
+		return map[string]any{"type": "codex.thread/tokenUsage/updated", "data": map[string]any{"tokenUsage": map[string]any{
+			"last": map[string]any{"inputTokens": in, "cachedInputTokens": cached, "outputTokens": out}, "modelContextWindow": 258400}}}
+	}
+	end := map[string]any{"type": "codex.turn_end", "data": map[string]any{"status": "completed"}}
+	w.feed(request(100, 40, 5), request(200, 150, 7))
+	w.restart()
+	w.feed(end, request(300, 250, 11), end)
+	var got [][3]any
+	for _, e := range ofType(w.events(), evModelRequestDone) {
+		if e.Payload["turn"] == true {
+			tk := e.Payload["tokens"].(map[string]any)
+			got = append(got, [3]any{tk["input"], tk["cacheRead"], tk["output"]})
+		}
+	}
+	if want := [][3]any{{110.0, 190.0, 12.0}, {50.0, 250.0, 11.0}}; !slices.Equal(got, want) {
+		t.Errorf("turns (input, cacheRead, output) = %v, want %v", got, want)
+	}
+	var in, cached, out int64
+	if err := w.owner.QueryRow(context.Background(), `SELECT input_tokens, cache_read_tokens, output_tokens FROM runs WHERE id = $1`,
+		w.run.ID).Scan(&in, &cached, &out); err != nil {
+		t.Fatal(err)
+	}
+	if in != 160 || cached != 440 || out != 23 {
+		t.Errorf("run: input %d cacheRead %d output %d, want 160 440 23", in, cached, out)
 	}
 }
 
