@@ -172,6 +172,10 @@ test("legacy project GET normalizes harness before an editor roundtrip and accep
   const made = await create("Legacy", "legacy");
   const { id } = (await made.json()) as { id: string };
   await owner`UPDATE projects SET agent_models = '{"reviewer": {"harness": "aider", "context": "old"}}' WHERE id = ${id}`;
+  const legacyBefore = [...await owner`SELECT * FROM projects WHERE id = ${id}`];
+  const echoed = await call("PATCH", `/v1/projects/${id}`, { agentModels: { reviewer: { harness: "aider", context: "old" } } });
+  expect(echoed.status).toBe(400);
+  expect([...await owner`SELECT * FROM projects WHERE id = ${id}`]).toEqual(legacyBefore);
   const get = await router.handle(new Request(`http://dude.test/v1/projects/${id}`));
   expect(get.status).toBe(200);
   const body = await get.json() as { agentModels: Record<string, unknown> };
