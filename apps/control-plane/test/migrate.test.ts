@@ -446,7 +446,7 @@ test("096 keeps every titled session's name as a person's, and lets a new one st
     }
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_old', 'org_n', 'Usage-based billing')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql", "097_session_names_validate.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql"]);
     // 097 leaves every check 096 added validated, as if made with the table.
     const checks = await sql`SELECT conname, convalidated FROM pg_constraint
       WHERE conrelid = 'sessions'::regclass AND contype = 'c' ORDER BY conname`;
@@ -538,7 +538,7 @@ test("097 validates while another transaction holds a row lock on sessions: it n
       new Promise<string>((resolve) => { timer = setTimeout(() => resolve("097 still waiting after 30 s"), 30_000); }),
     ]);
     clearTimeout(timer);
-    expect(outcome).toEqual(["097_session_names_validate.sql"]);
+    expect(outcome).toEqual(["097_session_names_validate.sql", "098_agent_network.sql"]);
     expect((await heldLock)[0].n).toBe(1);
   } finally {
     release();
@@ -570,7 +570,7 @@ test("097 refuses a session row that breaks 096's checks, naming the check, and 
     expect((await recorded(url)).map((m) => m.version)).not.toContain("097");
 
     await sql`UPDATE sessions SET titled_by = 'person' WHERE id = 'ssn_bad'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["097_session_names_validate.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["097_session_names_validate.sql", "098_agent_network.sql"]);
     expect([...await sql`SELECT conname FROM pg_constraint
       WHERE conrelid = 'sessions'::regclass AND contype = 'c' AND NOT convalidated`]).toEqual([]);
   } finally {

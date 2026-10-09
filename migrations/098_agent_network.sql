@@ -1,4 +1,4 @@
--- 096_agent_network.sql — what an agent's Run may reach, set in dude.
+-- 098_agent_network.sql — what an agent's Run may reach, set in dude.
 --
 -- An organisation lists the hosts (addresses, CIDR ranges, lux wildcards
 -- *.example.com, or * for anywhere) every agent Run of it may reach; a
