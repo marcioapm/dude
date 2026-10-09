@@ -26,7 +26,8 @@
 //	dude pr reply PR TEXT [--in-reply-to ID]
 //	                                      a conductor's: answer on its task's pull request
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
-//	dude publish FILE [--name NAME]       keep a file for people (local)
+//	dude publish FILE [--name NAME] [--description TEXT]
+//	                                      keep a file for people (lux-shim publish)
 //	dude publish [--message M]            a conductor's: publish its commits
 //	dude tools                            what this run may use
 //
@@ -50,6 +51,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -60,6 +62,10 @@ import (
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
+		var shim shimFailed
+		if errors.As(err, &shim) {
+			os.Exit(shim.code)
+		}
 		fmt.Fprintln(os.Stderr, "dude:", err)
 		os.Exit(1)
 	}
@@ -385,19 +391,20 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("update_task", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
+		description := fs.String("description", "", "one short line: what the file is for")
 		message := fs.String("message", "", "a conductor's: what its commits do, for Chat")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		// No file: a conductor publishing its commits to the task branch.
-		if len(args) == 0 && *name == "" {
+		if len(args) == 0 && *name == "" && *description == "" {
 			return show(out, *asJSON, call("publish", map[string]any{"message": *message}))
 		}
 		if len(args) != 1 || *message != "" {
-			return errors.New("usage: dude publish FILE [--name NAME], or a conductor's dude publish [--message M]")
+			return errors.New(`usage: dude publish FILE [--name NAME] [--description "what it is for"], or a conductor's dude publish [--message M]`)
 		}
-		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(args[0], *name) })
+		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(args[0], *name, *description) })
 	}
 	return fmt.Errorf("unknown command %q (dude help)", cmd)
 }
@@ -427,13 +434,47 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// publish copies a file into $LUX_ARTIFACTS, which lux collects when the
-// container stops and dude shows with the task.
-func publish(path, name string) (json.RawMessage, error) {
-	dir := os.Getenv("LUX_ARTIFACTS")
-	if dir == "" {
-		return nil, errors.New("LUX_ARTIFACTS is not set: publishing works inside a run")
+// luxShim is lux's client in every container; `lux-shim publish` hands the
+// shim a copy of a file, listed and downloadable while the Run goes on.
+var luxShim = "/.lux/bin/lux-shim"
+
+// shimFailed is lux-shim's refusal: its own words already went to stderr,
+// and dude exits with its status.
+type shimFailed struct{ code int }
+
+func (e shimFailed) Error() string { return fmt.Sprintf("lux-shim publish exited %d", e.code) }
+
+// publish makes a file an artifact of this Run, which dude shows with the
+// task or session: lux-shim's answer, {"id","name","size","sha256"}.
+func publish(path, name, description string) (json.RawMessage, error) {
+	// Until every lux has artifact-publish (lux#77): drop the copy.
+	if dir := os.Getenv("LUX_ARTIFACTS"); dir != "" {
+		return copyInto(dir, path, name)
 	}
+	args := []string{"publish", path}
+	if name != "" {
+		args = append(args, "--name", name)
+	}
+	if description != "" {
+		args = append(args, "--description", description)
+	}
+	cmd := exec.Command(luxShim, args...)
+	var stdout bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, os.Stderr
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return nil, shimFailed{ee.ExitCode()}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("publishing works inside a lux Run: %w", err)
+	}
+	return bytes.TrimSpace(stdout.Bytes()), nil
+}
+
+// copyInto copies a file into an older lux's $LUX_ARTIFACTS, collected when
+// the container stops.
+func copyInto(dir, path, name string) (json.RawMessage, error) {
 	if name == "" {
 		name = filepath.Base(path)
 	}
@@ -615,7 +656,10 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude task update [--goal G] [--criterion C]... [--no-criteria]
                                              a conductor's: write what Chat settled into the task,
                                              before the implementer starts
-  dude publish FILE [--name NAME]            keep a file for people, shown with the task
+  dude publish FILE --name NAME --description "what it is for"
+                                             keep a file for people, shown with the task while
+                                             you work; the description is one short line saying
+                                             what the file is for. The same name again is a new version
   dude publish [--message M]                 a conductor's: take what you committed in your checkout
                                              to the task branch (small changes only; you are woken
                                              when it is published or refused)
