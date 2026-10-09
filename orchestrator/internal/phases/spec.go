@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -34,8 +34,9 @@ type AgentConfig struct {
 	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
 	// "" turns the library off: a Run whose image is a library image fails.
 	Layer string
-	// Hosts every agent may reach besides its model provider. "*" turns
-	// egress filtering off.
+	// The operator's floor (agent.egress): what every agent may reach,
+	// under its organisation's and project's lists. "*" turns egress
+	// filtering off for every Run.
 	Egress []string
 	// Agents may run docker or podman in their Run
 	// (DUDE_AGENT_NESTED_CONTAINERS). lux places such Runs only on hosts
@@ -73,7 +74,7 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 		ToolsURL:     cfg.String("DUDE_TOOLS_URL"),
 		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),
 		ToolsKey:     []byte(cfg.String("DUDE_TOOLS_KEY")),
-		Egress:       cfg.List("DUDE_AGENT_EGRESS"),
+		Egress:       slices.Clone(cfg.List("DUDE_AGENT_EGRESS")),
 
 		NestedContainers: cfg.Bool("DUDE_AGENT_NESTED_CONTAINERS"),
 	}
@@ -83,6 +84,14 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 	if c.LLMURL != "" {
 		if err := ValidateHTTPURL(c.LLMURL); err != nil {
 			return c, fmt.Errorf("%s: %w", cfg.Label("DUDE_LLM_URL"), err)
+		}
+	}
+	// Refused here, not left out of a Run: with no model's host, a floor
+	// left empty would make every Run unrestricted.
+	for i, e := range c.Egress {
+		c.Egress[i] = strings.ToLower(e)
+		if _, ok := lux.ParseEgressRule(c.Egress[i]); e != "*" && !ok {
+			return c, fmt.Errorf("%s: %q: not a hostname, address, range or *.<domain> lux takes", cfg.Label("DUDE_AGENT_EGRESS"), e)
 		}
 	}
 	return c, nil
@@ -133,6 +142,8 @@ type specInput struct {
 	Registry *RegistryLogin
 	// The machine it runs on; nil leaves lux's default size and pool.
 	Machine *delivery.Machine
+	// What it may reach besides the operator's floor (RunEgress).
+	Egress []string
 }
 
 // MachineSpec puts a machine size on a lux spec: its resources, memory and
@@ -354,9 +365,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
-		if len(spec.Workload.MCPServers) > 0 {
-			// Its tools must be reachable; nothing else needs to be.
-			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, toolsOnly: true})
+		if len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
+			// Its tools must be reachable, and what it stands in for may
+			// reach; it needs no model.
+			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in.Egress)
 		}
 		return spec
 	}
@@ -373,7 +385,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
-	spec.Network = egress(c)
+	spec.Network = egress(c, in.Egress)
 	return spec
 }
 
@@ -417,41 +429,54 @@ var colourEnv = map[string]string{
 	"GIT_CONFIG_VALUE_0": "always",
 }
 
-// egress allows the LLM API's host and anything configured. Without either,
-// filtering is off rather than leaving an agent that cannot reach its own
-// model.
-func egress(c AgentConfig) *lux.Network {
-	hosts := map[string]bool{}
-	var cidrs []string
-	for _, h := range c.Egress {
-		if h == "*" {
-			return &lux.Network{Unrestricted: true}
+// egress is a Run's network: the operator's floor (agent.egress), the
+// Run's own list (RunEgress), the LLM API's host and dude's tools, each
+// rule once, in that order. "*" in either list turns filtering off. With
+// nothing listed anywhere and no model's host, filtering is off rather than
+// leaving an agent that cannot reach its own model; the tools alone
+// restrict nothing. Every entry is one lux takes (LoadAgentConfig refuses
+// others in the operator's list, the API in the Run's own); were one not,
+// lux would refuse the Run rather than run it with less listed.
+func egress(c AgentConfig, own []string) *lux.Network {
+	n := &lux.Network{}
+	seen := map[lux.EgressRule]bool{}
+	add := func(entry string) {
+		if r, _ := lux.ParseEgressRule(strings.ToLower(entry)); !seen[r] {
+			seen[r] = true
+			n.Egress = append(n.Egress, r)
 		}
-		hosts[h] = true
+	}
+	for _, e := range slices.Concat(c.Egress, own) {
+		if e = strings.TrimSpace(e); e == "*" {
+			return &lux.Network{Unrestricted: true}
+		} else if e != "" {
+			add(e)
+		}
 	}
 	if u, err := url.Parse(c.LLMURL); err == nil && u.Hostname() != "" {
-		hosts[u.Hostname()] = true
+		add(u.Hostname())
 	}
-	if len(hosts) == 0 && !c.toolsOnly {
-		// Nothing configured to restrict to: the agent could not reach its
-		// own model otherwise. The tools alone restrict nothing.
+	if len(n.Egress) == 0 && !c.toolsOnly {
 		return &lux.Network{Unrestricted: true}
 	}
-	// dude's tools. An address goes in as an address: lux matches hosts by
-	// name and addresses by range.
 	if u, err := url.Parse(c.ToolsURL); err == nil && u.Hostname() != "" {
-		if ip := net.ParseIP(u.Hostname()); ip != nil {
-			cidrs = append(cidrs, ip.String()+"/32")
-		} else {
-			hosts[u.Hostname()] = true
-		}
-	}
-	n := &lux.Network{}
-	for h := range hosts {
-		n.Egress = append(n.Egress, lux.EgressRule{Host: h})
-	}
-	for _, c := range cidrs {
-		n.Egress = append(n.Egress, lux.EgressRule{CIDR: c})
+		add(u.Hostname())
 	}
 	return n
+}
+
+// RunEgress is the list a Run of a project gets on top of the operator's:
+// its organisation's and its project's (mode "add"), or its project's
+// alone (mode "only"), each entry once.
+func RunEgress(org, project []string, mode string) []string {
+	if mode == "only" {
+		org = nil
+	}
+	var out []string
+	for _, e := range slices.Concat(org, project) {
+		if !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

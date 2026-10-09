@@ -138,6 +138,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     "Settings",
     [
       ["s-layout", "Settings page"],
+      ["s-network", "Agent network"],
       ["s-markdown", "MarkdownDocument"],
       ["s-history", "PromptHistory"],
       ["s-epics", "EpicCard / EpicRow"],

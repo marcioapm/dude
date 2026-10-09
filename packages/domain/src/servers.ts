@@ -57,8 +57,10 @@ export interface Recipe extends RecipeInput {
   updatedBy: { id: string; name: string } | null;
 }
 
-/** A concrete hostname: labels of letters, digits, '-' and '_'; no wildcards. */
+/** A concrete hostname: labels of letters, digits, '-' and '_'. */
 const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*\.?$/i;
+/** What follows a wildcard's "*.", as lux takes it (lux#68): at least two labels. */
+const WILDCARD_DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
 function isIPv6(s: string): boolean {
@@ -71,25 +73,57 @@ function isIPv6(s: string): boolean {
   }
 }
 
+const validWildcard = (e: string) => e.startsWith("*.") && e.length <= 255 && WILDCARD_DOMAIN.test(e.slice(2));
+
 /**
  * Why lux would refuse an egress entry, or null if it takes it: "*"
- * (anywhere), an address, a CIDR range, or a concrete hostname. lux
- * resolves each host it allows, so a wildcard host is refused (and would
- * fail every preview); list the hosts themselves. Mirrored by the
- * orchestrator's servers.EgressRule.
+ * (anywhere), an address, a CIDR range, a concrete hostname, or a wildcard
+ * `*.example.com` — every name under the domain, not the domain itself.
+ * A refused wildcard is said in lux's own words. Mirrored by the
+ * orchestrator's lux.ParseEgressRule.
  */
 export function egressProblem(entry: string): string | null {
   const e = entry.trim();
   if (e === "*" || IPV4.test(e) || isIPv6(e)) return null;
+  if (e.includes("*")) {
+    if (validWildcard(e)) return null;
+    const cut = e.search(/[:/]/);
+    return cut > 0 && validWildcard(e.slice(0, cut))
+      ? `${e}: a wildcard is a domain only, without a port or path`
+      : `${e}: a wildcard is "*." then a domain of at least two labels, e.g. *.example.com`;
+  }
   if (e.includes("/")) {
     const [ip, bits, ...rest] = e.split("/");
     const max = IPV4.test(ip!) ? 32 : isIPv6(ip!) ? 128 : -1;
     if (rest.length === 0 && max > 0 && /^\d{1,3}$/.test(bits!) && Number(bits) <= max) return null;
     return `${e}: not a CIDR range (an address, '/', and a prefix length up to ${max > 0 ? max : 32})`;
   }
-  if (e.includes("*")) return `${e}: wildcards cannot be resolved; list each host (or "*" for anywhere)`;
   if (e.length > 253 || !HOSTNAME.test(e)) return `${e}: not a hostname, address or CIDR range`;
   return null;
+}
+
+/** An egress list as lux takes it: each entry valid, at most 200. */
+const egressEntries = z
+  .array(z.string().trim().min(1).max(255).superRefine((e, ctx) => {
+    const problem = egressProblem(e);
+    if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+  }))
+  .max(200);
+
+/** An agent egress list as stored: lowercased, each entry once. */
+export const agentEgressSchema = egressEntries.transform((list) => [...new Set(list.map((e) => e.toLowerCase()))]);
+
+/**
+ * Whether a list lets a Run look a name up, as lux decides: "*", the name
+ * itself, or a wildcard over a domain the name is under (never the domain
+ * itself). Addresses and ranges admit no name. Mirrors lux's HostMatches.
+ */
+export function egressAllows(list: readonly string[], name: string): boolean {
+  const n = name.toLowerCase().replace(/\.$/, "");
+  return list.some((e) => {
+    const rule = e.toLowerCase();
+    return rule === "*" || rule === n || (validWildcard(rule) && n.endsWith(rule.slice(1)) && n.length > rule.length - 1);
+  });
 }
 
 /** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
@@ -101,14 +135,8 @@ export const previewSettingsSchema = z.object({
   image: z.string().trim().min(1).max(500).nullable().default(null),
   /** The library image previews run in; null: the project's runtime image. */
   imageId: z.string().min(1).max(100).nullable().default(null),
-  /** Hosts (or addresses, CIDR ranges) a preview may reach; "*" for anywhere. */
-  egress: z
-    .array(z.string().trim().min(1).max(253).superRefine((e, ctx) => {
-      const problem = egressProblem(e);
-      if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
-    }))
-    .max(200)
-    .default([]),
+  /** Hosts (or addresses, CIDR ranges, wildcards) a preview may reach; "*" for anywhere. */
+  egress: egressEntries.default([]),
   idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(15),
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),

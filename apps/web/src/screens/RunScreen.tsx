@@ -50,8 +50,9 @@ import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type SteerWait, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
+import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
@@ -180,6 +181,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const people = usePeople();
 
   const { events, reconnects } = useEventStream({ client, runId });
+  // A tool call whose output names a host lux refused this Run says so under it.
+  const networkNote = useNetworkNotes(client, run?.projectId, events);
 
   // Re-read the Run whenever the ledger says its status changed, rather than
   // polling: the stream already tells us when something happened.
@@ -424,7 +427,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const restartedText = runRestartedText(run, events, people);
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
-    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown);
+    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote);
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -972,7 +975,8 @@ function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: st
 }
 
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
-  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages) {
+  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
+  toolNote?: (turn: ToolTurn) => ReactNode) {
   switch (turn.kind) {
     case "repositoryRequest": {
       // Asked of a person, like a question: approve brings it into the Run.
@@ -1111,6 +1115,7 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           output={turn.result?.output ?? turn.result?.stdout}
           stderr={turn.result?.stderr}
           exitCode={turn.result?.exitCode}
+          note={toolNote?.(turn)}
         />
       );
   }

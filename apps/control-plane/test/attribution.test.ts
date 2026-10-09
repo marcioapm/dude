@@ -73,6 +73,7 @@ beforeAll(async () => {
       }
       return Response.json({ ok: true, path });
     }
+    if (path === "/internal/network/defaults") return Response.json({ operator: [], always: ["dude’s tools"], model: null });
     return Response.json(path.endsWith("builtin") ? { implementer: "Built-in prompt" } : {});
   } });
   useConfig(Config.load({ env: { ...process.env,
