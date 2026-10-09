@@ -531,3 +531,44 @@ func TestAReservationIsLeftAloneUntilItLapses(t *testing.T) {
 		t.Errorf("after the takeover: generation %d reserved %v; want 1, released", gen, reserved)
 	}
 }
+
+// A lux stage event is one servers.changed notification for the preview's
+// current Run; one from a Run it has retired (a move's or replacement's
+// old stream draining) or one already applied is none.
+func TestAStageEventNotifiesOnlyForTheCurrentRun(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	_, rows := previewRows(t, owner, 1, false)
+	r := rows[0].previewRun
+	p := &Previews{Service: &Service{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	stage := func(luxRunID string, id int64) {
+		t.Helper()
+		from := r
+		from.LuxRunID = luxRunID
+		if err := p.applyEvent(ctx, from, lux.Frame{Kind: "lux", EventID: id, EventType: "stage",
+			EventData: []byte(`{"stage":"image","since":"2026-10-09T12:00:00Z","epoch":2}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notified := func() int {
+		t.Helper()
+		var n int
+		if err := owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'servers.changed'
+			AND payload->>'change' = 'stage'`, r.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	stage("lux_retired", 1)
+	if n := notified(); n != 0 {
+		t.Fatalf("a retired Run's stage notified %d times", n)
+	}
+	stage(r.LuxRunID, 2)
+	if n := notified(); n != 1 {
+		t.Fatalf("the current Run's stage notified %d times, want 1", n)
+	}
+	stage(r.LuxRunID, 2)
+	if n := notified(); n != 1 {
+		t.Fatalf("a redelivered stage notified again: %d", n)
+	}
+}
