@@ -1,7 +1,8 @@
 /**
  * The gallery's Image library section draws "Can run containers" in each
- * frame: its badges (a Run header's too), the box with its hint and warning, the check stage in
- * its states, a waiting Run, and the history's flips.
+ * frame: its badges (a Run header's too, with its tooltip), the box with its
+ * hint and warning, the check stage in its states, a waiting Run, and the
+ * history's flips.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -9,6 +10,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
 import { ImagesGallerySection } from "../src/gallery/sections/Images.tsx";
+
+/** cond's value once it is truthy, polling for up to 2 s. */
+async function until<T>(cond: () => T | null | undefined): Promise<T> {
+  for (const end = Date.now() + 2000; Date.now() < end; ) {
+    const v = cond();
+    if (v) return v;
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  }
+  throw new Error("timed out");
+}
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -32,10 +43,18 @@ test("Can run containers renders in dark and light, comfortable and compact", as
     const text = pane.textContent!;
     expect([...pane.querySelectorAll("[data-testid=can-run-containers]")].map((b) => b.textContent)).toEqual(
       ["Can run containers", "Can run containers", "can run containers", "Can run containers"]);
-    // A Run's header: the badge after the image chip, its sentence in its title.
+    // A Run's header: the badge after the image chip, focusable, its sentence in a tooltip.
     const facts = pane.querySelector("[data-testid=run-header-facts]")!;
-    expect(facts.lastElementChild!.getAttribute("data-testid")).toBe("can-run-containers");
-    expect(facts.lastElementChild!.getAttribute("title")).toBe("This Run can start containers inside it.");
+    const badge = facts.lastElementChild as HTMLElement;
+    expect(badge.getAttribute("data-testid")).toBe("can-run-containers");
+    expect(badge.getAttribute("aria-label")).toBe("Can run containers: this Run can start containers inside it");
+    expect(badge.hasAttribute("title")).toBe(false);
+    await act(async () => badge.focus());
+    expect(document.activeElement).toBe(badge);
+    const tip = await until(() => document.querySelector("[role=tooltip]"));
+    expect(tip.textContent).toBe("This Run can start containers inside it. Fixed when the session started: its resumes keep it.");
+    await act(async () => badge.blur());
+    await until(() => document.querySelector("[role=tooltip]") ? null : true);
     expect(pane.querySelectorAll("[role=checkbox]")).toHaveLength(3);
     expect(text).toContain("unless the base has them");
     expect(text).toContain("Existing ones keep theirs until they start a fresh run.");

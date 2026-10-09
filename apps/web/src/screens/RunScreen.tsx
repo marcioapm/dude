@@ -400,7 +400,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
         {/* Recorded at submit; nothing for false or a Run from before it was recorded. */}
-        {run.canRunContainers ? <CanRunContainersBadge title={CAN_RUN_CONTAINERS_TIP} /> : null}
+        {run.canRunContainers ? <CanRunContainersBadge tooltip={CAN_RUN_CONTAINERS_TIP} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
@@ -1271,7 +1271,7 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
   );
 }
 
-const CAN_RUN_CONTAINERS_TIP = "This Run can start containers inside it.";
+const CAN_RUN_CONTAINERS_TIP = "This Run can start containers inside it. Fixed when the session started: its resumes keep it.";
 
 /**
  * The library image the Run got, as it was when it started: its name and
