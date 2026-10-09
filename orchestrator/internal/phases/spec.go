@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -475,10 +476,33 @@ func anthropicBaseURL(llmURL string) string {
 // The same settings are also Codex's config.toml, a file secret in
 // $HOME/.codex: lux's adapter adds its MCP servers as -c overrides after
 // app-server, and Codex 0.144 then drops every -c given before the
-// subcommand, these included. The file is read either way.
+// subcommand, these included. The file is read either way. A tier's args
+// go the same way (codexSettings): only its -c overrides, as lines of the
+// file, since any other argument before app-server is dropped too.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
+	settings, _ := codexSettings(c, in)
+	cmd := []string{"codex"}
+	for _, s := range settings {
+		cmd = append(cmd, "-c", s)
+	}
+	spec.Workload.Command = cmd
+	spec.Secrets = append(spec.Secrets, lux.Secret{Name: "CODEX_CONFIG", Value: strings.Join(settings, "\n") + "\n",
+		As: "file", Path: agentHome + "/.codex/config.toml"})
+	if c.LLMKey != "" {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "OPENAI_API_KEY", Value: c.LLMKey, As: "env"})
+	}
+}
+
+// codexSettings are a Codex Run's config.toml lines (key=value), and the
+// tier's args it drops. Each `-c key=value` (or --config) in the args
+// replaces dude's line for that key or adds one; the value is a JSON
+// string, number, boolean or array of those, or else a bare word, taken as
+// a string, as Codex takes an unparseable value. An override inside or
+// above a table dude sets (model_providers.dude.*) would rewrite it, and is
+// dropped, as is every other argument.
+func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
 		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
 	if len(in.Headers) > 0 {
@@ -489,7 +513,7 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 		provider += ", http_headers={" + strings.Join(kv, ", ") + "}"
 	}
 	provider += "}"
-	settings := []string{
+	settings = []string{
 		"approval_policy=" + tomlString("never"),
 		"sandbox_mode=" + tomlString("danger-full-access"),
 		"check_for_update_on_startup=false",
@@ -502,27 +526,88 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
-	cmd := []string{"codex"}
-	for _, s := range settings {
-		cmd = append(cmd, "-c", s)
+	args := HarnessArgs(in.Options)
+	for i := 0; i < len(args); i++ {
+		arg, override := args[i], ""
+		switch {
+		case (arg == "-c" || arg == "--config") && i+1 < len(args):
+			i++
+			override = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			override = strings.TrimPrefix(arg, "--config=")
+		default:
+			dropped = append(dropped, arg)
+			continue
+		}
+		key, raw, _ := strings.Cut(override, "=")
+		key = strings.TrimSpace(key)
+		value, ok := codexValue(strings.TrimSpace(raw))
+		at := slices.IndexFunc(settings, func(s string) bool { k, _, _ := strings.Cut(s, "="); return k == key })
+		nested := slices.ContainsFunc(settings, func(s string) bool {
+			k, _, _ := strings.Cut(s, "=")
+			return strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
+		})
+		if !ok || !codexKey.MatchString(key) || nested {
+			dropped = append(dropped, arg+" "+override)
+			continue
+		}
+		if at >= 0 {
+			settings[at] = key + "=" + value
+		} else {
+			settings = append(settings, key+"="+value)
+		}
 	}
-	spec.Workload.Command = append(cmd, HarnessArgs(in.Options)...)
-	spec.Secrets = append(spec.Secrets, lux.Secret{Name: "CODEX_CONFIG", Value: strings.Join(settings, "\n") + "\n",
-		As: "file", Path: agentHome + "/.codex/config.toml"})
-	if c.LLMKey != "" {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "OPENAI_API_KEY", Value: c.LLMKey, As: "env"})
-	}
+	return settings, dropped
 }
 
-// tomlString is s as a TOML basic string: a JSON string is one for any
-// text without DEL or other control characters JSON leaves raw.
+// codexKey is a dotted TOML key of bare parts, as -c takes one.
+var codexKey = regexp.MustCompile(`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`)
+
+// codexValue is an override's value as TOML, and whether dude can write it.
+func codexValue(raw string) (string, bool) {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		// Not JSON: a bare word is a string; TOML's own syntax is not read.
+		if raw == "" || strings.ContainsAny(raw[:1], `"'[{`) {
+			return "", false
+		}
+		return tomlString(raw), true
+	}
+	scalar := func(v any) (string, bool) {
+		switch x := v.(type) {
+		case string:
+			return tomlString(x), true
+		case bool, float64:
+			b, _ := json.Marshal(x)
+			return string(b), true
+		}
+		return "", false
+	}
+	list, isList := v.([]any)
+	if !isList {
+		return scalar(v)
+	}
+	items := make([]string, 0, len(list))
+	for _, item := range list {
+		s, ok := scalar(item)
+		if !ok {
+			return "", false
+		}
+		items = append(items, s)
+	}
+	return "[" + strings.Join(items, ", ") + "]", true
+}
+
+// tomlString is s as a TOML basic string: a JSON string is one, once DEL,
+// which JSON leaves raw and TOML does not allow raw, is escaped too.
 func tomlString(s string) string {
 	b, _ := json.Marshal(s)
-	return string(b)
+	return strings.ReplaceAll(string(b), "\x7f", `\u007f`)
 }
 
 // HarnessArgs are a tier's extra command-line arguments for Claude Code or
-// Codex: its options' "args", a list of strings, appended to the command.
+// Codex: its options' "args", a list of strings. Claude Code's are appended
+// to its command; Codex takes only their -c overrides (codexSettings).
 // Anything else in options is OpenCode's and means nothing to them
 // (IgnoredOptions names it).
 func HarnessArgs(options map[string]any) []string {
@@ -575,11 +660,21 @@ func submittedHarness(ranOn, role string) string {
 }
 
 // logIgnoredOptions says which of the tier's options a Run on Claude Code
-// or Codex leaves out (only "args" means anything to them).
+// or Codex leaves out (only "args" means anything to them), and which of
+// its args Codex leaves out (all but its -c overrides).
 func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
-	if ignored := IgnoredOptions(in.Harness, in.Options); len(ignored) > 0 && s.Log != nil {
+	if s.Log == nil {
+		return
+	}
+	if ignored := IgnoredOptions(in.Harness, in.Options); len(ignored) > 0 {
 		s.Log.Info("the tier's options other than args are OpenCode's; ignored on this harness",
 			"run", r.ID, "harness", in.Harness, "tier", in.ModelTier, "ignored", ignored)
+	}
+	if in.Harness == delivery.HarnessCodex {
+		if _, dropped := codexSettings(s.Agent, in); len(dropped) > 0 {
+			s.Log.Warn("Codex takes only -c key=value args from a tier, written to its config.toml; dropped the rest",
+				"run", r.ID, "tier", in.ModelTier, "dropped", dropped)
+		}
 	}
 }
 

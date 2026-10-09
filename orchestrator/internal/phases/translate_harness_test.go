@@ -552,6 +552,8 @@ func TestAClaudeResultThatFailedFailsItsOwnTurn(t *testing.T) {
 		{"error in result", [][]map[string]any{{claudeEnd, luxIdle, claudeResultLine(map[string]any{"is_error": true, "result": "API Error: 500"})}}, "failed"},
 		{"error_during_execution", [][]map[string]any{{claudeEnd, luxIdle},
 			{claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "errors": []any{"API Error: 529 overloaded"}})}}, "failed"},
+		{"error_during_execution, null result", [][]map[string]any{{claudeEnd, luxIdle,
+			claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "result": nil})}}, "failed"},
 		{"interrupted", [][]map[string]any{{claudeEnd, claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution",
 			"terminal_reason": "aborted_streaming", "errors": []any{"[ede_diagnostic] turn aborted"}})}}, "running"},
 	} {
@@ -566,7 +568,7 @@ func TestAClaudeResultThatFailedFailsItsOwnTurn(t *testing.T) {
 		if st == "failed" {
 			var reason string
 			_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, w.run.ID).Scan(&reason)
-			if !strings.Contains(reason, "API Error") {
+			if !strings.Contains(reason, "API Error") && !strings.Contains(reason, "(error_during_execution)") {
 				t.Errorf("%s: reason %q", tc.name, reason)
 			}
 		}

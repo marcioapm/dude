@@ -93,10 +93,12 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   `--effort`/`--thinking disabled` and `ANTHROPIC_CUSTOM_HEADERS`, Codex's
   `model_reasoning_effort` and its provider's `http_headers`. A tier's
   `options` are OpenCode model options; on the other two only
-  `{"args": [...]}` means anything, extra command-line arguments appended
-  as given. A list of strings is the one shape that maps onto both CLIs
-  without dude knowing each flag; anything else in `options` is logged as
-  ignored on those Runs.
+  `{"args": [...]}` means anything. Claude Code appends them to its command
+  as given. Codex takes only `-c key=value` overrides, written to its
+  `config.toml` (Codex ignores arguments before `app-server` once lux's own
+  `-c` follow it), and drops and logs the rest. A list of strings is the one
+  shape that maps onto both CLIs without dude knowing each flag; anything
+  else in `options` is logged as ignored on those Runs.
 - **Runs record it**: `runs.harness` is what the Run ran on (`scripted` for
   the test models on OpenCode), and a resume goes on with it whatever the
   role says now. The session header's chip names it: `Claude Code · Coder ·

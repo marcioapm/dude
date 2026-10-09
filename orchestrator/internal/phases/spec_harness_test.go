@@ -21,6 +21,8 @@ import (
 // fails with.
 func TestEachHarnessesSpecIsTheGoldenOne(t *testing.T) {
 	options := map[string]any{"args": []any{"--extra", "x y"}, "sendReasoning": true}
+	codexOptions := map[string]any{"args": []any{"--extra", "-c", `model_verbosity="low"`, "-c", "model_reasoning_summary=detailed"},
+		"sendReasoning": true}
 	headers := map[string]string{"X-Team": "dude", "anthropic-beta": "context-1m"}
 	for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
 		t.Run(harness, func(t *testing.T) {
@@ -34,8 +36,11 @@ func TestEachHarnessesSpecIsTheGoldenOne(t *testing.T) {
 					}
 					c, in := goldenInput(model)
 					in.Harness, in.Effort, in.Headers = harness, effort, headers
-					if harness != delivery.HarnessOpenCode {
+					switch harness {
+					case delivery.HarnessClaudeCode:
 						in.Options = options
+					case delivery.HarnessCodex:
+						in.Options = codexOptions
 					}
 					cases[key] = buildSpec(c, in)
 				}
@@ -159,6 +164,55 @@ func TestATiersArgsAreTheOnlyOptionsOtherHarnessesTake(t *testing.T) {
 	}
 	if got := IgnoredOptions(delivery.HarnessOpenCode, options); got != nil {
 		t.Errorf("OpenCode ignores %v", got)
+	}
+}
+
+// Codex drops every argument given before app-server once lux's own -c
+// follow it, so a tier's -c overrides are written to its config.toml, each
+// replacing dude's line for its key or adding one; the rest are dropped,
+// and so is one that would rewrite dude's provider.
+func TestACodexTiersConfigArgsGoToItsConfigFile(t *testing.T) {
+	c, in := goldenInput("gpt-6-sol")
+	in.Harness = delivery.HarnessCodex
+	in.Options = map[string]any{"args": []any{"-c", `model_reasoning_effort="low"`, "--config=model_verbosity=low",
+		"-c", "sandbox_mode=read-only", "-c", `model_providers.dude.base_url="https://evil.example"`,
+		"-c", "tools.web_search=true", "-m", "other", "-c", `notify=["say", 1]`, "-c", "x={a=1}"}}
+	spec := buildSpec(c, in)
+	var config string
+	for _, s := range spec.Secrets {
+		if s.Name == "CODEX_CONFIG" {
+			config = s.Value
+		}
+	}
+	lines := strings.Split(strings.TrimSuffix(config, "\n"), "\n")
+	for _, want := range []string{`model_reasoning_effort="low"`, `model_verbosity="low"`, `sandbox_mode="read-only"`,
+		"tools.web_search=true", `notify=["say", 1]`} {
+		if !slices.Contains(lines, want) {
+			t.Errorf("config.toml has no %s:\n%s", want, config)
+		}
+	}
+	if slices.Contains(lines, `sandbox_mode="danger-full-access"`) || strings.Contains(config, "evil") || strings.Contains(config, "x=") {
+		t.Errorf("config.toml kept an overridden line or took a refused one:\n%s", config)
+	}
+	if slices.Contains(spec.Workload.Command, "-m") || slices.Contains(spec.Workload.Command, "other") {
+		t.Errorf("command = %v", spec.Workload.Command)
+	}
+	_, dropped := codexSettings(c, in)
+	if want := []string{`-c model_providers.dude.base_url="https://evil.example"`, "-m", "other", "-c x={a=1}"}; !slices.Equal(dropped, want) {
+		t.Errorf("dropped = %q, want %q", dropped, want)
+	}
+}
+
+// A header value may hold DEL, which TOML does not allow raw: Codex's
+// config.toml carries it escaped.
+func TestACodexHeaderWithDELIsValidTOML(t *testing.T) {
+	c, in := goldenInput("gpt-6-sol")
+	in.Harness = delivery.HarnessCodex
+	in.Headers = map[string]string{"X-Odd": "a\x7fb"}
+	for _, s := range buildSpec(c, in).Secrets {
+		if s.Name == "CODEX_CONFIG" && (strings.ContainsRune(s.Value, 0x7f) || !strings.Contains(s.Value, `"X-Odd"="a\u007fb"`)) {
+			t.Errorf("config.toml = %q", s.Value)
+		}
 	}
 }
 
