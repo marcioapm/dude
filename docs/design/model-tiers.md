@@ -165,7 +165,8 @@ them to admins until one dismisses them.
 - **Add / change a tier**: name, what it is for, the model to request with
   the proxy's names as chips, labelled as suggestions, and **Reasoning
   effort** (Model's default, None, Low, Medium, High, Max; "On Claude
-  models, None turns thinking off. GPT models reason at their default."). An **Advanced** disclosure holds
+  models, None turns thinking off. GPT models reason at their default.").
+  An **Advanced** disclosure holds
   two JSON fields, "OpenCode model options" and "Request headers", checked
   in the dialog by the same rules as the API. A name the proxy does not
   list shows the attention callout and the button reads "Save anyway" /
