@@ -29,18 +29,14 @@ import (
 // publish makes content an artifact of the Run under name, as lux's shim
 // does. Callers hold s.mu.
 func (s *Server) publish(run *Run, name, content, description string) {
-	path := lux.PublishedPrefix + name
 	version := 1
 	for _, a := range run.artifacts {
-		if a.Path == path {
+		if a.Path == lux.PublishedPrefix+name {
 			version = max(version, a.Version+1)
 		}
 	}
-	sum := sha256.Sum256([]byte(content))
-	s.nextArt++
-	art := &artifact{ID: fmt.Sprintf("art_%d", s.nextArt), Path: path, Version: version, Description: description,
-		ContentType: mimeFor(name), SHA256: hex.EncodeToString(sum[:]), Epoch: run.Epoch, Size: int64(len(content)), Content: content}
-	run.artifacts = append(run.artifacts, art)
+	art := s.addArtifact(run, name, content, run.Epoch)
+	art.Version, art.Description = version, description
 	// Uploaded a moment later, as a runner's upload trails the report, in
 	// the order published: whichever upload is done first announces every
 	// one before it too.
@@ -49,7 +45,7 @@ func (s *Server) publish(run *Run, name, content, description string) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for _, a := range run.artifacts {
-			if a.Available || !strings.HasPrefix(a.Path, lux.PublishedPrefix) {
+			if a.Available {
 				continue
 			}
 			a.Available = true
@@ -61,6 +57,17 @@ func (s *Server) publish(run *Run, name, content, description string) {
 			}
 		}
 	}()
+}
+
+// addArtifact lists content on the Run under name, not yet available.
+// Callers hold s.mu.
+func (s *Server) addArtifact(run *Run, name, content string, epoch int) *artifact {
+	sum := sha256.Sum256([]byte(content))
+	s.nextArt++
+	a := &artifact{ID: fmt.Sprintf("art_%d", s.nextArt), Path: lux.PublishedPrefix + name, ContentType: mimeFor(name),
+		SHA256: hex.EncodeToString(sum[:]), Epoch: epoch, Size: int64(len(content)), Content: content}
+	run.artifacts = append(run.artifacts, a)
+	return a
 }
 
 // save is the agent publishing files, name → content, in name order, each

@@ -13,8 +13,6 @@
 package fakelux
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1568,11 +1566,7 @@ func (s *Server) exited(run *Run) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for name, content := range published {
-			sum := sha256.Sum256([]byte(content))
-			s.nextArt++
-			run.artifacts = append(run.artifacts, &artifact{ID: fmt.Sprintf("art_%d", s.nextArt),
-				Path: lux.PublishedPrefix + name, ContentType: mimeFor(name), SHA256: hex.EncodeToString(sum[:]),
-				Epoch: p.Epoch, Size: int64(len(content)), Content: content, Available: true})
+			s.addArtifact(run, name, content, p.Epoch).Available = true
 		}
 		done := time.Now()
 		p.SnapshotDoneAt = &done
