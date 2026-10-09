@@ -113,15 +113,35 @@ func TestARecipeEditReachesTheNextWakeOnEveryPath(t *testing.T) {
 
 // A wake with the recipes as they were sends lux no PATCH, also when only
 // the project's preview settings (idle timeout, egress) changed meanwhile.
+// Labels are not reconciled: a server dude made carries app=dude, and one
+// made before dude labelled them so (adopted here) keeps the labels it has.
 func TestAnUnchangedRecipeIsNotPatched(t *testing.T) {
-	for _, change := range []string{"nothing", "preview settings"} {
+	for _, change := range []string{"nothing", "preview settings", "made before app=dude"} {
 		t.Run(change, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
 			setup := "npm ci"
 			w.recipe("web", 3000, "npm run dev", "apps/web", &setup, true)
-			_, runID := w.declare()
+			var runID string
+			wantApp := lux.App
+			if change == "made before app=dude" {
+				var task string
+				task, runID = w.startPreview()
+				if _, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
+					Command: servers.ShellCommand(&setup, "npm run dev"), Workdir: servers.Workdir("target", "apps/web"),
+					Env: map[string]string{"PORT": "1"}, Hostname: servers.PreviewHostname(previewDomain, "web", w.previewOf(task), ""),
+					Wake: "request", Lifetime: "owner", Labels: map[string]string{"dude.preview": runID}}); err != nil {
+					t.Fatal(err)
+				}
+				w.untilAsleep(runID)
+				wantApp = ""
+			} else {
+				_, runID = w.declare()
+			}
 			web := w.serverID(runID, "web")
+			if sv, _ := w.lux.TenantServer(web); sv.Labels[lux.AppLabel] != wantApp {
+				t.Fatalf("lux's server has labels %v; want %s=%q", sv.Labels, lux.AppLabel, wantApp)
+			}
 			w.open(web)
 			w.running(runID, "web")
 			w.lux.Idle(web)
@@ -137,6 +157,9 @@ func TestAnUnchangedRecipeIsNotPatched(t *testing.T) {
 				if strings.HasPrefix(c, "patch ") {
 					t.Fatalf("lux saw %q for recipes nobody changed; all calls %v", c, w.lux.TenantCalls())
 				}
+			}
+			if sv, _ := w.lux.TenantServer(web); sv.Labels[lux.AppLabel] != wantApp {
+				t.Errorf("after the wake lux's server has labels %v; want %s=%q", sv.Labels, lux.AppLabel, wantApp)
 			}
 			if r := w.luxRuns()[0]; r.Resumed != 1 {
 				t.Fatalf("resumed %d times", r.Resumed)
