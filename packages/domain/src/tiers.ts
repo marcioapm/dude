@@ -202,8 +202,8 @@ function roleChain(role: string): string[] {
   return role === "fixer" ? ["fixer", "implementer"] : [role];
 }
 
-function roleField(layer: AgentModels | null | undefined, role: string, field: "tier"): string | undefined {
-  return (layer as Record<string, Partial<Record<"tier", string>>> | null | undefined)?.[role]?.[field];
+function roleTier(layer: AgentModels | null | undefined, role: string): string | undefined {
+  return (layer as Record<string, { tier?: string } | undefined> | null | undefined)?.[role]?.tier;
 }
 
 /**
@@ -221,7 +221,7 @@ export function resolveTier(
   const ordered = [["project", layers.project], ["organization", layers.organization]] as const;
   for (const r of roleChain(role)) {
     for (const [name, layer] of ordered) {
-      const id = roleField(layer, r, "tier");
+      const id = roleTier(layer, r);
       if (!id) continue;
       return { tierId: tiers.some((t) => t.id === id) ? id : null, from: r === role ? name : "implementer" };
     }
