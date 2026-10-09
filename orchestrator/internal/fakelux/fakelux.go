@@ -335,8 +335,7 @@ func (s *Server) EndTurn(id string) {
 		return
 	}
 	s.completeOpenTools(run)
-	s.turnEnd(run, map[string]any{"stopReason": "end_turn"})
-	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	s.turnEnd(run, map[string]any{"stopReason": "end_turn"}, true)
 	run.busy = false
 	run.turnsEnded++
 	s.deliverQueued(run)
@@ -1269,8 +1268,7 @@ func (s *Server) turn(run *Run) {
 	run.openTools = nil
 	b := run.behavior
 	if b.TurnError != "" {
-		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError})
-		s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError}, true)
 		run.busy = false
 		return
 	}
@@ -1377,8 +1375,7 @@ func (s *Server) turn(run *Run) {
 	// The prompt's response, as the ACP adapter relays it: with the turn's
 	// token usage.
 	s.turnEnd(run, map[string]any{"stopReason": "end_turn", "usage": map[string]any{
-		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
-	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}}, true)
 	run.busy = false
 	run.turnsEnded++
 	if b.ExitAfterTurn {
@@ -1806,7 +1803,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		// harness took and the agent had not read starts the next turn,
 		// under the same request ids; FailUnreadOnInterrupt fails it instead.
 		run.Interrupted++
-		s.turnEnd(run, map[string]any{"stopReason": "cancelled"})
+		s.turnEnd(run, map[string]any{"stopReason": "cancelled"}, false)
 		run.busy = false
 		if s.FailUnreadOnInterrupt {
 			// A legacy lux holds input it never acknowledges; it fails it

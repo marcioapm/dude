@@ -159,13 +159,16 @@ def claude(spec: dict, key: str, home: str, mcp: str) -> list:
         if not line.startswith("{"):
             continue
         m = json.loads(line)
-        records.append({"type": "claude." + m.get("type", ""), "data": m})
         if m.get("type") == "result":
+            # lux relays a result line as claude.turn_end (its usage) first,
+            # then the line itself (lux internal/adapter/claude.go).
             turn_end = {}
             if m.get("usage") is not None:
                 turn_end["usage"] = m["usage"]
             records.append({"type": "claude.turn_end", "data": turn_end})
+            records.append({"type": "claude.result", "data": m})
             break
+        records.append({"type": "claude." + m.get("type", ""), "data": m})
     p.stdin.close()
     try:
         p.wait(timeout=30)

@@ -87,19 +87,23 @@ type translator struct {
 	// What a Claude Code or Codex turn needs remembered between batches,
 	// saved as runs.harness_state.
 	harnessState
-	// The reason the turn in progress failed, from a Claude Code line that
-	// said so; the turn's end fails the Run with it.
-	turnError string
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
 // process, the last of it recorded, and its plan as TaskCreate and
-// TaskUpdate built it; the tokens of the Codex turn in progress.
+// TaskUpdate built it; the half of a Claude turn's end that has arrived
+// (claudeTurnEnd), and the idle held until the other half; the tokens of
+// the Codex turn in progress; and why the turn in progress failed, from a
+// harness line that said so, which its end fails the Run with.
 type harnessState struct {
 	claudeCost     float64
 	claudeCostSeen float64
 	claudeTasks    []map[string]any
+	claudeHalf     string
+	claudeUsage    *claudeUsage
+	claudeIdle     bool
 	codexTurn      codexTokens
+	turnError      string
 }
 
 type codexTokens struct {
@@ -110,11 +114,16 @@ type harnessStateJSON struct {
 	ClaudeCost     float64          `json:"claudeCost,omitempty"`
 	ClaudeCostSeen float64          `json:"claudeCostSeen,omitempty"`
 	ClaudeTasks    []map[string]any `json:"claudeTasks,omitempty"`
+	ClaudeHalf     string           `json:"claudeHalf,omitempty"`
+	ClaudeUsage    *claudeUsage     `json:"claudeUsage,omitempty"`
+	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
 	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
+	TurnError      string           `json:"turnError,omitempty"`
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
-	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks}
+	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
+		ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -126,7 +135,8 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &j); err != nil {
 		return err
 	}
-	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks}
+	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
+		claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
 	if j.CodexTurn != nil {
 		h.codexTurn = *j.CodexTurn
 	}
@@ -685,6 +695,8 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string, epoch int) error {
 	switch activity {
 	case "busy":
+		// A new turn: an idle held for a Claude turn's end is past.
+		t.claudeIdle = false
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -695,24 +707,34 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 			waiting_since = NULL, agent_active_at = now() WHERE id = $1`, t.run.ID)
 		return err
 	case "idle":
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
+		// Between the halves of a Claude turn's end: held for the second.
+		if t.claudeHalf != "" {
+			t.claudeIdle = true
+			return nil
 		}
-		clear(t.openCalls)
-		// A turn's end is when an agent's edits settle.
-		s.pokeDiff(t.run.ID)
-		// A turn that ended with something open for a person — a question, a
-		// repository it asked for — is not done: the agent waits, and the
-		// answer starts its next turn. The syncer parks it if the wait is
-		// long.
-		tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
-			WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
-		if err != nil || tag.RowsAffected() > 0 {
-			return err
-		}
-		return t.turnDone(ctx, tx, s, false)
+		return t.idle(ctx, tx, s)
 	}
 	return nil
+}
+
+// idle: the agent's turn is over.
+func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
+	if err := t.flush(ctx, tx, s); err != nil {
+		return err
+	}
+	clear(t.openCalls)
+	// A turn's end is when an agent's edits settle.
+	s.pokeDiff(t.run.ID)
+	// A turn that ended with something open for a person — a question, a
+	// repository it asked for — is not done: the agent waits, and the
+	// answer starts its next turn. The syncer parks it if the wait is
+	// long.
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
+		WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
+	if err != nil || tag.RowsAffected() > 0 {
+		return err
+	}
+	return t.turnDone(ctx, tx, s, false)
 }
 
 // turnDone marks the agent's turn done, once. settling: only a turn that

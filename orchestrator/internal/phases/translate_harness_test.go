@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -224,9 +225,10 @@ func TestARealClaudeCodeTurnIsTranslated(t *testing.T) {
 	if len(ends) != 1 {
 		t.Fatalf("turn ends = %v", ends)
 	}
-	tokens := ends[0].Payload["tokens"].(map[string]any)
-	if tokens["output"].(float64) <= 0 || tokens["cacheRead"].(float64) <= 0 || ends[0].Payload["costUsd"].(float64) <= 0 ||
-		ends[0].Payload["contextTokens"].(float64) <= 0 {
+	tokens, _ := ends[0].Payload["tokens"].(map[string]any)
+	turnCost, _ := ends[0].Payload["costUsd"].(float64)
+	if output, _ := tokens["output"].(float64); output <= 0 || number(tokens["cacheRead"]) <= 0 || turnCost <= 0 ||
+		number(ends[0].Payload["contextTokens"]) <= 0 {
 		t.Errorf("turn end = %v", ends[0].Payload)
 	}
 	var cost float64
@@ -234,7 +236,7 @@ func TestARealClaudeCodeTurnIsTranslated(t *testing.T) {
 	if err := w.owner.QueryRow(context.Background(), `SELECT agent_cost_usd::float8, output_tokens FROM runs WHERE id = $1`, w.run.ID).Scan(&cost, &out); err != nil {
 		t.Fatal(err)
 	}
-	if cost != ends[0].Payload["costUsd"].(float64) || out != int64(tokens["output"].(float64)) {
+	if cost != turnCost || out != int64(number(tokens["output"])) {
 		t.Errorf("run: cost %v output %d, want the turn's", cost, out)
 	}
 	if n := len(w.tr.openCalls); n != 0 {
@@ -413,26 +415,137 @@ func TestClaudeCodesTasksAndCostOutliveARestart(t *testing.T) {
 		return map[string]any{"type": "claude.result", "data": map[string]any{"type": "result", "total_cost_usd": cost}}
 	}
 	end := map[string]any{"type": "claude.turn_end", "data": map[string]any{"usage": map[string]any{"input_tokens": 5, "output_tokens": 7}}}
-	w.feed(use("a", "TaskCreate", map[string]any{"subject": "one"}), use("b", "TaskCreate", map[string]any{"subject": "two"}), result(0.25), end)
+	w.feed(use("a", "TaskCreate", map[string]any{"subject": "one"}), use("b", "TaskCreate", map[string]any{"subject": "two"}), end, result(0.25))
 	w.restart()
-	w.feed(use("c", "TaskUpdate", map[string]any{"taskId": "2", "status": "in_progress"}), result(0.75), end)
+	w.feed(use("c", "TaskUpdate", map[string]any{"taskId": "2", "status": "in_progress"}), end, result(0.75))
 	events := w.events()
 	plans := ofType(events, evPlanUpdated)
 	want := `[{"content":"one","status":"pending"},{"content":"two","status":"in_progress"}]`
 	if got, _ := json.Marshal(plans[len(plans)-1].Payload["todos"]); string(got) != want {
 		t.Errorf("plan = %s, want %s", got, want)
 	}
-	var costs []float64
+	var costs []any
 	for _, e := range ofType(events, evModelRequestDone) {
-		costs = append(costs, e.Payload["costUsd"].(float64))
+		costs = append(costs, e.Payload["costUsd"])
 	}
-	if !slices.Equal(costs, []float64{0.25, 0.5}) {
+	if !slices.Equal(costs, []any{0.25, 0.5}) {
 		t.Errorf("turn costs = %v, want 0.25 then 0.5", costs)
 	}
 	// A resumed process counts from zero again: its first total is its own.
-	w.feed(result(0.1), end)
+	w.feed(end, result(0.1))
 	if e := ofType(w.events(), evModelRequestDone); len(e) != 1 || e[0].Payload["costUsd"] != 0.1 {
 		t.Errorf("after a new process: %v", e)
+	}
+}
+
+// claudeResultLine is a Claude Code result line as lux relays it.
+func claudeResultLine(fields map[string]any) map[string]any {
+	data := map[string]any{"type": "result", "subtype": "success"}
+	maps.Copy(data, fields)
+	return map[string]any{"type": "claude.result", "data": data}
+}
+
+var (
+	claudeEnd = map[string]any{"type": "claude.turn_end", "data": map[string]any{"usage": map[string]any{"input_tokens": 5, "output_tokens": 7}}}
+	luxIdle   = map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "idle"}}
+	luxBusy   = map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "busy"}}
+)
+
+func (w *harnessWorld) status() (status string, turnDone bool) {
+	w.t.Helper()
+	if err := w.owner.QueryRow(context.Background(), `SELECT status::text, turn_done_at IS NOT NULL FROM runs WHERE id = $1`,
+		w.run.ID).Scan(&status, &turnDone); err != nil {
+		w.t.Fatal(err)
+	}
+	return status, turnDone
+}
+
+// lux relays Claude Code's result line as claude.turn_end, the agent
+// going idle, then claude.result (lux internal/adapter/claude.go): each
+// turn ends once, on the second of the pair, with its own cost and tokens
+// — whether the pair arrives in one batch or two, across a restart — and
+// is done only then.
+func TestAClaudeTurnEndsWithTheResultLuxSendsAfterIt(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(claudeEnd, luxIdle, claudeResultLine(map[string]any{"total_cost_usd": 0.25}))
+	if _, done := w.status(); !done {
+		t.Error("the first turn is not done after its result")
+	}
+	w.feed(luxBusy, claudeEnd, luxIdle)
+	if st, done := w.status(); st != "running" || done {
+		t.Errorf("before its result, the second turn is %s, done %v", st, done)
+	}
+	w.restart()
+	w.feed(claudeResultLine(map[string]any{"total_cost_usd": 0.75}))
+	if _, done := w.status(); !done {
+		t.Error("the second turn is not done after its result")
+	}
+	var costs []any
+	for _, e := range ofType(w.events(), evModelRequestDone) {
+		if tokens, _ := e.Payload["tokens"].(map[string]any); e.Payload["turn"] != true || tokens["output"] != float64(7) {
+			t.Errorf("turn end %v", e.Payload)
+		}
+		costs = append(costs, e.Payload["costUsd"])
+	}
+	if !slices.Equal(costs, []any{0.25, 0.5}) {
+		t.Errorf("turn costs = %v, want [0.25 0.5]", costs)
+	}
+	var cost float64
+	var out int64
+	if err := w.owner.QueryRow(context.Background(), `SELECT agent_cost_usd::float8, output_tokens FROM runs WHERE id = $1`, w.run.ID).Scan(&cost, &out); err != nil {
+		t.Fatal(err)
+	}
+	if cost != 0.75 || out != 14 {
+		t.Errorf("run: cost %v output %d, want 0.75 and 14", cost, out)
+	}
+}
+
+// A failure only the result line carries (an API error mid-turn:
+// error_during_execution, no synthetic reply before it) fails its own
+// turn, never done, and not the next. One an interrupt caused does not.
+func TestAClaudeResultThatFailedFailsItsOwnTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines [][]map[string]any
+		want  string
+	}{
+		{"error in result", [][]map[string]any{{claudeEnd, luxIdle, claudeResultLine(map[string]any{"is_error": true, "result": "API Error: 500"})}}, "failed"},
+		{"error_during_execution", [][]map[string]any{{claudeEnd, luxIdle},
+			{claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "errors": []any{"API Error: 529 overloaded"}})}}, "failed"},
+		{"interrupted", [][]map[string]any{{claudeEnd, claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution",
+			"terminal_reason": "aborted_streaming", "errors": []any{"[ede_diagnostic] turn aborted"}})}}, "running"},
+	} {
+		w := newHarnessWorld(t)
+		for _, batch := range tc.lines {
+			w.feed(batch...)
+		}
+		st, done := w.status()
+		if st != tc.want || done {
+			t.Errorf("%s: %s, done %v; want %s", tc.name, st, done, tc.want)
+		}
+		if st == "failed" {
+			var reason string
+			_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, w.run.ID).Scan(&reason)
+			if !strings.Contains(reason, "API Error") {
+				t.Errorf("%s: reason %q", tc.name, reason)
+			}
+		}
+	}
+	// The failed turn's error is not carried into the next.
+	w := newHarnessWorld(t)
+	w.feed(claudeEnd, claudeResultLine(map[string]any{"is_error": true, "terminal_reason": "aborted_tools", "result": "aborted"}))
+	w.feed(luxBusy, claudeEnd, luxIdle, claudeResultLine(map[string]any{"result": "done"}))
+	if st, done := w.status(); st != "running" || !done {
+		t.Errorf("the turn after an interrupted one: %s, done %v", st, done)
+	}
+}
+
+// The recording is in lux's order: its last two records are the turn's
+// end, then the result line.
+func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
+	recs := recorded(t, "claude-code-real.jsonl")
+	if got := []any{recs[len(recs)-2]["type"], recs[len(recs)-1]["type"]}; !slices.Equal(got, []any{"claude.turn_end", "claude.result"}) {
+		t.Errorf("last two records = %v", got)
 	}
 }
 
@@ -443,8 +556,8 @@ func TestAFailedTurnOnEitherHarnessFailsTheRun(t *testing.T) {
 		"claude-code": {
 			{"type": "claude.assistant", "data": map[string]any{"error": "model_not_found", "message": map[string]any{
 				"content": []any{map[string]any{"type": "text", "text": "There's an issue with the selected model (claude-nope-9)."}}}}},
-			{"type": "claude.result", "data": map[string]any{"is_error": true, "result": "There's an issue with the selected model (claude-nope-9)."}},
 			{"type": "claude.turn_end", "data": map[string]any{}},
+			{"type": "claude.result", "data": map[string]any{"is_error": true, "result": "There's an issue with the selected model (claude-nope-9)."}},
 		},
 		"codex": {
 			{"type": "codex.error", "data": map[string]any{"error": map[string]any{"message": "Reconnecting... 2/5"}, "willRetry": true}},
