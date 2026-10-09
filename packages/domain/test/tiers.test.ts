@@ -65,7 +65,8 @@ describe("a tier's effort, options and headers", () => {
     expect(errorOf(tier({ options: { a: "\u0000" } }))).toBe(nul);
     expect(errorOf(tier({ options: { deep: [{ "k\u0000": 1 }] } }))).toBe(nul);
     expect(errorOf(tier({ headers: { "X-Team": "a\u0000b" } }))).toBe(nul);
-    expect(errorOf(testModelSchema.safeParse({ model: "gpt-6-sol", options: { a: "\u0000" } }))).toBe(nul);
+    const test = testModelSchema.safeParse({ model: "gpt-6-sol", options: { a: "\u0000" } });
+    expect(test.success ? null : test.error.issues[0]!.message).toBe(nul);
   });
 });
 
