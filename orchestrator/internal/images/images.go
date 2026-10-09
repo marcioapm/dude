@@ -57,7 +57,8 @@ WORKDIR /home/agent
 // podman looks the caller up by uid and matches that name or the number,
 // so an agent line behind another name does not stop this one. Lines the
 // image has for that other name are its own; the container check fails a
-// version whose lines a Run cannot map.
+// version whose lines a Run cannot map. images/runtime/Dockerfile writes
+// the same ranges for its agent (uid 1000); the two must agree.
 const SubIDs = `u=$(id -u agent) && n=$(grep -m1 "^[^:]*:[^:]*:$u:" /etc/passwd | cut -d: -f1) && ` +
 	`o=agent && { [ "$n" = agent ] || o=$u; } && for f in /etc/subuid /etc/subgid; do ` +
 	`grep -qs -e "^$o:" -e "^$u:" $f || ` +
