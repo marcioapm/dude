@@ -180,7 +180,7 @@ export function ServerRecipeDialog({ open, onOpenChange, existing, repository, d
       onOpenChange={onOpenChange}
       size="lg"
       title={existing ? `Edit ${existing.name}` : "Add a server"}
-      description={existing ? `Changes apply to the next start; a running ${existing.name} keeps its command.` : "A port and the command that serves it, run in the checkout."}
+      description={existing ? `Changes apply to the next start; a running ${existing.name} keeps its command. Previews pick them up when they next wake.` : "A port and the command that serves it, run in the checkout."}
       footer={
         <>
           <Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button>
