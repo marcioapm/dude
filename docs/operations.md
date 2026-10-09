@@ -318,7 +318,9 @@ server; one removed, or no longer started in previews, has its server
 deleted, and a preview left with none ends. A preview running when the
 recipe is saved keeps what it started with until it next sleeps and wakes.
 Preview secrets are not part of a recipe: a new value reaches previews when
-they next wake, as before.
+they next wake, as before. On a lux without `preview.domain`, previews start
+at once and keep the servers they were declared with; a recipe change
+reaches the next preview.
 
 Every orchestrator follows the feed; each event is applied once, keyed in
 the database, and a wake is acted on by one orchestrator. The feed's

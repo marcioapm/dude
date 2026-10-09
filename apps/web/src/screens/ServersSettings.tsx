@@ -189,7 +189,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         tone="danger"
         size="sm"
         title={`Remove ${removing?.name ?? ""}?`}
-        description="Runs that already have it keep it; a preview drops it when it next wakes."
+        description="Runs that already have it keep it; a preview at its own URL drops it when it next wakes."
         footer={
           <>
             <Button variant="quiet" onClick={() => setRemoving(null)}>Cancel</Button>
