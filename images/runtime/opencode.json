@@ -21,8 +21,8 @@
       }
     },
     "llm-openai": {
-      "name": "LLM, OpenAI-compatible API (DUDE_LLM_URL)",
-      "npm": "@ai-sdk/openai-compatible",
+      "name": "LLM, OpenAI Responses API (DUDE_LLM_URL)",
+      "npm": "@ai-sdk/openai",
       "options": {
         "baseURL": "{env:DUDE_LLM_URL}",
         "apiKey": "{env:DUDE_LLM_KEY}"

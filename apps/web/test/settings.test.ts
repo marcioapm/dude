@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DeliverySettings, FullDeliveryPolicy, RoleSettings } from "@dude/domain";
-import { deliveryChanged, deliveryPatch, effortLabel, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
+import { deliveryChanged, deliveryPatch, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
 
 const org = <T,>(value: T) => ({ value, source: "organization" as const });
 const proj = <T,>(value: T) => ({ value, source: "project" as const });
@@ -20,7 +20,6 @@ const delivery: DeliverySettings = {
 
 const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
   model: org("m"),
-  effort: org(null),
   timeLimitMinutes: org(null),
   machineSize: org(null),
   image: org(null),
@@ -38,7 +37,7 @@ describe("settings helpers", () => {
   test("counts what a project overrides", () => {
     expect(deliveryChanged(delivery)).toBe(1);
     expect(roleChanged(role())).toBe(false);
-    expect(roleChanged(role({ effort: proj("low") }))).toBe(true);
+    expect(roleChanged(role({ timeLimitMinutes: proj(45) }))).toBe(true);
     expect(roleChanged(role({ machineSize: proj("msz_xl") }))).toBe(true);
     const withPrompt = (mode: "add" | "replace" | "inherit") =>
       role({ prompt: { organization: role().prompt.organization, project: { ...role().prompt.organization, mode } } });
@@ -49,7 +48,6 @@ describe("settings helpers", () => {
   test("labels read as a person says them", () => {
     expect([timeLimitLabel(null), timeLimitLabel(45), timeLimitLabel(60), timeLimitLabel(120), timeLimitLabel(90)])
       .toEqual(["2 hours (default)", "45 min", "1 hour", "2 hours", "90 min"]);
-    expect([effortLabel(null), effortLabel("high")]).toEqual(["Model’s default", "High"]);
   });
 
   test("a place's page, or the first", () => {

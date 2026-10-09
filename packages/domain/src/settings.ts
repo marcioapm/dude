@@ -1,11 +1,10 @@
 import { z } from "zod";
 import {
   deliveryPolicySchema,
-  effortSchema,
+  ROLE_EFFORT_REMOVED,
   ROLE_MODEL_REMOVED,
   TERMINAL_TASK_STATUSES,
   timeLimitMinutesSchema,
-  type Effort,
   type FullDeliveryPolicy,
 } from "./hierarchy.ts";
 import { agentEgressSchema } from "./servers.ts";
@@ -23,7 +22,7 @@ import { agentEgressSchema } from "./servers.ts";
  * The agents a person configures, in the order they are shown. The fixer
  * is the implementer's model told something else: its own prompt, and
  * settings of its own only where it is given them. The investigator reads
- * before anything is written; like the others it has a tier, effort, time
+ * before anything is written; like the others it has a tier, time
  * limit and machine, and it follows no other role. Nor does the conductor,
  * which people talk to in a task's Chat, on a small machine of its own; nor
  * the brainstorm, which a session's members talk to, on the same small
@@ -108,7 +107,6 @@ export interface RoleSettings {
    * implementer's.
    */
   tier: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
-  effort: Setting<Effort | null>;
   timeLimitMinutes: Setting<number | null>;
   /**
    * A machine size's id; null: none set at any layer, so the organization's
@@ -179,7 +177,7 @@ export const settingsPatchSchema = z
           .object({
             tier: nullable(z.string().min(1).max(100)),
             model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
-            effort: nullable(effortSchema),
+            effort: z.undefined({ invalid_type_error: ROLE_EFFORT_REMOVED }),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),
             machineSize: nullable(z.string().min(1).max(100)),
             image: nullable(z.string().min(1).max(100)),

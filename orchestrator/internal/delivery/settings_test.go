@@ -16,13 +16,13 @@ func TestARolesNoProgressLimitIsReadAtHalfAnHourAtLeast(t *testing.T) {
 }
 
 func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
-	org := json.RawMessage(`{"reviewer":{"tier":"mtr_thinker","effort":"high","timeLimitMinutes":20},
+	org := json.RawMessage(`{"reviewer":{"tier":"mtr_thinker","timeLimitMinutes":20},
 		"implementer":{"tier":"mtr_coder","context":"org notes"}}`)
-	project := json.RawMessage(`{"reviewer":{"effort":"low"},"implementer":{"tier":"mtr_fast"}}`)
+	project := json.RawMessage(`{"reviewer":{"timeLimitMinutes":45},"implementer":{"tier":"mtr_fast"}}`)
 
-	// The project changed only the reviewer's effort: the tier and limit
-	// are still its organization's.
-	if got, want := ResolveRole("reviewer", project, org), (RoleSettings{Tier: "mtr_thinker", Effort: "low", TimeLimitMinutes: 20}); got != want {
+	// The project changed only the reviewer's time limit: the tier is still
+	// its organization's.
+	if got, want := ResolveRole("reviewer", project, org), (RoleSettings{Tier: "mtr_thinker", TimeLimitMinutes: 45}); got != want {
 		t.Errorf("reviewer = %+v, want %+v", got, want)
 	}
 	// Each field on its own: the project's tier, the organization's notes.
@@ -40,13 +40,13 @@ func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
 }
 
 func TestTheFixerIsTheImplementerUnlessSetApart(t *testing.T) {
-	org := json.RawMessage(`{"implementer":{"tier":"mtr_coder","effort":"medium"}}`)
-	if got := ResolveRole("fixer", nil, org); got.Tier != "mtr_coder" || got.Effort != "medium" {
+	org := json.RawMessage(`{"implementer":{"tier":"mtr_coder","context":"coder notes"}}`)
+	if got := ResolveRole("fixer", nil, org); got.Tier != "mtr_coder" || got.Context != "coder notes" {
 		t.Errorf("fixer = %+v, want the implementer's", got)
 	}
-	project := json.RawMessage(`{"fixer":{"effort":"high"}}`)
-	if got := ResolveRole("fixer", project, org); got.Tier != "mtr_coder" || got.Effort != "high" {
-		t.Errorf("fixer with its own effort = %+v", got)
+	project := json.RawMessage(`{"fixer":{"context":"fixer notes"}}`)
+	if got := ResolveRole("fixer", project, org); got.Tier != "mtr_coder" || got.Context != "fixer notes" {
+		t.Errorf("fixer with its own notes = %+v", got)
 	}
 	// The fixer's own tier on any layer comes before the implementer's on
 	// any layer: the organization's fixer beats the project's implementer.

@@ -49,7 +49,8 @@ like the existing ones (`ENABLE` + `FORCE ROW LEVEL SECURITY`, policy on
 
 ### Settings (owned by the settings track)
 - Organisation defaults and project overrides for: agent role config
-  (model, effort, time limit, enabled, prompt) and delivery policy.
+  (model tier, time limit, enabled, prompt; reasoning effort is the
+  tier's, see model-tiers.md) and delivery policy.
   Project stores **overrides only**; absent = inherited. API returns each
   value with `{ value, source: "organization" | "project" }`.
 - Prompts: `prompt_versions (id, organization_id, project_id null, role,

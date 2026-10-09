@@ -1,9 +1,9 @@
 package delivery
 
 // Model tiers: the organization's (model_tiers, migration 069), named by
-// each role's settings (tier, over the same layers as its effort). A tier
-// names the one model dude requests from the LLM proxy for it; what the
-// proxy then serves is the proxy's to say.
+// each role's settings (tier, over the same layers as its machine). A tier
+// names the one model dude requests from the LLM proxy for it, and how
+// hard it thinks; what the proxy then serves is the proxy's to say.
 
 import (
 	"context"
@@ -14,10 +14,14 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
-// Tier is a tier as a Run is built from it: its name, and the model it
-// requests ("" while none is set).
+// Tier is a tier as a Run is built from it: its name, the model it
+// requests ("" while none is set), its reasoning effort ("" the model's
+// default), and the extra OpenCode model options and request headers its
+// agent is requested with.
 type Tier struct {
-	ID, Name, Model string
+	ID, Name, Model, Effort string
+	Options                 map[string]any
+	Headers                 map[string]string
 }
 
 // TierFor reads the tier role resolves to, in the organization's
@@ -30,7 +34,8 @@ func TierFor(ctx context.Context, tx pgx.Tx, role string, settings RoleSettings)
 	}
 	t := Tier{ID: settings.Tier}
 	var model *string
-	err := tx.QueryRow(ctx, `SELECT name, model FROM model_tiers WHERE id = $1`, settings.Tier).Scan(&t.Name, &model)
+	err := tx.QueryRow(ctx, `SELECT name, model, COALESCE(effort, ''), options, headers FROM model_tiers WHERE id = $1`, settings.Tier).
+		Scan(&t.Name, &model, &t.Effort, &t.Options, &t.Headers)
 	if db.IsNotFound(err) {
 		return Tier{}, fmt.Sprintf("The %s's model tier no longer exists. An admin picks another in Agents.", who), nil
 	}

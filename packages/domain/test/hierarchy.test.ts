@@ -37,13 +37,13 @@ describe("resolveAgentModel", () => {
     expect(resolved?.tier).toBe("system-tier");
   });
 
-  test("resolves field by field: a project's effort keeps the organization's tier", () => {
+  test("resolves field by field: a project's time limit keeps the organization's tier", () => {
     const resolved = resolveAgentModel(
       "reviewer",
-      project({ reviewer: { effort: "low" } }),
-      org({ reviewer: { tier: "org-tier", effort: "high", timeLimitMinutes: 20 } }),
+      project({ reviewer: { timeLimitMinutes: 45 } }),
+      org({ reviewer: { tier: "org-tier", timeLimitMinutes: 20, context: "org notes" } }),
     );
-    expect(resolved).toEqual({ tier: "org-tier", effort: "low", timeLimitMinutes: 20 });
+    expect(resolved).toEqual({ tier: "org-tier", timeLimitMinutes: 45, context: "org notes" });
   });
 
   test("returns null when no layer configures the role", () => {
@@ -74,8 +74,6 @@ describe("agentModelConfigSchema", () => {
   test("a tier, when given, is not empty — and a layer may give none", () => {
     expect(agentModelConfigSchema.safeParse({ tier: "" }).success).toBe(false);
     expect(agentModelConfigSchema.safeParse({}).success).toBe(true);
-    expect(agentModelConfigSchema.safeParse({ effort: "high" }).success).toBe(true);
-    expect(agentModelConfigSchema.safeParse({ effort: "extreme" }).success).toBe(false);
   });
 
   test("a role names a tier, never a model: a model is refused, saying so", () => {

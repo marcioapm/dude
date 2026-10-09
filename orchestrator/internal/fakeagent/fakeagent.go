@@ -166,7 +166,13 @@ type Step struct {
 	LongCommand bool
 	// Names it looks up before its tools, as a package install would.
 	Lookups []string
+	// What it thinks before it acts, streamed as thought chunks (the fake
+	// lux only: lux-fake has no thoughts).
+	Thought string
 }
+
+// ToolsThought is what ToolsModel's implementer thinks before it acts.
+const ToolsThought = "Progress first, then the commit: the person watching should see each step land."
 
 // Notes is what the implementer publishes: a short account of its work, as
 // the prompt invites an agent to leave.
@@ -376,6 +382,7 @@ func For(phase, model, runID string, fixed bool) Step {
 			step.Lookups = Lookups
 		}
 		if model == ToolsModel {
+			step.Thought = ToolsThought
 			step.Tools = [][2]string{
 				{"emit_event", `{"type":"progress","data":{"done":1,"of":2,"step":"writing FACTORY.md"}}`},
 				{"emit_event", `{"type":"progress","data":{"done":2,"of":2,"step":"committing"}}`},

@@ -23,19 +23,19 @@ func (w *world) specOf(phase string) *lux.Spec {
 	return nil
 }
 
-// An organization's settings reach the agent: its model and effort for a
-// role the project leaves alone, its time limit, and its prompt in place
-// of dude's — with the project's added after it — and the Run records the
-// versions it ran with, so its history can say who was told what.
+// An organization's settings reach the agent: the tier its role names, with
+// that tier's effort, its time limit, and its prompt in place of dude's —
+// with the project's added after it — and the Run records the versions it
+// ran with, so its history can say who was told what.
 func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	// The implementer is a real model so its spec carries a real prompt;
 	// the implementer's tier is the organization's to say.
-	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{"implementer":{"effort":"high"}}'::jsonb WHERE id = $1`, w.project)
-	mustExec(t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('mtr_org_impl_' || $1, $1, 'Org coder', 'llm-impl')`, w.org)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models - 'implementer' WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model, effort) VALUES ('mtr_org_impl_' || $1, $1, 'Org coder', 'llm-impl', 'high')`, w.org)
 	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models =
-		jsonb_build_object('implementer', jsonb_build_object('tier', 'mtr_org_impl_' || $1, 'effort', 'low', 'timeLimitMinutes', 45)) WHERE id = $1`, w.org)
+		jsonb_build_object('implementer', jsonb_build_object('tier', 'mtr_org_impl_' || $1, 'timeLimitMinutes', 45)) WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by, created_at)
 		VALUES ('pv_old', $1, 'implementer', 'OLD ORG PROMPT', 'key_x', now() - interval '1 hour'),
 		       ('pv_org', $1, 'implementer', 'ORG PROMPT', 'key_x', now())`, w.org)
@@ -48,7 +48,7 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	w.until("the implementer to reach lux", func() bool { spec = w.specOf("implement"); return spec != nil })
 
 	if spec.Labels["dude.model"] != "llm-impl" || spec.Labels["dude.model_tier"] != "Org coder" || spec.Labels["dude.effort"] != "high" {
-		t.Errorf("model %q tier %q effort %q: want the organization's tier and the project's effort",
+		t.Errorf("model %q tier %q effort %q: want the organization's tier and its effort",
 			spec.Labels["dude.model"], spec.Labels["dude.model_tier"], spec.Labels["dude.effort"])
 	}
 	// The role's time limit is when its owner is told of no progress, not
@@ -56,8 +56,16 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	if spec.Timeout != phases.DefaultTimeout {
 		t.Errorf("timeout = %q, want the hard limit %s", spec.Timeout, phases.DefaultTimeout)
 	}
-	if config := spec.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(config, `"reasoningEffort":"high"`) {
-		t.Errorf("opencode config lacks the effort: %s", config)
+	var config struct {
+		Provider map[string]struct {
+			Models map[string]struct {
+				Options map[string]any `json:"options"`
+			} `json:"models"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil ||
+		config.Provider["llm-openai"].Models["llm-impl"].Options["reasoningEffort"] != "high" {
+		t.Errorf("opencode config lacks the tier's effort: %s", spec.Env["OPENCODE_CONFIG_CONTENT"])
 	}
 	p := spec.Workload.Prompt
 	if !strings.Contains(p, "ORG PROMPT") || strings.Contains(p, "OLD ORG PROMPT") || strings.Contains(p, "handing over code that does not build") {

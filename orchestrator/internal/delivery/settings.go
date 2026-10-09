@@ -3,8 +3,8 @@ package delivery
 // Settings in layers: a project's override, else its organization's
 // default, else the factory's. Each layer stores only what it sets (a
 // missing key is "inherited"), so each value is resolved on its own: a
-// project that changes only the reviewer's effort keeps its organization's
-// reviewer tier.
+// project that changes only the reviewer's time limit keeps its
+// organization's reviewer tier.
 
 import (
 	"context"
@@ -19,9 +19,6 @@ type RoleSettings struct {
 	// The model tier's id, as the first layer names it; resolved by
 	// TierFor, which fails the Run when the tier is gone or names no model.
 	Tier string
-	// How hard the model thinks (low, medium, high, max); "" leaves it to
-	// the model.
-	Effort string
 	// How long a phase Run of the role may go without progress before its
 	// owner is told, in minutes (TimeLimitFor).
 	TimeLimitMinutes int
@@ -33,7 +30,6 @@ type RoleSettings struct {
 // project, default_agent_models on an organization ({role -> config}).
 type roleLayer struct {
 	Tier             *string `json:"tier"`
-	Effort           *string `json:"effort"`
 	TimeLimitMinutes *int    `json:"timeLimitMinutes"`
 	Context          *string `json:"context"`
 	// Resolved by Sizes.ForRole, which passes over ids that are gone.
@@ -66,9 +62,6 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 			l := m[r]
 			if rs.Tier == "" && l.Tier != nil {
 				rs.Tier = *l.Tier
-			}
-			if rs.Effort == "" && l.Effort != nil {
-				rs.Effort = *l.Effort
 			}
 			if rs.TimeLimitMinutes == 0 && l.TimeLimitMinutes != nil {
 				rs.TimeLimitMinutes = *l.TimeLimitMinutes

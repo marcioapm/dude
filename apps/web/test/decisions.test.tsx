@@ -18,7 +18,7 @@ import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { conductedLines } from "../src/conducted.ts";
 import { taskHistory } from "../src/taskHistory.ts";
-import { interleaved } from "../src/screens/RunScreen.tsx";
+import { asides, interleaved } from "../src/screens/RunScreen.tsx";
 import { ApiError, type ChatSent, type RunDetail, type TaskDetail } from "../src/api/client.ts";
 import { firstMessage } from "../src/screens/ChatSection.tsx";
 
@@ -460,6 +460,14 @@ describe("what the Chat is made of", () => {
     const line = taskHistory({ status: "running", decider: "conductor", runs: [run({ id: "a", status: "running", conductorRunId: CONDUCTOR })] }, [], [], null, String);
     expect(line.lead).toBe("Conducting");
     expect(taskHistory({ status: "received", decider: "conductor", runs: [] }, [], [], null, String).lead).toBe("Planning with the conductor");
+  });
+
+  test("what an agent records between its tool calls stays in their aside, on the message column", () => {
+    const t = (kind: string, id: string) => ({ kind, id, at: at(1), startedAt: at(1) }) as never;
+    const out = asides([t("message", "m1"), t("tool", "a"), t("thought", "b"), t("event", "c"), t("progress", "d"),
+      t("tool", "e"), t("message", "m2"), t("event", "f")]);
+    const ids = (g: unknown) => Array.isArray(g) ? g.map((x: { id: string }) => x.id) : (g as { id: string }).id;
+    expect(out.map(ids)).toEqual(["m1", ["a", "b", "c", "d", "e"], "m2", ["f"]]);
   });
 
   test("lines go before the first turn that came after them", () => {

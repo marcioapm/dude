@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -50,78 +51,77 @@ func (f *fakeProxy) serve(t *testing.T, handle func(w http.ResponseWriter, s see
 	return srv
 }
 
-func ok(w http.ResponseWriter, _ seen) {
-	_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
-}
-
-// efforts reads a result's efforts, "" for none.
-func efforts(r Result) []string {
-	out := []string{}
-	for _, e := range r.Efforts {
-		if e == nil {
-			out = append(out, "")
-		} else {
-			out = append(out, *e)
-		}
-	}
-	return out
-}
-
-// A test message is one Chat Completions request per distinct
-// reasoning_effort (max goes as high, so high and max are one), tiny, with
-// dude's key; each result names every effort it covers.
-func TestATestMessageIsSentOncePerDistinctRequest(t *testing.T) {
+// An OpenAI model is tested as the agent requests it: one streamed
+// Responses API request, tiny, with dude's key, the tier's reasoning (max as
+// max) and summary, and the tier's headers.
+func TestAnOpenAIModelIsTestedThroughTheResponsesAPI(t *testing.T) {
 	f := &fakeProxy{}
-	srv := f.serve(t, ok)
+	srv := f.serve(t, func(w http.ResponseWriter, _ seen) {
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+	})
 	c := Client{URL: srv.URL + "/v1", Key: "sk-proxy"}
-	results := c.Test(context.Background(), "gpt-5.6-sol", []string{"high", "max", "", "high"})
-	if len(results) != 2 || !results[0].OK || !results[1].OK || *results[0].Status != 200 || results[0].Error != nil {
-		t.Fatalf("results = %+v", results)
-	}
-	if got := efforts(results[0]); !slices.Equal(got, []string{"high", "max"}) || results[0].Sent == nil || *results[0].Sent != "high" {
-		t.Errorf("first result covers %v, sent %v; want high and max, sent high", got, results[0].Sent)
-	}
-	if got := efforts(results[1]); !slices.Equal(got, []string{""}) || results[1].Sent != nil {
-		t.Errorf("second result covers %v, sent %v; want none, sent none", got, results[1].Sent)
-	}
-	var sent []string
-	for _, s := range f.seen {
-		if s.Path != "/v1/chat/completions" || s.Headers.Get("Authorization") != "Bearer sk-proxy" ||
-			s.Body["model"] != "gpt-5.6-sol" || s.Body["max_tokens"] != float64(testMaxTokens) {
-			t.Errorf("request = %+v", s)
-		}
-		e, _ := s.Body["reasoning_effort"].(string)
-		sent = append(sent, e)
-	}
-	slices.Sort(sent)
-	if !slices.Equal(sent, []string{"", "high"}) {
-		t.Errorf("reasoning_effort sent = %q, want one request with none and one with high", sent)
-	}
-}
-
-// A Claude model is sent as Anthropic Messages, with x-api-key and no
-// effort (OpenCode's Anthropic provider sends none for reasoningEffort), so
-// any efforts asked for are one request, and its result names them all.
-func TestAClaudeModelIsTestedAsAnthropicMessages(t *testing.T) {
-	f := &fakeProxy{}
-	srv := f.serve(t, func(w http.ResponseWriter, _ seen) { _, _ = w.Write([]byte(`{"content":[]}`)) })
-	c := Client{URL: srv.URL + "/v1/", Key: "sk-proxy"}
-	results := c.Test(context.Background(), "claude-opus-5-5", []string{"high", ""})
-	if len(results) != 1 || !results[0].OK || results[0].Sent != nil || !slices.Equal(efforts(results[0]), []string{"high", ""}) {
-		t.Fatalf("results = %+v", results)
+	r := c.Test(context.Background(), TestTier{Model: "gpt-6-sol", Effort: "max", Headers: map[string]string{"X-Team": "dude"}})
+	if !r.OK || *r.Status != 200 || r.Error != nil {
+		t.Fatalf("result = %+v", r)
 	}
 	if len(f.seen) != 1 {
 		t.Fatalf("%d requests, want 1", len(f.seen))
 	}
 	s := f.seen[0]
-	if s.Path != "/v1/messages" || s.Headers.Get("x-api-key") != "sk-proxy" || s.Headers.Get("anthropic-version") != "2023-06-01" ||
-		s.Headers.Get("Authorization") != "" || s.Body["model"] != "claude-opus-5-5" {
+	if s.Path != "/v1/responses" || s.Headers.Get("Authorization") != "Bearer sk-proxy" || s.Headers.Get("X-Team") != "dude" ||
+		s.Body["model"] != "gpt-6-sol" || s.Body["max_output_tokens"] != float64(testMaxTokens) || s.Body["stream"] != true || s.Body["store"] != false {
 		t.Errorf("request = %+v", s)
 	}
-	for _, key := range []string{"reasoning_effort", "effort", "output_config"} {
-		if _, has := s.Body[key]; has {
-			t.Errorf("an Anthropic request carried %s: %v", key, s.Body)
-		}
+	want := map[string]any{"effort": "max", "summary": "auto"}
+	if !reflect.DeepEqual(s.Body["reasoning"], want) || !reflect.DeepEqual(r.Sent, map[string]any{"reasoning": want}) {
+		t.Errorf("reasoning sent %v, result says %v; want %v", s.Body["reasoning"], r.Sent, want)
+	}
+}
+
+// A refusal inside a 200 stream (gpt-6-sol and effort none) is a failed
+// test, with the proxy's words.
+func TestARefusalInsideAStreamIsTheTestsError(t *testing.T) {
+	f := &fakeProxy{}
+	const msg = "Unsupported value: 'none' is not supported with the 'gpt-6.1-sol' model."
+	srv := f.serve(t, func(w http.ResponseWriter, _ seen) {
+		_, _ = w.Write([]byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"" + msg + "\",\"code\":\"unsupported_value\"}}\n\n"))
+	})
+	r := Client{URL: srv.URL, Key: "k"}.Test(context.Background(), TestTier{Model: "gpt-6-sol", Effort: "none"})
+	if r.OK || r.Status == nil || *r.Status != 200 || r.Error == nil || *r.Error != msg {
+		t.Errorf("result = %+v", r)
+	}
+	if _, has := f.seen[0].Body["reasoning"].(map[string]any)["effort"]; has {
+		t.Errorf("effort none went on the wire as an effort: %v", f.seen[0].Body)
+	}
+}
+
+// A Claude model is sent as Anthropic Messages, with x-api-key, and the
+// tier's thinking and effort as the agent's provider writes them; the
+// tier's options win over its effort.
+func TestAClaudeModelIsTestedAsAnthropicMessages(t *testing.T) {
+	f := &fakeProxy{}
+	srv := f.serve(t, func(w http.ResponseWriter, _ seen) { _, _ = w.Write([]byte(`{"content":[]}`)) })
+	c := Client{URL: srv.URL + "/v1/", Key: "sk-proxy"}
+	r := c.Test(context.Background(), TestTier{Model: "claude-opus-5-5", Effort: "high", Options: map[string]any{"effort": "xhigh"}})
+	if !r.OK {
+		t.Fatalf("result = %+v", r)
+	}
+	s := f.seen[0]
+	if s.Path != "/v1/messages" || s.Headers.Get("x-api-key") != "sk-proxy" || s.Headers.Get("anthropic-version") != "2023-06-01" ||
+		s.Headers.Get("Authorization") != "" || s.Body["model"] != "claude-opus-5-5" || s.Body["max_tokens"] != float64(testMaxTokens) {
+		t.Errorf("request = %+v", s)
+	}
+	if !reflect.DeepEqual(s.Body["thinking"], map[string]any{"type": "adaptive", "display": "summarized"}) ||
+		!reflect.DeepEqual(s.Body["output_config"], map[string]any{"effort": "xhigh"}) {
+		t.Errorf("body = %v", s.Body)
+	}
+	if _, has := s.Body["effort"]; has {
+		t.Errorf("effort sent as a top-level key: %v", s.Body)
+	}
+	// None turns thinking off and sends no effort.
+	c.Test(context.Background(), TestTier{Model: "claude-opus-5-5", Effort: "none"})
+	if s := f.seen[1]; !reflect.DeepEqual(s.Body["thinking"], map[string]any{"type": "disabled"}) || s.Body["output_config"] != nil {
+		t.Errorf("none: body = %v", s.Body)
 	}
 }
 
@@ -132,13 +132,13 @@ func TestAProxysRefusalIsPassedOnVerbatim(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":{"type":"not_found_error","message":"model 'gpt-9' is not served by this proxy"}}`))
 	})
-	r := Client{URL: srv.URL, Key: "k"}.Test(context.Background(), "gpt-9", []string{"high"})[0]
+	r := Client{URL: srv.URL, Key: "k"}.Test(context.Background(), TestTier{Model: "gpt-9", Effort: "high"})
 	if r.OK || r.Status == nil || *r.Status != 404 || r.Error == nil || *r.Error != "model 'gpt-9' is not served by this proxy" {
 		t.Errorf("result = %+v", r)
 	}
 	// A body that is not JSON is the body.
 	srv2 := f.serve(t, func(w http.ResponseWriter, _ seen) { w.WriteHeader(502); _, _ = w.Write([]byte("upstream down")) })
-	r = Client{URL: srv2.URL, Key: "k"}.Test(context.Background(), "gpt-9", []string{""})[0]
+	r = Client{URL: srv2.URL, Key: "k"}.Test(context.Background(), TestTier{Model: "gpt-9"})
 	if *r.Status != 502 || *r.Error != "upstream down" {
 		t.Errorf("result = %+v", r)
 	}
@@ -152,7 +152,7 @@ func TestATestMessageIsBounded(t *testing.T) {
 	// After serve's: cleanups run last first, and the server's Close waits on the handler.
 	t.Cleanup(func() { close(release) })
 	start := time.Now()
-	r := Client{URL: srv.URL, Key: "k", Timeout: 200 * time.Millisecond}.Test(context.Background(), "gpt-x", []string{""})[0]
+	r := Client{URL: srv.URL, Key: "k", Timeout: 200 * time.Millisecond}.Test(context.Background(), TestTier{Model: "gpt-x"})
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("took %s", took)
 	}

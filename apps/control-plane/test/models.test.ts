@@ -93,7 +93,7 @@ for (const path of paths) {
     const before = await (await call("GET", path)).json();
     const [countBefore] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'settings.updated'`;
     for (const model of models) {
-      const res = await call("PATCH", path, { roles: { implementer: { model }, reviewer: { effort: "high" } } });
+      const res = await call("PATCH", path, { roles: { implementer: { model }, reviewer: { timeLimitMinutes: 45 } } });
       expect(res.status).toBe(400);
       const error = (await body(res)).error;
       expect(error.code).toBe("bad_request");
@@ -137,6 +137,6 @@ test("a stored model left over reads safely and is ignored: the role's tier is w
   const read = await call("GET", `/v1/projects/${PROJECT}/settings`);
   expect(read.status).toBe(200);
   expect((await body(read)).roles.implementer.model).toBeUndefined();
-  expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { effort: "low" } } })).status).toBe(200);
+  expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { timeLimitMinutes: 45 } } })).status).toBe(200);
   expect((await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" })).status).toBe(200);
 });

@@ -5,9 +5,9 @@
  *   ToolCallCard  filled 32px row (26), mono name          what it ran
  *   ThinkingBlock unfilled 28px row (24), brain glyph, 13px what it thought
  *
- * The glyph's left edge sits on the message text column; the hover wash
- * overhangs it by 6px to the left so the wash has an inset without moving
- * the content off the column.
+ * The row's edge sits on the message text column, as a ToolCallCard's
+ * does, and its glyph is inset by the same 8px as the card's icon, so a
+ * thought and the tool calls around it line up.
  */
 
 .root {
@@ -21,8 +21,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-item-sm);
-  margin-left: calc(var(--ds-space-6) * -1);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
   border-radius: 0;
@@ -108,7 +107,7 @@
 /* Open: the text hangs off a dotted rail under the glyph, in secondary ink
    and one step smaller than a message, so it never competes with one. */
 .body {
-  margin: 0 var(--ds-space-8) var(--ds-space-6) 7px;
+  margin: 0 var(--ds-space-8) var(--ds-space-6) calc(var(--ds-space-8) + 7px);
   padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
   border-left: 2px solid var(--ds-color-border-subtle);
   animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);

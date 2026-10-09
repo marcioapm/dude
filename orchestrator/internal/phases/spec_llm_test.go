@@ -2,11 +2,15 @@ package phases
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -48,43 +52,112 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 
 // A Run's OpenCode config names the model under the provider its name goes
 // through, and declares it there, so a model the image's file does not list
-// still resolves; the effort is the agent's reasoningEffort, max as high.
+// still resolves; the tier's effort is the model's options.
 func TestTheModelAndEffortAreInlineOpenCodeConfig(t *testing.T) {
-	declare := func(provider, model string) map[string]any {
-		return map[string]any{provider: map[string]any{"models": map[string]any{model: map[string]any{}}}}
-	}
-	effort := func(e string) map[string]any {
-		return map[string]any{"build": map[string]any{"reasoningEffort": e}}
-	}
 	for _, tc := range []struct {
 		model, effort string
-		want          map[string]any
+		want          string
 	}{
-		{"claude-opus-5-5", "high", map[string]any{"model": "llm-anthropic/claude-opus-5-5",
-			"provider": declare("llm-anthropic", "claude-opus-5-5"), "agent": effort("high")}},
+		{"claude-opus-5-5", "high", `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
 		// Not in the image's opencode.json: declared all the same.
-		{"claude-nova-7", "low", map[string]any{"model": "llm-anthropic/claude-nova-7",
-			"provider": declare("llm-anthropic", "claude-nova-7"), "agent": effort("low")}},
-		{"gpt-5.6-sol", "max", map[string]any{"model": "llm-openai/gpt-5.6-sol",
-			"provider": declare("llm-openai", "gpt-5.6-sol"), "agent": effort("high")}},
-		{"gemini-3.8-pro", "", map[string]any{"model": "llm-openai/gemini-3.8-pro",
-			"provider": declare("llm-openai", "gemini-3.8-pro")}},
+		{"claude-nova-7", "low", `{"model":"llm-anthropic/claude-nova-7","provider":{"llm-anthropic":{"models":{"claude-nova-7":{"options":{"effort":"low","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
+		{"gpt-5.6-sol", "max", `{"model":"llm-openai/gpt-5.6-sol","provider":{"llm-openai":{"models":{"gpt-5.6-sol":{"options":{"reasoningEffort":"max","reasoningSummary":"auto"}}}}}}`},
+		{"gemini-3.8-pro", "", `{"model":"llm-openai/gemini-3.8-pro","provider":{"llm-openai":{"models":{"gemini-3.8-pro":{"options":{"reasoningSummary":"auto"}}}}}}`},
 		// Only a name starting claude- is Anthropic's.
-		{"my-claude-proxy", "", map[string]any{"model": "llm-openai/my-claude-proxy",
-			"provider": declare("llm-openai", "my-claude-proxy")}},
+		{"my-claude-proxy", "", `{"model":"llm-openai/my-claude-proxy","provider":{"llm-openai":{"models":{"my-claude-proxy":{"options":{"reasoningSummary":"auto"}}}}}}`},
 	} {
 		spec := llmSpec(tc.model, tc.effort)
-		var got map[string]any
-		if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CONFIG_CONTENT"]), &got); err != nil {
-			t.Fatalf("%s: OPENCODE_CONFIG_CONTENT = %q: %v", tc.model, spec.Env["OPENCODE_CONFIG_CONTENT"], err)
-		}
-		if !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s effort %q: config = %v, want %v", tc.model, tc.effort, got, tc.want)
+		if got := spec.Env["OPENCODE_CONFIG_CONTENT"]; got != tc.want {
+			t.Errorf("%s effort %q:\n got %s\nwant %s", tc.model, tc.effort, got, tc.want)
 		}
 		if spec.Labels["dude.model"] != tc.model {
 			t.Errorf("%s: label dude.model = %q, want the model as the proxy names it", tc.model, spec.Labels["dude.model"])
 		}
 	}
+}
+
+// A tier's effort as each provider's model options: Claude's thinking is
+// always asked for summarized (else its text comes back empty) unless the
+// effort is none, which turns it off; OpenAI's reasoning summary is always
+// asked for, and its effort sent as it is, max included, none as nothing.
+func TestATiersEffortIsItsProvidersModelOptions(t *testing.T) {
+	const adaptive = `"thinking":{"display":"summarized","type":"adaptive"}`
+	for _, tc := range []struct {
+		model, effort, options string
+	}{
+		{"claude-sonnet-5", "", `{` + adaptive + `}`},
+		{"claude-sonnet-5", "none", `{"thinking":{"type":"disabled"}}`},
+		{"claude-sonnet-5", "low", `{"effort":"low",` + adaptive + `}`},
+		{"claude-sonnet-5", "max", `{"effort":"max",` + adaptive + `}`},
+		{"gpt-6-sol", "", `{"reasoningSummary":"auto"}`},
+		{"gpt-6-sol", "none", `{"reasoningSummary":"auto"}`},
+		{"gpt-6-sol", "high", `{"reasoningEffort":"high","reasoningSummary":"auto"}`},
+		{"gpt-6-sol", "max", `{"reasoningEffort":"max","reasoningSummary":"auto"}`},
+	} {
+		want := `{"model":"` + llm.Provider(tc.model) + `/` + tc.model + `","provider":{"` + llm.Provider(tc.model) +
+			`":{"models":{"` + tc.model + `":{"options":` + tc.options + `}}}}}`
+		if got := openCodeConfig(tc.model, tc.effort, nil, nil); got != want {
+			t.Errorf("%s at %q:\n got %s\nwant %s", tc.model, tc.effort, got, want)
+		}
+	}
+}
+
+// A tier's own options are merged over what its effort makes, object by
+// object, and win; its headers are the model's headers.
+func TestATiersOptionsWinAndItsHeadersAreTheModels(t *testing.T) {
+	options := map[string]any{"effort": "xhigh", "thinking": map[string]any{"display": "omitted"}, "sendReasoning": true}
+	got := openCodeConfig("claude-opus-5-5", "high", options, nil)
+	want := `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":` +
+		`{"effort":"xhigh","sendReasoning":true,"thinking":{"display":"omitted","type":"adaptive"}}}}}}}`
+	if got != want {
+		t.Errorf("options over effort:\n got %s\nwant %s", got, want)
+	}
+	got = openCodeConfig("gpt-6-sol", "low", map[string]any{"reasoningSummary": "detailed"},
+		map[string]string{"X-Team": "dude", "anthropic-beta": "context-1m"})
+	want = `{"model":"llm-openai/gpt-6-sol","provider":{"llm-openai":{"models":{"gpt-6-sol":{` +
+		`"headers":{"X-Team":"dude","anthropic-beta":"context-1m"},"options":{"reasoningEffort":"low","reasoningSummary":"detailed"}}}}}}`
+	if got != want {
+		t.Errorf("headers:\n got %s\nwant %s", got, want)
+	}
+	// The tier's options are its own: building a config does not change them.
+	if d, _ := options["thinking"].(map[string]any); len(d) != 1 {
+		t.Errorf("the tier's options were written to: %v", options)
+	}
+}
+
+// A Run on a tier carries the tier's effort through to its spec: as the
+// model's options and as the dude.effort label.
+func TestATiersEffortReachesTheSpec(t *testing.T) {
+	c := AgentConfig{LLMURL: "https://llm.example/v1"}
+	spec := buildSpec(c, specInput{RunID: "run_1", TaskID: "wi_1", Phase: "review", Model: "claude-fable-5-1",
+		ModelTier: "Thinker", Effort: "high", Headers: map[string]string{"X-A": "1"}})
+	if spec.Labels["dude.effort"] != "high" {
+		t.Errorf("labels = %v", spec.Labels)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CONFIG_CONTENT"]), &got); err != nil {
+		t.Fatal(err)
+	}
+	entry := got["provider"].(map[string]any)["llm-anthropic"].(map[string]any)["models"].(map[string]any)["claude-fable-5-1"]
+	if !reflect.DeepEqual(entry, map[string]any{"headers": map[string]any{"X-A": "1"},
+		"options": map[string]any{"effort": "high", "thinking": map[string]any{"type": "adaptive", "display": "summarized"}}}) {
+		t.Errorf("model entry = %v", entry)
+	}
+}
+
+// Prints the OPENCODE_CONFIG_CONTENT buildSpec gives a phase Run on a tier,
+// for trying it against a real OpenCode (scripts/real_thinking.py). Only
+// when DUDE_PRINT_TIER_CONFIG is "MODEL [EFFORT]".
+func TestPrintATiersOpenCodeConfig(t *testing.T) {
+	args := strings.Fields(os.Getenv("DUDE_PRINT_TIER_CONFIG"))
+	if len(args) == 0 {
+		t.Skip("DUDE_PRINT_TIER_CONFIG not set")
+	}
+	in := specInput{Phase: delivery.PhaseImplement, Model: args[0], ModelTier: "Probe"}
+	if len(args) > 1 {
+		in.Effort = args[1]
+	}
+	fmt.Println("OPENCODE_CONFIG_CONTENT=" + buildSpec(AgentConfig{}, in).Env["OPENCODE_CONFIG_CONTENT"])
 }
 
 func TestATiersRunIsLabelledWithTheTier(t *testing.T) {

@@ -58,6 +58,13 @@ describe("ChatEvent markup", () => {
     expect(open).toContain("&quot;passed&quot;: 42");
     expect(open).toContain('aria-label="Reviewer"');
   });
+  test("the whole row is the toggle: its time and chevron are inside the button, as on a tool call", () => {
+    const html = renderToStaticMarkup(<ChatEvent type="tests.finished" data={{ passed: 42 }} at="2026-09-24T10:00:00Z" role="reviewer" />);
+    const button = html.match(/<button[\s\S]*?<\/button>/)?.[0] ?? "";
+    expect(button).toContain("<time");
+    expect(button).toContain("<svg");
+    expect(html.slice(html.indexOf("</button>"))).not.toContain("<time");
+  });
 });
 
 describe("progressFraction", () => {
