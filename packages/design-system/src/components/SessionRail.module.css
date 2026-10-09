@@ -102,3 +102,20 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
+/* A published file: its kind's glyph, then its name. */
+.published {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.glyph {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.version {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
