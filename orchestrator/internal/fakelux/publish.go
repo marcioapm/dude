@@ -41,15 +41,25 @@ func (s *Server) publish(run *Run, name, content, description string) {
 	art := &artifact{ID: fmt.Sprintf("art_%d", s.nextArt), Path: path, Version: version, Description: description,
 		ContentType: mimeFor(name), SHA256: hex.EncodeToString(sum[:]), Epoch: run.Epoch, Size: int64(len(content)), Content: content}
 	run.artifacts = append(run.artifacts, art)
-	// Uploaded a moment later, as a runner's upload trails the report.
+	// Uploaded a moment later, as a runner's upload trails the report, in
+	// the order published: whichever upload is done first announces every
+	// one before it too.
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		art.Available = true
-		s.luxEvent(run, "artifact.published", map[string]any{"artifactId": art.ID, "path": art.Path, "name": name,
-			"version": art.Version, "description": art.Description, "size": art.Size, "sha256": art.SHA256,
-			"contentType": art.ContentType})
+		for _, a := range run.artifacts {
+			if a.Available || !strings.HasPrefix(a.Path, lux.PublishedPrefix) {
+				continue
+			}
+			a.Available = true
+			s.luxEvent(run, "artifact.published", map[string]any{"artifactId": a.ID, "path": a.Path,
+				"name": strings.TrimPrefix(a.Path, lux.PublishedPrefix), "version": a.Version, "description": a.Description,
+				"size": a.Size, "sha256": a.SHA256, "contentType": a.ContentType})
+			if a == art {
+				break
+			}
+		}
 	}()
 }
 
