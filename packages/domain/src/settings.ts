@@ -8,6 +8,7 @@ import {
   type FullDeliveryPolicy,
 } from "./hierarchy.ts";
 import { agentEgressSchema } from "./servers.ts";
+import { harnessSchema, type Harness } from "./harnesses.ts";
 
 /**
  * Settings in two layers: the organization's defaults, and each project's
@@ -107,6 +108,12 @@ export interface RoleSettings {
    * implementer's.
    */
   tier: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
+  /**
+   * The harness its Runs run on; never null (OpenCode when no layer names
+   * one). Layered like machineSize: on a project, `organization` is what
+   * the organization's layer resolves to.
+   */
+  harness: Setting<Harness> & { organization?: Harness; followsImplementer?: boolean };
   timeLimitMinutes: Setting<number | null>;
   /**
    * A machine size's id; null: none set at any layer, so the organization's
@@ -176,6 +183,7 @@ export const settingsPatchSchema = z
         z
           .object({
             tier: nullable(z.string().min(1).max(100)),
+            harness: nullable(harnessSchema),
             model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
             effort: z.undefined({ invalid_type_error: ROLE_EFFORT_REMOVED }),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),

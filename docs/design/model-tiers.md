@@ -71,6 +71,37 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   naming a tier that is gone. Removing one nothing uses needs no
   replacement; removing the last tier is refused (409).
 
+## The harness, apart from the tier
+
+- **A role also names its harness**: `harness` in its settings, `opencode`,
+  `claude-code` or `codex`, on the same layers as its tier and machine, the
+  fixer following the implementer (`resolveHarness`, and
+  `delivery.ResolveRole` for the Run). No layer naming one is OpenCode. The
+  harness is how the agent runs; the tier is which model it asks for and
+  how hard it thinks. A Claude Code role on "Coder (High)" runs `claude`
+  with Coder's model and effort.
+- **Fit is checked when a Run is built, not when it is saved.** Claude Code
+  takes Anthropic models (`claude-*`), Codex OpenAI's; OpenCode both
+  (`llm.Provider` decides). A role whose harness cannot run its tier's
+  model fails its Run, as a role on no tier does: "The Implementer runs on
+  Claude Code, which takes an Anthropic model (claude-…), but its tier
+  Coder requests gpt-6-sol. An admin picks another harness or tier in
+  Agents." The settings page says so beside the Harness field, and saves
+  the choice all the same, since the tier may be about to change too.
+- **What each harness is given** for a tier's effort, options and headers is
+  in [operations](../operations.md#claude-code-and-codex): Claude Code's
+  `--effort`/`--thinking disabled` and `ANTHROPIC_CUSTOM_HEADERS`, Codex's
+  `model_reasoning_effort` and its provider's `http_headers`. A tier's
+  `options` are OpenCode model options; on the other two only
+  `{"args": [...]}` means anything, extra command-line arguments appended
+  as given. A list of strings is the one shape that maps onto both CLIs
+  without dude knowing each flag; anything else in `options` is logged as
+  ignored on those Runs.
+- **Runs record it**: `runs.harness` is what the Run ran on (`scripted` for
+  the test models on OpenCode), and a resume goes on with it whatever the
+  role says now. The session header's chip names it: `Claude Code · Coder ·
+  claude-sonnet-5 · high`.
+
 ## How a tier reaches the agent
 
 - When a phase Run's spec is built, the orchestrator resolves role → tier

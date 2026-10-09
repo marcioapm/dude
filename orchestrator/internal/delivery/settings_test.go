@@ -39,6 +39,22 @@ func TestARoleResolvesFieldByFieldProjectThenOrganization(t *testing.T) {
 	}
 }
 
+// A role's harness layers like its tier: the project's, then the
+// organization's, the fixer following the implementer; none is OpenCode,
+// and a value that names no harness is passed over.
+func TestARolesHarnessIsLayeredAndOpenCodeByDefault(t *testing.T) {
+	org := json.RawMessage(`{"implementer":{"harness":"codex"},"reviewer":{"harness":"claude-code"}}`)
+	project := json.RawMessage(`{"reviewer":{"harness":"opencode"},"simplifier":{"harness":"aider"}}`)
+	for role, want := range map[string]string{"reviewer": HarnessOpenCode, "implementer": HarnessCodex, "fixer": HarnessCodex, "simplifier": HarnessOpenCode, "conductor": HarnessOpenCode} {
+		if got := ResolveRole(role, project, org).HarnessName(); got != want {
+			t.Errorf("%s = %s, want %s", role, got, want)
+		}
+	}
+	if got := ResolveRole("reviewer", nil, org).HarnessName(); got != HarnessClaudeCode {
+		t.Errorf("reviewer without the project = %s", got)
+	}
+}
+
 func TestTheFixerIsTheImplementerUnlessSetApart(t *testing.T) {
 	org := json.RawMessage(`{"implementer":{"tier":"mtr_coder","context":"coder notes"}}`)
 	if got := ResolveRole("fixer", nil, org); got.Tier != "mtr_coder" || got.Context != "coder notes" {

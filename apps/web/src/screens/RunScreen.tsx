@@ -43,8 +43,8 @@ import {
   ImageViewer,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
-import type { AgentRole, PersistedEvent } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
+import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
@@ -387,7 +387,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     subtitle: (
       <>
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
-        {run.model ? <RunTierChip tier={run.modelTier} model={run.model} effort={run.effort} role={role} phase={run.phase} /> : null}
+        {run.model ? <RunTierChip tier={run.modelTier} model={run.model} effort={run.effort} harness={run.harness} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
@@ -1283,14 +1283,17 @@ class TerminalReader {
  * the proxy served is the proxy's to say. A Run from before tiers shows its
  * model alone.
  */
-function RunTierChip({ tier, model, effort, role, phase }: { tier: string | null; model: string; effort: string | null; role: AgentRole; phase: string | null }) {
+function RunTierChip({ tier, model, effort, harness, role, phase }: { tier: string | null; model: string; effort: string | null; harness: string | null | undefined; role: AgentRole; phase: string | null }) {
   const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
   const asked = <><code>{model}</code>{effort ? ` at effort ${effort}` : ""}</>;
+  // A real harness by its name; the scripted agent, and Runs from before it was kept, show none.
+  const ranOn = harness && harness in HARNESS_LABEL ? HARNESS_LABEL[harness as Harness] : null;
   return (
-    <TierChip tier={tier} model={model} effort={effort} data-testid="run-model"
+    <TierChip tier={tier} model={model} effort={effort} harness={ranOn} data-testid="run-model"
       tooltip={
         <TierTip title={tier ?? model}
           aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">
+          {ranOn ? <>It runs on {ranOn}. </> : null}
           {tier
             ? <>The {agent}’s tier. When this session started, {tier} asked the proxy for {asked}; changing {tier} now changes the next session, not this one.</>
             : <>When this session started, dude asked the proxy for {asked}.</>}
