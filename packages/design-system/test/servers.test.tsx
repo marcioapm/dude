@@ -246,6 +246,16 @@ describe("ServerRow", () => {
 });
 
 describe("PreviewStages", () => {
+  for (const [stage, words] of [["image", "Preparing image"], ["volumes", "Restoring volumes"], ["container", "Starting container"], ["stopping", "Stopping"]] as const) {
+    test(`${stage} is honest and has one accessible active step`, () => {
+      const h = html(<PreviewStages stage={stage} branch="feature/x" />);
+      expect(text(h)).toContain(words);
+      expect(text(h)).not.toContain("Cloning");
+      expect((h.match(/aria-current="step"/g) ?? []).length).toBe(1);
+      expect(text(h)).not.toContain("·");
+      if (stage === "stopping") expect(text(h)).toBe("Stopping");
+    });
+  }
   test("marks the current step and the done ones", () => {
     const h = html(<PreviewStages stage="setup" branch="feature/x" setup="npm ci" elapsed="24s" />);
     expect(h).toContain('data-stage="setup"');

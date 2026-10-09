@@ -125,6 +125,9 @@ type Run struct {
 	Spec        json.RawMessage
 	State       string
 	StateReason string
+	stage       string
+	stageSince  *time.Time
+	stageReason string
 	Epoch       int
 	SessionID   string
 	Inputs      []string
@@ -348,7 +351,7 @@ type placement struct {
 	// assigned, starting, running, then exited.
 	State string
 	// How far its start got, as lux reports each, in order.
-	AcceptedAt, AssignedAt, ImageReadyAt, VolumesRestoredAt, ContainerStartedAt, WorkloadStartedAt *time.Time
+	AcceptedAt, AssignedAt, ImageReadyAt, VolumesRestoredAt, ReposReadyAt, ContainerStartedAt, WorkloadStartedAt *time.Time
 	// How it ended, in order: asked to stop (by a stop or a migrate), its
 	// container gone, its snapshot taken, then uploaded.
 	StopRequestedAt, ExitedAt, SnapshotDoneAt, UploadedAt *time.Time
@@ -405,8 +408,12 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	if p == nil {
 		p = s.newPlacement(run)
 	}
+	s.setStage(run, "image", p.AssignedAt, "")
 	s.mu.Unlock()
-	for _, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ContainerStartedAt} {
+	if s.OnStage != nil {
+		s.OnStage(epoch, "image")
+	}
+	for i, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ReposReadyAt, &p.ContainerStartedAt} {
 		time.Sleep(step)
 		s.mu.Lock()
 		if !run.starting(epoch, start) {
@@ -415,7 +422,11 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 		}
 		now := time.Now()
 		*stamp, p.State = &now, "starting"
+		s.setStage(run, []string{"volumes", "repositories", "container", "running"}[i], &now, "")
 		s.mu.Unlock()
+		if s.OnStage != nil {
+			s.OnStage(epoch, []string{"volumes", "repositories", "container", "running"}[i])
+		}
 	}
 	time.Sleep(step)
 	return true
@@ -578,6 +589,9 @@ type Server struct {
 	// onStart, set by a test before any Run, is called by each start at
 	// its hold points (hold), and may block to order it against others.
 	onStart func(epoch int, point string)
+	// OnStage can hold a lifecycle boundary without the fake's lock.
+	OnStage      func(epoch int, stage string)
+	LegacyStages bool
 
 	// Pools is what GET /v1/pools lists; nil is DefaultPools. POST
 	// /v1/pools adds one, or updates the one of its name; DELETE
@@ -1155,6 +1169,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.specServers(run, spec)
 	s.runs[run.ID] = run
+	s.setStage(run, "waiting", run.acceptedAt, "")
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
 		s.byKey[k] = run.ID
 	}
@@ -1172,6 +1187,9 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		run.StateReason = "waiting for capacity: 1 host in its pool does not support nested containers"
 		s.mu.Unlock()
 		return
+	}
+	if s.OnStage != nil {
+		s.OnStage(epoch, "waiting")
 	}
 	after := s.StartAfter
 	if after <= 0 {
@@ -1498,6 +1516,20 @@ func chunks(s string, n int) []string {
 // Callers hold s.mu.
 func (s *Server) setState(run *Run, state string) { s.setStateWith(run, state, "") }
 
+func (s *Server) setStage(run *Run, stage string, since *time.Time, reason string) {
+	if run.stage == stage {
+		return
+	}
+	if since == nil {
+		now := time.Now()
+		since = &now
+	}
+	run.stage, run.stageSince, run.stageReason = stage, since, reason
+	if !s.LegacyStages {
+		s.luxEvent(run, "stage", map[string]any{"stage": stage, "since": since, "epoch": run.Epoch, "reason": reason})
+	}
+}
+
 // setStateWith records a state with lux's reason for it. Callers hold s.mu.
 func (s *Server) setStateWith(run *Run, state, reason string) {
 	run.State, run.StateReason = state, reason
@@ -1527,6 +1559,18 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		data["reason"] = reason
 	}
 	s.luxEvent(run, "state", data)
+	switch state {
+	case "submitted", "resuming":
+		s.setStage(run, "waiting", run.acceptedAt, "")
+	case "stopping":
+		s.setStage(run, "stopping", run.currentPlacement().StopRequestedAt, reason)
+	case "running":
+		s.setStage(run, "running", run.currentPlacement().ContainerStartedAt, "")
+	default:
+		if lux.Terminal(state) {
+			s.setStage(run, state, nil, "")
+		}
+	}
 }
 
 // exited is the container going away: lux collects what the agent put in
@@ -1669,7 +1713,13 @@ func (s *Server) view(run *Run) map[string]any {
 		}
 	}
 	out := map[string]any{"id": run.ID, "state": run.State, "stateReason": run.StateReason, "epoch": run.Epoch, "sessionId": run.SessionID,
-		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
+		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec,
+		"stage": run.stage, "stageSince": run.stageSince, "stageReason": run.stageReason}
+	if s.LegacyStages {
+		delete(out, "stage")
+		delete(out, "stageSince")
+		delete(out, "stageReason")
+	}
 	if u, ok := s.Usage[run.ID]; ok {
 		out["usage"] = u
 	}

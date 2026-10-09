@@ -29,9 +29,12 @@ import (
 
 // Run is a lux Run as its API reports it; only the fields dude reads.
 type Run struct {
-	ID          string `json:"id"`
-	State       string `json:"state"`
-	StateReason string `json:"stateReason"`
+	ID          string     `json:"id"`
+	State       string     `json:"state"`
+	StateReason string     `json:"stateReason"`
+	Stage       string     `json:"stage"`
+	StageSince  *time.Time `json:"stageSince"`
+	StageReason string     `json:"stageReason"`
 	// busy or idle: whether the agent is working or waiting for input.
 	Activity  string `json:"activity"`
 	Epoch     int    `json:"epoch"`

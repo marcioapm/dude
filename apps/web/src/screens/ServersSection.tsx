@@ -208,7 +208,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
         ) : null}
         {isPreview && run.previewStage && run.previewStage !== "ready" ? (
           <PreviewStages stage={run.previewStage} branch={run.branch} setup={setup || undefined}
-            elapsed={run.startedAt ? <Duration since={run.startedAt} live tone="muted" /> : undefined} />
+            elapsed={run.previewStageSince ? <Duration since={run.previewStageSince} live tone="muted" /> : undefined} />
         ) : null}
         {run.waitingReason && live ? <WaitingForHost reason={run.waitingReason} /> : null}
         <ServerList aria-label="Servers">

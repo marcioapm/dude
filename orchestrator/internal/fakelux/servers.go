@@ -301,7 +301,12 @@ func (s *Server) Migrate(id string) {
 	}
 	run.Calls = append(run.Calls, "migrate")
 	run.busy = false
-	s.setState(run, "stopping")
+	s.setStateWith(run, "stopping", "migrate")
+	s.mu.Unlock()
+	if s.OnStage != nil {
+		s.OnStage(run.Epoch, "stopping")
+	}
+	s.mu.Lock()
 	s.setStateWith(run, "stopped", "migrate")
 	run.Epoch++
 	run.starts++
