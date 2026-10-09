@@ -289,7 +289,7 @@ func TestASessionAndAConductorAskForContainersAsTheirImageSays(t *testing.T) {
 			if got := s.str(`SELECT coalesce(image->>'canRunContainers', 'false') FROM runs WHERE id = $1`, run); got != fmt.Sprint(c.image != "" && c.can) {
 				t.Errorf("runs.image canRunContainers = %s", got)
 			}
-			if got := s.str(`SELECT coalesce(can_run_containers::text, 'null') FROM runs WHERE id = $1`, run); got != fmt.Sprint(c.want) {
+			if got := s.recordedContainers(run); got != fmt.Sprint(c.want) {
 				t.Errorf("runs.can_run_containers = %s, want %v", got, c.want)
 			}
 		})
@@ -450,7 +450,7 @@ func TestARetriedSubmitRecordsTheSandboxOfTheRunLuxTook(t *testing.T) {
 		if spec := submitted(t, runs[0]); nested(&spec) != first {
 			t.Fatalf("the Run lux took: nested = %v, want %v", nested(&spec), first)
 		}
-		if retried := lost.Retried(); retried == nil || retried.NestedContainers() == first {
+		if retried := lost.Retried(); retried == nil || nested(retried) == first {
 			t.Fatalf("the retry's spec = %+v; want nested %v", retried, !first)
 		}
 		if got := w.recordedContainers(runID); got != fmt.Sprint(first) {

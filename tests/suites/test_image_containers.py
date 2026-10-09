@@ -352,8 +352,11 @@ def test_a_run_that_can_run_containers_says_so_in_its_header(
     client.patch(f"/v1/projects/{pid}", {"runtimeImageId": image["image"]["id"]})
     task = client.create_task(pid, "Run the integration suite in podman")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    run = wait_until(lambda: (r := query(owner_dsn, "SELECT id, can_run_containers FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
-                                         (task["id"],))) and r[0], timeout=60, message="the implementer never reached lux")
+    def submitted(task_id: str) -> dict:
+        return wait_until(lambda: (r := query(owner_dsn, "SELECT id, can_run_containers FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
+                                              (task_id,))) and r[0], timeout=60, message="the implementer never reached lux")
+
+    run = submitted(task["id"])
     assert run["can_run_containers"] is True
     assert client.get(f"/v1/runs/{run['id']}").json()["canRunContainers"] is True
 
@@ -379,21 +382,20 @@ def test_a_run_that_can_run_containers_says_so_in_its_header(
         assert clipped == [], f"clipped at {width}px: {clipped}"
         box = badge.bounding_box()
         assert box and box["x"] + box["width"] <= width, f"the badge leaves the page at {width}px: {box}"
-    _shoot(page, "11-run-can-run-containers-1440", width=1440)
-    _shoot(page, "11-run-can-run-containers-1024", width=1024)
+    _shoot(page, "12-run-can-run-containers-1440", width=1440)
+    _shoot(page, "12-run-can-run-containers-1024", width=1024)
     # Its sentence is a tooltip, reached from the keyboard as the chips before it.
     page.set_viewport_size({"width": 1440, "height": 1000})
     badge.focus()
     tip = page.get_by_role("tooltip")
     expect(tip).to_have_text("This Run can start containers inside it. Set when the session started; resuming keeps it.")
-    _shoot(page, "11-run-can-run-containers-tip-1440", width=1440)
+    _shoot(page, "12-run-can-run-containers-tip-1440", width=1440)
 
     # A Run on dude's fallback, with agent.nested_containers off: nothing.
     plain = client.create_project(name="Plain", slug=f"plain-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
     other = client.create_task(plain["id"], "Say hello")
     assert client.post(f"/v1/tasks/{other['id']}/deliver").status_code == 201
-    cannot = wait_until(lambda: (r := query(owner_dsn, "SELECT id, can_run_containers FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
-                                            (other["id"],))) and r[0], timeout=60, message="the plain implementer never reached lux")
+    cannot = submitted(other["id"])
     assert cannot["can_run_containers"] is False
     assert client.get(f"/v1/runs/{cannot['id']}").json()["canRunContainers"] is False
     page.goto(f"{web_url}#/session/{cannot['id']}")

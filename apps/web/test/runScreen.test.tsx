@@ -131,7 +131,7 @@ describe("the session's model", () => {
 });
 
 describe("whether the session can start containers", () => {
-  const badge = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=can-run-containers]");
+  const badge = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=can-run-containers]");
   const IMAGE: NonNullable<RunDetail["image"]> = { imageId: "img_1", name: "agents-podman", versionId: "imv_1", version: 3,
     ref: "registry.test/dude/custom@sha256:" + "1".repeat(64), layer: "registry.test/dude/layer@sha256:" + "2".repeat(64) };
 
@@ -145,6 +145,7 @@ describe("whether the session can start containers", () => {
     expect(shown.getAttribute("aria-label")).toBe("Can run containers");
     expect(shown.hasAttribute("title")).toBe(false);
     expect(await tipOf(shown)).toBe("This Run can start containers inside it. Set when the session started; resuming keeps it.");
+    expect(document.activeElement).toBe(shown);
   });
 
   test("on a typed image or dude's fallback (no image chip), the header still says so", async () => {
@@ -160,15 +161,6 @@ describe("whether the session can start containers", () => {
     });
   }
 });
-
-/** A header chip's tooltip, opened as a keyboard user does: focusing it. */
-async function tipOf(chip: HTMLElement): Promise<string> {
-  const { act } = await import("react");
-  await act(async () => chip.focus());
-  expect(document.activeElement).toBe(chip);
-  const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");
-  return tip.textContent ?? "";
-}
 
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
 async function machineTip(page: HTMLElement): Promise<string> {

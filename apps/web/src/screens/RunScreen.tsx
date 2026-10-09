@@ -399,7 +399,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {run.model ? <RunTierChip tier={run.modelTier} model={run.model} effort={run.effort} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
-        {/* Recorded at submit; nothing for false or a Run from before it was recorded. */}
         {run.canRunContainers ? <CanRunContainersBadge tooltip={CAN_RUN_CONTAINERS_TIP} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
