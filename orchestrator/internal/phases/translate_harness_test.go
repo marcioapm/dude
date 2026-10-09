@@ -655,6 +655,51 @@ func TestClaudeCodesKeptPlanIsBounded(t *testing.T) {
 	if first["content"] != "task 51" || last["content"] != "task 250" || last["status"] != "in_progress" {
 		t.Errorf("plan runs %v .. %v", first, last)
 	}
+	w.tr.claudePlan("TaskCreate", map[string]any{"subject": "task 251"})
+	plan, _ := w.tr.claudePlan("TaskUpdate", map[string]any{"taskId": "251", "status": "completed"})
+	if len(plan) != maxClaudeTasks || plan[len(plan)-1].(map[string]any)["content"] != "task 251" || plan[len(plan)-1].(map[string]any)["status"] != "completed" {
+		t.Fatalf("create/update after pruned reload = %v", plan)
+	}
+}
+
+func TestLegacyClaudeTasksKeepTheirIdentityAcrossLoading(t *testing.T) {
+	var tr translator
+	if err := json.Unmarshal([]byte(`{"claudeTasks":[{"content":"one","status":"pending"},{"content":"two","status":"pending"}]}`), &tr.harnessState); err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := tr.claudePlan("TaskUpdate", map[string]any{"taskId": "2", "status": "completed"})
+	if len(plan) != 2 || plan[1].(map[string]any)["status"] != "completed" {
+		t.Fatalf("legacy update 2 = %v", plan)
+	}
+	tr.claudePlan("TaskCreate", map[string]any{"subject": "three"})
+	state, err := json.Marshal(tr.harnessState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded translator
+	if err := json.Unmarshal(state, &loaded.harnessState); err != nil {
+		t.Fatal(err)
+	}
+	plan, _ = loaded.claudePlan("TaskUpdate", map[string]any{"taskId": "3", "status": "in_progress"})
+	if len(plan) != 3 || plan[2].(map[string]any)["content"] != "three" || plan[2].(map[string]any)["status"] != "in_progress" {
+		t.Fatalf("reloaded update 3 = %v", plan)
+	}
+}
+
+func TestLoadedClaudeTaskCounterNeverReusesRetainedIDs(t *testing.T) {
+	for _, counter := range []int{0, 9, 20} {
+		var tr translator
+		state := fmt.Sprintf(`{"claudeTaskNext":%d,"claudeTasks":[{"id":"10","content":"ten","status":"pending"}]}`, counter)
+		if err := json.Unmarshal([]byte(state), &tr.harnessState); err != nil {
+			t.Fatal(err)
+		}
+		tr.claudePlan("TaskCreate", map[string]any{"subject": "next"})
+		id := fmt.Sprint(max(counter, 10) + 1)
+		plan, _ := tr.claudePlan("TaskUpdate", map[string]any{"taskId": id, "status": "completed"})
+		if len(plan) != 2 || plan[1].(map[string]any)["status"] != "completed" || plan[0].(map[string]any)["status"] != "pending" {
+			t.Errorf("counter %d: update %s = %v", counter, id, plan)
+		}
+	}
 }
 
 // A turn that ends on a failed request fails the Run with the harness's
