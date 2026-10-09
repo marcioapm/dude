@@ -66,8 +66,8 @@ export function ImageStatusBadge({ status }: { readonly status: ImageChoiceView[
 
 /**
  * "Can run containers": an image whose published version can, wherever it
- * is listed. With tooltip it is a Run's, in its header: a focusable trigger,
- * as MachineChip is, that opens the tooltip on hover, focus and press.
+ * is listed. With tooltip it is a Run's, in its header: a focusable
+ * trigger, as MachineChip is.
  */
 export function CanRunContainersBadge({ size = "sm", lower, tooltip }: {
   readonly size?: "sm" | "md" | undefined;

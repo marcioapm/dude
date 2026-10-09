@@ -270,19 +270,14 @@ type Sandbox struct {
 	NestedContainers bool `json:"nestedContainers,omitempty"`
 }
 
-// NestedContainers is whether the spec asks lux to let the Run start
-// containers inside it.
-func (s Spec) NestedContainers() bool { return s.Sandbox != nil && s.Sandbox.NestedContainers }
-
-// NestedContainers is whether the lux Run may start containers inside it,
-// as its stored spec says: for a submit lux had already taken under the
-// same key, the first submit's sandbox, not sent's. sent's when lux
-// returned no sandbox. What a submit records as runs.can_run_containers.
+// NestedContainers is whether the lux Run may start containers inside it:
+// its stored spec's sandbox, which for a submit lux had already taken under
+// the same key is the first submit's; sent's only when lux returned none.
 func (r Run) NestedContainers(sent Spec) bool {
-	if r.Spec.Sandbox != nil {
-		return r.Spec.Sandbox.NestedContainers
+	if sb := r.Spec.Sandbox; sb != nil {
+		return sb.NestedContainers
 	}
-	return sent.NestedContainers()
+	return sent.Sandbox != nil && sent.Sandbox.NestedContainers
 }
 
 type Image struct {
