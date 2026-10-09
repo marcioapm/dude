@@ -86,7 +86,7 @@ function Panel({ data, openLogs = [] }: { readonly data: TaskServers; readonly o
         />
         {data.moved ? <ServersMoved at={formatTimestamp(data.moved.at, "time-short")} fromHost={data.moved.fromHost} toHost={data.moved.toHost} onStartAll={() => undefined} /> : null}
         {run.previewStage && run.previewStage !== "ready" ? (
-          <PreviewStages stage={run.previewStage} branch={run.branch} setup="npm ci, make deps" elapsed={<Duration since={run.startedAt ?? undefined} live tone="muted" />} />
+          <PreviewStages stage={run.previewStage} branch={run.branch} setup="npm ci, make deps" elapsed={run.previewStageSince ? <Duration since={run.previewStageSince} live tone="muted" /> : undefined} />
         ) : null}
         <ServerList aria-label="Servers">
           {data.servers.map((s) => {
@@ -256,7 +256,7 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
       <Block id="sv-stages" title="PreviewStages / ServersMoved / PreviewAlsoRunning" note="A branch preview coming up, stage by stage; the notice when a run moved host and its servers stopped with the old placement; and a preview live behind the agent run the panel shows, with its Stop.">
         <Panes mode={mode}>
           <Col>
-            <States items={(["scheduling", "cloning", "setup", "starting", "ready"] as PreviewStage[]).map((s) => [s, <PreviewStages key={s} stage={s} branch="feature/checkout-v2" setup="npm ci, make deps" elapsed="24s" />])} />
+            <States items={(["scheduling", "image", "volumes", "cloning", "container", "setup", "starting", "ready", "stopping"] as PreviewStage[]).map((s) => [s, <PreviewStages key={s} stage={s} branch="feature/checkout-v2" setup="npm ci, make deps" elapsed="24s" />])} />
             <ServersMoved at="14:32" fromHost="lux-c7" toHost="lux-c9" onStartAll={() => undefined} />
             <PreviewAlsoRunning onStop={() => undefined} />
             <PreviewAlsoRunning parked onStop={() => undefined} />

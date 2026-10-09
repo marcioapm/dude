@@ -1606,7 +1606,11 @@ MarkdownCheatsheet.
   server; a branch preview's adds Stop preview, which ends the run, where
   Stop all leaves it live.
 - **PreviewStages / ServersMoved** — a branch preview's stages, and the
-  notice with Start all after a run moved host.
+  notice with Start all after a run moved host. Infrastructure uses lux's
+  stage: Preparing image, Restoring volumes, Cloning, Starting container;
+  Stopping is a single step, not a completed startup. The active step has
+  `aria-current="step"`. Elapsed is optional: only supply it with an
+  authoritative stage timestamp, never the Run's original start.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's
   grammar.
 - **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —

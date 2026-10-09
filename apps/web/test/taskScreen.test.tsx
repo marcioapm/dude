@@ -132,6 +132,51 @@ describe("the task's Servers tab", () => {
 });
 
 describe("a branch preview on the Servers tab", () => {
+  for (const since of ["present", "null", "absent"] as const) {
+    test(`stage timer uses previewStageSince ${since}`, async () => {
+      const timestamp = { present: new Date(Date.now() - 24000).toISOString(), null: null, absent: undefined }[since];
+      class TimedPreview extends FixtureClient {
+        override taskServers() {
+          return super.taskServers().then((d) => ({ ...d, run: d.run ? {
+            ...d.run, startedAt: new Date(Date.now() - 34 * 60000).toISOString(),
+            previewStage: "volumes" as const, ...(timestamp === undefined ? {} : { previewStageSince: timestamp }),
+          } : null }));
+        }
+      }
+      const page = await taskPage(new TimedPreview("e"), { tab: "servers" });
+      const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
+      expect(progress.textContent).toContain("Restoring volumes");
+      expect(progress.textContent).not.toContain("Cloning");
+      const active = progress.querySelector('[aria-current="step"]')!;
+      expect(active.textContent).not.toContain("34m");
+      expect(active.textContent?.includes("·")).toBe(Boolean(timestamp));
+      // The timer counts from previewStageSince (24s ago), not from now or startedAt.
+      if (timestamp) expect(active.textContent).toMatch(/\b2[4-6]s\b/);
+    });
+  }
+  test("a stopping preview says Stopping, not starting, on its run and its tab", async () => {
+    class StoppingPreview extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({ ...d, run: d.run ? {
+          ...d.run, previewStage: "stopping" as const, previewStageSince: new Date().toISOString(), luxState: "stopping",
+        } : null }));
+      }
+    }
+    const page = await taskPage(new StoppingPreview("e"), { tab: "servers" });
+    const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
+    expect(progress.getAttribute("data-stage")).toBe("stopping");
+    const panel = page.querySelector<HTMLElement>("[data-testid=servers-panel]")!;
+    const mark = await until(() => panel.querySelector<HTMLElement>("[data-status]"), "the run's mark");
+    expect(mark.getAttribute("data-status")).not.toBe("starting");
+    expect(mark.textContent).toBe("Stopping");
+    // The tab reads the same servers: nothing on, and no "Preview starting" dot.
+    const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((x) => x.textContent?.startsWith("Servers"))!;
+    await act(async () => tab.focus());
+    const tip = await until(() => document.querySelector("[role=tooltip]"), "the tab's tooltip");
+    expect(tip.textContent).toContain("No servers on");
+    // toBeNull passes on a happy-dom element: compare instead.
+    expect(tab.querySelector("[data-server-state]") === null).toBe(true);
+  });
   /** Scenario e's preview, past its stages: ready, lux running it. */
   class ReadyPreview extends FixtureClient {
     override taskServers() {

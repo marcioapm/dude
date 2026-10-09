@@ -1226,7 +1226,12 @@ func (s *Service) wakeable(ctx context.Context, tx pgx.Tx, projectID string) (bo
 //	waking or a wake due, Run not yet placed → scheduling
 //	Run starting                             → cloning
 //	Run running                              → setup / starting / ready, by process, as a Run-embedded preview's
-func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *TaskServers) {
+//
+// When lux reports its Run's stage, previewProgress refines scheduling and
+// cloning by it (image, volumes, cloning, container, stopping) with lux's
+// stageSince as the timer; a zero luxRun (no Run, or its read failed)
+// keeps the coarse stage with no timer.
+func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *TaskServers, luxRun lux.Run) {
 	list, err := s.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
 	if err != nil {
 		s.Log.Debug("reading a preview's servers from lux", "run", r.ID, "error", err)
@@ -1262,7 +1267,7 @@ func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *
 		status = "scheduled"
 	}
 	v.Asleep = r.Status == "paused" && !waking
-	v.PreviewStage = Stage(status, v.LuxState, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
+	v.PreviewStage, v.PreviewStageSince = previewProgress(status, v.LuxState, luxRun, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
 }
 
 // wantWake asks for an asleep wakeable preview to be woken, as a request to
