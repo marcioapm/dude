@@ -553,6 +553,15 @@ describe("a session's files", () => {
       .toEqual(["Invoice PDF export, with the numbers"]);
   });
 
+  // The listing returns a name's newest 50 versions; the rail names the latest's number, not how many came.
+  test("a file published more often than the listing returns is shown at its latest version", async () => {
+    const client = new FilesClient(detail("read"));
+    client.artifacts = Array.from({ length: 50 }, (_, i) => art(`art_n${60 - i}`, "notes.md", 60 - i, 60));
+    const page = await sessionPage(client);
+    const block = await until(() => page.querySelector("[data-testid=session-files] [data-testid=published-files]"), "the files");
+    expect([...block.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["notes.mdv60"]);
+  });
+
   test("nothing published yet says so", async () => {
     const page = await sessionPage(new FilesClient(detail("owner")));
     await settle();
