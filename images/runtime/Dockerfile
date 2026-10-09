@@ -12,7 +12,15 @@
 #
 # That script builds the dude CLI for the target architecture into bin/ first.
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS agent-user
+# A lux Run maps only ids 0-65535; these ranges assume uid 1000 and must match
+# SubIDs in orchestrator/internal/images/images.go. `>` replaces the file
+# useradd writes (only agent's line on this base).
+RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
+    && printf 'agent:1:999\nagent:1001:64535\n' > /etc/subuid \
+    && cp /etc/subuid /etc/subgid
+
+FROM agent-user
 # Set by BuildKit (docker build, buildx) and by podman build.
 ARG TARGETARCH
 
@@ -81,13 +89,5 @@ RUN git config --system user.name "dude" \
     && git config --system user.email "dude@localhost" \
     && git config --system init.defaultBranch main
 
-# agent's subordinate ids replace useradd's agent:100000:65536: a lux Run
-# maps only ids 0-65535, so rootless podman inside it could not map those.
-# Every id below 65536 but 0 and agent's own, the same ranges the dude
-# layer's finish step writes for library images (SubIDs in
-# orchestrator/internal/images/images.go); the two must agree.
-RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
-    && printf 'agent:1:999\nagent:1001:64535\n' > /etc/subuid \
-    && cp /etc/subuid /etc/subgid
 USER agent
 WORKDIR /home/agent
