@@ -385,7 +385,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
       <Select label="Reasoning effort" aria-label="Reasoning effort" data-testid="model-tier-effort"
         value={draft.effort ?? DEFAULT_EFFORT} options={EFFORT_OPTIONS}
         onValueChange={(v) => set("effort", v === DEFAULT_EFFORT ? null : (v as TierEffort))}
-        hint="None turns thinking off, so the chat shows none." />
+        hint="On Claude models, None turns thinking off. GPT models reason at their default." />
       <SettingsDisclosure summary="Advanced: OpenCode model options and request headers">
         <FormStack>
           <Textarea label="OpenCode model options" mono rows={3} value={draft.options} placeholder={"{\"effort\": \"xhigh\"}"}

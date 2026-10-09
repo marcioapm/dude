@@ -21,7 +21,7 @@ export const TIER_JSON_MAX = 4096;
 
 export const TIER_MODEL_MESSAGE = "The model as the proxy names it: no spaces or slashes, at most 200 characters";
 
-/** How hard a tier's model thinks; null is the model's default. none turns thinking off. */
+/** How hard a tier's model thinks; null is the model's default. none turns Claude's thinking off; GPT reasons at its default. */
 export const TIER_EFFORTS = ["none", "low", "medium", "high", "max"] as const;
 export const tierEffortSchema = z.enum(TIER_EFFORTS);
 export type TierEffort = z.infer<typeof tierEffortSchema>;

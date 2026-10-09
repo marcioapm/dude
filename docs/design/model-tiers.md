@@ -22,7 +22,8 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   characters — except the scripted agent's test models (`fake/scripted`,
   `fake/hang`, …). `model` may be null: not set yet.
   - `effort`: `none`, `low`, `medium`, `high` or `max`; null is the model's
-    default. `none` turns thinking off, so the chat shows none.
+    default. On Claude models, None turns thinking off. GPT models reason
+    at their default: `none` sends them no `reasoningEffort`.
   - `options`: extra OpenCode model options, a JSON object merged over what
     the effort makes (the tier's keys win), at most 4 KB as Postgres renders
     it. The AI SDK drops keys it does not know without a word.
@@ -157,8 +158,8 @@ them to admins until one dismisses them.
   Remove…. A member sees it read-only.
 - **Add / change a tier**: name, what it is for, the model to request with
   the proxy's names as chips, labelled as suggestions, and **Reasoning
-  effort** (Model's default, None, Low, Medium, High, Max; "None turns
-  thinking off, so the chat shows none."). An **Advanced** disclosure holds
+  effort** (Model's default, None, Low, Medium, High, Max; "On Claude
+  models, None turns thinking off. GPT models reason at their default."). An **Advanced** disclosure holds
   two JSON fields, "OpenCode model options" and "Request headers", checked
   in the dialog by the same rules as the API. A name the proxy does not
   list shows the attention callout and the button reads "Save anyway" /

@@ -141,7 +141,7 @@ describe("the Models page", () => {
     const dialog = await menuItem(container, "Coder", "Change model…");
     await press(byLabel<HTMLButtonElement>(dialog, "Reasoning effort")!);
     await click(await until(() => [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent === "None"), "None"));
-    expect(dialog.textContent).toContain("None turns thinking off, so the chat shows none.");
+    expect(dialog.textContent).toContain("On Claude models, None turns thinking off. GPT models reason at their default.");
     const options = byLabel<HTMLTextAreaElement>(dialog, "OpenCode model options")!;
     const type = (el: HTMLTextAreaElement, text: string) => act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);

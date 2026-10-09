@@ -666,7 +666,7 @@ def test_an_admin_adds_a_tier_and_changes_one_and_the_role_page_follows(
     dialog.get_by_label("Model to request", exact=True).fill("claude-opus-5-5")
     effort = dialog.get_by_label("Reasoning effort")
     expect(effort).to_have_text(re.compile(r"^Medium"))
-    expect(dialog).to_contain_text("None turns thinking off, so the chat shows none.")
+    expect(dialog).to_contain_text("On Claude models, None turns thinking off. GPT models reason at their default.")
     effort.click()
     page.get_by_role("option", name="Max", exact=True).click()
     # The advanced fields take JSON objects only, as the API does.
