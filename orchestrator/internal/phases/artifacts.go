@@ -249,6 +249,10 @@ type artifactRun struct{ Org, ProjectID, TaskID, ID string }
 // recordArtifact records one artifact lux can serve, with artifact.created,
 // once per lux artifact id however often it is seen (the stream's
 // artifact.published, a replay of it, the stop-time sweep).
+//
+// created_at is clock_timestamp(), not the transaction's now(): versions of
+// one name recorded in one transaction (lux lists them in order) keep that
+// order in the listing, which numbers them by created_at.
 func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
 	id := ids.New(ids.Artifact)
 	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
@@ -257,8 +261,8 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		ctype = "application/octet-stream"
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type,
-			size_bytes, storage_key, sha256, epoch, description)
-		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9, $10)
+			size_bytes, storage_key, sha256, epoch, description, created_at)
+		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
 		ON CONFLICT (organization_id, storage_key) DO NOTHING`,
 		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch, art.Description)
 	if err != nil || tag.RowsAffected() == 0 {
