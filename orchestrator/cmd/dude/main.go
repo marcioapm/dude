@@ -451,19 +451,25 @@ func publish(path, name, description string) (json.RawMessage, error) {
 	if dir := os.Getenv("LUX_ARTIFACTS"); dir != "" {
 		return copyInto(dir, path, name)
 	}
-	args := []string{"publish", path}
+	// FILE after `--`: lux-shim reads any argument starting with - as a flag.
+	args := []string{"publish"}
 	if name != "" {
 		args = append(args, "--name", name)
 	}
 	if description != "" {
 		args = append(args, "--description", description)
 	}
+	args = append(args, "--", path)
 	cmd := exec.Command(luxShim, args...)
 	var stdout bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, os.Stderr
 	err := cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
+		// A negative code is a signal: no status of lux-shim's to pass on.
+		if ee.ExitCode() < 0 {
+			return nil, fmt.Errorf("lux-shim publish: %w", err)
+		}
 		return nil, shimFailed{ee.ExitCode()}
 	}
 	if err != nil {
