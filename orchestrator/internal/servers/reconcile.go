@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -38,6 +39,7 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 	// lost (attachAll, the feed) is not made again here.
 	var recorded []recordedServer
 	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
+	readAt := time.Now()
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
@@ -96,9 +98,11 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 	// The servers lux has for the preview that dude had no row of and no
 	// recipe wants: a delete in dropServer that did not reach lux. One
 	// dropped above is in recorded, so it is not deleted twice; one a
-	// recipe wants is adopted instead (createServer).
+	// recipe wants is adopted instead (createServer); one created after
+	// recorded was read may be another orchestrator's, recorded since.
 	for _, ts := range byID {
-		if wanted[ts.Name] || slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.LuxID == ts.ID }) {
+		if wanted[ts.Name] || ts.CreatedAt.After(readAt) ||
+			slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.LuxID == ts.ID }) {
 			continue
 		}
 		if err := p.Lux.DeleteServer(ctx, ts.ID); err != nil && !lux.IsNotFound(err) {

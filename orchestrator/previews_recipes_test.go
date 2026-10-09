@@ -531,3 +531,56 @@ func TestADroppedServerLuxDidNotDeleteIsDeletedLater(t *testing.T) {
 		})
 	}
 }
+
+// listedAfter is lux whose first label list of a preview's servers first
+// runs then: what another orchestrator did between this one's read of the
+// preview's rows and its list.
+type listedAfter struct {
+	lux.Client
+	mu   sync.Mutex
+	then func()
+}
+
+func (c *listedAfter) ListServers(ctx context.Context, hostname string, labels ...string) ([]lux.TenantServer, error) {
+	c.mu.Lock()
+	then := c.then
+	if len(labels) > 0 {
+		c.then = nil
+	}
+	c.mu.Unlock()
+	if len(labels) > 0 && then != nil {
+		then()
+	}
+	return c.Client.ListServers(ctx, hostname, labels...)
+}
+
+// A server of the preview no recipe wants, created and recorded by
+// another orchestrator after this one read the preview's rows, is not
+// taken for a leftover and deleted.
+func TestAServerCreatedAfterTheRowsWereReadIsNotDeleted(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	inner := w.previews.Lux
+	var theirs lux.TenantServer
+	w.previews.Lux = &listedAfter{Client: inner, then: func() {
+		var err error
+		theirs, err = inner.CreateServer(context.Background(), lux.CreateServer{Name: "api", Port: 4000,
+			Hostname: "api-theirs." + previewDomain, Wake: "request", Lifetime: "owner", Labels: map[string]string{"dude.preview": runID}})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		mustExec(t, w.owner, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname)
+			VALUES ($1, $2, 'api', $3, $4)`, runID, w.org, theirs.ID, "api-theirs."+previewDomain)
+	}}
+	w.open(web)
+	if theirs.ID == "" {
+		t.Fatal("the other orchestrator's server was never made")
+	}
+	if _, ok := w.lux.TenantServer(theirs.ID); !ok {
+		t.Errorf("the other orchestrator's server was deleted; calls %v", w.lux.TenantCalls())
+	}
+}

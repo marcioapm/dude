@@ -34,7 +34,8 @@ type TenantServer struct {
 	LastRequestAt *time.Time `json:"lastRequestAt"`
 	Wakes         int        `json:"wakes"`
 	// When its state last changed.
-	Since time.Time `json:"since"`
+	Since     time.Time `json:"since"`
+	CreatedAt time.Time `json:"createdAt"`
 	// How long without a request before server.idle: a Go duration
 	// ("45m0s") or seconds; 0 is never.
 	IdleAfter json.RawMessage `json:"idleAfter"`
