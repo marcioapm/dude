@@ -10,6 +10,7 @@
  */
 
 import { withOrg } from "../../db/client.ts";
+import { isSessionMember } from "../../events/visibility.ts";
 import { orchestratorStream } from "../../orchestrator/client.ts";
 import type { Principal } from "../auth.ts";
 import { badRequest, HttpError, json, notFound } from "../http.ts";
@@ -94,20 +95,12 @@ async function artifactsOf(organizationId: string, owner: Owner): Promise<Artifa
   return rows.map((a) => ({ ...a, contentType: artifactType(a.contentType, a.name) }));
 }
 
-/** Whether a person is an accepted member of a brainstorm session: anyone else is told it does not exist. */
-async function member(organizationId: string, personId: string, sessionId: string): Promise<boolean> {
-  return withOrg(organizationId, async ({ sql }) => {
-    const [row] = (await sql`SELECT session_role(${sessionId}, ${personId}) IS NOT NULL AS ok`) as Array<{ ok: boolean }>;
-    return row?.ok === true;
-  });
-}
-
 async function listArtifacts(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.url.searchParams.get("taskId");
   const sessionId = ctx.url.searchParams.get("sessionId");
   const { organizationId, personId } = ctx.principal;
   if (sessionId && !taskId) {
-    if (!(await member(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
+    if (!(await isSessionMember(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
     return json({ artifacts: await artifactsOf(organizationId, { sessionId }) });
   }
   if (!taskId || sessionId) throw badRequest("taskId or sessionId is required, not both");
@@ -218,7 +211,7 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
 async function sessionArtifactsZip(ctx: RequestContext): Promise<Response> {
   const sessionId = ctx.params.id!;
   const { organizationId, personId } = ctx.principal;
-  if (!(await member(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
+  if (!(await isSessionMember(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
   return zipOf(ctx.principal, await artifactsOf(organizationId, { sessionId }), "session");
 }
 

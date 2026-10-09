@@ -55,6 +55,10 @@ export async function canSee(organizationId: string, personId: string, sessionId
  */
 export async function mayReadSession(organizationId: string, personId: string, sessionId: string | undefined): Promise<boolean> {
   if (!sessionId?.startsWith(BRAINSTORM_PREFIX)) return true;
+  return isSessionMember(organizationId, personId, sessionId);
+}
+
+export async function isSessionMember(organizationId: string, personId: string, sessionId: string): Promise<boolean> {
   return withOrg(organizationId, async ({ sql }) => {
     const rows = (await sql`SELECT session_role(${sessionId}, ${personId}) IS NOT NULL AS ok`) as Array<{ ok: boolean }>;
     return rows[0]?.ok === true;
