@@ -46,26 +46,35 @@ function jsonbText(v: unknown): string {
   return JSON.stringify(v) ?? "null";
 }
 const jsonBytes = (v: unknown) => new TextEncoder().encode(jsonbText(v)).length;
+/** jsonb cannot store U+0000 in any string, key or value (Postgres 22P05). */
+const noNul = (v: unknown) => !(JSON.stringify(v) ?? "").includes("\\u0000");
 /** An HTTP header name (RFC 9110 token). */
 export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
-const TOO_BIG = `At most ${TIER_JSON_MAX} bytes as JSON`;
+/**
+ * The byte count is the client's estimate: Postgres prints jsonb numbers
+ * in full (1e21 is 22 digits), so the API also maps the CHECK's refusal.
+ */
+export const TIER_JSON_TOO_BIG = `At most ${TIER_JSON_MAX} bytes as JSON`;
+export const TIER_NUL_MESSAGE = "No NUL characters (\\u0000)";
 const HEADER_NAME_MESSAGE = "Header names are letters, digits and !#$%&'*+.^_`|~-";
 const HEADER_VALUE_MESSAGE = "A header's value is one line";
 /** What the options and headers fields are refused with, said back as they are. */
-export const TIER_JSON_MESSAGES = [TOO_BIG, HEADER_NAME_MESSAGE, HEADER_VALUE_MESSAGE] as const;
+export const TIER_JSON_MESSAGES = [TIER_JSON_TOO_BIG, TIER_NUL_MESSAGE, HEADER_NAME_MESSAGE, HEADER_VALUE_MESSAGE] as const;
 
 /** Extra OpenCode model options: a JSON object, at most TIER_JSON_MAX bytes. */
 export const tierOptionsSchema = z
   .record(z.unknown())
-  .refine((v) => jsonBytes(v) <= TIER_JSON_MAX, TOO_BIG);
+  .refine(noNul, TIER_NUL_MESSAGE)
+  .refine((v) => jsonBytes(v) <= TIER_JSON_MAX, TIER_JSON_TOO_BIG);
 
 /** Extra request headers: header names to one-line string values, at most TIER_JSON_MAX bytes. */
 export const tierHeadersSchema = z
   .record(z.string())
+  .refine(noNul, TIER_NUL_MESSAGE)
   .refine((h) => Object.keys(h).every((k) => HEADER_NAME.test(k)), HEADER_NAME_MESSAGE)
   .refine((h) => Object.values(h).every((v) => !/[\r\n]/u.test(v)), HEADER_VALUE_MESSAGE)
-  .refine((h) => jsonBytes(h) <= TIER_JSON_MAX, TOO_BIG);
+  .refine((h) => jsonBytes(h) <= TIER_JSON_MAX, TIER_JSON_TOO_BIG);
 
 /** A tier as an admin writes it (`POST /v1/models/tiers`, `PUT /v1/models/tiers/:id`). */
 export const modelTierInputSchema = z

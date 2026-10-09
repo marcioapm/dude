@@ -192,6 +192,27 @@ describe("tiers", () => {
     expect((await body(back)).tiers.find((t: Json) => t.id === fast.id)).toMatchObject({ effort: null, options: null, headers: null });
   });
 
+  test("options the schema takes but Postgres renders over 4 KB, or a NUL, are 400 naming the field, not 500", async () => {
+    const fast = await byName("Fast");
+    // 4081 bytes as the schema counts it ("1e+21"); jsonb prints 1e21 as 22 digits, 4098 bytes.
+    const big = { s: "x".repeat(4060), n: 1e21 };
+    const edit = await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", options: big });
+    expect(edit.status).toBe(400);
+    const refused = await body(edit);
+    expect(refused.error.message).toBe("request body failed validation: options: At most 4096 bytes as JSON");
+    expect(refused.error.details.fieldErrors).toEqual({ options: ["At most 4096 bytes as JSON"] });
+    const add = await call(adminKey, "POST", "/v1/models/tiers", { name: "Huge", options: big });
+    expect(add.status).toBe(400);
+    expect((await body(add)).error.message).toBe("request body failed validation: options: At most 4096 bytes as JSON");
+    for (const [over, field] of [[{ options: { a: "\u0000" } }, "options"], [{ headers: { "X-Team": "\u0000" } }, "headers"]] as const) {
+      const nul = await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", ...over });
+      expect(nul.status).toBe(400);
+      expect((await body(nul)).error.message).toBe(`request body failed validation: ${field}: No NUL characters (\\u0000)`);
+    }
+    expect((await byName("Fast")).options).toBeNull();
+    expect((await tiers()).map((t) => t.name)).not.toContain("Huge");
+  });
+
   test("an admin adds one, at the end; a name taken whatever its case is 409", async () => {
     const res = await call(adminKey, "POST", "/v1/models/tiers", { name: "Cheap", description: "Bulk, low-stakes work at the lowest price.", model: "gpt-5.6-luna" });
     expect(res.status).toBe(201);

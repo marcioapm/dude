@@ -22,6 +22,8 @@ import {
   replaceTier,
   resolveTier,
   testModelSchema,
+  TIER_JSON_TOO_BIG,
+  TIER_NUL_MESSAGE,
   type AgentModels,
   type ModelTestResult,
   type ModelTier,
@@ -156,6 +158,26 @@ function nameTaken(err: unknown, name: string): never {
   throw err;
 }
 
+const fieldRefused = (field: "options" | "headers", message: string) =>
+  badRequest(`request body failed validation: ${field}: ${message}`, { formErrors: [], fieldErrors: { [field]: [message] } });
+
+const hasNul = (v: unknown): boolean => JSON.stringify(v)?.includes("\\u0000") ?? false;
+
+/**
+ * What Postgres refuses in a tier the schema took, as a 400 naming the
+ * field: options or headers over 4096 bytes as jsonb renders them (numbers
+ * print in full: 1e21 is 22 digits), CHECK 23514; or a NUL, which jsonb
+ * cannot hold, 22P05. Otherwise as nameTaken.
+ */
+function tierRefused(err: unknown, input: ModelTierInput): never {
+  if (err instanceof SQL.PostgresError) {
+    if (err.errno === "23514" && err.constraint === "model_tiers_options_check") throw fieldRefused("options", TIER_JSON_TOO_BIG);
+    if (err.errno === "23514" && err.constraint === "model_tiers_headers_check") throw fieldRefused("headers", TIER_JSON_TOO_BIG);
+    if (err.errno === "22P05") throw fieldRefused(hasNul(input.options) ? "options" : "headers", TIER_NUL_MESSAGE);
+  }
+  return nameTaken(err, input.name);
+}
+
 const tierInput = async (ctx: RequestContext): Promise<ModelTierInput> =>
   (await parseBody(ctx.request, modelTierInputSchema)) as ModelTierInput;
 
@@ -169,7 +191,7 @@ async function createTier(ctx: RequestContext): Promise<Response> {
       VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.description}, ${input.model}, ${input.effort},
               ${input.options}::jsonb, ${input.headers}::jsonb,
               (SELECT COALESCE(max(position) + 1, 0) FROM model_tiers), ${ctx.principal.personId})`
-      .catch((err: unknown) => nameTaken(err, input.name));
+      .catch((err: unknown) => tierRefused(err, input));
     await record(scope, ctx, { [id]: { added: input } });
   });
   return json(await tiersResponse(ctx), 201);
@@ -185,7 +207,7 @@ async function updateTier(ctx: RequestContext): Promise<Response> {
       UPDATE model_tiers SET name = ${input.name}, description = ${input.description}, model = ${input.model},
         effort = ${input.effort}, options = ${input.options}::jsonb, headers = ${input.headers}::jsonb,
         updated_at = now(), updated_by = ${ctx.principal.personId}
-      WHERE id = ${id} RETURNING id`.catch((err: unknown) => nameTaken(err, input.name));
+      WHERE id = ${id} RETURNING id`.catch((err: unknown) => tierRefused(err, input));
     if (rows.length === 0) throw notFound(`no model tier ${id}`);
     await record(scope, ctx, { [id]: { edited: input } });
   });

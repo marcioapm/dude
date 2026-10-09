@@ -59,6 +59,14 @@ describe("a tier's effort, options and headers", () => {
     expect(tier({ headers: { "X-Team": 3 } }).success).toBe(false);
     expect(errorOf(tier({ headers: { h: "x".repeat(4096) } }))).toBe("At most 4096 bytes as JSON");
   });
+
+  test("no string in options or headers, key or value, holds a NUL, which jsonb cannot store", () => {
+    const nul = "No NUL characters (\\u0000)";
+    expect(errorOf(tier({ options: { a: "\u0000" } }))).toBe(nul);
+    expect(errorOf(tier({ options: { deep: [{ "k\u0000": 1 }] } }))).toBe(nul);
+    expect(errorOf(tier({ headers: { "X-Team": "a\u0000b" } }))).toBe(nul);
+    expect(errorOf(testModelSchema.safeParse({ model: "gpt-6-sol", options: { a: "\u0000" } }))).toBe(nul);
+  });
 });
 
 describe("a tier's name and description", () => {
