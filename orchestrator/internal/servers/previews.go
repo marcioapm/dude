@@ -376,7 +376,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 
 	spec := lux.Spec{
 		Name:   "preview " + r.TaskID,
-		Labels: map[string]string{"dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
+		Labels: map[string]string{"app": lux.App, "dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
 		Image:  lux.Image{Ref: image},
 		Workload: lux.Workload{
 			Adapter: "generic",

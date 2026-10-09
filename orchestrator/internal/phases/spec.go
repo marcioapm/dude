@@ -267,7 +267,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	spec := lux.Spec{
 		Name: fmt.Sprintf("%s %s", step, owner),
 		Labels: map[string]string{
-			"dude.org": in.OrganizationID, "dude.task": in.TaskID,
+			"app": lux.App, "dude.org": in.OrganizationID, "dude.task": in.TaskID,
 			"dude.run": in.RunID, "dude.phase": step, "dude.role": in.Role,
 			"dude.harness": harnessOpenCode, "dude.model": in.Model,
 		},
