@@ -192,7 +192,7 @@ describe("tiers", () => {
     expect((await body(back)).tiers.find((t: Json) => t.id === fast.id)).toMatchObject({ effort: null, options: null, headers: null });
   });
 
-  test("options the schema takes but Postgres renders over 4 KB, or a NUL, are 400 naming the field, not 500", async () => {
+  test("options the schema takes but Postgres renders over 4 KB are 400 naming the field, not 500; the schema refuses a NUL", async () => {
     const fast = await byName("Fast");
     // 4081 bytes as the schema counts it ("1e+21"); jsonb prints 1e21 as 22 digits, 4098 bytes.
     const big = { s: "x".repeat(4060), n: 1e21 };

@@ -47,7 +47,12 @@ function jsonbText(v: unknown): string {
 }
 const jsonBytes = (v: unknown) => new TextEncoder().encode(jsonbText(v)).length;
 /** jsonb cannot store U+0000 in any string, key or value (Postgres 22P05). */
-const noNul = (v: unknown) => !(JSON.stringify(v) ?? "").includes("\\u0000");
+function noNul(v: unknown): boolean {
+  if (typeof v === "string") return !v.includes("\u0000");
+  if (Array.isArray(v)) return v.every(noNul);
+  if (typeof v === "object" && v !== null) return Object.entries(v).every(([k, x]) => noNul(k) && noNul(x));
+  return true;
+}
 /** An HTTP header name (RFC 9110 token). */
 export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 

@@ -68,6 +68,13 @@ describe("a tier's effort, options and headers", () => {
     const test = testModelSchema.safeParse({ model: "gpt-6-sol", options: { a: "\u0000" } });
     expect(test.success ? null : test.error.issues[0]!.message).toBe(nul);
   });
+
+  test("a backslash followed by u0000 is six characters, not a NUL, and is kept", () => {
+    expect(tier({ options: { stop: "\\u0000" } }).success).toBe(true);
+    expect(tier({ options: { "\\u0000": 1 } }).success).toBe(true);
+    expect(tier({ headers: { "X-A": "\\u0000" } }).success).toBe(true);
+    expect(testModelSchema.safeParse({ model: "gpt-6-sol", options: { re: "\\u0000" } }).success).toBe(true);
+  });
 });
 
 describe("a tier's name and description", () => {

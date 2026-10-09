@@ -23,7 +23,6 @@ import {
   resolveTier,
   testModelSchema,
   TIER_JSON_TOO_BIG,
-  TIER_NUL_MESSAGE,
   type AgentModels,
   type ModelTestResult,
   type ModelTier,
@@ -161,19 +160,16 @@ function nameTaken(err: unknown, name: string): never {
 const fieldRefused = (field: "options" | "headers", message: string) =>
   badRequest(`request body failed validation: ${field}: ${message}`, { formErrors: [], fieldErrors: { [field]: [message] } });
 
-const hasNul = (v: unknown): boolean => JSON.stringify(v)?.includes("\\u0000") ?? false;
-
 /**
  * What Postgres refuses in a tier the schema took, as a 400 naming the
  * field: options or headers over 4096 bytes as jsonb renders them (numbers
- * print in full: 1e21 is 22 digits), CHECK 23514; or a NUL, which jsonb
- * cannot hold, 22P05. Otherwise as nameTaken.
+ * print in full: 1e21 is 22 digits), CHECK 23514. A NUL never gets here:
+ * the schema refuses it. Otherwise as nameTaken.
  */
 function tierRefused(err: unknown, input: ModelTierInput): never {
   if (err instanceof SQL.PostgresError) {
     if (err.errno === "23514" && err.constraint === "model_tiers_options_check") throw fieldRefused("options", TIER_JSON_TOO_BIG);
     if (err.errno === "23514" && err.constraint === "model_tiers_headers_check") throw fieldRefused("headers", TIER_JSON_TOO_BIG);
-    if (err.errno === "22P05") throw fieldRefused(hasNul(input.options) ? "options" : "headers", TIER_NUL_MESSAGE);
   }
   return nameTaken(err, input.name);
 }
