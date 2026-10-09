@@ -42,8 +42,10 @@ type Previews struct {
 	*Service
 	Forges delivery.Forges
 	// The image when neither the project's preview settings, the project
-	// nor its organization name one (DUDE_AGENT_IMAGE).
-	DefaultImage string
+	// nor its organization name one (DUDE_AGENT_IMAGE), and whether it can
+	// run containers (agent.nested_containers).
+	DefaultImage           string
+	DefaultImageContainers bool
 	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
 	// "" turns the library off.
 	Layer string
@@ -256,6 +258,10 @@ func (p *Previews) imageOutcome(ctx context.Context, r previewRun, err error, wa
 	return false, err
 }
 
+// EngineStore is where a preview that can run containers keeps podman's
+// and Docker's images, containers and data across sleep.
+const EngineStore = "/home/agent/.local/share"
+
 // previewRef is one repository of a preview, at the ref it previews.
 type previewRef struct{ Name, URL, Ref string }
 
@@ -320,6 +326,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	var machine *delivery.Machine
 	var image string
 	var got *images.RunImage
+	var nested bool
 	var outcome error
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
@@ -342,6 +349,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		site.Fallback = p.DefaultImage
 		var err error
 		image, got, err = images.Choose(ctx, tx, site, p.Layer, r.ID, r.ImageBuildID)
+		nested = site.Containers(got, p.DefaultImageContainers)
 		if err, outcome = images.Settle(err); err != nil || outcome != nil {
 			return err
 		}
@@ -376,7 +384,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 
 	spec := lux.Spec{
 		Name:   "preview " + r.TaskID,
-		Labels: map[string]string{"dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
+		Labels: map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
 		Image:  lux.Image{Ref: image},
 		Workload: lux.Workload{
 			Adapter: "generic",
@@ -432,6 +440,17 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	}
 	login.Apply(&spec)
 	phases.MachineSpec(machine, &spec)
+	if nested {
+		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+		// lux puts each engine's store on an ephemeral volume under
+		// $XDG_DATA_HOME, so a sleeping preview would wake to rebuild every
+		// container; a state volume over $XDG_DATA_HOME keeps them both
+		// (lux runspec "Nested containers"). Set in env so lux and the
+		// engines agree on it whatever HOME passwd gives the image's uid:
+		// library images and DUDE_AGENT_IMAGE run as agent, home /home/agent.
+		spec.Env = map[string]string{"XDG_DATA_HOME": EngineStore}
+		spec.Volumes = append(spec.Volumes, lux.Volume{Name: "engines", Path: EngineStore, Kind: "state"})
+	}
 	return spec, branch, machine, got, nil
 }
 

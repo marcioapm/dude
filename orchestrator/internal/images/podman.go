@@ -3,6 +3,8 @@ package images
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,9 @@ type Podman interface {
 	Remove(ctx context.Context, tag string, log io.Writer) error
 	// Controllers are the cgroup controllers podman can apply limits with.
 	Controllers(ctx context.Context) ([]string, error)
+	// CheckContainers runs the container check (ContainersCheck) in image,
+	// a local tag, and returns what it found.
+	CheckContainers(ctx context.Context, image string, log io.Writer) (Found, error)
 }
 
 // Limits are each build's: what a build may use of the dude host.
@@ -54,6 +59,9 @@ type CLI struct {
 	TLSVerify bool
 	// The podman binary; "podman" when "".
 	Bin string
+	// A static build of dude-image-builder, run in an image to check it
+	// can run containers (CheckCommand); the builder's own executable.
+	Self string
 }
 
 func (c CLI) bin() string {
@@ -74,19 +82,26 @@ func (c CLI) auth() []string {
 	return out
 }
 
-// BuildArgs is the podman build command line for dir, tag and args: the
-// limits apply to every RUN step. podman build has no --cpus or
-// --pids-limit: CPUs are a CFS quota over a 100 ms period, and processes
-// are capped with the nproc ulimit, the closest it offers.
-func (c CLI) BuildArgs(dir, tag string, args map[string]string) []string {
-	quota := int64(c.Limits.CPUs * 100000)
-	out := []string{"build",
-		"--platform", c.Limits.Platform,
+// resources are the flags that hold a build's RUN steps, and the check
+// run in its image, to Limits. podman build has no --cpus or --pids-limit:
+// CPUs are a CFS quota over a 100 ms period, swap is none beyond the
+// memory, and processes are capped with the nproc ulimit, the closest it
+// offers.
+func (l Limits) resources() []string {
+	quota := int64(l.CPUs * 100000)
+	return []string{
 		"--cpu-period", "100000", "--cpu-quota", strconv.FormatInt(quota, 10),
-		"--memory", c.Limits.Memory, "--memory-swap", c.Limits.Memory,
+		"--memory", l.Memory, "--memory-swap", l.Memory,
 		"--ulimit", "nproc=4096:4096",
-		"--pull=newer", "--layers=false", "--force-rm",
 	}
+}
+
+// BuildArgs is the podman build command line for dir, tag and args: the
+// limits apply to every RUN step.
+func (c CLI) BuildArgs(dir, tag string, args map[string]string) []string {
+	out := []string{"build", "--platform", c.Limits.Platform}
+	out = append(out, c.Limits.resources()...)
+	out = append(out, "--pull=newer", "--layers=false", "--force-rm")
 	out = append(out, c.auth()...)
 	keys := make([]string, 0, len(args))
 	for k := range args {
@@ -146,6 +161,53 @@ func (c CLI) Prune(ctx context.Context, log io.Writer) error {
 
 func (c CLI) Remove(ctx context.Context, tag string, log io.Writer) error {
 	return c.run(ctx, log, "rmi", "--ignore", tag)
+}
+
+// CheckContainers runs Self's CheckCommand in image, as root, offline,
+// under the build's limits, with nothing of the host but Self.
+// Cancelled (a timeout, the builder stopping), podman is asked to stop
+// first, and the container is removed whatever happened: a killed podman
+// client leaves its container running.
+func (c CLI) CheckContainers(ctx context.Context, image string, log io.Writer) (Found, error) {
+	if c.Self == "" {
+		return Found{}, errors.New("the builder cannot check containers: it does not know its own executable")
+	}
+	name := "dude-check-" + randomHex(8)
+	defer c.removeContainer(ctx, name, log)
+	var out bytes.Buffer
+	args := append([]string{"run", "--rm", "--name", name, "--pull=never", "--network=none", "--user=0:0",
+		"--security-opt=label=disable"}, c.Limits.resources()...)
+	args = append(args, "--volume", c.Self+":/.dude-check:ro", "--entrypoint", "/.dude-check", image, CheckCommand)
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Stdout, cmd.Stderr = &out, log
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return Found{}, ctx.Err()
+		}
+		return Found{}, fmt.Errorf("the container check could not run in the image: %w", err)
+	}
+	return parseFound(out.Bytes())
+}
+
+// checkRemoveTimeout bounds removing a check's container, on a context of
+// its own: the job's may be done.
+const checkRemoveTimeout = 30 * time.Second
+
+func (c CLI) removeContainer(ctx context.Context, name string, log io.Writer) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkRemoveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(rctx, c.bin(), "rm", "--force", "--ignore", "--time", "0", name)
+	cmd.Stdout, cmd.Stderr = io.Discard, log
+	cmd.WaitDelay = 5 * time.Second
+	_ = cmd.Run()
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (c CLI) Controllers(ctx context.Context) ([]string, error) {

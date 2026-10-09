@@ -148,7 +148,7 @@ func TestDeclaringAPreviewCreatesItsServersAndNothingElse(t *testing.T) {
 		}
 		if sv.State != lux.SrvAsleep || *sv.Hostname != host || *sv.URL != "https://"+host || sv.RunID != nil ||
 			sv.Labels["dude.preview"] != runID || sv.Labels["dude.task"] != task || sv.Labels["dude.project"] != w.project ||
-			sv.Labels["dude.org"] != w.org {
+			sv.Labels["dude.org"] != w.org || sv.Labels[lux.AppLabel] != lux.App {
 			t.Errorf("%s = %+v", name, sv)
 		}
 		raw := string(sv.Raw)

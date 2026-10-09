@@ -357,7 +357,7 @@ func deref(s *string) string {
 // this preview already has, at whatever hostname: a create whose answer was
 // lost, or one another orchestrator made for it meanwhile.
 func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
-	labels := map[string]string{"dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
+	labels := map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),

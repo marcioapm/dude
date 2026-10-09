@@ -1,4 +1,4 @@
--- 100_harness_state.sql — what the translator keeps of a Claude Code or Codex
+-- 101_harness_state.sql — what the translator keeps of a Claude Code or Codex
 -- turn between batches.
 --
 -- OpenCode's events carry their own running totals; these two harnesses

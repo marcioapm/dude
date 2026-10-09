@@ -12,8 +12,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
-// RunImage is what a Run got from the library (runs.image): kept as it
-// was, so its page and its resumes say what it started with.
+// RunImage is the library image a Run was submitted on (runs.image); null
+// for a typed image or DUDE_AGENT_IMAGE. An agent Run's resume reuses the
+// spec lux holds (nesting included), not this; a preview's new generation
+// resolves its image again and records it again.
 type RunImage struct {
 	ImageID   string `json:"imageId"`
 	Name      string `json:"name"`
@@ -22,6 +24,9 @@ type RunImage struct {
 	// The final image lux pulls, by digest.
 	Ref   string `json:"ref"`
 	Layer string `json:"layer"`
+	// Its version can run containers: the Run asked lux for
+	// sandbox.nestedContainers, and its page says so.
+	CanRunContainers bool `json:"canRunContainers"`
 }
 
 // Site is where a Run's image may be named. Pick says which wins.
@@ -55,6 +60,18 @@ func (s Site) Pick() (imageID, ref string) {
 		}
 	}
 	return "", s.Fallback
+}
+
+// Containers is whether a Run on what Pick chose asks lux to let it start
+// containers: a library image as its version (got) says, an image typed by
+// hand never, and DUDE_AGENT_IMAGE when the operator says it can
+// (agent.nested_containers, fallback).
+func (s Site) Containers(got *RunImage, fallback bool) bool {
+	if got != nil {
+		return got.CanRunContainers
+	}
+	id, _ := s.Pick()
+	return id == "" && s.PreviewTyped == "" && s.RuntimeTyped == "" && fallback
 }
 
 // RoleImage is the image a role's settings name over a project's
@@ -146,8 +163,9 @@ func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (
 	var versionID *string
 	var number *int
 	var userRef *string
-	err := tx.QueryRow(ctx, `SELECT i.name, v.id, v.number, v.user_ref FROM images i
-		LEFT JOIN image_versions v ON v.id = i.published_version_id WHERE i.id = $1`, imageID).Scan(&name, &versionID, &number, &userRef)
+	var containers *bool
+	err := tx.QueryRow(ctx, `SELECT i.name, v.id, v.number, v.user_ref, v.can_run_containers FROM images i
+		LEFT JOIN image_versions v ON v.id = i.published_version_id WHERE i.id = $1`, imageID).Scan(&name, &versionID, &number, &userRef, &containers)
 	if db.IsNotFound(err) {
 		return Outcome{Fail: fmt.Sprintf("its image %s is not one of the organization's", imageID)}, nil
 	}
@@ -171,7 +189,7 @@ func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (
 		}
 		return Outcome{WaitBuild: build}, nil
 	}
-	img := &RunImage{ImageID: imageID, Name: name, VersionID: *versionID, Version: *number, Layer: layer}
+	img := &RunImage{ImageID: imageID, Name: name, VersionID: *versionID, Version: *number, Layer: layer, CanRunContainers: *containers}
 	var final string
 	err = tx.QueryRow(ctx, `SELECT final_ref FROM image_finals WHERE image_version_id = $1 AND layer_ref = $2`, *versionID, layer).Scan(&final)
 	if err == nil {

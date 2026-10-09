@@ -1,6 +1,7 @@
 {
   "name": "implement wi_1",
   "labels": {
+    "app": "dude",
     "dude.harness": "scripted",
     "dude.model": "fake/scripted",
     "dude.model_tier": "Coder",

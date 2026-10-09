@@ -238,6 +238,7 @@ function GeneralTab({ client, project, canEdit, onSaved, images, orgName, onMana
         <SettingRow label="Runtime image" help={`What this project’s agents work in. Without one, ${orgName}’s default base.`} data-testid="runtime-image-row">
           <ImageField
             testId="runtime-image"
+            containersFor="this project’s agents"
             label="Runtime image"
             images={images.images}
             value={project.runtimeImageId}

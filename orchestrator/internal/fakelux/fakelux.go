@@ -121,12 +121,13 @@ type execPlay struct {
 }
 
 type Run struct {
-	ID        string
-	Spec      json.RawMessage
-	State     string
-	Epoch     int
-	SessionID string
-	Inputs    []string
+	ID          string
+	Spec        json.RawMessage
+	State       string
+	StateReason string
+	Epoch       int
+	SessionID   string
+	Inputs      []string
 	// Names its agent looked up: lux records each once (lookUp).
 	looked map[string]bool
 	// Some repository got a commit from a push.
@@ -492,12 +493,16 @@ type event struct {
 }
 
 type Server struct {
-	mu      sync.Mutex
-	runs    map[string]*Run
-	byKey   map[string]string
-	next    int
-	nextEv  int64
-	nextArt int
+	// NoNestedHost: no host in the pool offers nested containers, so a Run
+	// asking for them waits, submitted, saying so in its stateReason, as
+	// lux's scheduler does (internal/server/hostfit.go).
+	NoNestedHost bool
+	mu           sync.Mutex
+	runs         map[string]*Run
+	byKey        map[string]string
+	next         int
+	nextEv       int64
+	nextArt      int
 	// Decide chooses each Run's behaviour from its spec.
 	Decide func(spec map[string]any) Behaviour
 	// Repo is a bare git repository pushes land in, as `git push` would.
@@ -898,6 +903,26 @@ func (s *Server) Lose(id string) {
 	}
 }
 
+// Wait has a Run wait for a host with reason, as lux's scheduler does when
+// its pool asks a provider for one: state provisioning, with the reason.
+func (s *Server) Wait(id, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setStateWith(run, "provisioning", reason)
+	}
+}
+
+// Place assigns a waiting Run a host, as lux's scheduler does: state
+// scheduled, with no reason. The fake starts nothing on it.
+func (s *Server) Place(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setState(run, "scheduled")
+	}
+}
+
 // Crash ends a Run's agent as a dead container would.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
@@ -1145,6 +1170,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 // start is the accepted start it plays (Run.starts).
 func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed bool) {
 	defer s.hold(epoch, holdOver)
+	if sb, _ := spec["sandbox"].(map[string]any); s.NoNestedHost && sb["nestedContainers"] == true {
+		s.mu.Lock()
+		run.StateReason = "waiting for capacity: 1 host in its pool does not support nested containers"
+		s.mu.Unlock()
+		return
+	}
 	after := s.StartAfter
 	if after <= 0 {
 		after = 20 * time.Millisecond
@@ -1472,7 +1503,7 @@ func (s *Server) setState(run *Run, state string) { s.setStateWith(run, state, "
 
 // setStateWith records a state with lux's reason for it. Callers hold s.mu.
 func (s *Server) setStateWith(run *Run, state, reason string) {
-	run.State = state
+	run.State, run.StateReason = state, reason
 	if state == "running" {
 		p := run.currentPlacement()
 		if p == nil {
@@ -1631,7 +1662,7 @@ func (s *Server) view(run *Run) map[string]any {
 			}
 		}
 	}
-	out := map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID,
+	out := map[string]any{"id": run.ID, "state": run.State, "stateReason": run.StateReason, "epoch": run.Epoch, "sessionId": run.SessionID,
 		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
 	if u, ok := s.Usage[run.ID]; ok {
 		out["usage"] = u

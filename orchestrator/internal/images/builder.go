@@ -67,6 +67,11 @@ type job struct {
 	Containerfile                      string
 	BuildArgs                          map[string]string
 	UserRef                            string
+	// The version can run containers: its final image is checked before
+	// it is pushed (checkContainers).
+	CanRunContainers bool
+	// The image's published version's number, 0 for none, for the log.
+	Published int
 }
 
 // Run takes jobs until ctx ends, writing its heartbeat throughout.
@@ -195,9 +200,10 @@ func (b *Builder) claim(ctx context.Context) (job, bool, error) {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `
-			SELECT v.image_id, i.name, COALESCE(v.number, 0), v.containerfile, v.build_args, COALESCE(v.user_ref, '')
+			SELECT v.image_id, i.name, COALESCE(v.number, 0), v.containerfile, v.build_args, COALESCE(v.user_ref, ''),
+				v.can_run_containers, COALESCE((SELECT p.number FROM image_versions p WHERE p.id = i.published_version_id), 0)
 			FROM image_versions v JOIN images i ON i.id = v.image_id WHERE v.id = $1`, j.VersionID).
-			Scan(&j.ImageID, &j.ImageName, &j.Number, &j.Containerfile, &args, &j.UserRef); err != nil {
+			Scan(&j.ImageID, &j.ImageName, &j.Number, &j.Containerfile, &args, &j.UserRef, &j.CanRunContainers, &j.Published); err != nil {
 			return err
 		}
 		if j.Kind == "build" {
@@ -342,8 +348,8 @@ func (b *Builder) do(ctx context.Context, j job) {
 	// publish nor this last one drops any.
 	b.flush(record, j, p, false)
 	log, stage := p.full()
-	if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET build_seconds = $2, push_seconds = $3 WHERE id = $1`,
-		j.ID, nullable(timings["build"]), nullable(timings["push"])); werr != nil {
+	if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET build_seconds = $2, push_seconds = $3, check_seconds = $4 WHERE id = $1`,
+		j.ID, nullable(timings["build"]), nullable(timings["push"]), nullable(timings["check"])); werr != nil {
 		b.Log.Error("recording an image job's timings", "build", j.ID, "error", werr)
 	}
 	if err == nil {
@@ -591,6 +597,13 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 		return "", wrapTimeout(ctx, err)
 	}
 	timings["build"] += time.Since(start).Seconds()
+	if j.CanRunContainers {
+		if err := b.checkContainers(ctx, j, tag, p, timings); err != nil {
+			return "", err
+		}
+		// The check is done: the page shows the push as the next stage.
+		p.setStage("pushing")
+	}
 	start = time.Now()
 	digest, err := b.Podman.Push(ctx, tag, p)
 	timings["push"] += time.Since(start).Seconds()
@@ -600,6 +613,41 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 	final := b.Repository + "@" + digest
 	p.printf("pushed %s\n", final)
 	return final, nil
+}
+
+// checkContainers checks a version marked "Can run containers" on its
+// final image, before it is pushed: the image Runs get, with the dude
+// layer's agent user and subordinate ids on it, since the user image
+// alone has no agent to check them for. A version that cannot fails the
+// job with the check's sentence, and nothing of it is pushed or published.
+func (b *Builder) checkContainers(ctx context.Context, j job, tag string, p *progress, timings map[string]float64) error {
+	p.setStage("checking")
+	p.printf("Check containers: v%d is marked Can run containers, so dude checks it.\n", j.Number)
+	start := time.Now()
+	found, err := b.Podman.CheckContainers(ctx, tag, p)
+	timings["check"] = time.Since(start).Seconds()
+	if err != nil {
+		return wrapTimeout(ctx, err)
+	}
+	for _, l := range found.LogLines() {
+		p.printf("%s\n", l)
+	}
+	result, _ := json.Marshal(map[string]any{"passed": found.Passed(), "detail": found.Detail()})
+	if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
+		return err
+	}
+	if found.Passed() {
+		p.printf("Check passed: it can run containers.\n")
+		return nil
+	}
+	sentence := found.Sentence()
+	p.printf("%s\n", sentence)
+	if j.Kind == "build" && j.Published > 0 {
+		p.printf("Not pushed. v%d stays published.\n", j.Published)
+	} else {
+		p.printf("Not pushed.\n")
+	}
+	return reason(sentence)
 }
 
 // remove untags an image the job built, whether or not it was pushed, so

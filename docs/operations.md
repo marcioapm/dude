@@ -243,10 +243,15 @@ keeps lux's server id, stores the full hostname and URL lux returns, and
 finds a preview's servers by their `dude.preview` label; it never reads a
 hostname back.
 
+Every Run and server dude submits to lux carries `app=dude`, so lux can
+name dude as the tool behind a cost. Labels are set when lux creates a Run
+or server and a resume sends none, so those created before this label was
+added keep their old labels until they are replaced.
+
 - **Declaring a preview** creates its servers (`wake: request`, `lifetime:
   owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
-  labels `dude.org`, `dude.project`, `dude.task`, `dude.preview`) and
-  nothing else: no Run, no host.
+  labels `app=dude`, `dude.org`, `dude.project`, `dude.task`,
+  `dude.preview`) and nothing else: no Run, no host.
 - **Opening a URL** (signed in to lux's previews) shows lux's waking page,
   and lux tells dude on its event feed (`GET /v1/events`). dude resumes the
   preview's Run, every checkout synced to the task's branch, or, the first
@@ -279,6 +284,14 @@ hostname back.
   only for a server that is ready, so one that never becomes ready
   (starting or unreachable) counts as idle once it has had no request for
   `idleAfter`, and an exited one at once.
+- **Containers kept while asleep**: a preview whose image can run
+  containers (a library image's version that can, or `DUDE_AGENT_IMAGE`
+  with `agent.nested_containers`) asks lux for nested containers and gets a
+  `state` volume over the engines' store (`/home/agent/.local/share`, with
+  `XDG_DATA_HOME` set to it): its images, containers and data survive a
+  park, at the cost of a larger snapshot. It runs only on a host whose
+  runner offers nested containers; until one does, its Servers tab says it
+  waits for one. See [the image library](design/images.md#can-run-containers).
 - **A new commit** on the task's branch (an agent's, or a push the forge
   reports on its pull request) is synced into a running preview at once; a
   sleeping one gets it on its next wake.
@@ -502,7 +515,7 @@ does not refuse to start.
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `agent.timeout` | `DUDE_AGENT_TIMEOUT` | `4h` | orchestrator | The most running time lux gives a phase Run (its `timeout`, running time only: parked time does not count); past it lux stops it and it fails. The conductor gets none. |
 | `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | The operator's floor: hosts (addresses, CIDR ranges, lux wildcards `*.example.com`) every agent Run may reach, under each organisation's and project's own list, which people set on the Network settings page (see [Agent network](#agent-network)). `*` turns egress filtering off for every organisation. `llm.url`'s host and dude's tools are always added. With nothing listed here, by the organisation or by the project, and no `llm.url`, egress is unrestricted. |
-| `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | Agents may run containers themselves (rootless Docker or Podman in the Run), for test suites that start their own services. Sets lux's `sandbox.nestedContainers` on every agent Run, so lux places them only on hosts whose runner offers nested containers: with none, Runs wait for one. The agent image must carry the engine. Preview servers are unaffected. |
+| `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | The fallback image, `agent.image`, can run containers (rootless Podman or Docker inside the Run). Every Run on it, agents and branch previews alike, asks lux for `sandbox.nestedContainers`, so lux places it only on hosts whose runner offers nested containers: with none, it waits for one, and the Run page says why. The image must carry the engine. A library image says this per version ("Can run containers", checked when it builds); an image typed by hand never can. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
 | `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |
 | `registry.credential` | `DUDE_REGISTRY_CREDENTIAL` | none | orchestrator | `static` only: `user:password` for `registry.host`. **Secret.** |

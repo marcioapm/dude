@@ -213,6 +213,39 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+.versionFlag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-accent-text);
+}
+/* A version's property beside its Containerfile: "Can run containers off → on". */
+.propDiff {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-6) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.propDiff > svg {
+  color: var(--ds-color-text-muted);
+}
+.propBefore,
+.propAfter,
+.propValue {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  text-decoration: none;
+}
+.propBefore {
+  color: var(--ds-diff-del-fg);
+}
+.propAfter {
+  color: var(--ds-diff-add-fg);
+}
 .diffPane {
   display: flex;
   flex-direction: column;
