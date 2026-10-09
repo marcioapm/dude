@@ -316,16 +316,13 @@ func (s *Server) Migrate(id string) {
 		}
 	}
 	s.setStateWith(run, "stopped", "migrate")
-	// The resume is the same change as the placement's end, so its waiting
-	// stage starts there (lux: "since its placement ended").
-	ended := time.Now()
-	if p := run.currentPlacement(); p != nil && p.ExitedAt != nil {
-		ended = *p.ExitedAt
-	}
 	run.Epoch++
 	run.starts++
 	run.moveNext = true
-	run.acceptedAt = &ended
+	// lux's waiting since on a move is needs_host_since, the now() of the
+	// transaction that also ended the placement.
+	accepted := time.Now()
+	run.acceptedAt = &accepted
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)

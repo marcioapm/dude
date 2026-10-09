@@ -412,9 +412,7 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	// assignment (its AcceptedAt is the Run's submit or resume).
 	s.setStage(run, "image", p.AssignedAt, "")
 	s.mu.Unlock()
-	if s.OnStage != nil {
-		s.OnStage(epoch, "image")
-	}
+	s.atStage(epoch, "image")
 	stages := [...]string{"volumes", "repositories", "container", "running"}
 	for i, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ReposReadyAt, &p.ContainerStartedAt} {
 		time.Sleep(step)
@@ -427,9 +425,7 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 		*stamp, p.State = &now, "starting"
 		s.setStage(run, stages[i], &now, "")
 		s.mu.Unlock()
-		if s.OnStage != nil {
-			s.OnStage(epoch, stages[i])
-		}
+		s.atStage(epoch, stages[i])
 	}
 	time.Sleep(step)
 	return true
@@ -453,6 +449,14 @@ const (
 func (s *Server) hold(epoch int, point string) {
 	if s.onStart != nil {
 		s.onStart(epoch, point)
+	}
+}
+
+// atStage lets a test hold a Run at a stage boundary (OnStage), without
+// the fake's lock.
+func (s *Server) atStage(epoch int, stage string) {
+	if s.OnStage != nil {
+		s.OnStage(epoch, stage)
 	}
 }
 
@@ -1151,8 +1155,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if id, ok := s.byKey[r.Header.Get("Idempotency-Key")]; ok && id != "" {
 		run := s.runs[id]
+		view := s.view(run)
 		s.mu.Unlock()
-		writeJSON(w, 200, s.view(run))
+		writeJSON(w, 200, view)
 		return
 	}
 	if msg := s.placementProblem(raw); msg != "" {
@@ -1181,9 +1186,11 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
 		s.byKey[k] = run.ID
 	}
+	// Read before play starts: placing writes the Run under s.mu.
+	view := s.view(run)
 	s.mu.Unlock()
 	go s.play(run, 1, start, spec, false)
-	writeJSON(w, 201, s.view(run))
+	writeJSON(w, 201, view)
 }
 
 // play is the agent's life: start, check out, take the task, work, go idle.
@@ -1196,9 +1203,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		s.mu.Unlock()
 		return
 	}
-	if s.OnStage != nil {
-		s.OnStage(epoch, "waiting")
-	}
+	s.atStage(epoch, "waiting")
 	after := s.StartAfter
 	if after <= 0 {
 		after = 20 * time.Millisecond
@@ -1524,6 +1529,8 @@ func chunks(s string, n int) []string {
 // Callers hold s.mu.
 func (s *Server) setState(run *Run, state string) { s.setStateWith(run, state, "") }
 
+// setStage records the Run's stage and announces a change of it, as lux's
+// stage event; since nil is now. Callers hold s.mu.
 func (s *Server) setStage(run *Run, stage string, since *time.Time, reason string) {
 	if run.stage == stage {
 		return
@@ -1569,8 +1576,8 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 	s.luxEvent(run, "state", data)
 	// Each stage's since, as lux's deriveStage takes it (the fake's own
 	// marks stand in for lux's columns):
-	//	waiting  run.acceptedAt: the submit or resume, or a move's placement
-	//	         end (lux: waiting_since, needs_host_since, last end, created)
+	//	waiting  run.acceptedAt: the submit or resume, a move's included
+	//	         (lux: waiting_since, needs_host_since, last end, created)
 	//	image    the placement's AssignedAt (placing; lux: its acceptedAt,
 	//	         which the fake's run-level AcceptedAt does not model)
 	//	volumes, repositories, container  imageReadyAt, volumesRestoredAt, reposReadyAt
@@ -1736,12 +1743,9 @@ func (s *Server) view(run *Run) map[string]any {
 		}
 	}
 	out := map[string]any{"id": run.ID, "state": run.State, "stateReason": run.StateReason, "epoch": run.Epoch, "sessionId": run.SessionID,
-		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec,
-		"stage": run.stage, "stageSince": run.stageSince, "stageReason": run.stageReason}
-	if s.LegacyStages {
-		delete(out, "stage")
-		delete(out, "stageSince")
-		delete(out, "stageReason")
+		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
+	if !s.LegacyStages {
+		out["stage"], out["stageSince"], out["stageReason"] = run.stage, run.stageSince, run.stageReason
 	}
 	if u, ok := s.Usage[run.ID]; ok {
 		out["usage"] = u

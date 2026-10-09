@@ -115,6 +115,16 @@ func (w *world) holdStages() (next func(epoch int, stage string) stageHold) {
 	}
 }
 
+// taskServers is the task's servers as the backend reads them.
+func (w *world) taskServers(task string) map[string]any {
+	w.t.Helper()
+	code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+	if code != 200 {
+		w.t.Fatal(code, out)
+	}
+	return out
+}
+
 // stageChanges is how many servers.changed notifications of a lux stage
 // the run has had.
 func (w *world) stageChanges(runID string) int {
@@ -137,32 +147,22 @@ func TestPreviewAuthoritativeStages(t *testing.T) {
 				t.Fatal(code, out)
 			}
 			runID := out["run"].(map[string]any)["id"].(string)
-			servers := func() map[string]any {
-				code, out := w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
-				if code != 200 {
-					t.Fatal(code, out)
-				}
-				return out
-			}
+			servers := func() map[string]any { return w.taskServers(wi) }
 			view := func() map[string]any { return servers()["run"].(map[string]any) }
 			// Each held boundary is exactly one stage notification more than
 			// the last; a lux without stages sends none.
 			notified := 0
-			notifiedOnce := func(stage string) {
-				t.Helper()
-				if legacy {
-					if n := w.stageChanges(runID); n != 0 {
-						t.Fatalf("legacy lux: %d stage notifications at %s", n, stage)
-					}
-					return
-				}
-				w.until("the "+stage+" notification", func() bool { return w.stageChanges(runID) >= notified+1 })
-				notified++
-			}
 			// held checks the view at a held boundary against lux's stage.
 			held := func(h stageHold, want string) {
 				t.Helper()
-				notifiedOnce(h.stage)
+				if legacy {
+					if n := w.stageChanges(runID); n != 0 {
+						t.Fatalf("legacy lux: %d stage notifications at %s", n, h.stage)
+					}
+				} else {
+					w.until("the "+h.stage+" notification", func() bool { return w.stageChanges(runID) > notified })
+					notified++
+				}
 				v := view()
 				lr, err := w.previews.Lux.Get(context.Background(), v["luxRunId"].(string))
 				if err != nil {
@@ -180,12 +180,12 @@ func TestPreviewAuthoritativeStages(t *testing.T) {
 				}
 				close(h.release)
 			}
+			// running is the servers' to time (setup/starting/ready).
+			shows := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container"}
 			checkStart := func(epoch int) {
 				t.Helper()
 				for _, stage := range []string{"waiting", "image", "volumes", "repositories", "container", "running"} {
-					// running is the servers' to time (setup/starting/ready).
-					want := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container"}[stage]
-					held(next(epoch, stage), want)
+					held(next(epoch, stage), shows[stage])
 				}
 			}
 			checkStart(1)
@@ -248,16 +248,10 @@ func TestAWakeablePreviewShowsLuxsStage(t *testing.T) {
 	// dude records the lux Run from its submit's answer, which may trail the hold.
 	var v map[string]any
 	w.until("the woken Run in the view", func() bool {
-		code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
-		if code != 200 {
-			t.Fatal(code, out)
-		}
-		v = out["run"].(map[string]any)
-		id, _ := v["luxRunId"].(string)
-		return id != ""
+		v = w.taskServers(task)["run"].(map[string]any)
+		return v["luxRunId"] != nil && v["luxRunId"] != ""
 	})
-	luxID := v["luxRunId"].(string)
-	lr, err := w.previews.Lux.Get(context.Background(), luxID)
+	lr, err := w.previews.Lux.Get(context.Background(), v["luxRunId"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}

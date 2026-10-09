@@ -132,8 +132,9 @@ describe("the task's Servers tab", () => {
 });
 
 describe("a branch preview on the Servers tab", () => {
-  for (const timestamp of [new Date(Date.now() - 24000).toISOString(), null, undefined]) {
-    test(`stage timer uses previewStageSince ${timestamp === null ? "null" : timestamp === undefined ? "absent" : "present"}`, async () => {
+  for (const since of ["present", "null", "absent"] as const) {
+    test(`stage timer uses previewStageSince ${since}`, async () => {
+      const timestamp = { present: new Date(Date.now() - 24000).toISOString(), null: null, absent: undefined }[since];
       class TimedPreview extends FixtureClient {
         override taskServers() {
           return super.taskServers().then((d) => ({ ...d, run: d.run ? {
@@ -168,8 +169,13 @@ describe("a branch preview on the Servers tab", () => {
     const mark = await until(() => panel.querySelector<HTMLElement>("[data-status]"), "the run's mark");
     expect(mark.getAttribute("data-status")).not.toBe("starting");
     expect(mark.textContent).toBe("Stopping");
+    // The tab reads the same servers: nothing on, and no "Preview starting" dot.
     const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((x) => x.textContent?.startsWith("Servers"))!;
-    expect(tab.querySelector("[data-server-state=starting]")).toBeNull();
+    await act(async () => tab.focus());
+    const tip = await until(() => document.querySelector("[role=tooltip]"), "the tab's tooltip");
+    expect(tip.textContent).toContain("No servers on");
+    // toBeNull passes on a happy-dom element: compare instead.
+    expect(tab.querySelector("[data-server-state]") === null).toBe(true);
   });
   /** Scenario e's preview, past its stages: ready, lux running it. */
   class ReadyPreview extends FixtureClient {
