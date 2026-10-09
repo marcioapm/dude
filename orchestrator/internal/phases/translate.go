@@ -84,6 +84,59 @@ type translator struct {
 	resumes map[int]bool
 	// A session's refused names said so far (refused).
 	sessionRefused map[string]bool
+	// What a Claude Code or Codex turn needs remembered between batches,
+	// saved as runs.harness_state.
+	harnessState
+	// The reason the turn in progress failed, from a Claude Code line that
+	// said so; the turn's end fails the Run with it.
+	turnError string
+}
+
+// harnessState is runs.harness_state: Claude Code's running cost for its
+// process, the last of it recorded, and its plan as TaskCreate and
+// TaskUpdate built it; the tokens of the Codex turn in progress.
+type harnessState struct {
+	claudeCost     float64
+	claudeCostSeen float64
+	claudeTasks    []map[string]any
+	codexTurn      codexTokens
+}
+
+type codexTokens struct {
+	Input, Cached, Output int64
+}
+
+type harnessStateJSON struct {
+	ClaudeCost     float64          `json:"claudeCost,omitempty"`
+	ClaudeCostSeen float64          `json:"claudeCostSeen,omitempty"`
+	ClaudeTasks    []map[string]any `json:"claudeTasks,omitempty"`
+	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
+}
+
+func (h harnessState) MarshalJSON() ([]byte, error) {
+	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks}
+	if h.codexTurn != (codexTokens{}) {
+		j.CodexTurn = &h.codexTurn
+	}
+	return json.Marshal(j)
+}
+
+func (h *harnessState) UnmarshalJSON(b []byte) error {
+	var j harnessStateJSON
+	if err := json.Unmarshal(b, &j); err != nil {
+		return err
+	}
+	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks}
+	if j.CodexTurn != nil {
+		h.codexTurn = *j.CodexTurn
+	}
+	return nil
+}
+
+// replaying: a resumed agent loading its session replays the conversation,
+// which is already recorded.
+func (t *translator) replaying(epoch int) bool {
+	return epoch > t.sessionEpoch && t.sessionEpoch != 0
 }
 
 // runUsage is the Run's usage as the agent reported it. Context is the
@@ -107,11 +160,15 @@ const promptRequestID = "prompt"
 func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	var message, thought string
 	var open []string
+	var state []byte
 	u := &t.usage
 	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, open_tool_calls,
-		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state
 		FROM runs WHERE id = $1`, t.run.ID).
-		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite); err != nil {
+		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite, &state); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(state, &t.harnessState); err != nil {
 		return err
 	}
 	t.message.WriteString(message)
@@ -147,19 +204,24 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEvent int64) error {
 	u := t.usage
 	open := slices.Sorted(maps.Keys(t.openCalls))
+	state, err := json.Marshal(t.harnessState)
+	if err != nil {
+		return err
+	}
 	// Each open call keeps the time it was first seen open
 	// (open_tool_calls_at): what "open for how long" is measured from.
-	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
+	_, err = tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
 		open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, COALESCE(open_tool_calls_at->c, to_jsonb(now())))
 			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
-		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13)
+		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
+		harness_state = $14::jsonb
 		WHERE id = $1`,
 		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
-		db.NonNil(open), t.active, cursor, afterEvent)
+		db.NonNil(open), t.active, cursor, afterEvent, state)
 	t.active = false
 	t.unsettled = nil
 	return err
@@ -693,14 +755,22 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		map[string]any{"repository": repo, "error": cloneErr})
 }
 
-// agentEvent translates the agent's own protocol messages. Only ACP is
-// spoken (the adapter dude configures for OpenCode and the scripted agent);
-// an unknown event type is ignored rather than guessed at.
+// agentEvent translates the agent's own protocol messages: ACP (OpenCode
+// and the scripted agent), Claude Code's stream-json (claude.*,
+// translate_claude.go) and Codex's app-server (codex.*,
+// translate_codex.go). An unknown event type is ignored rather than
+// guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
 		_ = json.Unmarshal(f.Event.Data, &d)
 		return t.shimEvent(ctx, tx, s, f.Event.Type, d, f.Epoch)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "claude."); ok {
+		return t.claudeEvent(ctx, tx, s, typ, f)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "codex."); ok {
+		return t.codexEvent(ctx, tx, s, typ, f)
 	}
 	typ, ok := strings.CutPrefix(f.Event.Type, "acp.")
 	if !ok {
@@ -708,7 +778,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	}
 	// While a resumed agent loads its session it replays the conversation;
 	// that replay is already recorded.
-	if f.Epoch > t.sessionEpoch && t.sessionEpoch != 0 {
+	if t.replaying(f.Epoch) {
 		return nil
 	}
 	var u map[string]any

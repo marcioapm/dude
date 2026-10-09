@@ -468,6 +468,11 @@ func anthropicBaseURL(llmURL string) string {
 // Codex sends reasoning only for a model it knows does summaries, and it
 // does not know the proxy's names: model_supports_reasoning_summaries says
 // so. Effort none or unset sends no effort.
+//
+// The same settings are also Codex's config.toml, a file secret in
+// $HOME/.codex: lux's adapter adds its MCP servers as -c overrides after
+// app-server, and Codex 0.144 then drops every -c given before the
+// subcommand, these included. The file is read either way.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
@@ -481,20 +486,26 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 		provider += ", http_headers={" + strings.Join(kv, ", ") + "}"
 	}
 	provider += "}"
-	cmd := []string{"codex",
-		"-c", "approval_policy=" + tomlString("never"),
-		"-c", "sandbox_mode=" + tomlString("danger-full-access"),
-		"-c", "check_for_update_on_startup=false",
-		"-c", "model=" + tomlString(in.Model),
-		"-c", "model_provider=" + tomlString("dude"),
-		"-c", "model_providers.dude=" + provider,
-		"-c", "model_reasoning_summary=" + tomlString("auto"),
-		"-c", "model_supports_reasoning_summaries=true",
+	settings := []string{
+		"approval_policy=" + tomlString("never"),
+		"sandbox_mode=" + tomlString("danger-full-access"),
+		"check_for_update_on_startup=false",
+		"model=" + tomlString(in.Model),
+		"model_provider=" + tomlString("dude"),
+		"model_providers.dude=" + provider,
+		"model_reasoning_summary=" + tomlString("auto"),
+		"model_supports_reasoning_summaries=true",
 	}
 	if in.Effort != "" && in.Effort != "none" {
-		cmd = append(cmd, "-c", "model_reasoning_effort="+tomlString(in.Effort))
+		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
+	}
+	cmd := []string{"codex"}
+	for _, s := range settings {
+		cmd = append(cmd, "-c", s)
 	}
 	spec.Workload.Command = append(cmd, HarnessArgs(in.Options)...)
+	spec.Secrets = append(spec.Secrets, lux.Secret{Name: "CODEX_CONFIG", Value: strings.Join(settings, "\n") + "\n",
+		As: "file", Path: agentHome + "/.codex/config.toml"})
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "OPENAI_API_KEY", Value: c.LLMKey, As: "env"})
 	}
