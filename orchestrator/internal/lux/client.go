@@ -121,8 +121,13 @@ type Artifact struct {
 	ID    string `json:"id"`
 	Epoch int    `json:"epoch"`
 	// Where it was in the container: /.lux/artifacts/<name> for what the
-	// agent published into $LUX_ARTIFACTS.
-	Path        string `json:"path"`
+	// workload published.
+	Path string `json:"path"`
+	// 1 for the first file at its path in the Run, counting up (lux#77; 0
+	// from an older lux).
+	Version int `json:"version"`
+	// What the Run said the file is when it published it.
+	Description string `json:"description"`
 	ContentType string `json:"contentType"`
 	Size        int64  `json:"size"`
 	SHA256      string `json:"sha256"`
@@ -130,10 +135,11 @@ type Artifact struct {
 	Available bool `json:"available"`
 }
 
-// PublishedDir is $LUX_ARTIFACTS inside the container, and PublishedPrefix
-// where what an agent put there is listed.
+// ShimBinary is lux's client in every container: `ShimBinary publish FILE
+// --name NAME` makes FILE an artifact listed under PublishedPrefix+NAME,
+// downloadable while the Run goes on (lux#77).
 const (
-	PublishedDir    = "/.lux/run/artifacts"
+	ShimBinary      = "/.lux/bin/lux-shim"
 	PublishedPrefix = "/.lux/artifacts/"
 )
 
@@ -349,8 +355,8 @@ type InputRequest struct {
 
 // BeforeStop is a command lux runs inside the container, as the workload's
 // user with its environment and working directory, when it stops the Run —
-// bounded by Timeout, and never longer than the stop's grace. What it
-// writes into $LUX_ARTIFACTS is collected like any artifact.
+// bounded by Timeout, and never longer than the stop's grace. The shim is
+// still up then, so it can publish (ShimBinary publish).
 type BeforeStop struct {
 	Command []string `json:"command"`
 	Timeout string   `json:"timeout,omitempty"`

@@ -199,7 +199,8 @@ func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 		t.Errorf("the index changed: %q", status)
 	}
 
-	// The hook's way: the same diff, in $LUX_ARTIFACTS, printing nothing.
+	// The hook's way on an older lux: the same diff, in $LUX_ARTIFACTS,
+	// printing nothing.
 	artifacts := filepath.Join(dir, "artifacts")
 	if out := run("artifacts", "LUX_ARTIFACTS="+artifacts); out != "" {
 		t.Errorf("the hook printed %q", out)
@@ -230,6 +231,43 @@ func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 	if string(a)+string(b) != printed || !strings.HasPrefix(string(b), "# dude-diff b ") {
 		t.Errorf("patches %q + %q, printed %q", a, b, printed)
 	}
+
+	// On lux#77 ($LUX_ARTIFACTS unset): each patch published with lux-shim
+	// under .dude-final-diff/<repo>.patch, and nothing printed. The stand-in
+	// shim keeps what it was given, by name.
+	got = publishedByHook(t, dir, "a", repo, "main", "b", repo, "main")
+	if len(got) != 2 || got[finalDiffDir+"/a.patch"]+got[finalDiffDir+"/b.patch"] != printed {
+		t.Errorf("published %q, printed %q", got, printed)
+	}
+}
+
+// publishedByHook runs the beforeStop hook's script with no $LUX_ARTIFACTS
+// and a stand-in for lux-shim (at its path in the script), and returns what
+// it published, name → content.
+func publishedByHook(t *testing.T, dir string, repos ...string) map[string]string {
+	t.Helper()
+	kept := filepath.Join(dir, "kept")
+	_ = os.MkdirAll(kept, 0o755)
+	shim := filepath.Join(dir, "lux-shim")
+	// publish FILE --name NAME: kept/<NAME with / as %>.
+	stand := "#!/bin/sh\n[ \"$1\" = publish ] && [ \"$3\" = --name ] || exit 2\n" +
+		"cp \"$2\" \"" + kept + "/$(printf %s \"$4\" | tr / %)\" && echo '{\"id\":\"art_x\"}'\n"
+	if err := os.WriteFile(shim, []byte(stand), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(diffScript, lux.ShimBinary, shim)
+	cmd := exec.Command("sh", append([]string{"-c", script, "dude-diff", "artifacts"}, repos...)...)
+	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS=")
+	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
+		t.Fatalf("the hook: %v, printed %q", err, out)
+	}
+	entries, _ := os.ReadDir(kept)
+	out := map[string]string{}
+	for _, e := range entries {
+		b, _ := os.ReadFile(filepath.Join(kept, e.Name()))
+		out[strings.ReplaceAll(e.Name(), "%", "/")] = string(b)
+	}
+	return out
 }
 
 func TestSeveralRepositoriesAreOneDiffWithTheirNames(t *testing.T) {

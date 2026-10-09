@@ -232,13 +232,16 @@ func num(n int) *int { return &n }
 // it was. Output stops at 8 MB.
 //
 // $1 is where the diff goes: "-" for standard output (the live read,
-// through exec), or "artifacts" for $LUX_ARTIFACTS/.dude-final-diff/, one
-// <repository>.patch each (the beforeStop hook, collected when the
-// container exits; together, in name order, they are what a live read
-// prints). Then, per repository: its name, its checkout, and the commit it
-// started from — a sha, or the branch lux checked out, whose first reflog
-// entry is where it started (lux checks a branch out with checkout -B,
-// which records it).
+// through exec), or "artifacts" for the final diff, one <repository>.patch
+// each published as .dude-final-diff/<repository>.patch (the beforeStop
+// hook; together, in name order, they are what a live read prints). Then,
+// per repository: its name, its checkout, and the commit it started from —
+// a sha, or the branch lux checked out, whose first reflog entry is where
+// it started (lux checks a branch out with checkout -B, which records it).
+//
+// A patch is written to a temporary directory and published with lux-shim
+// publish, which keeps its own copy. A failed publish exits 3 after trying
+// every repository.
 const diffScript = `set -u
 dest=$1; shift
 base_of() {
@@ -265,18 +268,32 @@ diffs() {
 }
 if [ "$dest" = - ]; then
   diffs "$@" | head -c 8388608
+elif [ -n "${LUX_ARTIFACTS:-}" ]; then
+` + legacyFinalDiff + `
 else
-  out=${LUX_ARTIFACTS:?}/` + finalDiffDir + `
+  tmp=$(mktemp -d) || exit 3
+  status=0
+  while [ $# -ge 3 ]; do
+    diffs "$1" "$2" "$3" | head -c 8388608 > "$tmp/$1.patch" &&
+      ` + lux.ShimBinary + ` publish "$tmp/$1.patch" --name "` + finalDiffDir + `/$1.patch" > /dev/null || status=3
+    shift 3
+  done
+  rm -rf "$tmp"
+  exit $status
+fi`
+
+// Until every lux has artifact-publish (lux#77): drop the copy.
+const legacyFinalDiff = `  out=$LUX_ARTIFACTS/` + finalDiffDir + `
   mkdir -p "$out" || exit 3
   while [ $# -ge 3 ]; do
     diffs "$1" "$2" "$3" | head -c 8388608 > "$out/.$1.tmp" && mv "$out/.$1.tmp" "$out/$1.patch"
     shift 3
-  done
-fi`
+  done`
 
-// Where the beforeStop hook leaves the final diff, under $LUX_ARTIFACTS: a
+// The name the beforeStop hook publishes the final diff under: a
 // <repository>.patch each, headed by its base like a live read's section.
-// dude's own: nothing under it is listed as a file for people.
+// dude's own: nothing under it is listed as a file for people. lux takes a
+// leading-dot segment (proto.ValidArtifactName refuses only . and ..).
 const finalDiffDir = ".dude-final-diff"
 
 // FinalDiffPrefix is where the final diff's artifacts are, as lux lists them.
