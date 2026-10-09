@@ -445,3 +445,176 @@ def test_the_image_states_render_and_the_viewer_opens_from_a_turn(gallery_page: 
     gallery_page.keyboard.press("Escape")
     expect(viewer).to_have_count(0)
     assert console_errors == []
+
+
+def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page: Page, console_errors: list):
+    """SessionTitle: pressing a session's name opens it for editing in place;
+    Escape keeps the name, Enter saves the new one."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    titles = pane.get_by_test_id("session-title")
+    expect(titles.nth(0)).to_have_text("New session")
+    titles.nth(1).click()
+    field = pane.get_by_test_id("session-title-input")
+    expect(field).to_be_focused()
+    field.fill("Dropped")
+    gallery_page.keyboard.press("Escape")
+    expect(field).to_have_count(0)
+    expect(titles.nth(1)).to_have_text("Usage-based billing")
+    titles.nth(1).click()
+    pane.get_by_test_id("session-title-input").fill("Billing v2")
+    gallery_page.keyboard.press("Enter")
+    expect(titles.nth(1)).to_have_text("Billing v2")
+    assert console_errors == []
+
+
+def test_ending_a_title_edit_from_the_keyboard_gives_the_focus_back_to_the_title(gallery_page: Page, console_errors: list):
+    """Escape, Enter on an unchanged name and Enter saving a new one each return the focus to the title
+    button, so a keyboard user carries on from it; leaving the field for something else keeps the focus there."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    title = pane.get_by_test_id("session-title").nth(1)
+    field = pane.get_by_test_id("session-title-input")
+    is_title = "el => document.activeElement === el"
+
+    def edit() -> None:
+        title.focus()
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_focused()
+
+    edit()
+    gallery_page.keyboard.press("Escape")
+    expect(field).to_have_count(0)
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    edit()
+    gallery_page.keyboard.press("Enter")
+    expect(field).to_have_count(0)
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    edit()
+    field.fill("Keyboard rename")
+    gallery_page.keyboard.press("Enter")
+    expect(title).to_have_text("Keyboard rename")
+    assert title.evaluate(is_title), gallery_page.evaluate("document.activeElement.tagName")
+    # A blur cancels and leaves the focus where it went.
+    edit()
+    share = pane.get_by_test_id("title-in-header").get_by_role("button", name="Share")
+    share.focus()
+    expect(field).to_have_count(0)
+    expect(share).to_be_focused()
+    assert console_errors == []
+
+
+def test_a_slow_rename_gives_the_focus_back_only_if_it_was_not_moved_meanwhile(gallery_page: Page, console_errors: list):
+    """A save that resolves late refocuses the title when the focus was left alone (the disabled field drops
+    it to the page), and leaves it where the user put it when they moved to another field meanwhile."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    slow = gallery_page.locator("#bs-title [data-theme]").first.get_by_test_id("slow-title")
+    title = slow.get_by_test_id("session-title")
+    field = slow.get_by_test_id("session-title-input")
+    other = slow.get_by_role("textbox", name="Another field")
+    finish = slow.get_by_role("button", name="Finish the save")
+
+    def save_pending(name: str) -> None:
+        title.focus()
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_focused()
+        field.fill(name)
+        gallery_page.keyboard.press("Enter")
+        expect(field).to_be_disabled()
+        expect(finish).to_be_enabled()
+
+    # Focus moved to another field while the save is pending: it stays there once the save resolves.
+    save_pending("Moved away")
+    other.focus()
+    other.press_sequentially("typing")
+    # A dispatched click resolves the save without moving the focus to the button.
+    finish.dispatch_event("click")
+    expect(title).to_have_text("Moved away")
+    expect(other).to_be_focused()
+    other.press_sequentially(" on")
+    expect(other).to_have_value("typing on")
+    # Focus left alone: the title takes it back.
+    save_pending("Left alone")
+    finish.dispatch_event("click")
+    expect(title).to_have_text("Left alone")
+    expect(title).to_be_focused()
+    assert console_errors == []
+
+
+def _title_fits(title) -> dict:
+    """A SessionTitle's words, as Chrome laid them out: whether they are cut, and the space around them."""
+    return title.evaluate("""el => {
+        const words = el.querySelector('[data-title-words]');
+        const header = el.closest('header');
+        return {text: words.textContent, cut: words.scrollWidth > words.clientWidth, tip: words.getAttribute('title'),
+                words: words.getBoundingClientRect().width, header: header.getBoundingClientRect().width};
+    }""")
+
+
+def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(gallery_page: Page, console_errors: list):
+    """In a screen's header at desktop width, a short title and "New session" are never cut, shown or
+    edited; a title longer than the line is cut with an ellipsis, all of it in the tooltip."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 1000})
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    headers = gallery_page.locator("#bs-title [data-theme]").first.get_by_test_id("title-in-header")
+    titles = headers.get_by_test_id("session-title")
+    short, untitled, long = (_title_fits(titles.nth(i)) for i in range(3))
+    assert (short["text"], short["cut"]) == ("Billing v2", False), short
+    assert (untitled["text"], untitled["cut"]) == ("New session", False), untitled
+    assert long["cut"] and long["tip"] == long["text"], long
+    # Cut only for want of room: the long title takes the header's line.
+    assert long["words"] > long["header"] * 0.6, long
+    # Edited, the field is as wide as the name needs and no narrower than a short one's room.
+    titles.nth(0).click()
+    field = headers.get_by_test_id("session-title-input")
+    expect(field).to_be_focused()
+    fits = field.evaluate("el => el.scrollWidth <= el.clientWidth")
+    assert fits, "the name field cuts a short name"
+    gallery_page.keyboard.press("Escape")
+    assert console_errors == []
+
+
+def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_page: Page, console_errors: list):
+    """At 375px a shared header's marker, model and Share do not shrink; they wrap under the title,
+    which keeps the first line, with room for at least "New session"."""
+    gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
+    gallery_page.set_viewport_size({"width": 375, "height": 900})
+    pane = gallery_page.locator("#bs-title [data-theme]").first
+    # The gallery's own navigation takes 220px of a phone: the header is measured as a phone's screen
+    # draws it, alone at the viewport's width (a copy, inside the pane for its theme).
+    m = pane.get_by_test_id("title-in-header").locator("header").first.evaluate("""el => {
+        const h = el.cloneNode(true);
+        h.style.cssText = 'position:fixed;left:0;top:0;width:375px;box-sizing:border-box;z-index:10';
+        el.parentElement.append(h);
+        const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
+        const probe = words.cloneNode(false);
+        probe.textContent = 'New session';
+        probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
+        h.append(probe);
+        const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,
+                   room: title.getBoundingClientRect().width, need: probe.getBoundingClientRect().width,
+                   words: words.getBoundingClientRect().width, cut: words.scrollWidth > words.clientWidth,
+                   text: words.textContent, titleBottom: title.getBoundingClientRect().bottom,
+                   metaTop: title.nextElementSibling.getBoundingClientRect().top,
+                   actionsRight: h.lastElementChild.previousElementSibling.getBoundingClientRect().right};
+        h.remove();
+        return r;
+    }""")
+    assert m["header"] == 375 and m["overflow"] <= 0, m
+    assert (m["text"], m["cut"]) == ("Billing v2", False) and m["words"] > 0, m
+    assert m["room"] > m["need"] > 0, m
+    assert m["metaTop"] >= m["titleBottom"] and m["actionsRight"] <= 375, m
+    assert console_errors == []
+
+
+def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, console_errors: list):
+    """PublishedFiles: the rail's Files, each by its own name with the folder in its tooltip, then N more."""
+    gallery_page.get_by_role("link", name="PublishedFiles", exact=True).click()
+    pane = gallery_page.locator("#bs-files [data-theme]").first
+    lists = pane.get_by_test_id("published-files")
+    first = lists.nth(0).locator('[data-name="design/metering.md"]')
+    expect(first).to_contain_text("metering.md")
+    expect(first).to_have_attribute("title", "design/metering.md")
+    expect(first).to_contain_text("v3")
+    expect(lists.nth(1)).to_contain_text("1 more")
+    assert console_errors == []

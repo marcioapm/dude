@@ -47,3 +47,20 @@ export async function canSee(organizationId: string, personId: string, sessionId
   answers.set(key, { ok, at: Date.now() });
   return ok;
 }
+
+/**
+ * Whether a read that names a brainstorm session (`?sessionId=ssn_…`) is
+ * an accepted member's. Anyone else is answered as if it did not exist,
+ * as the session's own routes answer them. Not cached: asked once per read.
+ */
+export async function mayReadSession(organizationId: string, personId: string, sessionId: string | undefined): Promise<boolean> {
+  if (!sessionId?.startsWith(BRAINSTORM_PREFIX)) return true;
+  return isSessionMember(organizationId, personId, sessionId);
+}
+
+export async function isSessionMember(organizationId: string, personId: string, sessionId: string): Promise<boolean> {
+  return withOrg(organizationId, async ({ sql }) => {
+    const rows = (await sql`SELECT session_role(${sessionId}, ${personId}) IS NOT NULL AS ok`) as Array<{ ok: boolean }>;
+    return rows[0]?.ok === true;
+  });
+}

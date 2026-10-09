@@ -42,7 +42,7 @@ export function filesOf(artifacts: readonly Artifact[]): GalleryFile[] {
 }
 
 /** Save a blob as a file, from a URL the page made. */
-function save(blob: Blob, name: string) {
+export function save(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -62,45 +62,70 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   const { toast } = useToast();
   const files = useMemo(() => filesOf(artifacts), [artifacts]);
   const [open, setOpen] = useState<string | null>(null);
-  const [version, setVersion] = useState<string | undefined>(undefined);
   const fail = (err: unknown) => toast({ title: errorText(err), tone: "danger" });
-  const download = (v: FileVersion) => void client.artifactContent(v.id).then((b) => save(b, v.name.split("/").pop() ?? v.name), fail);
+  const download = useDownload(client);
   const thumbnails = useThumbnails(client, files);
   if (files.length === 0) return null;
-  const file = files.find((f) => f.name === open);
-  const shown = file ? (file.versions.find((v) => v.id === version) ?? file.versions[0]!) : undefined;
   return (
     <div data-testid="files">
       <FileGallery
         files={files}
         thumbnail={(v) => thumbnails.get(v.id)}
-        onOpen={(f) => {
-          setVersion(undefined);
-          setOpen(f.name);
-        }}
+        onOpen={(f) => setOpen(f.name)}
         onDownload={download}
         onDownloadAll={() => void client.artifactsZip(taskId).then((b) => save(b, `${taskKey ?? taskId}-files.zip`), fail)}
       />
-      <FileViewer
-        files={files}
-        open={open}
-        onOpenChange={(name) => {
-          setVersion(undefined);
-          setOpen(name);
-        }}
-        version={version}
-        onVersionChange={setVersion}
-        onDownload={download}
-        onCopy={(v) => void client.artifactContent(v.id).then((b) => b.text()).then((t) => navigator.clipboard.writeText(t))
-          .then(() => toast({ title: `Copied ${v.name}` }), fail)}
-        onOpenSession={(v) => {
-          const a = artifacts.find((x) => x.id === v.id);
-          if (a?.runId) onOpenRun(a.runId);
-        }}
-      >
-        {shown ? <Content key={shown.id} client={client} version={shown} /> : null}
-      </FileViewer>
+      <ArtifactViewer client={client} files={files} open={open} onOpenChange={setOpen} onOpenSession={(v) => {
+        const a = artifacts.find((x) => x.id === v.id);
+        if (a?.runId) onOpenRun(a.runId);
+      }} />
     </div>
+  );
+}
+
+/** Downloading one version: its bytes read with the key, saved under its own name. */
+function useDownload(client: ApiClient): (v: FileVersion) => void {
+  const { toast } = useToast();
+  return (v) => void client.artifactContent(v.id).then((b) => save(b, v.name.split("/").pop() ?? v.name),
+    (err: unknown) => toast({ title: errorText(err), tone: "danger" }));
+}
+
+/**
+ * The viewer over a set of files, open on one by name: its content read
+ * when shown, its versions, copy and download. A task's Files and a
+ * brainstorm session's rail open the same one.
+ */
+export function ArtifactViewer({ client, files, open, onOpenChange, onOpenSession }: {
+  client: ApiClient;
+  files: readonly GalleryFile[];
+  open: string | null;
+  onOpenChange: (name: string | null) => void;
+  /** Go to the agent session that made it; absent where there is none to go to. */
+  onOpenSession?: ((v: FileVersion) => void) | undefined;
+}) {
+  const { toast } = useToast();
+  const [version, setVersion] = useState<string | undefined>(undefined);
+  const fail = (err: unknown) => toast({ title: errorText(err), tone: "danger" });
+  const download = useDownload(client);
+  const file = files.find((f) => f.name === open);
+  const shown = file ? (file.versions.find((v) => v.id === version) ?? file.versions[0]!) : undefined;
+  return (
+    <FileViewer
+      files={files}
+      open={open}
+      onOpenChange={(name) => {
+        setVersion(undefined);
+        onOpenChange(name);
+      }}
+      version={version}
+      onVersionChange={setVersion}
+      onDownload={download}
+      onCopy={(v) => void client.artifactContent(v.id).then((b) => b.text()).then((t) => navigator.clipboard.writeText(t))
+        .then(() => toast({ title: `Copied ${v.name}` }), fail)}
+      onOpenSession={onOpenSession}
+    >
+      {shown ? <Content key={shown.id} client={client} version={shown} /> : null}
+    </FileViewer>
   );
 }
 

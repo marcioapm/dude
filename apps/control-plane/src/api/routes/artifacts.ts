@@ -10,6 +10,7 @@
  */
 
 import { withOrg } from "../../db/client.ts";
+import { isSessionMember } from "../../events/visibility.ts";
 import { orchestratorStream } from "../../orchestrator/client.ts";
 import type { Principal } from "../auth.ts";
 import { badRequest, HttpError, json, notFound } from "../http.ts";
@@ -55,7 +56,8 @@ const isActive = (type: string) => /^(text\/html|application\/xhtml\+xml|image\/
 
 interface ArtifactRow {
   id: string;
-  taskId: string;
+  taskId: string | null;
+  sessionId: string | null;
   runId: string;
   name: string;
   contentType: string;
@@ -71,10 +73,15 @@ interface ArtifactRow {
   versions: number;
 }
 
-/** A task's artifacts, newest first, each with its version among those of its name. */
-async function artifactsOf(organizationId: string, taskId: string): Promise<ArtifactRow[]> {
+/** Whose files: a task's Runs', or a brainstorm session's. */
+type Owner = { taskId: string } | { sessionId: string };
+
+/** The artifacts of a task's or a session's Runs, newest first, each with its version among those of its name. */
+async function artifactsOf(organizationId: string, owner: Owner): Promise<ArtifactRow[]> {
+  const taskId = "taskId" in owner ? owner.taskId : null;
+  const sessionId = "sessionId" in owner ? owner.sessionId : null;
   const rows = await withOrg(organizationId, async ({ sql }) => (await sql`
-    SELECT a.id, r.task_id AS "taskId", a.run_id AS "runId", a.name,
+    SELECT a.id, r.task_id AS "taskId", r.session_id AS "sessionId", a.run_id AS "runId", a.name,
       a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.epoch,
       a.created_at AS "createdAt", r.phase::text AS phase, r.role::text AS role,
       row_number() OVER (PARTITION BY a.name ORDER BY a.created_at, a.epoch, a.id)::int AS version,
@@ -82,7 +89,7 @@ async function artifactsOf(organizationId: string, taskId: string): Promise<Arti
     FROM artifacts a JOIN runs r ON r.id = a.run_id
     -- dude's own (the final diff its beforeStop hook leaves) is never a
     -- file for people; the collector keeps it out, and so does this.
-    WHERE r.task_id = ${taskId} AND a.name NOT LIKE '.dude-%'
+    WHERE (r.task_id = ${taskId} OR r.session_id = ${sessionId}) AND a.name NOT LIKE '.dude-%'
     ORDER BY a.created_at DESC, a.epoch DESC, a.id DESC
     LIMIT 500`) as ArtifactRow[]);
   return rows.map((a) => ({ ...a, contentType: artifactType(a.contentType, a.name) }));
@@ -90,8 +97,14 @@ async function artifactsOf(organizationId: string, taskId: string): Promise<Arti
 
 async function listArtifacts(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.url.searchParams.get("taskId");
-  if (!taskId) throw badRequest("taskId is required");
-  return json({ artifacts: await artifactsOf(ctx.principal.organizationId, taskId) });
+  const sessionId = ctx.url.searchParams.get("sessionId");
+  const { organizationId, personId } = ctx.principal;
+  if (sessionId && !taskId) {
+    if (!(await isSessionMember(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
+    return json({ artifacts: await artifactsOf(organizationId, { sessionId }) });
+  }
+  if (!taskId || sessionId) throw badRequest("taskId or sessionId is required, not both");
+  return json({ artifacts: await artifactsOf(organizationId, { taskId }) });
 }
 
 /** An artifact's row, in the caller's organization; a session's Run's, for its members only. */
@@ -188,16 +201,29 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
     return row?.key;
   });
   if (!key) throw notFound(`task ${taskId} not found`);
-  const latest = (await artifactsOf(organizationId, taskId))
-    .filter((a) => a.version === a.versions)
-    .sort((x, y) => x.name.localeCompare(y.name));
+  return zipOf(ctx.principal, await artifactsOf(organizationId, { taskId }), key);
+}
+
+/**
+ * A brainstorm session's files as one zip, for its members alone. Named
+ * by no title: a session's name stays in the session.
+ */
+async function sessionArtifactsZip(ctx: RequestContext): Promise<Response> {
+  const sessionId = ctx.params.id!;
+  const { organizationId, personId } = ctx.principal;
+  if (!(await isSessionMember(organizationId, personId, sessionId))) throw notFound(`session ${sessionId} not found`);
+  return zipOf(ctx.principal, await artifactsOf(organizationId, { sessionId }), "session");
+}
+
+async function zipOf(principal: Principal, artifacts: ArtifactRow[], name: string): Promise<Response> {
+  const latest = artifacts.filter((a) => a.version === a.versions).sort((x, y) => x.name.localeCompare(y.name));
 
   async function* entries(): AsyncGenerator<ZipEntry> {
     const missing: string[] = [];
     for (const a of latest) {
       // The orchestrator unreachable throws rather than answers: that file
       // is missing too, not the end of the archive.
-      const res = await fetchContent(ctx.principal, a.id).catch(
+      const res = await fetchContent(principal, a.id).catch(
         (e: unknown) => new Response(null, { status: e instanceof HttpError ? e.status : 502 }),
       );
       if (!res.ok || !res.body) {
@@ -214,7 +240,7 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
   return new Response(zipStream(entries()), {
     headers: {
       "content-type": "application/zip",
-      "content-disposition": `attachment; filename="${key.replace(/[^\w.-]/g, "_")}-files.zip"`,
+      "content-disposition": `attachment; filename="${name.replace(/[^\w.-]/g, "_")}-files.zip"`,
       "x-content-type-options": "nosniff",
     },
   });
@@ -224,4 +250,5 @@ export function registerArtifactRoutes(router: Router): void {
   router.get("/v1/artifacts", listArtifacts);
   router.get("/v1/artifacts/:id/content", artifactContent);
   router.get("/v1/tasks/:id/artifacts.zip", artifactsZip);
+  router.get("/v1/brainstorms/:id/artifacts.zip", sessionArtifactsZip);
 }

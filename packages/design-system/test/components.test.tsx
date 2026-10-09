@@ -194,6 +194,29 @@ describe("NavTree task row: its people and its one state", () => {
     expect(h).toContain('data-pr-state="ci_red"');
     expect(h).not.toContain('data-status="review"');
   });
+
+  test("a retried task wears its open pull request, not its first attempt's closed one", () => {
+    const closed = { number: 101, url: "https://github.com/o/r/pull/101", state: "closed", checks: "pending", review: "pending" } as const;
+    const closedToo = { number: 107, url: "https://github.com/o/r/pull/107", state: "closed", checks: "failing", review: "changes_requested" } as const;
+    const open = { number: 125, url: "https://github.com/o/r/pull/125", state: "open", checks: "failing", review: "pending" } as const;
+    const h = render(wi([], false, { status: "review", pullRequests: [closed, closedToo, open] }));
+    expect(h).toContain('aria-label="CI failing, pull request #125 (opens on GitHub)"');
+    expect(h).toContain('href="https://github.com/o/r/pull/125"');
+    expect(h).not.toContain('data-pr-state="closed"');
+  });
+
+  test("with no open pull request, merged beats closed, and the latest closed beats the first", async () => {
+    const { currentPullRequest } = await import("../src/util/navModel.ts");
+    const base = { url: "", checks: "pending", review: "pending" } as const;
+    const pr = (number: number, state: "open" | "draft" | "closed" | "merged") => ({ ...base, number, url: `https://github.com/o/r/pull/${number}`, state });
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "closed"), pr(2, "merged"), pr(3, "closed")] }))?.number).toBe(2);
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "closed"), pr(2, "closed")] }))?.number).toBe(2);
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "merged"), pr(2, "open")] }))?.number).toBe(2);
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "closed"), pr(2, "draft")] }))?.number).toBe(2);
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "draft"), pr(2, "merged")] }))?.number).toBe(1);
+    expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "open"), pr(2, "draft")] }))?.number).toBe(2);
+    expect(currentPullRequest(wi([], false, {}))).toBeNull();
+  });
 });
 
 describe("the tree under a task: only what works now", () => {

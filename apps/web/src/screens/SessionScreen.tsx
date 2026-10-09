@@ -14,12 +14,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard,
-  ScreenHeader, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SharedMark, type ProposalCardItem,
+  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
-import { ApiError, type ApiClient } from "../api/client.ts";
+import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
+import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
+import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type Turn } from "../api/conversation.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
@@ -27,17 +28,20 @@ import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
-import { asides, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
 const OPEN_EVERY_MS = 60_000;
 
+/** What the session shows: its conversation, or its ledger. There are no Changes: a session changes no code. */
+type SessionView = "chat" | "events";
+
 /** The session's own events that change what the page reads (people, links, the card). */
 const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
-  EventTypes.BrainstormFiled, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
+  EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
 ]);
@@ -63,6 +67,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   const [problem, setProblem] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"share" | "link" | null>(null);
   const [handing, setHanding] = useState<SessionMemberView | null>(null);
+  const [view, setView] = useState<SessionView>("chat");
 
   const load = useCallback(async () => {
     try {
@@ -95,6 +100,19 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
 
   const { events } = useEventStream({ client, sessionId });
   const status = (detail?.session.run?.status ?? undefined) as RunStatus | undefined;
+
+  // What its agent published: read on opening, and again as each new one is recorded.
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const published = useMemo(() => events.filter((e) => e.eventType === EventTypes.ArtifactCreated).length, [events]);
+  useEffect(() => {
+    let current = true;
+    void client.listSessionArtifacts(sessionId).then((r) => current && setArtifacts(r.artifacts), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [client, sessionId, published]);
+  const files = useMemo(() => filesOf(artifacts), [artifacts]);
   const projection = useRef(emptyProjection());
   const projected = useRef(sessionId);
   const conversation = useMemo(() => {
@@ -117,6 +135,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     }
   }, [client, sessionId]);
 
+  const rename = useCallback(async (title: string) => {
+    setProblem(null);
+    try {
+      await client.renameSession(sessionId, title);
+      setDetail((d) => (d ? { ...d, session: { ...d.session, title, titledBy: "person" } } : d));
+      onChanged();
+    } catch (err) {
+      setProblem(`Could not rename it: ${errorText(err)}`);
+      throw err;
+    }
+  }, [client, sessionId, onChanged]);
+
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
   const lines = useMemo(() => {
     if (!detail) return [];
@@ -129,9 +159,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     }
     for (const e of events) {
       const text = sessionNotice(e, people);
+      // A rename is signed by whoever named it: the agent, or the person its words name.
+      const renamed = e.eventType === EventTypes.BrainstormRenamed;
+      const by = renamed ? (e.payload.by === "agent" ? "Brainstorm" : undefined) : dudeName(sessionId);
       if (text) out.push({ id: e.eventId, at: e.occurredAt, node: <ChatNotice key={e.eventId}
-        kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : "notice"}
-        by={dudeName(sessionId)} text={text} at={e.occurredAt} data-testid="session-notice" /> });
+        kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : renamed ? "renamed" : "notice"}
+        by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
     return out.sort((a, b) => a.at.localeCompare(b.at));
   }, [detail, events, people, client, sessionId, linkedKeys, load]);
@@ -161,7 +194,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>
       <ScreenHeader
-        title={session.title}
+        fillTitle
+        title={<SessionTitle title={session.title} untitled={UNTITLED_SESSION} maxLength={200}
+          onRename={reader ? undefined : rename} />}
         meta={<>
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
@@ -169,8 +204,14 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
         </>}
         actions={isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : undefined}
       />
-      <div className="runScreen" data-view="chat">
+      <div className="runScreen" data-view={view}>
+        {/* The Run screen's switch, without Changes: a session changes no code. */}
+        <div className="runBar">
+          <Segmented<SessionView> label="Show" value={view} onChange={setView} data-testid="session-view"
+            options={[conversationOption, eventsOption(events.length)]} />
+        </div>
         <div className="runView">
+          {view === "events" ? <EventLog events={events} people={people} /> : (
           <div className="runChat">
             <ChatTranscript
               fill
@@ -183,8 +224,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                   mode={yours ? "answer" : "chat"}
                   question={yours ? { id: yours.id, text: yours.prompt, askedBy: "the brainstorm", askedAt: yours.askedAt, options: yours.options } : undefined}
                   disabled={reader}
+                  // A session nobody has written to yet (a new one, opened at once) is for writing in.
+                  autoFocus={!reader && session.messages === 0}
                   disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
-                  placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.` : undefined}
+                  // A session has no task: the chat composer's own words would say "this task". An answer keeps its own.
+                  placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
+                    : yours ? undefined : "Message the brainstorm…"}
                   onSubmit={({ text }) => send(text)}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
@@ -212,6 +257,20 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                 {session.projects.length > 0 ? <LinkedProjects projects={session.projects} />
                   : <span className="muted">Nothing linked: it reads only what the organisation remembers.</span>}
               </SessionRailBlock>
+              <SessionRailBlock data-testid="session-files" label={<span className="sessionRailHead">
+                <span>Files{files.length > 0 ? <> <span className="ds-tnum runCount" data-testid="session-files-count">{files.length}</span></> : null}</span>
+                {files.length > 1 ? (
+                  <Button size="sm" variant="quiet" data-testid="session-files-zip" onClick={() => void client.sessionArtifactsZip(sessionId)
+                    .then((b) => save(b, "session-files.zip"), (err: unknown) => setProblem(`Could not download them: ${errorText(err)}`))}>
+                    Download all
+                  </Button>
+                ) : null}
+              </span>}>
+                {files.length > 0 ? (
+                  <PublishedFiles files={files.map((f) => ({ name: f.name, contentType: f.versions[0]!.contentType, versions: f.versions.length }))}
+                    onOpen={setViewing} />
+                ) : <span className="muted">Nothing published yet: documents it writes for you appear here.</span>}
+              </SessionRailBlock>
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
@@ -221,9 +280,11 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               </SessionRailBlock>
             </SessionRail>
           </div>
+          )}
         </div>
         {problem ? <Callout tone="danger" data-testid="session-problem">{problem}</Callout> : null}
       </div>
+      <ArtifactViewer client={client} files={files} open={viewing} onOpenChange={setViewing} />
       {isOwner ? (
         <>
           <ShareDialog client={client} detail={detail} open={dialog === "share"} onClose={() => setDialog(null)}
@@ -276,6 +337,10 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
     }
     case EventTypes.BrainstormLinked:
       return `${by} changed what the session reads.`;
+    case EventTypes.BrainstormRenamed: {
+      const title = typeof p.title === "string" ? p.title : "";
+      return p.by === "agent" ? `Named it “${title}”` : `${firstName(name(p.by))} renamed it “${title}”`;
+    }
     case EventTypes.BrainstormFiled: {
       const filed = Array.isArray(p.filed) ? p.filed as Array<{ key?: string }> : [];
       return `${typeof p.by === "string" ? p.by : by} filed ${filed.map((f) => f.key).filter(Boolean).join(", ")}.`;
