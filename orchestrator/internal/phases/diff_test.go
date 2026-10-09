@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,22 +236,31 @@ func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 	// On lux#77 ($LUX_ARTIFACTS unset): each patch published with lux-shim
 	// under .dude-final-diff/<repo>.patch, and nothing printed. The stand-in
 	// shim keeps what it was given, by name.
-	got = publishedByHook(t, dir, "a", repo, "main", "b", repo, "main")
-	if len(got) != 2 || got[finalDiffDir+"/a.patch"]+got[finalDiffDir+"/b.patch"] != printed {
-		t.Errorf("published %q, printed %q", got, printed)
+	got, code := publishedByHook(t, filepath.Join(dir, "ok"), "", "a", repo, "main", "b", repo, "main")
+	if code != 0 || len(got) != 2 || got[finalDiffDir+"/a.patch"]+got[finalDiffDir+"/b.patch"] != printed {
+		t.Errorf("exit %d, published %q, printed %q", code, got, printed)
+	}
+
+	// A publish lux-shim refuses: the other repositories are still
+	// published, and the hook exits 3.
+	got, code = publishedByHook(t, filepath.Join(dir, "refused"), finalDiffDir+"/a.patch", "a", repo, "main", "b", repo, "main")
+	if code != 3 || len(got) != 1 || got[finalDiffDir+"/b.patch"] == "" {
+		t.Errorf("with a.patch refused: exit %d, published %q; want 3 and b.patch", code, got)
 	}
 }
 
 // publishedByHook runs the beforeStop hook's script with no $LUX_ARTIFACTS
-// and a stand-in for lux-shim (at its path in the script), and returns what
-// it published, name → content.
-func publishedByHook(t *testing.T, dir string, repos ...string) map[string]string {
+// and a stand-in for lux-shim (at its path in the script) that refuses the
+// name refuse, and returns what it published, name → content, and the
+// hook's exit status.
+func publishedByHook(t *testing.T, dir, refuse string, repos ...string) (map[string]string, int) {
 	t.Helper()
 	kept := filepath.Join(dir, "kept")
 	_ = os.MkdirAll(kept, 0o755)
 	shim := filepath.Join(dir, "lux-shim")
 	// publish FILE --name NAME: kept/<NAME with / as %>.
 	stand := "#!/bin/sh\n[ \"$1\" = publish ] && [ \"$3\" = --name ] || exit 2\n" +
+		"[ \"$4\" = '" + refuse + "' ] && { echo refused >&2; exit 1; }\n" +
 		"cp \"$2\" \"" + kept + "/$(printf %s \"$4\" | tr / %)\" && echo '{\"id\":\"art_x\"}'\n"
 	if err := os.WriteFile(shim, []byte(stand), 0o755); err != nil {
 		t.Fatal(err)
@@ -258,8 +268,12 @@ func publishedByHook(t *testing.T, dir string, repos ...string) map[string]strin
 	script := strings.ReplaceAll(diffScript, lux.ShimBinary, shim)
 	cmd := exec.Command("sh", append([]string{"-c", script, "dude-diff", "artifacts"}, repos...)...)
 	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS=")
-	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
-		t.Fatalf("the hook: %v, printed %q", err, out)
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if err != nil && !errors.As(err, &ee) || stdout.Len() != 0 {
+		t.Fatalf("the hook: %v, printed %q", err, stdout.String())
 	}
 	entries, _ := os.ReadDir(kept)
 	out := map[string]string{}
@@ -267,7 +281,7 @@ func publishedByHook(t *testing.T, dir string, repos ...string) map[string]strin
 		b, _ := os.ReadFile(filepath.Join(kept, e.Name()))
 		out[strings.ReplaceAll(e.Name(), "%", "/")] = string(b)
 	}
-	return out
+	return out, cmd.ProcessState.ExitCode()
 }
 
 func TestSeveralRepositoriesAreOneDiffWithTheirNames(t *testing.T) {
