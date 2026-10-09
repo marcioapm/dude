@@ -548,10 +548,10 @@ func (c *listedAfter) ListServers(ctx context.Context, hostname string, labels .
 	return c.Client.ListServers(ctx, hostname, labels...)
 }
 
-// A server of the preview no recipe wants, created and recorded by
-// another orchestrator after this one read the preview's rows, is not
-// taken for a leftover and deleted.
-func TestAServerCreatedAfterTheRowsWereReadIsNotDeleted(t *testing.T) {
+// A declare of a pending preview deletes no server it has no row of:
+// another orchestrator may be creating one. The next wake, which is
+// claimed, deletes it once it is a real leftover (no row, no recipe).
+func TestADeclareLeavesLeftoversToTheNextWake(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
@@ -570,11 +570,21 @@ func TestAServerCreatedAfterTheRowsWereReadIsNotDeleted(t *testing.T) {
 		mustExec(t, w.owner, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname)
 			VALUES ($1, $2, 'api', $3, $4)`, runID, w.org, theirs.ID, "api-theirs."+previewDomain)
 	}}
-	w.open(web)
+	// A declare retried after a partial create: pending, with web's row live.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'pending' WHERE id = $1`, runID)
+	w.until("the declare done", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status <> 'pending'`, runID) == 1
+	})
 	if theirs.ID == "" {
 		t.Fatal("the other orchestrator's server was never made")
 	}
 	if _, ok := w.lux.TenantServer(theirs.ID); !ok {
-		t.Errorf("the other orchestrator's server was deleted; calls %v", w.lux.TenantCalls())
+		t.Fatalf("the declare deleted the other orchestrator's server; calls %v", w.lux.TenantCalls())
+	}
+
+	mustExec(t, w.owner, `DELETE FROM preview_servers WHERE lux_server_id = $1`, theirs.ID)
+	w.open(web)
+	if _, ok := w.lux.TenantServer(theirs.ID); ok {
+		t.Errorf("the next wake left the leftover in lux; calls %v", w.lux.TenantCalls())
 	}
 }
