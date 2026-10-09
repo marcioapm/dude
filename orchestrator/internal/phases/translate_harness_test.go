@@ -61,14 +61,20 @@ func (w *harnessWorld) restart() {
 }
 
 // feed gives the translator records as lux sends them, {type, data} each,
-// in one batch.
+// in one batch, from the Run's first placement.
 func (w *harnessWorld) feed(records ...map[string]any) {
+	w.t.Helper()
+	w.feedAt(1, records...)
+}
+
+// feedAt is feed from placement epoch.
+func (w *harnessWorld) feedAt(epoch int, records ...map[string]any) {
 	w.t.Helper()
 	ctx := context.Background()
 	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 		for _, r := range records {
 			data, _ := json.Marshal(r["data"])
-			f := lux.Frame{Kind: "record", Epoch: 1, Event: &lux.RecordEvent{Type: r["type"].(string), Data: data}}
+			f := lux.Frame{Kind: "record", Epoch: epoch, Event: &lux.RecordEvent{Type: r["type"].(string), Data: data}}
 			if err := w.tr.apply(ctx, tx, w.s, f); err != nil {
 				return err
 			}
@@ -580,6 +586,72 @@ func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
 	recs := recorded(t, "claude-code-real.jsonl")
 	if got := []any{recs[len(recs)-2]["type"], recs[len(recs)-1]["type"]}; !slices.Equal(got, []any{"claude.turn_end", "claude.result"}) {
 		t.Errorf("last two records = %v", got)
+	}
+}
+
+// A resumed Claude Code is a new process: its running cost starts from
+// zero again, however high its first total, and its tasks are numbered
+// from 1 again, so a TaskUpdate names its own process's task.
+func TestAResumedClaudeCodeCountsItsOwnCostAndTasks(t *testing.T) {
+	w := newHarnessWorld(t)
+	session := map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "s1"}}
+	use := func(id, name string, input map[string]any) map[string]any {
+		return map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
+			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}}}
+	}
+	w.feedAt(1, session, use("a", "TaskCreate", map[string]any{"subject": "old"}), claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.10}))
+	w.restart()
+	w.feedAt(2, session, use("b", "TaskCreate", map[string]any{"subject": "new"}),
+		use("c", "TaskUpdate", map[string]any{"taskId": "1", "status": "completed"}),
+		claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.30}))
+	events := w.events()
+	var costs []any
+	for _, e := range ofType(events, evModelRequestDone) {
+		costs = append(costs, e.Payload["costUsd"])
+	}
+	if !slices.Equal(costs, []any{0.1, 0.3}) {
+		t.Errorf("turn costs = %v, want [0.1 0.3]", costs)
+	}
+	var cost float64
+	if err := w.owner.QueryRow(context.Background(), `SELECT agent_cost_usd::float8 FROM runs WHERE id = $1`, w.run.ID).Scan(&cost); err != nil {
+		t.Fatal(err)
+	}
+	if cost != 0.4 {
+		t.Errorf("run cost %v, want 0.4", cost)
+	}
+	plans := ofType(events, evPlanUpdated)
+	want := `[{"content":"new","status":"completed"}]`
+	if got, _ := json.Marshal(plans[len(plans)-1].Payload["todos"]); string(got) != want {
+		t.Errorf("plan = %s, want %s", got, want)
+	}
+}
+
+// The plan kept between batches is bounded: past 200 tasks the oldest
+// finished ones are dropped, and the numbering still names the right one.
+func TestClaudeCodesKeptPlanIsBounded(t *testing.T) {
+	w := newHarnessWorld(t)
+	var lines []map[string]any
+	call := func(name string, input map[string]any) {
+		lines = append(lines, map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
+			"content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprint("t", len(lines)), "name": name, "input": input}}}}})
+	}
+	for i := 1; i <= 250; i++ {
+		call("TaskCreate", map[string]any{"subject": fmt.Sprint("task ", i)})
+		if i <= 100 {
+			call("TaskUpdate", map[string]any{"taskId": fmt.Sprint(i), "status": "completed"})
+		}
+	}
+	call("TaskUpdate", map[string]any{"taskId": "250", "status": "in_progress"})
+	w.feed(lines...)
+	w.restart()
+	if n := len(w.tr.claudeTasks); n != maxClaudeTasks {
+		t.Errorf("%d tasks kept, want %d", n, maxClaudeTasks)
+	}
+	plans := ofType(w.events(), evPlanUpdated)
+	todos := plans[len(plans)-1].Payload["todos"].([]any)
+	first, last := todos[0].(map[string]any), todos[len(todos)-1].(map[string]any)
+	if first["content"] != "task 51" || last["content"] != "task 250" || last["status"] != "in_progress" {
+		t.Errorf("plan runs %v .. %v", first, last)
 	}
 }
 

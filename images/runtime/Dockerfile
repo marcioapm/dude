@@ -51,15 +51,10 @@ RUN python3 -m venv /opt/playwright-venv \
 # venv's site-packages are on the system Python's path.
 RUN echo /opt/playwright-venv/lib/python3.11/site-packages > /usr/lib/python3/dist-packages/playwright-venv.pth
 
-# The agent. Installed as root into /usr/local, so the agent cannot rewrite
-# its own binary and the home volume does not hide it.
-ARG OPENCODE_VERSION=latest
-RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
-    && install -m 0755 /tmp/install/.opencode/bin/opencode /usr/local/bin/opencode \
-    && rm -rf /tmp/install
-
-# Claude Code and Codex, the other harnesses a role can run on, pinned and
-# system-wide for the same reason. Each npm platform package is a
+# The harnesses a role can run on. Installed as root into /usr/local, so
+# the agent cannot rewrite its own binary and the home volume does not hide
+# it. Claude Code and Codex are pinned, and come before OpenCode (unpinned),
+# so bumping OpenCode reuses this layer. Each npm platform package is a
 # standalone native binary (no Node): Claude Code's is the CLI itself,
 # Codex's a static musl build with the bubblewrap and ripgrep it ships.
 # Neither updates itself in a Run (dude sets DISABLE_AUTOUPDATER and
@@ -84,6 +79,12 @@ RUN set -eu; \
     ln -s /usr/local/lib/codex/codex-resources/bwrap /usr/local/bin/bwrap; \
     rm -rf /tmp/claude /tmp/codex; \
     claude --version; codex --version
+
+# OpenCode, the default harness, at its latest release.
+ARG OPENCODE_VERSION=latest
+RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
+    && install -m 0755 /tmp/install/.opencode/bin/opencode /usr/local/bin/opencode \
+    && rm -rf /tmp/install
 
 # The agent's providers: not secret, so they are the image's. They read the
 # URL and key dude gives every Run (DUDE_LLM_URL, DUDE_LLM_KEY); a Run's

@@ -8,5 +8,12 @@
 -- its tokens one model request at a time. Kept with the stream cursor, like
 -- agent_message_buffer, so a restart neither repeats nor loses any of it.
 
-ALTER TABLE runs ADD COLUMN harness_state jsonb NOT NULL DEFAULT '{}'
-  CHECK (jsonb_typeof(harness_state) = 'object');
+--
+-- Catalog changes only: the constant default adds the column without a
+-- rewrite, and the check is NOT VALID, so it binds every write from now on
+-- without scanning runs under the ACCESS EXCLUSIVE lock. Every existing row
+-- holds the default, an object, so there is nothing for it to find.
+
+ALTER TABLE runs ADD COLUMN harness_state jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE runs ADD CONSTRAINT runs_harness_state_check
+  CHECK (jsonb_typeof(harness_state) = 'object') NOT VALID;

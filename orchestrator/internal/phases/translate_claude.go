@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -264,28 +266,24 @@ func claudeTool(name string, input map[string]any) (string, map[string]any) {
 // it makes now (nil for a call that changes nothing to show). Claude Code
 // plans with TodoWrite (the whole list each time) or, from 2.1, with
 // TaskCreate and TaskUpdate (one task at a time, numbered from 1 in order
-// of creation): those are kept on the translator and the whole list
-// recorded each time, as a todowrite would.
+// of creation within its process): those are kept on the translator under
+// that number, and the whole list recorded each time, as a todowrite would.
 func (t *translator) claudePlan(name string, input map[string]any) ([]any, bool) {
 	switch name {
 	case "TodoWrite":
 		return planTodos(input), true
 	case "TaskCreate":
 		subject, _ := input["subject"].(string)
-		t.claudeTasks = append(t.claudeTasks, map[string]any{"content": subject, "status": "pending"})
+		t.claudeTaskNext++
+		t.claudeTasks = append(t.claudeTasks, map[string]any{"id": strconv.Itoa(t.claudeTaskNext), "content": subject, "status": "pending"})
+		t.claudeTasks = boundTasks(t.claudeTasks)
 	case "TaskUpdate":
 		id, _ := input["taskId"].(string)
-		var i int
-		for _, c := range id {
-			if c < '0' || c > '9' {
-				return nil, true
-			}
-			i = i*10 + int(c-'0')
-		}
-		if i < 1 || i > len(t.claudeTasks) {
+		i := slices.IndexFunc(t.claudeTasks, func(task map[string]any) bool { return task["id"] == id })
+		if i < 0 {
 			return nil, true
 		}
-		task := t.claudeTasks[i-1]
+		task := t.claudeTasks[i]
 		if st, ok := input["status"].(string); ok {
 			if st == "deleted" {
 				st = "cancelled"
@@ -302,9 +300,36 @@ func (t *translator) claudePlan(name string, input map[string]any) ([]any, bool)
 	}
 	todos := make([]any, len(t.claudeTasks))
 	for i, task := range t.claudeTasks {
-		todos[i] = maps.Clone(task)
+		todo := maps.Clone(task)
+		delete(todo, "id")
+		todos[i] = todo
 	}
 	return todos, true
+}
+
+// maxClaudeTasks bounds the plan kept in harness_state: past it, the
+// oldest finished tasks are dropped (the plan shows the rest).
+const maxClaudeTasks = 200
+
+func boundTasks(tasks []map[string]any) []map[string]any {
+	for over := len(tasks) - maxClaudeTasks; over > 0; over-- {
+		i := slices.IndexFunc(tasks, func(task map[string]any) bool {
+			return task["status"] == "completed" || task["status"] == "cancelled"
+		})
+		if i < 0 {
+			break
+		}
+		tasks = slices.Delete(tasks, i, i+1)
+	}
+	return tasks
+}
+
+// claudeProcessStarted: a resumed agent is a new Claude Code process. Its
+// running cost starts again from zero, and its tasks are numbered from 1
+// again, so neither is read against the last process's.
+func (t *translator) claudeProcessStarted() {
+	t.claudeCostSeen, t.claudeCost = 0, 0
+	t.claudeTasks, t.claudeTaskNext = nil, 0
 }
 
 // claudeTurnHalf records one half of a Claude turn's end. lux relays a
