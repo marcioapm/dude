@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { SQL } from "bun";
 import {
-  agentModelsSchema, storedAgentModelsSchema, deliveryPolicySchema, deriveProjectKey, newId, EventTypes, PROJECT_KEY, PROJECT_KEY_MESSAGE, projectKeyTakenMessage,
+  agentModelsSchema, harnessSchema, deliveryPolicySchema, deriveProjectKey, newId, EventTypes, PROJECT_KEY, PROJECT_KEY_MESSAGE, projectKeyTakenMessage,
 } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
@@ -77,7 +77,13 @@ interface ProjectRow {
 }
 
 function normalizeProject<T extends ProjectRow>(project: T) {
-  return { ...project, agentModels: storedAgentModelsSchema.parse(project.agentModels) };
+  const agentModels = Object.fromEntries(Object.entries(project.agentModels).map(([role, value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [role, value];
+    const config = { ...value } as Record<string, unknown>;
+    if (!harnessSchema.safeParse(config.harness).success) delete config.harness;
+    return [role, config];
+  }));
+  return { ...project, agentModels };
 }
 
 /** A project's image as its URL (served under its token), for the `projects` row in scope. */
