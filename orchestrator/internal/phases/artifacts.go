@@ -190,7 +190,24 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Most were recorded from the stream already: one read, rather than
+		// a conflicting insert each.
+		rows, err := tx.Query(ctx, `SELECT storage_key FROM artifacts WHERE run_id = $1`, r.ID)
+		if err != nil {
+			return err
+		}
+		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		keys := make(map[string]bool, len(recorded))
+		for _, k := range recorded {
+			keys[k] = true
+		}
 		for _, art := range files {
+			if keys[art.ID] {
+				continue
+			}
 			if err := recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art); err != nil {
 				return err
 			}
