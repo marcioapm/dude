@@ -487,6 +487,9 @@ func TestAConflictPatchingAnAdoptedServerIsTriedAgain(t *testing.T) {
 	w.until("asleep", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
+	if w.serverID(runID, "web") != old.ID {
+		t.Fatal("the server in lux was not adopted")
+	}
 	sv, _ := w.lux.TenantServer(old.ID)
 	if want := servers.ShellCommand(nil, "npm run dev -- --new"); !slices.Equal(sv.Command, want) {
 		t.Fatalf("command %v; want %v (calls %v)", sv.Command, want, w.lux.TenantCalls())
