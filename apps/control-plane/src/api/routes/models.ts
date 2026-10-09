@@ -157,8 +157,10 @@ function nameTaken(err: unknown, name: string): never {
   throw err;
 }
 
-const fieldRefused = (field: "options" | "headers", message: string) =>
-  badRequest(`request body failed validation: ${field}: ${message}`, { formErrors: [], fieldErrors: { [field]: [message] } });
+const SIZE_CHECKS: Readonly<Record<string, "options" | "headers">> = {
+  model_tiers_options_check: "options",
+  model_tiers_headers_check: "headers",
+};
 
 /**
  * What Postgres refuses in a tier the schema took, as a 400 naming the
@@ -167,9 +169,10 @@ const fieldRefused = (field: "options" | "headers", message: string) =>
  * the schema refuses it. Otherwise as nameTaken.
  */
 function tierRefused(err: unknown, input: ModelTierInput): never {
-  if (err instanceof SQL.PostgresError) {
-    if (err.errno === "23514" && err.constraint === "model_tiers_options_check") throw fieldRefused("options", TIER_JSON_TOO_BIG);
-    if (err.errno === "23514" && err.constraint === "model_tiers_headers_check") throw fieldRefused("headers", TIER_JSON_TOO_BIG);
+  const field = err instanceof SQL.PostgresError && err.errno === "23514" ? SIZE_CHECKS[err.constraint ?? ""] : undefined;
+  if (field) {
+    throw badRequest(`request body failed validation: ${field}: ${TIER_JSON_TOO_BIG}`,
+      { formErrors: [], fieldErrors: { [field]: [TIER_JSON_TOO_BIG] } });
   }
   return nameTaken(err, input.name);
 }
