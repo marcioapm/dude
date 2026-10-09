@@ -515,6 +515,27 @@ describe("a Run waiting for its image", () => {
   });
 });
 
+describe("a Run's can run containers", () => {
+  const runOf = async (id: string) => body(await call(memberKey, "GET", `/v1/runs/${id}`));
+  const taskOf = async (id: string) => body(await call(memberKey, "GET", `/v1/tasks/${id}`));
+
+  test("is what the orchestrator recorded at submit: true, false, or absent when it recorded nothing", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('tsk_crc', ${ORG}, ${PROJECT}, 50, 't')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, can_run_containers)
+      VALUES ('run_crc_yes', ${ORG}, ${PROJECT}, 'tsk_crc', 1, 'running', 'agent', true),
+             ('run_crc_no', ${ORG}, ${PROJECT}, 'tsk_crc', 2, 'running', 'agent', false),
+             ('run_crc_old', ${ORG}, ${PROJECT}, 'tsk_crc', 3, 'running', 'agent', NULL)`;
+    expect((await runOf("run_crc_yes")).canRunContainers).toBe(true);
+    expect((await runOf("run_crc_no")).canRunContainers).toBe(false);
+    expect("canRunContainers" in (await runOf("run_crc_old"))).toBe(false);
+    // The task's Runs say the same.
+    const runs = (await taskOf("tsk_crc")).runs as Json[];
+    expect(Object.fromEntries(runs.map((r) => [r.id, "canRunContainers" in r ? r.canRunContainers : "absent"]))).toEqual({
+      run_crc_yes: true, run_crc_no: false, run_crc_old: "absent",
+    });
+  });
+});
+
 describe("can run containers", () => {
   const PODMAN = "FROM debian:bookworm-slim\nRUN apt-get install -y git podman fuse-overlayfs uidmap\n";
 

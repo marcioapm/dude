@@ -1,6 +1,6 @@
 /**
  * The gallery's Image library section draws "Can run containers" in each
- * frame: its badges, the box with its hint and warning, the check stage in
+ * frame: its badges (a Run header's too), the box with its hint and warning, the check stage in
  * its states, a waiting Run, and the history's flips.
  */
 
@@ -31,7 +31,11 @@ test("Can run containers renders in dark and light, comfortable and compact", as
   for (const pane of panes) {
     const text = pane.textContent!;
     expect([...pane.querySelectorAll("[data-testid=can-run-containers]")].map((b) => b.textContent)).toEqual(
-      ["Can run containers", "Can run containers", "can run containers"]);
+      ["Can run containers", "Can run containers", "can run containers", "Can run containers"]);
+    // A Run's header: the badge after the image chip, its sentence in its title.
+    const facts = pane.querySelector("[data-testid=run-header-facts]")!;
+    expect(facts.lastElementChild!.getAttribute("data-testid")).toBe("can-run-containers");
+    expect(facts.lastElementChild!.getAttribute("title")).toBe("This Run can start containers inside it.");
     expect(pane.querySelectorAll("[role=checkbox]")).toHaveLength(3);
     expect(text).toContain("unless the base has them");
     expect(text).toContain("Existing ones keep theirs until they start a fresh run.");

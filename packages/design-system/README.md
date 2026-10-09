@@ -1343,6 +1343,12 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   in the image's header at `size="md"`, in a list row at `sm`, and in the
   picker's trail `lower` ("can run containers", as the picker writes
   "default"). `ImageChoiceView.canRunContainers` puts it there.
+- **A Run that can start containers says so in its header**: the same
+  `CanRunContainersBadge` at `sm`, after the image chip (or where it would
+  be, for an image typed by hand or dude's fallback), with `title` "This
+  Run can start containers inside it." It shows what the Run recorded when
+  it was submitted; nothing when it cannot, or for a Run from before that
+  was recorded — never a guess from today's settings.
 - **What the box needs said beside it is a muted line, not a `Callout`**:
   the `warning` glyph at 12px in attention ink, 22px in under the
   description, xs secondary text. Two of them: the hint (box on, nothing
@@ -1647,7 +1653,8 @@ MarkdownCheatsheet.
 - **ImagePicker / ImageMark / ImageStatusBadge / CanRunContainersBadge** —
   the image combobox, an image's cube mark, a newer version's state as a
   badge, and "Can run containers" (`size` `sm` | `md`, `lower` for the
-  picker's lowercase) for an image whose published version can.
+  picker's lowercase) for an image whose published version can, and
+  `title` for a Run's header, where it is the Run's.
 - **BuildQueueStrip / BuildStages / ImageState** — the builder's queue in a
   line, a build's stages, an image's state in a row.
 - **ImageHistory** — versions and their Containerfile diffs, with Publish

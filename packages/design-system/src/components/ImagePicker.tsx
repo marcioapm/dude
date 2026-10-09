@@ -63,10 +63,17 @@ export function ImageStatusBadge({ status }: { readonly status: ImageChoiceView[
   );
 }
 
-/** "Can run containers": an image whose published version can, wherever it is listed. */
-export function CanRunContainersBadge({ size = "sm", lower }: { readonly size?: "sm" | "md" | undefined; readonly lower?: boolean | undefined }) {
+/**
+ * "Can run containers": an image whose published version can, wherever it
+ * is listed; or a Run that asked for it, with title saying so in a sentence.
+ */
+export function CanRunContainersBadge({ size = "sm", lower, title }: {
+  readonly size?: "sm" | "md" | undefined;
+  readonly lower?: boolean | undefined;
+  readonly title?: string | undefined;
+}) {
   return (
-    <Badge size={size} icon="cube" emphasis="tinted" data-testid="can-run-containers">
+    <Badge size={size} icon="cube" emphasis="tinted" data-testid="can-run-containers" title={title}>
       {lower ? "can run containers" : "Can run containers"}
     </Badge>
   );
