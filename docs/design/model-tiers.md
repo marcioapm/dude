@@ -8,7 +8,7 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
 
 - **Tiers are the organisation's.** Each is `{id, name, description,
   model, effort, options, headers, position}` with who changed it and when
-  (`model_tiers`, migrations 069 and 098). Everyone in the organisation
+  (`model_tiers`, migrations 069 and 099). Everyone in the organisation
   reads them; only its admins add, change, reorder and remove them. There
   is no tier of a project's own, and no project or role names a model or
   an effort instead.
@@ -38,7 +38,7 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   no model, and its roles on them: Thinker for the conductor, brainstorm,
   investigator, reviewer, simplifier and tester, Coder for the implementer
   — the fixer follows it — and Fast for none. New organisations get them
-  from a trigger on `organizations`. Tiers from before migration 098 keep
+  from a trigger on `organizations`. Tiers from before migration 099 keep
   the model's default.
 - **What dude does not know.** Which model, or which provider, the proxy
   actually served: it may fall back by its own config. Nothing in dude says
@@ -58,7 +58,7 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
 - `model` and `effort` are gone from role settings. A request that still
   sends one is refused (400, "a role names a model tier …" / "reasoning
   effort is the model tier's (set it in Models), not the role's"); one
-  naming a tier the organisation lacks is refused too. Migration 098
+  naming a tier the organisation lacks is refused too. Migration 099
   deleted every role's `effort`.
 - **Editing a tier** moves every agent on it from its next session; a
   running session finishes on the model and settings it started with (lux

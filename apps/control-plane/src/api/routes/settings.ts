@@ -15,8 +15,10 @@
  */
 
 import {
+  allowNamesSchema,
   clampTimeLimit,
   deliveryPolicySchema,
+  egressAllows,
   EventTypes,
   newId,
   promptRoleSchema,
@@ -28,13 +30,16 @@ import {
   SETTINGS_ROLES,
   settingsPatchSchema,
   type AgentModels,
+  type AgentEgressMode,
   type DeliverySettings,
   type FullDeliveryPolicy,
+  type NetworkSettings,
   type ProjectPromptMode,
   type PromptHistory,
   type PromptRole,
   type PromptState,
   type PromptVersion,
+  type RefusedName,
   type RoleSettings,
   type SettingSource,
   type SettingsPatch,
@@ -48,6 +53,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { config } from "../../config.ts";
 import { checkSizes, listSizes } from "./machines.ts";
 import { checkTiers, listTiers } from "./models.ts";
 import { checkImages, imageIds } from "./images.ts";
@@ -78,22 +84,48 @@ function constant<T>(path: string): (ctx: RequestContext) => Promise<T> {
 }
 
 const factoryPolicy = constant<FullDeliveryPolicy>("/internal/delivery-defaults");
+
+type NetworkDefaults = { operator: string[]; always: string[]; model: string | null };
+let lastDefaults: { from: string; at: number; value: NetworkDefaults } | null = null;
+/**
+ * Under every list: the operator's (agent.egress), and the model's host and
+ * dude's tools. Configuration, which changes only when the orchestrator
+ * restarts: read again after a minute, and while the orchestrator cannot
+ * answer its last answer serves, so every settings page and save does not
+ * fail with it.
+ */
+async function networkDefaults(ctx: RequestContext): Promise<NetworkDefaults> {
+  const from = config().string("DUDE_ORCHESTRATOR_URL") ?? "";
+  const last = lastDefaults?.from === from ? lastDefaults : null;
+  if (last && Date.now() - last.at < 60_000) return last.value;
+  try {
+    const value = await fromOrchestrator<NetworkDefaults>(ctx, "/internal/network/defaults");
+    lastDefaults = { from, at: Date.now(), value };
+    return value;
+  } catch (err) {
+    if (!last) throw err;
+    // Ask again only in a minute: an orchestrator that hangs then delays one request a minute, not each.
+    lastDefaults = { ...last, at: Date.now() };
+    return last.value;
+  }
+}
 const builtinPrompts = constant<Record<PromptRole, string>>("/internal/prompts/builtin");
 
-interface Layers {
-  org: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json };
-  project?: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json };
+export interface Layers {
+  org: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json; agentEgress: string[] };
+  project?: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json; agentEgress: string[]; agentEgressMode: AgentEgressMode };
 }
 
 async function loadLayers(scope: OrgScope, projectId?: string, lock = false): Promise<Layers | null> {
   const forUpdate = scope.sql.unsafe(lock ? "FOR UPDATE" : "");
   const orgs = (await scope.sql`
-    SELECT id, name, default_agent_models AS "agentModels", delivery_policy AS "deliveryPolicy"
+    SELECT id, name, default_agent_models AS "agentModels", delivery_policy AS "deliveryPolicy", agent_egress AS "agentEgress"
     FROM organizations WHERE id = ${scope.organizationId} ${forUpdate}`) as Array<Layers["org"]>;
   if (!orgs[0]) return null;
   if (!projectId) return { org: orgs[0] };
   const projects = (await scope.sql`
-    SELECT id, name, agent_models AS "agentModels", delivery_policy AS "deliveryPolicy"
+    SELECT id, name, agent_models AS "agentModels", delivery_policy AS "deliveryPolicy", agent_egress AS "agentEgress",
+      agent_egress_mode AS "agentEgressMode"
     FROM projects WHERE id = ${projectId} ${forUpdate}`) as Array<NonNullable<Layers["project"]>>;
   return projects[0] ? { org: orgs[0], project: projects[0] } : null;
 }
@@ -154,8 +186,35 @@ function projectMode(v: VersionRow | undefined): ProjectPromptMode {
 // Reading settings
 // ---------------------------------------------------------------------------
 
+/**
+ * What an agent's Run may reach, as the orchestrator resolves it
+ * (phases.RunEgress, egress): the operator's list, the organisation's and
+ * the project's ("add"), or the project's alone ("only"), each once; ["*"]
+ * when any says anywhere, or when nothing is listed anywhere and there is
+ * no model to restrict to. A project's own list or mode is its override.
+ */
+export function network(layers: Layers, defaults: NetworkDefaults): NetworkSettings {
+  const { org, project } = layers;
+  const own = project ? project.agentEgress : org.agentEgress;
+  const runs = project?.agentEgressMode === "only" ? project.agentEgress : [...org.agentEgress, ...(project?.agentEgress ?? [])];
+  const effective = [...new Set([...defaults.operator, ...runs])];
+  const anywhere = effective.includes("*") || (effective.length === 0 && defaults.model === null);
+  return {
+    egress: { value: own, source: project && project.agentEgress.length ? "project" : "organization" },
+    ...(project
+      ? {
+          mode: { value: project.agentEgressMode, source: project.agentEgressMode === "only" ? "project" : "organization" },
+          organizationEgress: org.agentEgress,
+        }
+      : {}),
+    operator: defaults.operator,
+    always: defaults.always,
+    effective: anywhere ? ["*"] : effective,
+  };
+}
+
 async function settingsResponse(ctx: RequestContext, projectId?: string): Promise<SettingsResponse> {
-  const [factory, builtin] = await Promise.all([factoryPolicy(ctx), builtinPrompts(ctx)]);
+  const [factory, builtin, defaults] = await Promise.all([factoryPolicy(ctx), builtinPrompts(ctx), networkDefaults(ctx)]);
   return withOrg(ctx.principal.organizationId, async (scope) => {
     const layers = await loadLayers(scope, projectId);
     if (!layers) throw notFound(projectId ? `project ${projectId} not found` : "organization not found");
@@ -269,6 +328,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
       ...(layers.project ? { project: { id: layers.project.id, name: layers.project.name } } : {}),
       roles,
       delivery,
+      network: network(layers, defaults),
       canEdit: projectId ? await canEditProject(ctx, projectId) : await isOrgAdmin(ctx),
     };
   });
@@ -349,10 +409,11 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
     await checkReferences(scope, patch);
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
+    if (patch.network?.mode) throw badRequest("an organisation's list has no mode: only a project's adds to it or replaces it");
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
-        updated_at = now()
+        agent_egress = ${scope.sql.array(patch.network?.egress ?? layers.org.agentEgress, "text")}::text[], updated_at = now()
       WHERE id = ${scope.organizationId}`;
     await recordSettings(scope, ctx, null, patch);
   });
@@ -374,7 +435,9 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);
     await scope.sql`
-      UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb, updated_at = now()
+      UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
+        agent_egress = ${scope.sql.array(patch.network?.egress ?? layers.project.agentEgress, "text")}::text[],
+        agent_egress_mode = ${patch.network?.mode ?? layers.project.agentEgressMode}, updated_at = now()
       WHERE id = ${projectId}`;
     await recordSettings(scope, ctx, projectId, patch);
   });
@@ -535,7 +598,56 @@ async function restorePrompt(ctx: RequestContext): Promise<Response> {
   return json(await settingsResponse(ctx, restored ?? undefined));
 }
 
+// ---------------------------------------------------------------------------
+// The agent network: names refused, and Allow
+// ---------------------------------------------------------------------------
+
+/**
+ * The names a project's agents looked up in the last `days` and lux
+ * refused, refused in the most Runs first: one row per name. A name the
+ * project's Runs would now reach (listed since, or under a wildcard) is
+ * left out: it is no longer refused. At most the first 200 are listed,
+ * read from the first 500 so names allowed since still leave 200 to show.
+ */
+async function refusedNames(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  const days = Number(ctx.url.searchParams.get("days") ?? "7");
+  if (!Number.isInteger(days) || days < 1 || days > 90) throw badRequest("days is a whole number from 1 to 90");
+  const [defaults, settings] = await Promise.all([networkDefaults(ctx), settingsLayers(ctx, projectId)]);
+  const reach = network(settings, defaults).effective;
+  const rows = await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT name, count(*)::int AS runs, array_agg(DISTINCT role ORDER BY role) AS roles, max(refused_at) AS "lastAt"
+    FROM agent_egress_refusals WHERE project_id = ${projectId} AND refused_at > now() - make_interval(days => ${days})
+    GROUP BY name ORDER BY runs DESC, name LIMIT 500`) as RefusedName[];
+  return json({ refused: rows.filter((r) => !egressAllows(reach, r.name)).slice(0, 200) });
+}
+
+async function settingsLayers(ctx: RequestContext, projectId: string): Promise<Layers> {
+  const layers = await withOrg(ctx.principal.organizationId, (scope) => loadLayers(scope, projectId));
+  if (!layers?.project) throw notFound(`project ${projectId} not found`);
+  return layers;
+}
+
+/** One-click Allow: the names go on the end of the project's own list, each once. */
+async function allowNames(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await settingsLayers(ctx, projectId);
+  await requireProjectEditor(ctx, projectId);
+  const { names } = await parseBody(ctx.request, allowNamesSchema);
+  await withOrg(ctx.principal.organizationId, async (scope) => {
+    const layers = await loadLayers(scope, projectId, true);
+    if (!layers?.project) throw notFound(`project ${projectId} not found`);
+    const egress = [...new Set([...layers.project.agentEgress, ...names])];
+    if (egress.length > 200) throw badRequest("a project lists at most 200 hosts");
+    await scope.sql`UPDATE projects SET agent_egress = ${scope.sql.array(egress, "text")}::text[], updated_at = now() WHERE id = ${projectId}`;
+    await recordSettings(scope, ctx, projectId, { network: { egress } });
+  });
+  return json(await settingsResponse(ctx, projectId));
+}
+
 export function registerSettingsRoutes(router: Router): void {
+  router.get("/v1/projects/:id/network/refused", refusedNames);
+  router.post("/v1/projects/:id/network/allow", allowNames);
   router.get("/v1/settings/organization", getOrganizationSettings);
   router.patch("/v1/settings/organization", patchOrganizationSettings);
   router.get("/v1/projects/:id/settings", getProjectSettings);

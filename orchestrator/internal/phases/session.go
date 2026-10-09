@@ -36,8 +36,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, '') FROM runs r
-			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing); err != nil {
+		// A session spans projects: its organisation's list alone.
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, ''), o.agent_egress FROM runs r
+			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress); err != nil {
 			return fmt.Errorf("load the session's run: %w", err)
 		}
 		settings = delivery.ResolveRole(role, orgModels)

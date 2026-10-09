@@ -1,4 +1,4 @@
--- 098_tier_effort.sql — reasoning effort belongs to the model tier, not the role.
+-- 099_tier_effort.sql — reasoning effort belongs to the model tier, not the role.
 --
 -- A tier carries how hard its model thinks and the extra settings its agent
 -- is requested with, so "Thinker (High)" and "Thinker (Medium)" are two tiers

@@ -288,6 +288,12 @@ export const EventTypes = {
    * it wholesale.
    */
   PlanUpdated: "agent.plan.updated",
+  /**
+   * lux refused a name the Run's agent looked up: it is on no list the Run
+   * has (its `dns` event, allowed false). Once per Run and name. Payload:
+   * `{ name, role }`, `role` as its settings name it (fixer, implementer…).
+   */
+  NetworkRefused: "agent.network.refused",
 
   // Human interaction
   /**

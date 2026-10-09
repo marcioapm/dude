@@ -120,7 +120,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   a lux RunSpec: image, adapter, prompt, model and its tier's effort (inline OpenCode
   config in `OPENCODE_CONFIG_CONTENT`), the LLM's URL and key (`DUDE_LLM_URL`
   env, `DUDE_LLM_KEY` env secret), repository at `base_ref`, egress to the
-  LLM's host, and the agent's home as a state volume so a resume keeps the
+  LLM's host and the organisation's and project's lists, and the agent's
+  home as a state volume so a resume keeps the
   conversation.
 - **Handoff is via git.** Each publishing phase pushes to a branch of its
   own (`dude/<task>/run-<run>`) — lux lets a Run's first push go only to
@@ -305,9 +306,15 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 - **Previews open in a new tab**, never in a frame: a preview's sign-in
   cookie is SameSite=Lax and does not reach a cross-site iframe. Only an
   `https://` server URL becomes a link.
-- **Egress entries are what lux takes**: `*`, a hostname (no wildcards —
-  lux resolves each), an address or a CIDR range. The API refuses others;
-  the orchestrator leaves out any saved before it did.
+- **Egress entries are what lux takes**: `*`, a hostname, an address, a
+  CIDR range, or a wildcard `*.example.com` (lux#68: `*.` then a domain of
+  at least two labels, no port or path; it matches names under the domain,
+  not the domain itself). The API refuses others (`egressProblem` in
+  `@dude/domain`), the fake lux refuses them in lux's words, and the
+  orchestrator leaves out a preview's saved before it did and refuses to
+  start on one in `agent.egress` (`lux.ParseEgressRule`).
+  Previews and agents share the rule; an agent's list is its organisation's
+  and project's (operations, "Agent network").
 
 ## Decisions already made
 

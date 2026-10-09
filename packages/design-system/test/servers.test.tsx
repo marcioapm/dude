@@ -277,11 +277,11 @@ describe("the recipe form", () => {
 describe("the egress allowlist", () => {
   test("what lux would refuse is said so, and a host listed already that it would is marked", () => {
     expect(egressProblem("*")).toBeNull();
-    for (const ok of ["github.com", "10.0.0.5", "10.0.0.0/8", "2001:db8::/32", "::1"]) expect(egressProblem(ok)).toBeNull();
-    expect(egressProblem("*.github.com")).toContain("wildcards");
+    for (const ok of ["github.com", "10.0.0.5", "10.0.0.0/8", "2001:db8::/32", "::1", "*.github.com"]) expect(egressProblem(ok)).toBeNull();
+    expect(egressProblem("*.com")).toContain("at least two labels");
     expect(egressProblem("10.0.0.0/33")).toContain("CIDR");
-    const h = html(<HostChips hosts={["github.com", "*.npmjs.org"]} validate={egressProblem} onChange={() => {}} />);
-    expect(h).toMatch(/data-host="\*\.npmjs\.org" data-invalid="true"/);
+    const h = html(<HostChips hosts={["github.com", "*.npmjs"]} validate={egressProblem} onChange={() => {}} />);
+    expect(h).toMatch(/data-host="\*\.npmjs" data-invalid="true"/);
     expect(h).not.toMatch(/data-host="github\.com" data-invalid/);
   });
 });

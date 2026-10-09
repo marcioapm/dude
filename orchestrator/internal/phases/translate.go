@@ -33,6 +33,7 @@ const (
 	evDirectiveDelivered = "run.directive.delivered"
 	evDirectiveAccepted  = "run.directive.accepted"
 	evDirectiveFailed    = "run.directive.failed"
+	evNetworkRefused     = "agent.network.refused"
 	// inputConsumed: directiveReceipt's name for a lux.input.consumed.
 	inputConsumed = "consumed"
 )
@@ -81,6 +82,8 @@ type translator struct {
 	// Resumes to follow up once the batch commits, by epoch: true to read
 	// lux's placements first (resumes.go).
 	resumes map[int]bool
+	// A session's refused names said so far (refused).
+	sessionRefused map[string]bool
 }
 
 // runUsage is the Run's usage as the agent reported it. Context is the
@@ -291,6 +294,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		if t.run.conductor() {
 			return t.checkoutSynced(ctx, tx, f.EventData)
 		}
+	case "dns":
+		if allowed, _ := d["allowed"].(bool); !allowed {
+			return t.refused(ctx, tx, s, strings.TrimSuffix(strings.ToLower(str("name")), "."))
+		}
 	}
 	if strings.HasPrefix(f.EventType, "server.") {
 		// A server of the agent's Run changed (a person started it, it became
@@ -300,6 +307,45 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	}
 	return nil
 }
+
+// refused records a name lux would not resolve for the Run's agent: kept
+// for its project's Network page, and said on the Run the first time. lux
+// reports each distinct lookup once, but a replayed stream reports it
+// again. What it answered is not kept. Past maxRefusedNames distinct names
+// a Run's are neither kept nor said: lux does not bound refused lookups,
+// and an agent resolving random names would fill the table and the Run.
+// A session's Run has no project page to list them: it is only told, its
+// names counted in this follow alone.
+func (t *translator) refused(ctx context.Context, tx pgx.Tx, s *Syncer, name string) error {
+	if name == "" || len(name) > 253 {
+		return nil
+	}
+	role := delivery.PromptRoleFor(t.run.Phase, t.run.Role)
+	if t.run.ProjectID == "" {
+		if t.sessionRefused[name] || len(t.sessionRefused) >= maxRefusedNames {
+			return nil
+		}
+		if t.sessionRefused == nil {
+			t.sessionRefused = map[string]bool{}
+		}
+		t.sessionRefused[name] = true
+	} else {
+		err := tx.QueryRow(ctx, `INSERT INTO agent_egress_refusals (run_id, name, organization_id, project_id, role)
+			SELECT $1, $2, $3, $4, $5
+			WHERE (SELECT count(*) FROM agent_egress_refusals WHERE run_id = $1) < $6
+			ON CONFLICT (run_id, name) DO NOTHING
+			RETURNING true`, t.run.ID, name, t.run.Org, t.run.ProjectID, role, maxRefusedNames).Scan(new(bool))
+		if err == pgx.ErrNoRows {
+			return nil // seen before, or past the cap
+		} else if err != nil {
+			return err
+		}
+	}
+	return s.event(ctx, tx, t.run, evNetworkRefused, ledger.ActorSystem, map[string]any{"name": name, "role": role})
+}
+
+// maxRefusedNames is how many distinct refused names a Run keeps.
+const maxRefusedNames = 100
 
 // ended: the container stopped without dude asking — the agent crashed,
 // timed out, or its host died. A phase whose turn was already done is

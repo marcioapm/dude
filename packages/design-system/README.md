@@ -1561,7 +1561,16 @@ MarkdownCheatsheet.
   grammar.
 - **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
   project settings: the definitions, the editor with validation in words,
-  and a preview's egress allowlist as chips.
+  and a preview's egress allowlist as chips. `HostChips readOnly` lists
+  hosts changed elsewhere (an organisation's, on a project's page) with no
+  remove and no field; `muted` for what is always reachable and never
+  listed.
+- **HostPresets / RefusedHosts / NetworkRefusedNote** — the agent network:
+  a toolchain's hosts added by name, ticked when the list already reaches
+  them all; the hosts agents were refused, in how many Runs, with Allow on
+  each and Allow all; and, in a Run, the note a tool call whose output names a refused
+  host carries as `ToolCallCard`'s `note` — under the card, folded or
+  open, with Allow for the project and Settings.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
   out among actions. **TerminalLink** is it for a run's lux terminal
   ("Open terminal in lux ↗"): in an agent session's rail, and in a branch

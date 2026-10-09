@@ -1,13 +1,13 @@
 /**
- * Migration 098, effort moves onto the model tier: a role's effort is
+ * Migration 099, effort moves onto the model tier: a role's effort is
  * deleted from every organisation and project role config (a role left
  * with nothing is dropped), tiers there before keep a NULL effort, options
  * and headers, and an organisation made after gets Thinker at high and
  * Coder at medium. The table refuses an effort, options or headers the API
  * would.
  *
- * Applies the migrations before 098 to a database of its own, seeds role
- * efforts as production has them, then applies 098.
+ * Applies the migrations before 099 to a database of its own, seeds role
+ * efforts as production has them, then applies 099.
  *
  * Requires DATABASE_URL: a role that can create databases (the owner).
  */
@@ -31,7 +31,7 @@ beforeAll(async () => {
   const files = await listMigrationFiles();
   await db`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL, checksum text NOT NULL,
            applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const f of files.filter((f) => f.version < "098")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version < "099")) await db.unsafe(await f.contents());
 
   await db`INSERT INTO organizations (id, name, slug) VALUES ('org_prod', 'Prod', 'prod'), ('org_plain', 'Plain', 'plain')`;
   // As production has it: one organisation role at high. And a role whose
@@ -44,7 +44,7 @@ beforeAll(async () => {
     ('prj_a', 'org_prod', 'A', 'a', 'A', '{"reviewer": {"effort": "low", "timeLimitMinutes": 45}, "simplifier": {"effort": "max"}}'::jsonb),
     ('prj_b', 'org_plain', 'B', 'b', 'B', '{"reviewer": {"timeLimitMinutes": 60}}'::jsonb)`;
 
-  for (const f of files.filter((f) => f.version === "098")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version === "099")) await db.unsafe(await f.contents());
 }, 120_000);
 
 afterAll(async () => {

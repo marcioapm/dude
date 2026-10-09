@@ -9,7 +9,7 @@ import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
 import { SETTINGS_ROLES } from "@dude/domain";
-import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, RefusedName, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -309,8 +309,19 @@ export const SETTINGS: SettingsResponse = {
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
   },
+  network: {
+    egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },
+    organizationEgress: ["github.com", "*.github.com", "objects.githubusercontent.com"], operator: [],
+    always: ["llm.example", "dude’s tools"], effective: ["github.com", "*.github.com", "objects.githubusercontent.com"],
+  },
   canEdit: true,
 };
+
+/** What the project's agents were refused, as its Network page lists it. */
+export const REFUSED: RefusedName[] = [
+  { name: "files.pythonhosted.org", runs: 12, roles: ["fixer", "implementer"], lastAt: iso(20 * MIN) },
+  { name: "registry.npmjs.org", runs: 2, roles: ["reviewer"], lastAt: iso(3 * 60 * MIN) },
+];
 
 /** The organisation's machine sizes: lux's own default, and a bigger one the implementer runs on. */
 export const MACHINE_SIZES: MachineSizeWithUse[] = [

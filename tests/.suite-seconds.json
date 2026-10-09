@@ -23,6 +23,7 @@
   "suites/test_memory.py": 2.9,
   "suites/test_multi_tenant.py": 0.5,
   "suites/test_navigation.py": 0.6,
+  "suites/test_network.py": 8.0,
   "suites/test_people.py": 7.9,
   "suites/test_preview_secrets.py": 4.0,
   "suites/test_pull_request_loop.py": 42.0,
