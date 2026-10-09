@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,26 +78,43 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 // offering them; the operator's fallback flag alone does not ask either:
 // the image the Run resolved decides (images.Site.Containers).
 func TestNestedContainersAreAskedForOnlyWhenTheImageCan(t *testing.T) {
-	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
-		for _, set := range []bool{false, true} {
-			c, in := goldenInput(model)
-			c.NestedContainers = !set
-			in.NestedContainers = set
-			b, err := json.Marshal(buildSpec(c, in))
-			if err != nil {
-				t.Fatal(err)
-			}
-			// lux reads sandbox at the spec's top level.
-			var wire map[string]json.RawMessage
-			if err := json.Unmarshal(b, &wire); err != nil {
-				t.Fatal(err)
-			}
-			sandbox, present := wire["sandbox"]
-			if want := `{"nestedContainers":true}`; set && string(sandbox) != want {
-				t.Errorf("%s set: sandbox = %s, want %s", model, sandbox, want)
-			}
-			if !set && present {
-				t.Errorf("%s unset: sandbox = %s", model, sandbox)
+	// The scripted harness returns early without tools or egress, so each
+	// shape is its own case; "egress" also pins that the sandbox and the
+	// Run's allowlist ride the same spec.
+	shapes := map[string]func(*AgentConfig, *specInput){
+		"tools":    func(*AgentConfig, *specInput) {},
+		"no tools": func(c *AgentConfig, in *specInput) { c.ToolsURL, in.ToolsToken = "", "" },
+		"no tools, egress": func(c *AgentConfig, in *specInput) {
+			c.ToolsURL, in.ToolsToken, in.Egress = "", "", []string{"pypi.org"}
+		},
+	}
+	for _, name := range []string{"claude-opus-5-5", "fake/scripted"} {
+		for shape, edit := range shapes {
+			for _, set := range []bool{false, true} {
+				c, in := goldenInput(name)
+				edit(&c, &in)
+				model := name + " (" + shape + ")"
+				c.NestedContainers = !set
+				in.NestedContainers = set
+				b, err := json.Marshal(buildSpec(c, in))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// lux reads sandbox at the spec's top level.
+				var wire map[string]json.RawMessage
+				if err := json.Unmarshal(b, &wire); err != nil {
+					t.Fatal(err)
+				}
+				sandbox, present := wire["sandbox"]
+				if want := `{"nestedContainers":true}`; set && string(sandbox) != want {
+					t.Errorf("%s set: sandbox = %s, want %s", model, sandbox, want)
+				}
+				if !set && present {
+					t.Errorf("%s unset: sandbox = %s", model, sandbox)
+				}
+				if len(in.Egress) > 0 && !strings.Contains(string(wire["network"]), `"host":"pypi.org"`) {
+					t.Errorf("%s: network = %s, want the Run's pypi.org beside the sandbox", model, wire["network"])
+				}
 			}
 		}
 	}
