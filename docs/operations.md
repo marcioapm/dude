@@ -578,9 +578,9 @@ self-update off. The dev image (`images/runtime/Dockerfile`) pins them:
 
 | Harness | Binary | Version in the dev image | lux adapter |
 | --- | --- | --- | --- |
-| OpenCode | `opencode` | 1.18.34 | `opencode` |
-| Claude Code | `claude` | 2.1.207 | `claude-code` |
-| Codex | `codex` | 0.144.1 | `codex` |
+| OpenCode | `opencode` | the latest at build time (`OPENCODE_VERSION`) | `opencode` |
+| Claude Code | `claude` | 2.1.207 (`CLAUDE_CODE_VERSION`) | `claude-code` |
+| Codex | `codex` | 0.144.1 (`CODEX_VERSION`) | `codex` |
 
 dude gives every real agent Run on OpenCode these, and nothing else about
 its model:

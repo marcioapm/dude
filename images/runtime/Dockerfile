@@ -58,6 +58,33 @@ RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
     && install -m 0755 /tmp/install/.opencode/bin/opencode /usr/local/bin/opencode \
     && rm -rf /tmp/install
 
+# Claude Code and Codex, the other harnesses a role can run on, pinned and
+# system-wide for the same reason. Each npm platform package is a
+# standalone native binary (no Node): Claude Code's is the CLI itself,
+# Codex's a static musl build with the bubblewrap and ripgrep it ships.
+# Neither updates itself in a Run (dude sets DISABLE_AUTOUPDATER and
+# check_for_update_on_startup = false; the binaries are root's anyway).
+ARG CLAUDE_CODE_VERSION=2.1.207
+ARG CODEX_VERSION=0.144.1
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) claude_arch=linux-arm64; codex_arch=linux-arm64; codex_triple=aarch64-unknown-linux-musl ;; \
+      amd64) claude_arch=linux-x64;   codex_arch=linux-x64;   codex_triple=x86_64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /tmp/claude /tmp/codex /usr/local/lib/codex; \
+    curl -fsSL "https://registry.npmjs.org/@anthropic-ai/claude-code-${claude_arch}/-/claude-code-${claude_arch}-${CLAUDE_CODE_VERSION}.tgz" \
+      | tar -xz -C /tmp/claude --strip-components=1; \
+    install -m 0755 /tmp/claude/claude /usr/local/bin/claude; \
+    curl -fsSL "https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_VERSION}-${codex_arch}.tgz" \
+      | tar -xz -C /tmp/codex --strip-components=1; \
+    cp -r "/tmp/codex/vendor/${codex_triple}/." /usr/local/lib/codex/; \
+    chmod -R a+rX /usr/local/lib/codex; \
+    ln -s /usr/local/lib/codex/bin/codex /usr/local/bin/codex; \
+    ln -s /usr/local/lib/codex/codex-resources/bwrap /usr/local/bin/bwrap; \
+    rm -rf /tmp/claude /tmp/codex; \
+    claude --version; codex --version
+
 # The agent's providers: not secret, so they are the image's. They read the
 # URL and key dude gives every Run (DUDE_LLM_URL, DUDE_LLM_KEY); a Run's
 # model and effort come on top in OPENCODE_CONFIG_CONTENT, which declares
