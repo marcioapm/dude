@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -14,7 +15,7 @@ import (
 // artifact, in a transaction of its own as a batch would be.
 func (w *receiptWorld) published(id, path string, version int) {
 	w.t.Helper()
-	data, _ := json.Marshal(map[string]any{"artifactId": id, "path": path, "name": path[len(lux.PublishedPrefix):],
+	data, _ := json.Marshal(map[string]any{"artifactId": id, "path": path, "name": strings.TrimPrefix(path, lux.PublishedPrefix),
 		"version": version, "description": "Why the export streams rows", "size": 12, "sha256": "ab12",
 		"contentType": "text/markdown"})
 	if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
@@ -89,13 +90,7 @@ func TestAPublishedArtifactIsRecordedOnceFromTheStream(t *testing.T) {
 func TestTheFinalDiffAndCollectedFilesAreNotRecordedLive(t *testing.T) {
 	w := newReceiptWorld(t)
 	w.published("art_cccccccccccccccc", FinalDiffPrefix+"api.patch", 1)
-	data, _ := json.Marshal(map[string]any{"artifactId": "art_dddddddddddddddd", "path": "/workspace/out/report.xml",
-		"name": "/workspace/out/report.xml", "version": 1, "size": 3, "sha256": "cd"})
-	if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		return w.tr.luxEvent(context.Background(), tx, w.s, lux.Frame{Kind: "lux", EventType: "artifact.published", EventData: data})
-	}); err != nil {
-		t.Fatal(err)
-	}
+	w.published("art_dddddddddddddddd", "/workspace/out/report.xml", 1)
 	if got := w.artifacts(); len(got) != 0 {
 		t.Errorf("recorded %+v; want nothing", got)
 	}
