@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -12,6 +12,101 @@ import styles from "./Brainstorm.module.css";
  * member files from, a session's row in the list, its people and what it
  * reads in the rail, and the marker for a session someone else is in too.
  */
+
+// ---------------------------------------------------------------------------
+// The session's name
+// ---------------------------------------------------------------------------
+
+export interface SessionTitleProps {
+  /** null until its agent or a member names it: shown as `untitled`. */
+  readonly title: string | null;
+  readonly untitled?: string | undefined;
+  /** Given, a member who can chat may rename it; a reader's title is plain words. Resolves once saved; a rejection keeps the field open. */
+  readonly onRename?: ((title: string) => Promise<void>) | undefined;
+  readonly maxLength?: number | undefined;
+}
+
+/**
+ * A session's name in its header. Untitled, it reads "New session" in
+ * muted ink. With `onRename`, the name is a button: pressing it edits the
+ * name in place, Enter saves, Escape (or an unchanged name) cancels.
+ */
+export function SessionTitle({ title, untitled = "New session", onRename, maxLength = 200 }: SessionTitleProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  // Set when Enter or Escape ends the edit: the button that replaces the field takes the focus back.
+  // A blur, or a save that resolves after the focus moved elsewhere, leaves it unset.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    button.current?.focus();
+  }, [editing]);
+  const shown = title ?? untitled;
+  // The whole name in the tooltip, for when the line cuts it.
+  const words = <span className={cx(styles["titleWords"], title === null && styles["untitled"])} data-title-words=""
+    title={shown} data-untitled={title === null || undefined}>{shown}</span>;
+  if (!onRename) return <span className={styles["title"]} data-testid="session-title">{words}</span>;
+  if (!editing) {
+    return (
+      <button ref={button} type="button" className={cx(styles["title"], styles["titleEdit"])} data-testid="session-title"
+        aria-label={`Rename “${shown}”`} onClick={() => {
+          refocus.current = false;
+          setDraft(title ?? "");
+          setEditing(true);
+        }}>
+        {words}
+        <Icon name="edit" size={13} className={styles["titleGlyph"]} />
+      </button>
+    );
+  }
+  const close = (fromKeyboard: boolean) => {
+    refocus.current = fromKeyboard;
+    setEditing(false);
+  };
+  // While a save is pending the disabled field may drop the focus to the body; any other element
+  // holding it means the user moved on, and a late save must not pull the focus back.
+  const focusLeftAlone = () => {
+    const active = document.activeElement;
+    return !active || active === document.body || active === field.current || active === field.current?.parentElement;
+  };
+  const save = async () => {
+    const next = draft.trim().replace(/\s+/g, " ");
+    if (!next || next === title) {
+      close(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onRename(next);
+      close(focusLeftAlone());
+    } catch {
+      // The caller says why; the field stays open with what was typed.
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <input ref={field} className={styles["titleInput"]} aria-label="Session name" data-testid="session-title-input" autoFocus
+      // As wide as the name being typed (and the placeholder's room), up to the header's line.
+      size={Math.max(draft.length, untitled.length) + 2}
+      value={draft} maxLength={maxLength} disabled={busy} placeholder={untitled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => !busy && close(false)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void save();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          close(true);
+        }
+      }} />
+  );
+}
 
 // ---------------------------------------------------------------------------
 // The proposal card

@@ -29,6 +29,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions", s.auth(s.createSession))
 	mux.Handle("GET /internal/sessions", s.auth(s.listSessions))
 	mux.Handle("GET /internal/sessions/{id}", s.auth(s.getSession))
+	mux.Handle("POST /internal/sessions/{id}/title", s.auth(s.renameSession))
 	mux.Handle("POST /internal/sessions/{id}/chat", s.auth(s.sessionChat))
 	mux.Handle("POST /internal/sessions/{id}/link", s.auth(s.linkSession))
 	mux.Handle("POST /internal/sessions/{id}/people", s.auth(s.inviteToSession))
@@ -133,13 +134,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	title := strings.TrimSpace(body.Title)
-	if title == "" || len([]rune(title)) > sessionTitleMax {
-		return fail(http.StatusBadRequest, "bad_request", "a title of 1 to %d characters is required", sessionTitleMax)
+	title := delivery.OneLineTitle(body.Title)
+	if len([]rune(title)) > sessionTitleMax {
+		return fail(http.StatusBadRequest, "bad_request", "a title of at most %d characters", sessionTitleMax)
 	}
 	id := ids.New(ids.Session)
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(r.Context(), `INSERT INTO sessions (id, organization_id, title, created_by) VALUES ($1, $2, $3, $4)`,
+		// Untitled until its agent or a member names it.
+		if _, err := tx.Exec(r.Context(), `INSERT INTO sessions (id, organization_id, title, titled_by, created_by)
+			VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $3 <> '' THEN 'person' END, $4)`,
 			id, org, title, p.Person); err != nil {
 			return err
 		}
@@ -151,12 +154,44 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionCreated, p.ActorType, p.Actor,
-			map[string]any{"title": title})
+			map[string]any{"title": db.Nullable(title)})
 	})
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusCreated, map[string]any{"id": id, "title": title})
+	write(w, http.StatusCreated, map[string]any{"id": id, "title": db.Nullable(title)})
+	return nil
+}
+
+// renameSession is a member who can chat naming the session. A person's
+// title wins: the agent's name_session refuses from then on.
+func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org string) error {
+	p, err := sessionPrincipal(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	title := delivery.OneLineTitle(body.Title)
+	if title == "" || len([]rune(title)) > sessionTitleMax {
+		return fail(http.StatusBadRequest, "bad_request", "a title of 1 to %d characters is required", sessionTitleMax)
+	}
+	id := r.PathValue("id")
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "rename it"); err != nil {
+			return err
+		}
+		_, err := delivery.RenameSession(r.Context(), tx, delivery.SessionRef(org, id), title, p.Person, p.writer().ActorType, p.Actor)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	write(w, http.StatusOK, map[string]any{"id": id, "title": title})
 	return nil
 }
 
@@ -314,7 +349,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 			return err
 		}
 		var session json.RawMessage
-		if err := tx.QueryRow(r.Context(), `SELECT json_build_object('id', s.id, 'title', s.title, 'createdAt', s.created_at,
+		if err := tx.QueryRow(r.Context(), `SELECT json_build_object('id', s.id, 'title', s.title, 'titledBy', s.titled_by, 'createdAt', s.created_at,
 				'people', (SELECT COALESCE(json_agg(json_build_object('person', person_ref(pp), 'role', sp.role,
 					'accepted', sp.accepted_at IS NOT NULL, 'becomesOwner', sp.becomes_owner,
 					'open', COALESCE(sp.open_at > now() - interval '90 seconds', false))

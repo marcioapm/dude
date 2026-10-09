@@ -300,6 +300,9 @@ export class FixtureClient extends ApiClient {
   override listArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: this.#restarted ? RESTARTED_ARTIFACTS : [] });
   }
+  override listSessionArtifacts(): Promise<{ artifacts: Artifact[] }> {
+    return Promise.resolve({ artifacts: [] });
+  }
   override taskMetrics(_taskId: string, attempt?: number): Promise<TaskMetrics> {
     return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
