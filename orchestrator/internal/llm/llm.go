@@ -64,16 +64,16 @@ func ModelOptions(model, effort string, extra map[string]any) map[string]any {
 			out["reasoningEffort"] = effort
 		}
 	}
-	return MergeOptions(out, extra)
+	return mergeOptions(out, extra)
 }
 
-// MergeOptions deep-merges over onto base, in place: objects merge key by
+// mergeOptions deep-merges over onto base, in place: objects merge key by
 // key, anything else in over replaces what base had. Returns base.
-func MergeOptions(base, over map[string]any) map[string]any {
+func mergeOptions(base, over map[string]any) map[string]any {
 	for k, v := range over {
 		if sub, ok := v.(map[string]any); ok {
 			if have, ok := base[k].(map[string]any); ok {
-				base[k] = MergeOptions(maps.Clone(have), sub)
+				base[k] = mergeOptions(maps.Clone(have), sub)
 				continue
 			}
 		}
