@@ -11,6 +11,7 @@
   "gpt-6-sol effort=": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.harness": "codex",
       "dude.model": "gpt-6-sol",
       "dude.model_tier": "Coder",
@@ -163,6 +164,7 @@
   "gpt-6-sol effort=high": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "high",
       "dude.harness": "codex",
       "dude.model": "gpt-6-sol",
@@ -318,6 +320,7 @@
   "gpt-6-sol effort=none": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "none",
       "dude.harness": "codex",
       "dude.model": "gpt-6-sol",

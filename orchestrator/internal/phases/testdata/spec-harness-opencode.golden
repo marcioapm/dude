@@ -2,6 +2,7 @@
   "claude-sonnet-5 effort=": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.harness": "opencode",
       "dude.model": "claude-sonnet-5",
       "dude.model_tier": "Coder",
@@ -129,6 +130,7 @@
   "claude-sonnet-5 effort=high": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "high",
       "dude.harness": "opencode",
       "dude.model": "claude-sonnet-5",
@@ -257,6 +259,7 @@
   "claude-sonnet-5 effort=none": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "none",
       "dude.harness": "opencode",
       "dude.model": "claude-sonnet-5",
@@ -385,6 +388,7 @@
   "gpt-6-sol effort=": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.harness": "opencode",
       "dude.model": "gpt-6-sol",
       "dude.model_tier": "Coder",
@@ -512,6 +516,7 @@
   "gpt-6-sol effort=high": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "high",
       "dude.harness": "opencode",
       "dude.model": "gpt-6-sol",
@@ -640,6 +645,7 @@
   "gpt-6-sol effort=none": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "none",
       "dude.harness": "opencode",
       "dude.model": "gpt-6-sol",
