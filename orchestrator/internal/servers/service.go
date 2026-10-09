@@ -85,9 +85,10 @@ type RunView struct {
 	Commit    *string    `json:"commit"`
 	// A preview's: how far it is from serving, and how long it may go
 	// unused before it is parked.
-	PreviewStage      *string  `json:"previewStage"`
-	ParksAfterMinutes *float64 `json:"parksAfterMinutes"`
-	TerminalURL       *string  `json:"terminalUrl"`
+	PreviewStage      *string    `json:"previewStage"`
+	PreviewStageSince *time.Time `json:"previewStageSince"`
+	ParksAfterMinutes *float64   `json:"parksAfterMinutes"`
+	TerminalURL       *string    `json:"terminalUrl"`
 	// A wakeable preview: its servers wake on request (opening a URL).
 	Wakeable bool `json:"wakeable"`
 	// A wakeable preview nothing serves now and no wake is due.
@@ -283,7 +284,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 	}
 	if r.Kind == KindPreview && r.Wakeable {
 		// Its servers are lux's own, read by label, not its Run's.
-		s.wakeableView(ctx, r, v, &out)
+		s.wakeableView(ctx, r, v, &out, luxRun)
 		out.Moved = nil
 		return out
 	}
@@ -295,7 +296,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		}
 	}
 	if r.Kind == KindPreview {
-		v.PreviewStage = Stage(r.Status, v.LuxState, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
+		v.PreviewStage, v.PreviewStageSince = previewProgress(r.Status, v.LuxState, luxRun, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
 	}
 	out.Moved = moved(out.Servers, luxRun)
 	return out
@@ -313,6 +314,45 @@ func phaseLabel(phase string) string {
 		return l
 	}
 	return "Agent"
+}
+
+// previewProgress keeps infrastructure timing in lux and process timing in servers.
+func previewProgress(status, state string, run lux.Run, list []lux.Server, withSetup func(string) bool) (*string, *time.Time) {
+	coarse := Stage(status, state, list, withSetup)
+	if coarse == nil || run.Stage == "" {
+		return coarse, nil
+	}
+	mapped := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container", "stopping": "stopping"}
+	if stage, ok := mapped[run.Stage]; ok {
+		return &stage, run.StageSince
+	}
+	if run.Stage != "running" {
+		return coarse, nil
+	}
+	coarse = Stage(status, "running", list, withSetup)
+	var since *time.Time
+	for _, sv := range list {
+		if !sv.FromSpec {
+			continue
+		}
+		var stamp *time.Time
+		switch *coarse {
+		case "ready":
+			stamp = sv.ReadySince
+		case "setup":
+			if sv.State == lux.ServerStarting && withSetup(sv.Name) {
+				stamp = sv.Since
+			}
+		case "starting":
+			if sv.State == lux.ServerStarting {
+				stamp = sv.Since
+			}
+		}
+		if stamp != nil && (since == nil || stamp.After(*since)) {
+			since = stamp
+		}
+	}
+	return coarse, since
 }
 
 // Stage is how far a preview is from serving: scheduling (waiting for a

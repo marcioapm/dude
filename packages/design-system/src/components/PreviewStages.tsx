@@ -20,6 +20,10 @@ export interface PreviewStagesProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const STAGE_WORDS: Record<PreviewStage, string> = {
+  image: "Preparing image",
+  volumes: "Restoring volumes",
+  container: "Starting container",
+  stopping: "Stopping",
   scheduling: "Scheduling",
   cloning: "Cloning",
   setup: "Setup",
@@ -33,10 +37,12 @@ const STAGE_WORDS: Record<PreviewStage, string> = {
  * one spins with how long it has taken, the rest are hollow.
  */
 export function PreviewStages({ stage, branch, setup, elapsed, className, ...rest }: PreviewStagesProps) {
-  const at = PREVIEW_STAGES.indexOf(stage);
+  const steps: readonly PreviewStage[] = stage === "stopping" ? ["stopping"] :
+    PREVIEW_STAGES.map((s) => s === "cloning" && ["image", "volumes", "container"].includes(stage) ? stage : s);
+  const at = steps.indexOf(stage);
   return (
     <div className={cx(styles["root"], className)} aria-label="Preview progress" data-stage={stage} {...rest}>
-      {PREVIEW_STAGES.map((s, i) => {
+      {steps.map((s, i) => {
         const done = i < at;
         const now = i === at;
         const words = s === "cloning" && branch ? `${STAGE_WORDS[s]} ${branch}` : s === "setup" && setup ? `${STAGE_WORDS[s]}: ${setup}` : STAGE_WORDS[s];

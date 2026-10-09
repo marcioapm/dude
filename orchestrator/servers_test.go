@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -72,6 +73,128 @@ func (w *world) changes(runID string) []map[string]any {
 		out = append(out, p)
 	}
 	return out
+}
+
+func TestPreviewAuthoritativeStages(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%v", legacy), func(t *testing.T) {
+			w := newWorld(t)
+			w.previews.Minute = time.Hour
+			w.lux.LegacyStages = legacy
+			w.lux.ServerReadyAfter = 300 * time.Millisecond
+			type boundary struct {
+				epoch   int
+				stage   string
+				release chan struct{}
+			}
+			reached := make(chan boundary, 20)
+			done := make(chan struct{})
+			defer close(done)
+			w.lux.OnStage = func(epoch int, stage string) {
+				b := boundary{epoch, stage, make(chan struct{})}
+				reached <- b
+				select {
+				case <-b.release:
+				case <-done:
+				}
+			}
+			setup := "npm ci"
+			w.recipe("web", 3000, "npm run dev", "", &setup, true)
+			wi := w.task()
+			code, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+			if code != 201 {
+				t.Fatal(code, out)
+			}
+			runID := out["run"].(map[string]any)["id"].(string)
+			view := func() map[string]any {
+				code, out := w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
+				if code != 200 {
+					t.Fatal(code, out)
+				}
+				return out["run"].(map[string]any)
+			}
+			checkStart := func(epoch int) {
+				for _, stage := range []string{"waiting", "image", "volumes", "repositories", "container", "running"} {
+					var b boundary
+					w.until("held at "+stage, func() bool {
+						select {
+						case b = <-reached:
+							return true
+						default:
+							return false
+						}
+					})
+					if b.epoch != epoch || b.stage != stage {
+						t.Fatalf("boundary %+v", b)
+					}
+					v := view()
+					lr, err := w.previews.Lux.Get(context.Background(), v["luxRunId"].(string))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if legacy {
+						if v["previewStageSince"] != nil {
+							t.Fatalf("legacy timer: %v", v)
+						}
+					} else if stage != "running" {
+						want := map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes", "repositories": "cloning", "container": "container"}[stage]
+						if v["previewStage"] != want || v["previewStageSince"] != lr.StageSince.Format(time.RFC3339Nano) {
+							t.Fatalf("stage %s: %v, lux %+v", stage, v, lr)
+						}
+					}
+					close(b.release)
+				}
+			}
+			checkStart(1)
+			w.until("setup", func() bool { return view()["previewStage"] == "setup" })
+			_, out = w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
+			v := out["run"].(map[string]any)
+			if !legacy && v["previewStageSince"] != serverNamed(out, "web")["since"] {
+				t.Fatalf("setup: %v", out)
+			}
+			w.until("ready", func() bool { return view()["previewStage"] == "ready" })
+			mustExec(t, w.owner, `UPDATE runs SET started_at = now() - interval '34 minutes' WHERE id = $1`, runID)
+			luxID := view()["luxRunId"].(string)
+			go w.lux.Migrate(luxID)
+			var b boundary
+			w.until("stopping", func() bool {
+				select {
+				case b = <-reached:
+					return true
+				default:
+					return false
+				}
+			})
+			if b.stage != "stopping" {
+				t.Fatal(b)
+			}
+			if !legacy && view()["previewStage"] != "stopping" {
+				t.Fatal(view())
+			}
+			close(b.release)
+			checkStart(2)
+			w.until("ready after move", func() bool { return view()["previewStage"] == "ready" })
+			w.previews.Minute = time.Millisecond
+			w.until("parked", func() bool { return view()["state"] == "paused" && w.lux.State(luxID) == "stopped" })
+			w.previews.Minute = time.Hour
+			code, out = w.do("POST", "/internal/runs/"+runID+"/servers/start-all", nil)
+			if code != 200 {
+				t.Fatal(code, out)
+			}
+			checkStart(3)
+			w.until("ready after warm resume", func() bool { return view()["previewStage"] == "ready" })
+			_, out = w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
+			v = out["run"].(map[string]any)
+			if !legacy && v["previewStageSince"] != serverNamed(out, "web")["readySince"] {
+				t.Fatalf("ready timer: %v", out)
+			}
+			if !legacy {
+				w.until("stage notification", func() bool {
+					return slices.ContainsFunc(w.changes(runID), func(p map[string]any) bool { return p["change"] == "stage" })
+				})
+			}
+		})
+	}
 }
 
 func TestAWorkingAgentsServersAreItsRunsThroughLux(t *testing.T) {

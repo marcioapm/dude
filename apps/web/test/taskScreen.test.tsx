@@ -132,6 +132,25 @@ describe("the task's Servers tab", () => {
 });
 
 describe("a branch preview on the Servers tab", () => {
+  for (const timestamp of [new Date(Date.now() - 24000).toISOString(), null, undefined]) {
+    test(`stage timer uses previewStageSince ${timestamp === null ? "null" : timestamp === undefined ? "absent" : "present"}`, async () => {
+      class TimedPreview extends FixtureClient {
+        override taskServers() {
+          return super.taskServers().then((d) => ({ ...d, run: d.run ? {
+            ...d.run, startedAt: new Date(Date.now() - 34 * 60000).toISOString(),
+            previewStage: "volumes" as const, previewStageSince: timestamp,
+          } : null }));
+        }
+      }
+      const page = await taskPage(new TimedPreview("e"), { tab: "servers" });
+      const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
+      expect(progress.textContent).toContain("Restoring volumes");
+      expect(progress.textContent).not.toContain("Cloning");
+      const active = progress.querySelector('[aria-current="step"]')!;
+      expect(active.textContent).not.toContain("34m");
+      expect(active.textContent?.includes("·")).toBe(Boolean(timestamp));
+    });
+  }
   /** Scenario e's preview, past its stages: ready, lux running it. */
   class ReadyPreview extends FixtureClient {
     override taskServers() {

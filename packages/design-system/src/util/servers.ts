@@ -48,7 +48,7 @@ export interface ServerWords {
 export type ServerRunContext = Pick<ServersRun, "kind" | "previewStage"> | null | undefined;
 
 /** Before "starting servers", a preview's spec servers are waiting, not stopped. */
-const BEFORE_SERVERS: ReadonlySet<ServersRun["previewStage"]> = new Set(["scheduling", "cloning", "setup"]);
+const BEFORE_SERVERS: ReadonlySet<ServersRun["previewStage"]> = new Set(["scheduling", "image", "volumes", "cloning", "container", "setup"]);
 
 export function describeServer(server: RunServer, now: number, run?: ServerRunContext): ServerWords {
   const since = toMs(server.since) ?? now;

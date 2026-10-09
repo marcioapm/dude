@@ -658,6 +658,8 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas WHERE id = $1`,
 			r.ID, str("repo"), str("base"))
 		return err
+	case f.EventType == "stage":
+		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "stage"})
 	case strings.HasPrefix(f.EventType, "server."):
 		return phases.ServerEvent(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, f.EventType, f.EventData)
 	}
