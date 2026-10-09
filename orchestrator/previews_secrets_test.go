@@ -520,28 +520,44 @@ func (c *lostAddAnswer) Retried() bool {
 }
 
 // lostSubmitAnswer passes a submit to lux, then, once, loses lux's answer
-// after running after: what changed before dude's retry. retried is the
-// spec of the first submit after that.
+// after running after: what changed before dude's retry.
 type lostSubmitAnswer struct {
 	lux.Client
+	mu      sync.Mutex
 	after   func()
 	lost    bool
 	retried *lux.Spec
 }
 
 func (c *lostSubmitAnswer) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	c.mu.Lock()
 	if c.lost && c.retried == nil {
 		c.retried = &spec
 	}
+	c.mu.Unlock()
 	r, err := c.Client.Submit(ctx, spec, key)
-	if err == nil && c.after != nil {
-		after := c.after
-		c.after = nil
-		after()
-		c.lost = true
-		return lux.Run{}, errors.New("the submit's answer was lost after lux accepted it")
+	if err != nil {
+		return r, err
 	}
-	return r, err
+	c.mu.Lock()
+	after := c.after
+	c.after = nil
+	c.mu.Unlock()
+	if after == nil {
+		return r, nil
+	}
+	after()
+	c.mu.Lock()
+	c.lost = true
+	c.mu.Unlock()
+	return lux.Run{}, errors.New("the submit's answer was lost after lux accepted it")
+}
+
+// Retried is the spec of the first submit after the lost answer, or nil.
+func (c *lostSubmitAnswer) Retried() *lux.Spec {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.retried
 }
 
 // lux accepts a preview's submit and its answer is lost; a secret is
