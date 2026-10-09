@@ -64,9 +64,8 @@ type Behaviour struct {
 	// Tools start and do not finish: a long command.
 	KeepToolsOpen bool
 	// Files the agent publishes as it finishes its turn, name → content
-	// (lux-shim publish; with LegacyArtifacts, written into $LUX_ARTIFACTS
-	// and collected when its container exits). Each with its description
-	// in Descriptions, if any.
+	// (with LegacyArtifacts, written into $LUX_ARTIFACTS and collected when
+	// its container exits).
 	Publish map[string]string
 	// What each published file is for, by name.
 	Descriptions map[string]string
@@ -1544,8 +1543,8 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 
 // exited is the container going away: a moment later the host reports it,
 // and with LegacyArtifacts what the agent put in $LUX_ARTIFACTS is
-// collected then. The report trails
-// the exit, as it does in lux, so dude must wait for it. Callers hold s.mu.
+// collected then. The report trails the exit, as it does in lux, so dude
+// must wait for it. Callers hold s.mu.
 func (s *Server) exited(run *Run) {
 	if len(run.placements) == 0 {
 		return

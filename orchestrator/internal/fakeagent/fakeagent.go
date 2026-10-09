@@ -25,18 +25,16 @@ import (
 	"strings"
 )
 
-// ShimBinary is lux-shim in a lux container, whose publish makes a file an
-// artifact of the Run (lux.ShimBinary; not imported, to keep this package
-// free of the client).
+// ShimBinary is lux.ShimBinary, not imported, to keep this package free of
+// the client.
 const ShimBinary = "/.lux/bin/lux-shim"
 
 // Description is what the scripted agent says a file it publishes is for.
 func Description(name string) string { return "What " + name + " is for" }
 
 // publishScript is a lux-fake script that publishes a file through
-// lux-shim, as dude publish does on lux#77: written to /tmp first, since
-// lux-fake writes files and runs commands but publishes nothing itself.
-// lux-fake writes one line; content's line breaks become spaces.
+// lux-shim, as dude publish does: lux-fake publishes nothing itself, so it
+// writes the file to /tmp first, on one line.
 func publishScript(name, content, description string) string {
 	tmp := "/tmp/dude-publish/" + strings.ReplaceAll(name, "/", "_")
 	return fmt.Sprintf("write %s %s\nsh %s publish %s --name %s --description %s\n", tmp,

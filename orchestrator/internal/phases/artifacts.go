@@ -19,14 +19,12 @@ import (
 
 // Artifacts records what agents published, once lux has it.
 //
-// An agent publishes a file with `dude publish` (lux-shim publish). lux
-// reports each one on the Run's stream as artifact.published once it can
-// be downloaded, and the translator records it then, while the Run goes
-// on. This sweep is the backstop: for an older lux, which collects
+// An agent publishes a file with `dude publish` (lux-shim publish). The
+// translator records it when lux's artifact.published arrives, while the
+// Run goes on. This sweep is the backstop: for an older lux, which collects
 // $LUX_ARTIFACTS only when the container exits, and for anything the
-// stream's follower missed. dude only records them: the bytes stay in lux
-// and are streamed from there when someone opens one. Both record through
-// recordArtifact, idempotent on lux's artifact id.
+// stream's follower missed. The bytes stay in lux and are streamed from
+// there when someone opens one.
 //
 // A Run is due for collection when it stops (a trigger sets
 // artifacts_due_at on every stopping status). lux reports an exit's
@@ -156,9 +154,8 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		ready = append(ready, art)
 	}
 	// The final diff the beforeStop hook left is dude's own: recorded as
-	// the Run's diff, never listed as a file for people. The latest exit's,
-	// and of each repository's patch its latest version (every version is
-	// listed).
+	// the Run's diff, never listed as a file for people: the latest exit's,
+	// each repository's patch at its latest version.
 	var final []lux.Artifact
 	files := ready[:0]
 	for _, art := range ready {
@@ -264,12 +261,11 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 type artifactRun struct{ Org, ProjectID, TaskID, ID string }
 
 // recordArtifact records one artifact lux can serve, with artifact.created,
-// once per lux artifact id however often it is seen (the stream's
-// artifact.published, a replay of it, the stop-time sweep).
+// once per lux artifact id: from the stream, a replay of it, or the sweep.
 //
-// created_at is clock_timestamp(), not the transaction's now(): versions of
-// one name recorded in one transaction (lux lists them in order) keep that
-// order in the listing, which numbers them by created_at.
+// created_at is clock_timestamp(), not now(): versions of one name recorded
+// in one transaction keep lux's order in the listing, which numbers them by
+// created_at.
 func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
 	id := ids.New(ids.Artifact)
 	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
