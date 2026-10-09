@@ -450,8 +450,8 @@ func TestARetriedSubmitRecordsTheSandboxOfTheRunLuxTook(t *testing.T) {
 		if spec := submitted(t, runs[0]); nested(&spec) != first {
 			t.Fatalf("the Run lux took: nested = %v, want %v", nested(&spec), first)
 		}
-		if lost.retried == nil || lost.retried.NestedContainers() == first {
-			t.Fatalf("the retry's spec = %+v; want nested %v", lost.retried, !first)
+		if retried := lost.Retried(); retried == nil || retried.NestedContainers() == first {
+			t.Fatalf("the retry's spec = %+v; want nested %v", retried, !first)
 		}
 		if got := w.recordedContainers(runID); got != fmt.Sprint(first) {
 			t.Errorf("runs.can_run_containers = %s; the Run lux took says %v", got, first)
