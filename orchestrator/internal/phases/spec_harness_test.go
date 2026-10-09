@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -197,9 +198,51 @@ func TestACodexTiersConfigArgsGoToItsConfigFile(t *testing.T) {
 	if slices.Contains(spec.Workload.Command, "-m") || slices.Contains(spec.Workload.Command, "other") {
 		t.Errorf("command = %v", spec.Workload.Command)
 	}
+	parsed := parsedCodexTOML(t, config)
+	for key, want := range map[string]any{"model_reasoning_effort": "low", "model_verbosity": "low", "sandbox_mode": "read-only"} {
+		if parsed[key] != want {
+			t.Errorf("%s = %v, want %v", key, parsed[key], want)
+		}
+	}
+	if parsed["tools"].(map[string]any)["web_search"] != true || !reflect.DeepEqual(parsed["notify"], []any{"say", float64(1)}) {
+		t.Errorf("tools/notify = %v / %v", parsed["tools"], parsed["notify"])
+	}
 	_, dropped := codexSettings(c, in)
 	if want := []string{`-c model_providers.dude.base_url="https://evil.example"`, "-m", "other", "-c x={a=1}"}; !slices.Equal(dropped, want) {
 		t.Errorf("dropped = %q, want %q", dropped, want)
+	}
+}
+
+func parsedCodexTOML(t *testing.T, config string) map[string]any {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", "import sys,tomllib,json; json.dump(tomllib.loads(sys.stdin.read()),sys.stdout)")
+	cmd.Stdin = strings.NewReader(config)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("parse TOML: %v: %s", err, out)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+func TestCodexProtectsItsExactProviderTable(t *testing.T) {
+	c, in := goldenInput("gpt-6-sol")
+	in.Options = map[string]any{"args": []any{"-c", "model_providers.dude=evil", "-c", "model_providers=evil", "-c", "model_providers.dude.base_url=evil", "-c", "model_providers.other.name=other"}}
+	settings, dropped := codexSettings(c, in)
+	parsed := parsedCodexTOML(t, strings.Join(settings, "\n"))
+	providers := parsed["model_providers"].(map[string]any)
+	provider, ok := providers["dude"].(map[string]any)
+	if !ok || provider["base_url"] != c.LLMURL || provider["env_key"] != "OPENAI_API_KEY" {
+		t.Errorf("protected provider = %v", providers["dude"])
+	}
+	if providers["other"].(map[string]any)["name"] != "other" {
+		t.Errorf("sibling = %v", providers["other"])
+	}
+	if want := []string{"-c model_providers.dude=evil", "-c model_providers=evil", "-c model_providers.dude.base_url=evil"}; !slices.Equal(dropped, want) {
+		t.Errorf("dropped = %v, want %v", dropped, want)
 	}
 }
 
@@ -209,10 +252,22 @@ func TestACodexHeaderWithDELIsValidTOML(t *testing.T) {
 	c, in := goldenInput("gpt-6-sol")
 	in.Harness = delivery.HarnessCodex
 	in.Headers = map[string]string{"X-Odd": "a\x7fb"}
+	found := false
 	for _, s := range buildSpec(c, in).Secrets {
-		if s.Name == "CODEX_CONFIG" && (strings.ContainsRune(s.Value, 0x7f) || !strings.Contains(s.Value, `"X-Odd"="a\u007fb"`)) {
+		if s.Name != "CODEX_CONFIG" {
+			continue
+		}
+		found = true
+		if strings.ContainsRune(s.Value, 0x7f) || !strings.Contains(s.Value, `"X-Odd"="a\u007fb"`) {
 			t.Errorf("config.toml = %q", s.Value)
 		}
+		provider := parsedCodexTOML(t, s.Value)["model_providers"].(map[string]any)["dude"].(map[string]any)
+		if got := provider["http_headers"].(map[string]any)["X-Odd"]; got != "a\x7fb" {
+			t.Errorf("header = %v", got)
+		}
+	}
+	if !found {
+		t.Fatal("no CODEX_CONFIG secret")
 	}
 }
 
