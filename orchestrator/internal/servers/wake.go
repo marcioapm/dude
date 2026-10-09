@@ -1175,12 +1175,16 @@ func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 		}
 	}
 	// What lux still has under the preview's label with no row: a server
-	// whose recipe was dropped (dropServer) and whose delete failed.
+	// whose recipe was dropped (dropServer) and whose delete failed. One
+	// deleted above may still be listed.
 	left, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
 	if err != nil {
 		return err
 	}
 	for _, ts := range left {
+		if slices.ContainsFunc(list, func(sv previewServer) bool { return sv.LuxID == ts.ID }) {
+			continue
+		}
 		if err := p.Lux.DeleteServer(ctx, ts.ID); err != nil && !lux.IsNotFound(err) {
 			return err
 		}
