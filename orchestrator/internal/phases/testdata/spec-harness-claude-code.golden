@@ -2,6 +2,7 @@
   "claude-sonnet-5 effort=": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.harness": "claude-code",
       "dude.model": "claude-sonnet-5",
       "dude.model_tier": "Coder",
@@ -143,6 +144,7 @@
   "claude-sonnet-5 effort=high": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "high",
       "dude.harness": "claude-code",
       "dude.model": "claude-sonnet-5",
@@ -287,6 +289,7 @@
   "claude-sonnet-5 effort=none": {
     "name": "implement wi_1",
     "labels": {
+      "app": "dude",
       "dude.effort": "none",
       "dude.harness": "claude-code",
       "dude.model": "claude-sonnet-5",
