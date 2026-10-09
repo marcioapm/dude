@@ -101,6 +101,18 @@ describe("FileGallery", () => {
     expect(html).toContain("Download all");
     expect(html).toContain("3 KB");
   });
+
+  test("a file's description is a line under its name, in a card and a row; none, no line", () => {
+    const described: GalleryFile[] = [
+      { name: "shot.png", versions: [{ ...v("shot.png", "image/png"), description: "The signed-in page" }] },
+      { name: "NOTES.md", versions: [{ ...v("NOTES.md", "text/markdown"), description: "Why the export streams" }] },
+      { name: "plain.md", versions: [v("plain.md", "text/markdown")] },
+    ];
+    const html = renderToStaticMarkup(<FileGallery files={described} onOpen={() => {}} onDownload={() => {}} />);
+    expect(html).toMatch(/<b>shot\.png<\/b><span>The signed-in page<\/span>/);
+    expect(html).toMatch(/<b>NOTES\.md<\/b><span>Why the export streams<\/span>/);
+    expect(html).toMatch(/<b>plain\.md<\/b><small/);
+  });
 });
 
 describe("artifactKind", () => {

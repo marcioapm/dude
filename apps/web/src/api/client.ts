@@ -351,6 +351,8 @@ export interface Artifact {
   contentType: string;
   sizeBytes: number;
   sha256: string;
+  /** What the agent said the file is for, one short line; "" when it said nothing. */
+  description: string;
   epoch: number;
   createdAt: string;
   phase: string | null;

@@ -75,13 +75,16 @@ test("SessionTitle: untitled reads New session, muted; one who can chat renames 
   expect(notices[1]).toContain("Ana renamed it “Billing v2”");
 });
 
-test("PublishedFiles: each file by its own name and kind, a version mark when published again, the rest as N more", async () => {
+test("PublishedFiles: each file by its own name and kind, a version mark when published again, its description under it, the rest as N more", async () => {
   const el = await mount();
   const pane = el.querySelector("#bs-files [data-theme]")!;
   const [full, capped] = [...pane.querySelectorAll("[data-testid='published-files']")];
   const names = [...full!.querySelectorAll("button")].map((b) => [b.getAttribute("data-name"), b.getAttribute("title"), b.textContent]);
-  expect(names[0]).toEqual(["design/metering.md", "design/metering.md", "metering.mdv3"]);
-  expect(names[1]).toEqual(["usage-by-kind.csv", "usage-by-kind.csv", "usage-by-kind.csv"]);
+  expect(names[0]).toEqual(["design/metering.md", "design/metering.md", "metering.mdv3How usage is metered and billed"]);
+  expect(names[1]).toEqual(["usage-by-kind.csv", "usage-by-kind.csv", "usage-by-kind.csvUsage per kind, last 30 days"]);
+  expect(names[2]).toEqual(["flow.svg", "flow.svg", "flow.svg"]);
+  const described = [...full!.querySelectorAll("[data-testid='published-file-description']")].map((d) => d.textContent);
+  expect(described).toEqual(["How usage is metered and billed", "Usage per kind, last 30 days"]);
   expect(full!.querySelectorAll("svg").length).toBe(4);
   expect(capped!.querySelectorAll("button")).toHaveLength(2);
   expect(capped!.textContent).toContain("1 more");
