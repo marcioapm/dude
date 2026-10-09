@@ -99,13 +99,13 @@ beforeAll(async () => {
         return Response.json({ publicKey: "k" });
       }
       if (path === "/internal/llm/test") {
-        const asked = await req.json() as { model: string; efforts: Array<string | null> };
+        const asked = await req.json() as { model: string; effort: string | null };
         tested.push(asked);
         if (asked.model === "slow") await Bun.sleep(slowMs);
-        const refused = asked.model === "nope";
-        return Response.json({ model: asked.model, results: asked.efforts.map((effort) => refused
-          ? { efforts: [effort], sent: effort, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }
-          : { efforts: [effort], sent: effort, ok: true, latencyMs: 800, status: 200, error: null }) });
+        const sent = { reasoning: { effort: asked.effort, summary: "auto" } };
+        return Response.json({ model: asked.model, result: asked.model === "nope"
+          ? { sent, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }
+          : { sent, ok: true, latencyMs: 800, status: 200, error: null } });
       }
       if (path === "/internal/network/defaults") return Response.json({ operator: [], always: ["dude’s tools"], model: null });
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
@@ -138,11 +138,12 @@ describe("tiers", () => {
     expect(res.canEdit).toBe(false);
     expect(res.upgrade).toEqual([]);
     expect(res.tiers.map((t: Json) => [t.name, t.model])).toEqual([["Thinker", null], ["Coder", null], ["Fast", null]]);
+    expect(res.tiers.map((t: Json) => [t.effort, t.options, t.headers])).toEqual([["high", null, null], ["medium", null, null], [null, null, null]]);
     const thinker = res.tiers[0];
     expect(thinker.usedBy.map((u: Json) => u.role).sort()).toEqual(["brainstorm", "conductor", "investigator", "qa_browser", "reviewer", "simplifier"]);
     expect(res.tiers[1].usedBy).toEqual([
-      { kind: "organization", role: "implementer", project: null, effort: null },
-      { kind: "organization", role: "fixer", project: null, inherited: true, effort: null },
+      { kind: "organization", role: "implementer", project: null },
+      { kind: "organization", role: "fixer", project: null, inherited: true },
     ]);
     expect((await call(memberKey, "POST", "/v1/models/tiers", { name: "Cheap" })).status).toBe(403);
     expect((await call(memberKey, "PUT", `/v1/models/tiers/${thinker.id}`, { name: "Thinker", model: "x" })).status).toBe(403);
@@ -168,6 +169,49 @@ describe("tiers", () => {
       expect((await body(res)).error.message).toBe("request body failed validation: model: The model as the proxy names it: no spaces or slashes, at most 200 characters");
     }
     expect((await byName("Coder")).model).toBe("claude-opus-5-5");
+  });
+
+  test("an admin sets a tier's effort, OpenCode options and headers; each is checked as the schema checks it", async () => {
+    const fast = await byName("Fast");
+    const set = (over: Json) => call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", description: fast.description, ...over });
+    const res = await set({ effort: "none", options: { thinking: { display: "omitted" } }, headers: { "X-Team": "dude" } });
+    expect(res.status).toBe(200);
+    expect((await body(res)).tiers.find((t: Json) => t.id === fast.id))
+      .toMatchObject({ effort: "none", options: { thinking: { display: "omitted" } }, headers: { "X-Team": "dude" } });
+    for (const [over, message] of [
+      [{ effort: "xhigh" }, null],
+      [{ options: ["a"] }, null],
+      [{ options: { k: "x".repeat(4096) } }, "options: At most 4096 bytes as JSON"],
+      [{ headers: { "X Team": "a" } }, "headers: Header names are letters, digits and !#$%&'*+.^_`|~-"],
+      [{ headers: { "X-Team": "a\nB: c" } }, "headers: A header's value is one line"],
+    ] as const) {
+      const refused = await set(over);
+      expect(refused.status).toBe(400);
+      expect((await body(refused)).error.message).toBe(message ? `request body failed validation: ${message}` : "request body failed validation");
+    }
+    const back = await set({ effort: null, options: null, headers: null });
+    expect((await body(back)).tiers.find((t: Json) => t.id === fast.id)).toMatchObject({ effort: null, options: null, headers: null });
+  });
+
+  test("options the schema takes but Postgres renders over 4 KB are 400 naming the field, not 500; the schema refuses a NUL", async () => {
+    const fast = await byName("Fast");
+    // 4081 bytes as the schema counts it ("1e+21"); jsonb prints 1e21 as 22 digits, 4098 bytes.
+    const big = { s: "x".repeat(4060), n: 1e21 };
+    const edit = await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", options: big });
+    expect(edit.status).toBe(400);
+    const refused = await body(edit);
+    expect(refused.error.message).toBe("request body failed validation: options: At most 4096 bytes as JSON");
+    expect(refused.error.details.fieldErrors).toEqual({ options: ["At most 4096 bytes as JSON"] });
+    const add = await call(adminKey, "POST", "/v1/models/tiers", { name: "Huge", options: big });
+    expect(add.status).toBe(400);
+    expect((await body(add)).error.message).toBe("request body failed validation: options: At most 4096 bytes as JSON");
+    for (const [over, field] of [[{ options: { a: "\u0000" } }, "options"], [{ headers: { "X-Team": "\u0000" } }, "headers"]] as const) {
+      const nul = await call(adminKey, "PUT", `/v1/models/tiers/${fast.id}`, { name: "Fast", ...over });
+      expect(nul.status).toBe(400);
+      expect((await body(nul)).error.message).toBe(`request body failed validation: ${field}: No NUL characters (\\u0000)`);
+    }
+    expect((await byName("Fast")).options).toBeNull();
+    expect((await tiers()).map((t) => t.name)).not.toContain("Huge");
   });
 
   test("an admin adds one, at the end; a name taken whatever its case is 409", async () => {
@@ -231,7 +275,11 @@ describe("roles name a tier", () => {
       const res = await call(adminKey, "PATCH", path, { roles: { implementer: { model: "claude-opus-5-5" } } });
       expect(res.status).toBe(400);
       expect((await body(res)).error.message).toContain("roles.implementer.model: a role names a model tier");
+      const effort = await call(adminKey, "PATCH", path, { roles: { implementer: { effort: "high" } } });
+      expect(effort.status).toBe(400);
+      expect((await body(effort)).error.message).toContain("roles.implementer.effort: reasoning effort is the model tier's");
     }
+    expect((await body(await call(adminKey, "GET", "/v1/settings/organization"))).roles.implementer.effort).toBeUndefined();
     const create = await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { conductor: { model: "fake/scripted" } } });
     expect(create.status).toBe(400);
     expect((await call(adminKey, "POST", "/v1/projects", { name: "Bad", slug: "bad", agentModels: { conductor: { tier: "mtr_nope" } } })).status).toBe(400);
@@ -239,13 +287,13 @@ describe("roles name a tier", () => {
     expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}`, { agentModels: { conductor: { tier: "mtr_nope" } } })).status).toBe(400);
   });
 
-  test("the tiers say who uses them, at which effort", async () => {
+  test("the tiers say who uses them", async () => {
     const cheap = await byName("Cheap");
-    await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: cheap.id, effort: "low" } } });
-    await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { tier: cheap.id, effort: "high" } } });
+    await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: cheap.id, timeLimitMinutes: 45 } } });
+    await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { simplifier: { tier: cheap.id, timeLimitMinutes: 60 } } });
     expect((await byName("Cheap")).usedBy).toEqual([
-      { kind: "organization", role: "simplifier", project: null, effort: "high" },
-      { kind: "project", role: "reviewer", project: DOCS_SITE, effort: "low" },
+      { kind: "organization", role: "simplifier", project: null },
+      { kind: "project", role: "reviewer", project: DOCS_SITE },
     ]);
   });
 
@@ -253,12 +301,12 @@ describe("roles name a tier", () => {
     const cheap = await byName("Cheap");
     const before = await projectModels();
     try {
-      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: cheap.id, effort: "medium" } } });
+      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { tier: cheap.id } } });
       const project = DOCS_SITE;
       expect((await byName("Cheap")).usedBy.filter((u: Json) => u.kind === "project")).toEqual([
-        { kind: "project", role: "reviewer", project, effort: "low" },
-        { kind: "project", role: "implementer", project, effort: "medium" },
-        { kind: "project", role: "fixer", project, inherited: true, effort: "medium" },
+        { kind: "project", role: "reviewer", project },
+        { kind: "project", role: "implementer", project },
+        { kind: "project", role: "fixer", project, inherited: true },
       ]);
     } finally {
       await owner`UPDATE projects SET agent_models = ${before}::jsonb WHERE id = ${PROJECT}`;
@@ -267,35 +315,21 @@ describe("roles name a tier", () => {
 });
 
 describe("a test message", () => {
-  test("goes to the orchestrator once per distinct effort of the tier's agents; none for a new tier", async () => {
-    const cheap = await byName("Cheap");
+  test("goes to the orchestrator once, with the tier's model and settings as the dialog has them", async () => {
     tested.length = 0;
-    const res = await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol", tierId: cheap.id });
+    const res = await call(adminKey, "POST", "/v1/models/test",
+      { model: "gpt-6-sol", effort: "max", options: { reasoningSummary: "detailed" }, headers: { "X-Team": "dude" } });
     expect(res.status).toBe(200);
-    expect((await body(res)).results.map((r: Json) => [r.efforts, r.ok])).toEqual([[["high"], true], [["low"], true]]);
-    expect((await body(await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" }))).results.map((r: Json) => r.efforts)).toEqual([[null]]);
-    expect(tested).toEqual([{ model: "gpt-5.6-sol", efforts: ["high", "low"] }, { model: "gpt-5.6-sol", efforts: [null] }]);
+    expect((await body(res)).result).toEqual({ sent: { reasoning: { effort: "max", summary: "auto" } }, ok: true, latencyMs: 800, status: 200, error: null });
+    expect(tested).toEqual([{ model: "gpt-6-sol", effort: "max", options: { reasoningSummary: "detailed" }, headers: { "X-Team": "dude" } }]);
   });
 
-  test("an effort several of the tier's agents share is asked for once", async () => {
-    const cheap = await byName("Cheap");
-    const before = { org: await orgModels(), project: await projectModels() };
-    try {
-      // Two more roles at high, and one at none: five uses, three efforts.
-      await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { qa_browser: { tier: cheap.id, effort: "high" } } });
-      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, {
-        roles: { simplifier: { tier: cheap.id, effort: "high" }, investigator: { tier: cheap.id } },
-      });
-      expect((await byName("Cheap")).usedBy.map((u: Json) => u.effort).sort()).toEqual(["high", "high", "high", "low", null]);
-      tested.length = 0;
-      expect((await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol", tierId: cheap.id })).status).toBe(200);
-      expect(tested).toHaveLength(1);
-      const { efforts } = tested[0] as { efforts: Array<string | null> };
-      expect([...efforts].sort()).toEqual(["high", "low", null]);
-    } finally {
-      await owner`UPDATE organizations SET default_agent_models = ${before.org}::jsonb WHERE id = ${ORG}`;
-      await owner`UPDATE projects SET agent_models = ${before.project}::jsonb WHERE id = ${PROJECT}`;
+  test("settings a tier could not be saved with are refused before the orchestrator is asked", async () => {
+    tested.length = 0;
+    for (const bad of [{ effort: "xhigh" }, { headers: { "X Team": "a" } }, { tierId: "mtr_x" }]) {
+      expect((await call(adminKey, "POST", "/v1/models/test", { model: "gpt-6-sol", ...bad })).status).toBe(400);
     }
+    expect(tested).toEqual([]);
   });
 
   test("a member is refused before the orchestrator is asked; an admin's reaches it", async () => {
@@ -304,13 +338,13 @@ describe("a test message", () => {
     expect(refused.status).toBe(403);
     expect(tested).toEqual([]);
     expect((await call(adminKey, "POST", "/v1/models/test", { model: "gpt-5.6-sol" })).status).toBe(200);
-    expect(tested).toEqual([{ model: "gpt-5.6-sol", efforts: [null] }]);
+    expect(tested).toEqual([{ model: "gpt-5.6-sol", effort: null, options: null, headers: null }]);
   });
 
   test("an answer slower than other orchestrator calls may take still comes back", async () => {
     const res = await call(adminKey, "POST", "/v1/models/test", { model: "slow" });
     expect(res.status).toBe(200);
-    expect((await body(res)).results.map((r: Json) => r.ok)).toEqual([true]);
+    expect((await body(res)).result.ok).toBe(true);
   });
 
   test("another orchestrator call as slow is given up on", async () => {
@@ -321,7 +355,7 @@ describe("a test message", () => {
 
   test("the proxy's refusal is passed on as it came", async () => {
     const res = await body(await call(adminKey, "POST", "/v1/models/test", { model: "nope" }));
-    expect(res.results).toEqual([{ efforts: [null], sent: null, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" }]);
+    expect(res.result).toEqual({ sent: { reasoning: { effort: null, summary: "auto" } }, ok: false, latencyMs: 12, status: 404, error: "model nope is not served here" });
   });
 });
 
@@ -367,8 +401,8 @@ describe("removing a tier", () => {
     const res = await call(adminKey, "DELETE", `/v1/models/tiers/${cheap.id}`, { replacement: thinker.id });
     expect(res.status).toBe(200);
     expect((await body(res)).tiers.map((t: Json) => t.name)).not.toContain("Cheap");
-    expect((await orgModels()).simplifier).toEqual({ tier: thinker.id, effort: "high" });
-    expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id, effort: "low" } });
+    expect((await orgModels()).simplifier).toEqual({ tier: thinker.id, timeLimitMinutes: 60 });
+    expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id, timeLimitMinutes: 45 } });
   });
 
   test("one nothing uses goes with no replacement; the last one cannot go", async () => {

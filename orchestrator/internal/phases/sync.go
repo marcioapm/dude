@@ -840,18 +840,21 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 				}
 			}
 		}
-		// machine, model_tier, image and network: what it runs on, the tier
-		// it requested, what it runs in and what it may reach, recorded with
-		// the lux Run it runs as, so a later edit or removal of the size or
-		// tier, a new version of the image or a change of the egress lists
-		// leaves this Run's record — and its resumes — alone.
+		// machine, model_tier, effort, image and network: what it runs on,
+		// the tier it requested and how hard it thinks, what it runs in and
+		// what it may reach, recorded with the lux Run it runs as, so a later
+		// edit or removal of the size or tier, a new version of the image or
+		// a change of the egress lists leaves this Run's record — and its
+		// resumes — alone.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
 			machine = $10::jsonb, model_tier = NULLIF($11, ''), image = $12::jsonb, image_waiting_since = NULL, network = $13::jsonb,
+			effort = NULLIF($14, ''),
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got, spec.Network)
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got, spec.Network,
+			spec.Labels["dude.effort"])
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -980,8 +983,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, '') FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, settings); err != nil || noTier != "" {
@@ -1055,7 +1058,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model, in.ModelTier, in.Effort = tier.Model, tier.Name, settings.Effort
+	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 	in.Egress = RunEgress(orgEgress, projectEgress, egressMode)
 	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m

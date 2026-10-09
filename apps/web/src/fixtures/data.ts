@@ -56,7 +56,7 @@ export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; rol
   return {
     organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, attempt: 1, workerId: null, workspacePath: null, error: null, kind: "agent",
     category: null, parentRunId: null, conductorRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
-    branch: BRANCH, harness: "opencode", model: "claude-opus-5-5", modelTier: "Coder", dudePause: null,
+    branch: BRANCH, harness: "opencode", model: "claude-opus-5-5", modelTier: "Coder", effort: "medium", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
     image: null, preparingImage: null,
@@ -289,7 +289,6 @@ export const SETTINGS: SettingsResponse = {
   project: { id: PROJECT.id, name: PROJECT.name },
   roles: Object.fromEntries(SETTINGS_ROLES.map((role) => [role, {
     tier: { value: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", source: "organization", organization: role === "implementer" || role === "fixer" ? "mtr_coder" : "mtr_thinker", ...(role === "fixer" ? { followsImplementer: true } : {}) },
-    effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
     machineSize: { value: null, source: "organization", organization: null },
     image: { value: null, source: "organization", organization: null },
@@ -331,18 +330,21 @@ export const MACHINE_SIZES: MachineSizeWithUse[] = [
     usedBy: [{ kind: "organization", role: "implementer", project: null }] },
 ];
 
-const orgUse = (role: string, effort: string | null = "high", inherited = false): ModelTierUse =>
-  ({ kind: "organization", role, project: null, effort, ...(inherited ? { inherited } : {}) });
+const orgUse = (role: string, inherited = false): ModelTierUse =>
+  ({ kind: "organization", role, project: null, ...(inherited ? { inherited } : {}) });
 
 /** The organisation's model tiers, as an organisation seeded and then set them. */
 export const MODEL_TIERS: ModelTierWithUse[] = [
   { id: "mtr_thinker", name: "Thinker", description: "Reads, plans, judges and tidies. Slow and thorough.", model: "claude-fable-5-1", position: 0,
+    effort: "high", options: null, headers: null,
     updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: { id: "per_marcio", name: "Márcio" },
     usedBy: ["investigator", "reviewer", "simplifier", "qa_browser"].map((r) => orgUse(r)) },
   { id: "mtr_coder", name: "Coder", description: "Writes and fixes code for hours at a time.", model: "claude-opus-5-5", position: 1,
+    effort: "medium", options: null, headers: null,
     updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: { id: "per_marcio", name: "Márcio" },
-    usedBy: [orgUse("implementer"), orgUse("fixer", "high", true)] },
+    usedBy: [orgUse("implementer"), orgUse("fixer", true)] },
   { id: "mtr_fast", name: "Fast", description: "Small, mechanical jobs where speed beats depth.", model: null, position: 2,
+    effort: null, options: null, headers: null,
     updatedAt: iso(7 * 24 * 60 * MIN), updatedBy: null, usedBy: [] },
 ];
 

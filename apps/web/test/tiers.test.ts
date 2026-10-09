@@ -1,27 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelTierUpgradeNote, ModelTierUse } from "@dude/domain";
 import {
-  effortsWords,
   proxyKnows,
   testResultWords,
+  tierDraftOf,
   tierDraftProblems,
+  tierEffortLabel,
   tierInput,
   tierMark,
   tierUsedByWords,
   tierUseName,
   tierUseWhere,
   upgradeLines,
+  type TierDraft,
 } from "../src/tiers.ts";
 
-const org = (role: string, effort: string | null = null, inherited = false): ModelTierUse =>
-  ({ kind: "organization", role, project: null, effort, ...(inherited ? { inherited } : {}) });
+const org = (role: string, inherited = false): ModelTierUse =>
+  ({ kind: "organization", role, project: null, ...(inherited ? { inherited } : {}) });
 const abs = { id: "prj_abs", name: "abs", imageUrl: null };
-const proj = (role: string, effort: string | null = null): ModelTierUse => ({ kind: "project", role, project: abs, effort });
+const proj = (role: string): ModelTierUse => ({ kind: "project", role, project: abs });
 
 describe("who uses a tier", () => {
   test("in words: agents, then projects", () => {
     expect(tierUsedByWords([org("investigator"), org("reviewer"), org("simplifier"), org("qa_browser")])).toBe("4 agents");
-    expect(tierUsedByWords([org("implementer"), org("fixer", null, true), proj("reviewer")])).toBe("2 agents · 1 project");
+    expect(tierUsedByWords([org("implementer"), org("fixer", true), proj("reviewer")])).toBe("2 agents · 1 project");
     expect(tierUsedByWords([proj("reviewer"), proj("implementer")])).toBe("1 project");
     expect(tierUsedByWords([])).toBe("Nobody");
   });
@@ -31,14 +33,7 @@ describe("who uses a tier", () => {
     expect(tierUseName(proj("reviewer"))).toBe("abs · Reviewer");
     expect(tierUseWhere(org("reviewer"), "Acme")).toBe("Acme’s setting");
     expect(tierUseWhere(proj("reviewer"), "Acme")).toBe("project override");
-    expect(tierUseWhere(org("fixer", null, true), "Acme")).toBe("follows the implementer");
-  });
-
-  test("the efforts its agents use, distinct", () => {
-    expect(effortsWords([org("implementer", "high"), org("fixer", "high", true)])).toBe("high");
-    expect(effortsWords([org("implementer", "high"), proj("reviewer", "low"), org("simplifier")])).toBe("high and low and the model’s default");
-    expect(effortsWords([])).toBeNull();
-    expect(effortsWords([org("implementer"), org("fixer", null, true)])).toBeNull();
+    expect(tierUseWhere(org("fixer", true), "Acme")).toBe("follows the implementer");
   });
 });
 
@@ -52,18 +47,44 @@ describe("a tier's mark", () => {
 });
 
 describe("a tier dialog's draft", () => {
+  const draft = (over: Partial<TierDraft> = {}): TierDraft =>
+    ({ name: "Cheap", description: "", model: "gpt-5.6-luna", effort: null, options: "", headers: "", ...over });
+
   test("an empty model is not set; names are trimmed", () => {
-    expect(tierInput({ name: " Cheap ", description: " Bulk. ", model: "  " })).toEqual({ name: "Cheap", description: "Bulk.", model: null });
-    expect(tierInput({ name: "Cheap", description: "", model: " gpt-5.6-luna " })).toEqual({ name: "Cheap", description: "", model: "gpt-5.6-luna" });
+    expect(tierInput(draft({ name: " Cheap ", description: " Bulk. ", model: "  " })))
+      .toEqual({ name: "Cheap", description: "Bulk.", model: null, effort: null, options: null, headers: null });
+    expect(tierInput(draft({ model: " gpt-5.6-luna " })).model).toBe("gpt-5.6-luna");
   });
 
   test("each field's problem in the schema's words", () => {
-    expect(tierDraftProblems({ name: "Cheap", description: "", model: "gpt-5.6-luna" })).toEqual({});
-    expect(tierDraftProblems({ name: "", description: "x".repeat(81), model: "llm-openai/gpt" })).toEqual({
+    expect(tierDraftProblems(draft())).toEqual({});
+    expect(tierDraftProblems(draft({ name: "", description: "x".repeat(81), model: "llm-openai/gpt" }))).toEqual({
       name: "A tier needs a name",
       description: "At most 80 characters",
       model: "The model as the proxy names it: no spaces or slashes, at most 200 characters",
     });
+  });
+
+  test("the effort, and the JSON fields as objects; empty is none", () => {
+    const d = draft({ effort: "high", options: "{\"effort\": \"xhigh\"}", headers: " {\"X-Team\": \"dude\"} " });
+    expect(tierInput(d)).toMatchObject({ effort: "high", options: { effort: "xhigh" }, headers: { "X-Team": "dude" } });
+    expect(tierDraftProblems(d)).toEqual({});
+    expect(tierInput(draft({ options: "  " })).options).toBeNull();
+  });
+
+  test("JSON that is not an object, or headers the schema refuses, are the field's problem", () => {
+    expect(tierDraftProblems(draft({ options: "{effort: xhigh}", headers: "[1]" }))).toEqual({
+      options: "A JSON object, like {\"key\": \"value\"}",
+      headers: "A JSON object, like {\"key\": \"value\"}",
+    });
+    expect(tierDraftProblems(draft({ headers: "{\"X Team\": \"a\"}" }))).toEqual({ headers: "Header names are letters, digits and !#$%&'*+.^_`|~-" });
+    expect(tierDraftProblems(draft({ headers: "{\"X-Team\": 3}" })).headers).toBeDefined();
+  });
+
+  test("a saved tier's settings as the draft shows them", () => {
+    const d = tierDraftOf({ id: "t", name: "Coder", description: "", model: "claude-sonnet-5", effort: "medium",
+      options: { effort: "xhigh" }, headers: null, position: 0, updatedAt: "", updatedBy: null });
+    expect(d).toEqual({ name: "Coder", description: "", model: "claude-sonnet-5", effort: "medium", options: "{\n  \"effort\": \"xhigh\"\n}", headers: "" });
   });
 
   test("whether the proxy lists a name; unknown while its list is unread", () => {
@@ -74,28 +95,27 @@ describe("a tier dialog's draft", () => {
   });
 });
 
+describe("a tier's effort", () => {
+  test("as people read it", () => {
+    expect([tierEffortLabel(null), tierEffortLabel("none"), tierEffortLabel("high")]).toEqual(["Model’s default", "None", "High"]);
+  });
+});
+
 describe("a test message's result", () => {
-  test("its latency, or the proxy's status and words as they came", () => {
-    expect(testResultWords({ efforts: ["high"], sent: "high", ok: true, latencyMs: 1234, status: 200, error: null })).toBe("answered (effort high) in 1.2 s");
-    expect(testResultWords({ efforts: [null], sent: null, ok: true, latencyMs: 800, status: 200, error: null })).toBe("answered with no effort in 0.8 s");
-    expect(testResultWords({ efforts: ["low"], sent: "low", ok: false, latencyMs: 12, status: 404, error: "model 'x' is not served" }))
-      .toBe("(effort low): the proxy answered 404 — model 'x' is not served");
-    expect(testResultWords({ efforts: [null], sent: null, ok: false, latencyMs: 30000, status: null, error: "no answer from the LLM proxy in 30s" }))
-      .toBe("with no effort: no answer from the LLM proxy in 30s");
+  const sent = { reasoning: { effort: "high", summary: "auto" } };
+  test("its latency, or the proxy's status and words as they came, with what was sent", () => {
+    expect(testResultWords({ sent, ok: true, latencyMs: 1234, status: 200, error: null }))
+      .toBe("answered in 1.2 s (sent {\"reasoning\":{\"effort\":\"high\",\"summary\":\"auto\"}})");
+    expect(testResultWords({ sent: {}, ok: false, latencyMs: 12, status: 404, error: "model 'x' is not served" }))
+      .toBe("the proxy answered 404 — model 'x' is not served");
+    expect(testResultWords({ sent: {}, ok: false, latencyMs: 30000, status: null, error: "no answer from the LLM proxy in 30s" }))
+      .toBe("no answer from the LLM proxy in 30s");
   });
 
-  test("one request for every effort that goes out alike; a Claude model's says it went without one", () => {
-    expect(testResultWords({ efforts: ["high", "max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null }))
-      .toBe("answered (efforts high, max) in 1.2 s");
-    expect(testResultWords({ efforts: ["high", null], sent: null, ok: true, latencyMs: 900, status: 200, error: null }))
-      .toBe("answered (efforts high, none; sent without an effort, as the agent sends it) in 0.9 s");
-  });
-
-  test("what was sent, when it is none of the efforts asked", () => {
-    expect(testResultWords({ efforts: ["max"], sent: "high", ok: false, latencyMs: 40, status: 400, error: "reasoning_effort high is not supported" }))
-      .toBe("(effort max, sent as high): the proxy answered 400 — reasoning_effort high is not supported");
-    expect(testResultWords({ efforts: ["max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null }))
-      .toBe("answered (effort max, sent as high) in 1.2 s");
+  test("a refusal inside a 200 stream is the proxy's words", () => {
+    expect(testResultWords({ sent: { reasoning: { summary: "auto" } }, ok: false, latencyMs: 300, status: 200,
+      error: "Unsupported value: 'none' is not supported with the 'gpt-6.1-sol' model." }))
+      .toBe("the proxy answered 200 — Unsupported value: 'none' is not supported with the 'gpt-6.1-sol' model. (sent {\"reasoning\":{\"summary\":\"auto\"}})");
   });
 });
 

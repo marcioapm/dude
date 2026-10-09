@@ -1119,7 +1119,8 @@ def test_an_agents_progress_shows_in_its_chat(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """The implementer reports progress with `dude event progress`; its
-    chat shows one progress row that moved, not a line per update."""
+    chat shows one progress row that moved, not a line per update. What it
+    thought before acting is in its events and in its chat, as a thought."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
         "implementer": {"model": "fake/tools"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Report progress")
@@ -1128,6 +1129,10 @@ def test_an_agents_progress_shows_in_its_chat(
                            timeout=30, message="no implementer")
     wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
                timeout=30, message="the progress never reached the ledger")
+    thought = "Progress first, then the commit: the person watching should see each step land."
+    thoughts = wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.thought"],
+                          timeout=30, message="the thought never reached the ledger")
+    assert [e["payload"]["text"] for e in thoughts] == [thought]
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
@@ -1135,6 +1140,10 @@ def test_an_agents_progress_shows_in_its_chat(
     expect(progress).to_have_count(1)
     expect(progress).to_contain_text("2 of 2")
     expect(progress).to_contain_text("committing")
+    shown = page.get_by_role("button").filter(has_text=re.compile(r"^Thought")).filter(has_text="Progress first, then the commit")
+    expect(shown).to_have_count(1)
+    shown.click()
+    expect(page.get_by_text(thought, exact=True)).to_be_visible()
     assert console_errors == []
 
 

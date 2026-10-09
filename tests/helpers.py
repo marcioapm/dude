@@ -179,7 +179,7 @@ class ApiClient:
     def on_models(self, models: Mapping[str, str | dict]) -> dict:
         """Agent models with each role on a tier requesting the model named:
         `{"implementer": "fake/scripted"}`, or `{"implementer": {"model":
-        "fake/hang", "effort": "low"}}` to keep other fields. A role names a
+        "fake/hang", "timeLimitMinutes": 45}}` to keep other fields. A role names a
         tier, never a model; this is how a test still says which model."""
         out = {}
         for role, spec in models.items():

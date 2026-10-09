@@ -69,15 +69,17 @@ func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	if err := owner.QueryRow(ctx, `SELECT id FROM model_tiers WHERE organization_id = 'org_plain' AND name = 'Coder'`).Scan(&coder); err != nil {
 		t.Fatal(err)
 	}
+	// Each role's other fields ride along with the rename: a time limit,
+	// which no later migration touches (099 deletes every role's effort).
 	mustExec(t, owner, `UPDATE organizations SET default_agent_models = default_agent_models
-		|| jsonb_build_object('orchestrator', jsonb_build_object('tier', $1::text, 'effort', 'high'))
-		|| '{"reviewer":{"tier":"mtr_kept","effort":"low"}}' WHERE id = 'org_plain'`, coder)
+		|| jsonb_build_object('orchestrator', jsonb_build_object('tier', $1::text, 'timeLimitMinutes', 60))
+		|| '{"reviewer":{"tier":"mtr_kept","timeLimitMinutes":45}}' WHERE id = 'org_plain'`, coder)
 	mustExec(t, owner, `UPDATE organizations SET default_agent_models = default_agent_models
 		|| '{"orchestrator":{"machineSize":"msz_big"}}' WHERE id = 'org_named'`)
 	mustExec(t, owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib)
 		VALUES ('msz_mine', 'org_small', 'small', 1, 2048, 10), ('msz_big', 'org_named', 'Big', 8, 16384, 80)`)
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models)
-		VALUES ('prj_m', 'org_plain', 'P', 'p', 'P', '{"orchestrator":{"tier":"mtr_custom","effort":"low"},"implementer":{"tier":"mtr_custom"}}')`)
+		VALUES ('prj_m', 'org_plain', 'P', 'p', 'P', '{"orchestrator":{"tier":"mtr_custom","timeLimitMinutes":30},"implementer":{"tier":"mtr_custom"}}')`)
 	mustExec(t, owner, `INSERT INTO model_tier_upgrade_notes (organization_id, project_id, role, old_model, tier_id, tier_name, model_changed)
 		VALUES ('org_plain', NULL, 'orchestrator', 'llm-openai/o', $1, 'Coder', true),
 		       ('org_plain', 'prj_m', 'reviewer', 'llm-openai/r', NULL, 'Thinker', false)`, coder)
@@ -105,11 +107,11 @@ func TestTheConductorMigrationRenamesTheRoleAndSeedsSmall(t *testing.T) {
 	_ = json.Unmarshal([]byte(projectModels), &project)
 	var evp map[string]any
 	_ = json.Unmarshal([]byte(payload), &evp)
-	if _, old := org["orchestrator"]; old || org["conductor"]["tier"] != coder || org["conductor"]["effort"] != "high" ||
-		org["reviewer"]["tier"] != "mtr_kept" || org["reviewer"]["effort"] != "low" {
+	if _, old := org["orchestrator"]; old || org["conductor"]["tier"] != coder || org["conductor"]["timeLimitMinutes"] != float64(60) ||
+		org["reviewer"]["tier"] != "mtr_kept" || org["reviewer"]["timeLimitMinutes"] != float64(45) {
 		t.Fatalf("organisation settings after: %s", models)
 	}
-	if _, old := project["orchestrator"]; old || project["conductor"]["tier"] != "mtr_custom" || project["conductor"]["effort"] != "low" ||
+	if _, old := project["orchestrator"]; old || project["conductor"]["tier"] != "mtr_custom" || project["conductor"]["timeLimitMinutes"] != float64(30) ||
 		project["implementer"]["tier"] != "mtr_custom" {
 		t.Fatalf("project settings after: %s", projectModels)
 	}

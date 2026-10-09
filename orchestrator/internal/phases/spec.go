@@ -128,9 +128,12 @@ type specInput struct {
 	// The model the Run's tier requests, as the proxy names it, and the
 	// tier's name (recorded on the Run and as a label).
 	Model, ModelTier string
-	// The role's reasoning effort, "" for the model's own.
-	Effort string
-	Prompt string
+	// The tier's reasoning effort, "" for the model's own, and its extra
+	// OpenCode model options and request headers.
+	Effort  string
+	Options map[string]any
+	Headers map[string]string
+	Prompt  string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
@@ -376,12 +379,13 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	spec.Env = maps.Clone(colourEnv)
 	// The image's OpenCode config defines the two providers, reading the URL
 	// and key from these; the Run adds its model, declared under the
-	// provider its name goes through, and its effort, all of which OpenCode
-	// deep-merges over that file (OPENCODE_CONFIG_CONTENT).
+	// provider its name goes through with its tier's options and headers,
+	// all of which OpenCode deep-merges over that file
+	// (OPENCODE_CONFIG_CONTENT).
 	if c.LLMURL != "" {
 		spec.Env["DUDE_LLM_URL"] = c.LLMURL
 	}
-	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort)
+	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
@@ -389,27 +393,30 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	return spec
 }
 
-// openCodeConfig is a Run's model and reasoning effort as OpenCode config.
+// openCodeConfig is a Run's model and its tier's settings as OpenCode
+// config.
 //
 // OpenCode refuses a model its provider does not declare (Model not found),
-// so the model is declared here, as an empty entry under the provider its
-// name goes through (llm.Provider): any name the proxy serves works with no
-// change to the image. OpenCode deep-merges this over the image's file, so a
-// model the image already declares keeps its limit and reasoning flag; one
-// it does not gets OpenCode's defaults (no context limit, so no automatic
+// so the model is declared here under the provider its name goes through
+// (llm.Provider): any name the proxy serves works with no change to the
+// image. OpenCode deep-merges this over the image's file, so a model the
+// image already declares keeps its limit and reasoning flag; one it does
+// not gets OpenCode's defaults (no context limit, so no automatic
 // compaction; 32000 output tokens).
 //
-// OpenCode passes an agent's unknown options to the provider as model
-// options; reasoningEffort is the one the OpenAI-compatible provider reads.
-// Its scale stops at high, so dude's "max" is the most it takes.
-func openCodeConfig(model, effort string) string {
+// The tier's effort and options go in the model's options, which OpenCode
+// sends on every request (an agent's variant does not take effect, and the
+// AI SDK drops keys it does not know without a word); its headers in the
+// model's headers, likewise sent on every request.
+func openCodeConfig(model, effort string, options map[string]any, headers map[string]string) string {
 	provider := llm.Provider(model)
+	entry := map[string]any{"options": llm.ModelOptions(model, effort, options)}
+	if len(headers) > 0 {
+		entry["headers"] = headers
+	}
 	config := map[string]any{
 		"model":    provider + "/" + model,
-		"provider": map[string]any{provider: map[string]any{"models": map[string]any{model: map[string]any{}}}},
-	}
-	if effort != "" {
-		config["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": llm.OpenAIEffort(effort)}}
+		"provider": map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
 	}
 	b, _ := json.Marshal(config)
 	return string(b)

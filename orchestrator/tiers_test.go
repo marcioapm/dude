@@ -8,12 +8,13 @@ import (
 
 // A Run goes to lux on its role's tier: the model the tier requests, under
 // the provider its name goes through, and the tier's name as a label; the
-// Run records both, in the statement that records its lux Run id.
+// Run records them and the tier's effort, in the statement that records its
+// lux Run id.
 func TestAPhaseRunsOnItsRolesTierAndRecordsIt(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	w.onModel("implementer", "gpt-5.6-sol")
-	mustExec(t, w.owner, `UPDATE model_tiers SET name = 'Coder*' WHERE organization_id = $1 AND model = 'gpt-5.6-sol'`, w.org)
+	mustExec(t, w.owner, `UPDATE model_tiers SET name = 'Coder*', effort = 'low' WHERE organization_id = $1 AND model = 'gpt-5.6-sol'`, w.org)
 	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
@@ -27,13 +28,13 @@ func TestAPhaseRunsOnItsRolesTierAndRecordsIt(t *testing.T) {
 	if config["model"] != "llm-openai/gpt-5.6-sol" {
 		t.Errorf("config model = %v, want llm-openai/gpt-5.6-sol", config["model"])
 	}
-	var model, tier, luxID string
-	if err := w.owner.QueryRow(ctx, `SELECT model, model_tier, lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).
-		Scan(&model, &tier, &luxID); err != nil {
+	var model, tier, effort, luxID string
+	if err := w.owner.QueryRow(ctx, `SELECT model, model_tier, COALESCE(effort, '<null>'), lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).
+		Scan(&model, &tier, &effort, &luxID); err != nil {
 		t.Fatal(err)
 	}
-	if model != "gpt-5.6-sol" || tier != "Coder*" || luxID == "" {
-		t.Errorf("run records model %q tier %q lux %q", model, tier, luxID)
+	if model != "gpt-5.6-sol" || tier != "Coder*" || effort != "low" || luxID == "" {
+		t.Errorf("run records model %q tier %q effort %q lux %q", model, tier, effort, luxID)
 	}
 }
 

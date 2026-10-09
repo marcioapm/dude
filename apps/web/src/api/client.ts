@@ -51,6 +51,7 @@ import type {
   ModelTierInput,
   ModelTiersResponse,
   ModelTestResult,
+  ModelTestInput,
   ProxyModels,
   ImageBuildWithLog,
   ImageChoice,
@@ -831,9 +832,9 @@ export class ApiClient {
     return this.#request("GET", "/v1/models/proxy");
   }
 
-  /** One small request for `model` at each effort `tierId`'s agents use (none: a new tier). */
-  testModel(model: string, tierId: string | null): Promise<{ model: string; results: ModelTestResult[] }> {
-    return this.#request("POST", "/v1/models/test", { model, tierId });
+  /** One small request for a tier's model with its effort, options and headers, as its agent sends it. */
+  testModel(input: ModelTestInput): Promise<{ model: string; result: ModelTestResult }> {
+    return this.#request("POST", "/v1/models/test", input);
   }
 
   // -- images: the organization's library ------------------------------------
