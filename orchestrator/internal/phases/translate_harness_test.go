@@ -447,17 +447,12 @@ func TestClaudeCodesTodoWriteIsThePlan(t *testing.T) {
 // turn's is its own.
 func TestClaudeCodesTasksAndCostOutliveARestart(t *testing.T) {
 	w := newHarnessWorld(t)
-	use := func(id, name string, input map[string]any) map[string]any {
-		return map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
-			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}}}
-	}
 	result := func(cost float64) map[string]any {
 		return map[string]any{"type": "claude.result", "data": map[string]any{"type": "result", "total_cost_usd": cost}}
 	}
-	end := map[string]any{"type": "claude.turn_end", "data": map[string]any{"usage": map[string]any{"input_tokens": 5, "output_tokens": 7}}}
-	w.feed(use("a", "TaskCreate", map[string]any{"subject": "one"}), use("b", "TaskCreate", map[string]any{"subject": "two"}), end, result(0.25))
+	w.feed(claudeToolUse("a", "TaskCreate", map[string]any{"subject": "one"}), claudeToolUse("b", "TaskCreate", map[string]any{"subject": "two"}), claudeEnd, result(0.25))
 	w.restart()
-	w.feed(use("c", "TaskUpdate", map[string]any{"taskId": "2", "status": "in_progress"}), end, result(0.75))
+	w.feed(claudeToolUse("c", "TaskUpdate", map[string]any{"taskId": "2", "status": "in_progress"}), claudeEnd, result(0.75))
 	events := w.events()
 	plans := ofType(events, evPlanUpdated)
 	want := `[{"content":"one","status":"pending"},{"content":"two","status":"in_progress"}]`
@@ -472,10 +467,16 @@ func TestClaudeCodesTasksAndCostOutliveARestart(t *testing.T) {
 		t.Errorf("turn costs = %v, want 0.25 then 0.5", costs)
 	}
 	// A resumed process counts from zero again: its first total is its own.
-	w.feed(end, result(0.1))
+	w.feed(claudeEnd, result(0.1))
 	if e := ofType(w.events(), evModelRequestDone); len(e) != 1 || e[0].Payload["costUsd"] != 0.1 {
 		t.Errorf("after a new process: %v", e)
 	}
+}
+
+// claudeToolUse is an assistant line holding one tool_use block.
+func claudeToolUse(id, name string, input map[string]any) map[string]any {
+	return map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
+		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}}}
 }
 
 // claudeResultLine is a Claude Code result line as lux relays it.
@@ -600,14 +601,10 @@ func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
 func TestAResumedClaudeCodeCountsItsOwnCostAndTasks(t *testing.T) {
 	w := newHarnessWorld(t)
 	session := map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "s1"}}
-	use := func(id, name string, input map[string]any) map[string]any {
-		return map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
-			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}}}
-	}
-	w.feedAt(1, session, use("a", "TaskCreate", map[string]any{"subject": "old"}), claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.10}))
+	w.feedAt(1, session, claudeToolUse("a", "TaskCreate", map[string]any{"subject": "old"}), claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.10}))
 	w.restart()
-	w.feedAt(2, session, use("b", "TaskCreate", map[string]any{"subject": "new"}),
-		use("c", "TaskUpdate", map[string]any{"taskId": "1", "status": "completed"}),
+	w.feedAt(2, session, claudeToolUse("b", "TaskCreate", map[string]any{"subject": "new"}),
+		claudeToolUse("c", "TaskUpdate", map[string]any{"taskId": "1", "status": "completed"}),
 		claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.30}))
 	events := w.events()
 	var costs []any
@@ -637,8 +634,7 @@ func TestClaudeCodesKeptPlanIsBounded(t *testing.T) {
 	w := newHarnessWorld(t)
 	var lines []map[string]any
 	call := func(name string, input map[string]any) {
-		lines = append(lines, map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{
-			"content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprint("t", len(lines)), "name": name, "input": input}}}}})
+		lines = append(lines, claudeToolUse(fmt.Sprint("t", len(lines)), name, input))
 	}
 	for i := 1; i <= 250; i++ {
 		call("TaskCreate", map[string]any{"subject": fmt.Sprint("task ", i)})
