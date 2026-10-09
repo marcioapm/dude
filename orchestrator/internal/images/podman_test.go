@@ -325,7 +325,8 @@ func TestPodmanTheLayerGivesAgentSubordinateIdsARunCanMap(t *testing.T) {
 
 // images/runtime's agent-user stage gives agent the subordinate ids the
 // dude layer gives it on the same base, and the check's range rule takes
-// them. Only that stage is built: no bin/, toolchain or network past the base.
+// them. Only that stage is built: no bin/, toolchain or network past the base;
+// a later stage rewriting the files would go unseen here.
 func TestPodmanTheRuntimeImagesAgentHasTheLayersSubordinateIds(t *testing.T) {
 	localPodman(t)
 	tag := fmt.Sprintf("localhost/dude-test-runtime-agent:%d", time.Now().UnixNano())
