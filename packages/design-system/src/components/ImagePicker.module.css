@@ -208,3 +208,15 @@
     display: none;
   }
 }
+
+/* CanRunContainersBadge with a tooltip: a bare button around the badge, so it takes focus. */
+.badgeTrigger {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  font: inherit;
+}
