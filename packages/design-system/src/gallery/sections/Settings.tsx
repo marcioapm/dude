@@ -170,10 +170,12 @@ function TiersDemo() {
       ]} />
       <Label>NameChips</Label>
       <NameChips label="Names the proxy knows" names={["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"]} value={model} onPick={setModel} />
-      <Label>TierChip, with its tooltip; one with an effort; one with no tier</Label>
+      <Label>TierChip, with its tooltip; one with an effort; one with an effort and its tooltip; one with no tier</Label>
       <TierChip tier="Coder" model="claude-opus-5-5"
         tooltip={<TierTip title="Coder" aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">When this session started, Coder asked the proxy for claude-opus-5-5.</TierTip>} />
       <TierChip tier="Coder" model="claude-sonnet-5" effort="medium" />
+      <TierChip tier="Thinker" model="claude-opus-5-5" effort="high"
+        tooltip={<TierTip title="Thinker" aside="That is what dude asked for; how the proxy served it is the proxy’s to say.">When this session started, Thinker asked the proxy for <code>claude-opus-5-5</code> at effort high; changing Thinker now changes the next session, not this one.</TierTip>} />
       <TierChip model="llm-anthropic/claude-sonnet-5" />
     </Col>
   );
