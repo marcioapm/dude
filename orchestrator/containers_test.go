@@ -4,8 +4,9 @@ package orchestrator_test
 // image's version says it (recorded in runs.image), an image typed by hand
 // never can, and DUDE_AGENT_IMAGE can when agent.nested_containers says so.
 // Every kind of Run asks lux for sandbox.nestedContainers from that; lux
-// keeps it in the Run's stored spec for every resume. What it asked is
-// recorded at submit as runs.can_run_containers, which the Run page reads.
+// keeps it in the Run's stored spec for every resume. The stored spec lux
+// returns from the submit is recorded as runs.can_run_containers, which the
+// Run page reads.
 
 import (
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -405,5 +407,77 @@ func TestARunKeepsWhatItWasSubmittedWithWhenTheOperatorChangesTheSetting(t *test
 	}
 	if got := w.recordedContainers(runID); got != "true" {
 		t.Errorf("the first Run after the next was submitted: runs.can_run_containers = %s, want true", got)
+	}
+}
+
+// lux takes a submit and its answer is lost; the image's published version
+// stops being able to run containers before dude retries. The retry's key
+// gets the Run lux took, which may: that is what is recorded, not the
+// retry's spec. Phase Run, eager preview, woken preview.
+func TestARetriedSubmitRecordsTheSandboxOfTheRunLuxTook(t *testing.T) {
+	setup := func(t *testing.T) (*world, string) {
+		w := newWorld(t)
+		w.useLayer(imageLayer)
+		podman := w.libraryImage("img_podman", "agents-podman", true)
+		w.canRunContainers(podman, true)
+		mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_podman', preview_image_id = 'img_podman' WHERE id = $1`, w.project)
+		return w, podman
+	}
+	// check: one lux Run, which asked for containers; a retry that asked
+	// lux for none; and the record is the Run's.
+	check := func(t *testing.T, w *world, runID string, lost *lostSubmitAnswer) {
+		t.Helper()
+		runs := w.luxRuns()
+		if len(runs) != 1 || runs[0].ID != w.luxRunOf(runID) {
+			t.Fatalf("lux Runs %d; want the one the first submit made, recorded", len(runs))
+		}
+		if spec := submitted(t, runs[0]); !nested(&spec) {
+			t.Fatalf("the Run lux took did not ask for nested containers")
+		}
+		if lost.retried == nil || lost.retried.NestedContainers() {
+			t.Fatalf("the retry's spec = %+v; want one that asks for no containers", lost.retried)
+		}
+		if got := w.recordedContainers(runID); got != "true" {
+			t.Errorf("runs.can_run_containers = %s; the Run lux took can run containers", got)
+		}
+	}
+	t.Run("a phase Run", func(t *testing.T) {
+		w, podman := setup(t)
+		lost := &lostSubmitAnswer{Client: w.syncer.Lux, after: func() { w.canRunContainers(podman, false) }}
+		w.syncer.Lux = lost
+		w.lux.Decide = hang
+		task := w.task()
+		w.deliver(task)
+		w.until("the submit taken, its answer lost", func() bool { return len(w.luxRuns()) == 1 })
+		runID := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		w.until("the retry recorded", func() bool { return w.luxRunOf(runID) != "" })
+		check(t, w, runID, lost)
+	})
+	for _, wakeable := range []bool{false, true} {
+		name := "an eager preview"
+		if wakeable {
+			name = "a woken preview"
+		}
+		t.Run(name, func(t *testing.T) {
+			w, podman := setup(t)
+			w.previews.Minute = time.Hour
+			if wakeable {
+				w.wakeable()
+			}
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			lost := &lostSubmitAnswer{Client: w.previews.Lux, after: func() { w.canRunContainers(podman, false) }}
+			w.previews.Lux = lost
+			_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
+			runID := out["run"].(map[string]any)["id"].(string)
+			if wakeable {
+				w.until("server declared", func() bool { return w.serverID(runID, "web") != "" })
+				w.lux.RequestServer(w.serverID(runID, "web"), "/")
+			}
+			w.until("the submit taken, its answer lost", func() bool { return len(w.luxRuns()) == 1 })
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL, wake_claimed_at = NULL WHERE id = $1`, runID)
+			w.until("the retry recorded", func() bool { return w.luxRunOf(runID) != "" })
+			check(t, w, runID, lost)
+		})
 	}
 }
