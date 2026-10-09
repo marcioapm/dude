@@ -503,8 +503,8 @@ func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 	if t == nil {
 		return
 	}
-	if in.Port != nil && (*in.Port < 1 || *in.Port > 65535) {
-		writeErr(w, 422, "invalid_server", "port must be 1-65535")
+	if msg := checkPatch(in.Port, in.Workdir, in.Env); msg != "" {
+		writeErr(w, 422, "invalid_server", msg)
 		return
 	}
 	var changed []string
@@ -529,6 +529,31 @@ func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 	s.tenantCalls = append(s.tenantCalls, "patch "+t.ID+" "+strings.Join(changed, ","))
 	s.serverEvent(t, "server.updated", map[string]any{"by": "key", "changed": changed})
 	writeJSON(w, 200, s.tview(t))
+}
+
+// envNameRe is lux's spec envRe.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// checkPatch is what lux's ValidateServer refuses of a PATCH's port,
+// workdir and env.
+func checkPatch(port *int, workdir *string, env *map[string]string) string {
+	if port != nil && (*port < 1 || *port > 65535) {
+		return "server.port: need 1-65535"
+	}
+	if workdir != nil && (strings.ContainsRune(*workdir, 0) || slices.Contains(strings.Split(*workdir, "/"), "..")) {
+		return "server.workdir: no .. and no NUL"
+	}
+	if env != nil {
+		for k := range *env {
+			if !envNameRe.MatchString(k) {
+				return fmt.Sprintf("server.env: invalid name %q", k)
+			}
+			if strings.HasPrefix(k, "LUX_") {
+				return fmt.Sprintf("server.env: %q: the LUX_ prefix is reserved", k)
+			}
+		}
+	}
+	return ""
 }
 
 // TenantCalls is what happened to tenant servers, in order: "create <id>
