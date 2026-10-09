@@ -56,6 +56,21 @@ func specNameProblems(raw json.RawMessage) string {
 			fail("workload.servers[%d]: invalid name %q (1-30 of a-z, 0-9 and -, starting with a letter, not ending in -)", i, sv.Name)
 		}
 	}
+	// As lux's spec.Normalize (internal/spec/spec.go, lux#68).
+	if spec.Network != nil {
+		for i, e := range spec.Network.Egress {
+			if (e.Host == "") == (e.CIDR == "") {
+				fail("network.egress[%d]: exactly one of host or cidr", i)
+			}
+			if strings.Contains(e.Host, "*") && !lux.ValidWildcard(e.Host) {
+				if j := strings.IndexAny(e.Host, ":/"); j > 0 && lux.ValidWildcard(e.Host[:j]) {
+					fail("network.egress[%d]: a wildcard is a domain only, without a port or path", i)
+				} else {
+					fail(`network.egress[%d]: a wildcard is "*." then a domain of at least two labels, e.g. *.example.com`, i)
+				}
+			}
+		}
+	}
 	return invalidSpec(errs)
 }
 

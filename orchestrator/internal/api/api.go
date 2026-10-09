@@ -67,6 +67,8 @@ type Server struct {
 	candidates candidateCache
 	// The LLM proxy, for the Models page's suggestions and test messages.
 	LLM llm.Client
+	// The operator's agent egress (agent.egress), for the Network page.
+	AgentEgress []string
 }
 
 func (s *Server) Handler() http.Handler {
@@ -120,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	s.llmRoutes(mux)
+	s.networkRoutes(mux)
 	s.sessionRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.

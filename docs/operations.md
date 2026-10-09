@@ -182,6 +182,39 @@ to the push services of browsers that asked for notifications. The backend
 reaches out to the orchestrator, and to GitHub's API when a person verifies
 a stored credential.
 
+## Agent network
+
+What an agent's Run may reach from inside its container is lux's
+`network.egress` (default deny). dude builds it per Run, when the Run is
+submitted (`phases.RunEgress`, `egress` in `internal/phases/spec.go`):
+
+- the operator's `agent.egress`, under every organisation;
+- the organisation's list (Organisation settings → **Network**), and the
+  project's own (Project settings → **Network**) on top of it, or with
+  **Only this project's list** the project's alone;
+- always the model's host (`llm.url`) and dude's tools.
+
+`*` anywhere in the operator's or the organisation's list (the page's
+**Anywhere** switch) makes the Run unrestricted; a project on its own list
+leaves its organisation's `*` out with the rest of that list. An entry is a
+hostname, an address, a CIDR range or a lux wildcard `*.example.com` (every
+name under `example.com`, not `example.com` itself: list the apex too).
+The API refuses anything lux would, and the orchestrator refuses to start
+on an `agent.egress` entry lux would. A change reaches Runs submitted
+after it: lux cannot change a live Run's rules, and a Run keeps what it was
+submitted with (`runs.network`) through its resumes. A session's agent gets
+its organisation's list.
+
+lux reports every distinct name a Run looks up as a `dns` event. dude says
+each one lux refused once on the Run (`agent.network.refused`), and for a
+project's Run keeps it (`agent_egress_refusals`, one row per Run and name),
+up to 100 names a Run: the project's Network page lists the last 7 days'
+under **Refused recently**, in how many Runs, with Allow, and a
+tool call whose output names one carries a note with **Allow for
+<project>** (`POST /v1/projects/:id/network/allow`).
+
+Branch previews keep their own allowlist (Project settings → Servers).
+
 ## Branch previews
 
 A branch preview serves a task's branch with the project's servers marked
@@ -476,7 +509,7 @@ does not refuse to start.
 | `embeddings.dimensions` | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | orchestrator | The index's size: only 768 is accepted, another is a migration. |
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `agent.timeout` | `DUDE_AGENT_TIMEOUT` | `4h` | orchestrator | The most running time lux gives a phase Run (its `timeout`, running time only: parked time does not count); past it lux stops it and it fails. The conductor gets none. |
-| `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | Hosts agents may reach besides `llm.url`'s host; `*` turns egress filtering off. With neither this nor `llm.url`, egress is unrestricted. |
+| `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | The operator's floor: hosts (addresses, CIDR ranges, lux wildcards `*.example.com`) every agent Run may reach, under each organisation's and project's own list, which people set on the Network settings page (see [Agent network](#agent-network)). `*` turns egress filtering off for every organisation. `llm.url`'s host and dude's tools are always added. With nothing listed here, by the organisation or by the project, and no `llm.url`, egress is unrestricted. |
 | `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | The fallback image, `agent.image`, can run containers (rootless Podman or Docker inside the Run). Every Run on it, agents and branch previews alike, asks lux for `sandbox.nestedContainers`, so lux places it only on hosts whose runner offers nested containers: with none, it waits for one, and the Run page says why. The image must carry the engine. A library image says this per version ("Can run containers", checked when it builds); an image typed by hand never can. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
 | `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |

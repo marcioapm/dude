@@ -3,6 +3,7 @@ package phases
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,6 +125,22 @@ func TestAnLLMURLThatIsNotHTTPIsRefusedAtStartup(t *testing.T) {
 	}
 	if _, err := LoadAgentConfig(settings(t, nil)); err != nil {
 		t.Errorf("unset: %v", err)
+	}
+}
+
+// An operator's entry lux would refuse stops the orchestrator: left out of
+// each Run, with no model's host, it would leave Runs unrestricted.
+func TestAnOperatorsEgressEntryLuxRefusesIsRefusedAtStartup(t *testing.T) {
+	for _, bad := range []string{"github.com:443", "*.com", "10.0.0.0/33"} {
+		if _, err := LoadAgentConfig(settings(t, map[string]string{"DUDE_AGENT_EGRESS": "pypi.org, " + bad})); err == nil ||
+			!strings.Contains(err.Error(), "agent.egress") || !strings.Contains(err.Error(), "DUDE_AGENT_EGRESS") ||
+			!strings.Contains(err.Error(), bad) {
+			t.Errorf("%q: err = %v, want agent.egress (DUDE_AGENT_EGRESS) refused naming it", bad, err)
+		}
+	}
+	c, err := LoadAgentConfig(settings(t, map[string]string{"DUDE_AGENT_EGRESS": "GitHub.com, *.PythonHosted.org, *"}))
+	if want := []string{"github.com", "*.pythonhosted.org", "*"}; err != nil || !slices.Equal(c.Egress, want) {
+		t.Errorf("egress = %v, %v; want %v", c.Egress, err, want)
 	}
 }
 

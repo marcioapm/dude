@@ -57,6 +57,7 @@ beforeAll(async () => {
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Admin" })).key;
   server = Bun.serve({ port: 0, fetch(req) {
+    if (new URL(req.url).pathname === "/internal/network/defaults") return Response.json({ operator: [], always: ["dude’s tools"], model: null });
     // Every prompt role gets a body: the control plane caches this answer
     // for the process, and later suites in the same run save prompts on it.
     return Response.json(new URL(req.url).pathname.endsWith("builtin")

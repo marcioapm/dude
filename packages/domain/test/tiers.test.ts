@@ -26,7 +26,7 @@ describe("a tier's model", () => {
   });
 
   test("the scripted agent's test models stay accepted", () => {
-    for (const m of ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"]) {
+    for (const m of ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/lookup"]) {
       expect(isTierModel(m)).toBe(true);
     }
   });

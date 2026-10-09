@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -470,7 +468,7 @@ func (p *Previews) forgeToken(ctx context.Context, org string) (string, error) {
 // Egress is a preview's network: the hosts (or addresses, or ranges) its
 // settings allow; "*" turns filtering off. None allows nothing — lux clones
 // the repository itself, so a preview that fetches nothing needs none. An
-// entry lux would refuse (a wildcard host, a range that does not parse) is
+// entry lux would refuse (a bad wildcard, a range that does not parse) is
 // left out and returned, so one bad entry does not fail every preview; the
 // API refuses them, so only settings saved before it did have any.
 func Egress(allow []string) (n *lux.Network, refused []string) {
@@ -483,7 +481,7 @@ func Egress(allow []string) (n *lux.Network, refused []string) {
 		if a == "*" {
 			return &lux.Network{Unrestricted: true}, nil
 		}
-		rule, ok := EgressRule(a)
+		rule, ok := lux.ParseEgressRule(a)
 		if !ok {
 			refused = append(refused, a)
 			continue
@@ -491,33 +489,6 @@ func Egress(allow []string) (n *lux.Network, refused []string) {
 		n.Egress = append(n.Egress, rule)
 	}
 	return n, refused
-}
-
-// hostnamePattern is a concrete hostname: dot-separated labels of letters,
-// digits, '-' and '_', none starting or ending with '-'. No wildcards: lux
-// resolves each host it allows.
-var hostnamePattern = regexp.MustCompile(`^(?i:[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)(\.(?i:[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?))*\.?$`)
-
-// EgressRule is one allowed entry other than "*" as lux takes it: an
-// address (as a one-address range), a range, or a hostname.
-func EgressRule(a string) (lux.EgressRule, bool) {
-	if ip := net.ParseIP(a); ip != nil {
-		bits := "/128"
-		if ip.To4() != nil {
-			bits = "/32"
-		}
-		return lux.EgressRule{CIDR: ip.String() + bits}, true
-	}
-	if strings.Contains(a, "/") {
-		if _, _, err := net.ParseCIDR(a); err != nil {
-			return lux.EgressRule{}, false
-		}
-		return lux.EgressRule{CIDR: a}, true
-	}
-	if len(a) > 253 || !hostnamePattern.MatchString(a) {
-		return lux.EgressRule{}, false
-	}
-	return lux.EgressRule{Host: a}, true
 }
 
 // follow reads a live preview's lux stream, if nothing is reading it yet.

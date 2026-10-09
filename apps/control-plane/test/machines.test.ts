@@ -104,6 +104,7 @@ beforeAll(async () => {
           ? Response.json({ pools: [], readAt: new Date().toISOString(), problem: "lux is unreachable" })
           : Response.json({ pools: luxPools, readAt: new Date().toISOString(), problem: null });
       }
+      if (path === "/internal/network/defaults") return Response.json({ operator: [], always: ["dude’s tools"], model: null });
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5 });

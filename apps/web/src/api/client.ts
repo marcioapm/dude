@@ -63,6 +63,7 @@ import type {
   RunServer,
   TaskServers,
   SettingsPatch,
+  RefusedName,
   SettingsResponse,
   IndexStatus,
   Memory,
@@ -751,6 +752,16 @@ export class ApiClient {
 
   updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
     return this.#request("PATCH", `/v1/projects/${projectId}/settings`, patch);
+  }
+
+  /** Names a project's agents looked up in the last `days` and lux refused, most called first. */
+  refusedNames(projectId: string, days = 7): Promise<{ refused: RefusedName[] }> {
+    return this.#request("GET", `/v1/projects/${projectId}/network/refused${qs({ days })}`);
+  }
+
+  /** Append names to a project's own egress list: the one-click Allow. */
+  allowNames(projectId: string, names: string[]): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/projects/${projectId}/network/allow`, { names });
   }
 
   /** Save a role's prompt: the organization's, or (with a project) the project's and how it goes with the organization's. */

@@ -89,6 +89,7 @@ beforeAll(async () => {
     port: 0,
     fetch(req) {
       const path = new URL(req.url).pathname;
+      if (path === "/internal/network/defaults") return Response.json({ operator: [], always: ["dude’s tools"], model: null });
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false, parkAfterMinutes: 10, idleNudgeMinutes: 0 });

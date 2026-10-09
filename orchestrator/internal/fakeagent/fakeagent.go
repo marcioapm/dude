@@ -95,6 +95,13 @@ const SilentModel = "fake/silent"
 // StillVerdict is StuckModel's reviewer's judgement of its earlier finding.
 const StillVerdict = "```yaml\nverdicts:\n  F1: still\n```\n"
 
+// LookupModel's implementer looks up Lookups before it works, as an
+// install would: lux refuses those the Run's network does not allow.
+const LookupModel = "fake/lookup"
+
+// Lookups are the names LookupModel's implementer looks up.
+var Lookups = []string{"files.pythonhosted.org", "registry.npmjs.org", "api.github.com"}
+
 // AskModel's implementer asks a person first, with dude's ask_person tool,
 // and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
@@ -157,6 +164,8 @@ type Step struct {
 	FinishEdits map[string]string
 	// Its tool calls stay running: a long command (with Hang, never done).
 	LongCommand bool
+	// Names it looks up before its tools, as a package install would.
+	Lookups []string
 }
 
 // Notes is what the implementer publishes: a short account of its work, as
@@ -362,6 +371,9 @@ func For(phase, model, runID string, fixed bool) Step {
 		if model == RequestModel {
 			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API"}`}}
 			step.Hang = true
+		}
+		if model == LookupModel {
+			step.Lookups = Lookups
 		}
 		if model == ToolsModel {
 			step.Tools = [][2]string{

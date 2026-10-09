@@ -24,6 +24,10 @@ import { Table, TBody, Td, Th, THead, Tr } from "../../primitives/Table.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
 import { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
 import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
+import { HostChips } from "../../components/HostChips.tsx";
+import { HostPresets, NetworkRefusedNote, RefusedHosts, type HostPreset } from "../../components/Network.tsx";
+import { ToolCallCard } from "../../components/ToolCallCard.tsx";
+import { egressAllows, egressProblem } from "@dude/domain";
 
 const PROMPT = `# Implementer
 
@@ -178,6 +182,52 @@ function TiersDemo() {
   );
 }
 
+const NETWORK_PRESETS: ReadonlyArray<HostPreset> = [
+  { name: "GitHub", hosts: ["github.com", "*.github.com", "objects.githubusercontent.com"] },
+  { name: "npm", hosts: ["registry.npmjs.org"] },
+  { name: "PyPI", hosts: ["pypi.org", "files.pythonhosted.org"] },
+];
+
+/** A project's Network page: the organisation's hosts read-only, its own, presets, refused names. */
+function NetworkDemo() {
+  const org = ["github.com", "*.github.com", "objects.githubusercontent.com"];
+  const [own, setOwn] = useState(["pypi.org"]);
+  const [refused, setRefused] = useState([
+    { name: "files.pythonhosted.org", runs: 12, roles: ["fixer", "implementer"] },
+    { name: "registry.npmjs.org", runs: 2, roles: ["reviewer"] },
+  ]);
+  const [allowed, setAllowed] = useState(false);
+  const allow = (names: string[]) => {
+    setOwn((o) => [...new Set([...o, ...names])]);
+    setRefused((r) => r.filter((x) => !names.includes(x.name)));
+  };
+  return (
+    <Col>
+      <SettingsSection>
+        <SettingRow label="Agents may reach" help="Acme’s hosts, then this project’s. A hostname, an address or a range.">
+          <SettingSource source="organization" from="Acme" />
+          <HostChips readOnly hosts={org} />
+          <Label>jervasion also</Label>
+          <HostChips hosts={own} onChange={setOwn} validate={egressProblem} placeholder="a host this project needs" />
+          <HostPresets presets={NETWORK_PRESETS} has={(h) => egressAllows([...org, ...own], h)} onAdd={(p) => setOwn((o) => [...new Set([...o, ...p.hosts])])} />
+          <Label>Always reachable</Label>
+          <HostChips readOnly muted hosts={["llmproxy.example.com", "dude’s tools"]} />
+        </SettingRow>
+        {refused.length ? (
+          <SettingRow label="Refused recently" help="Hosts agents on jervasion tried in the last 7 days and were not allowed to reach." block>
+            <RefusedHosts refused={refused} target="jervasion" onAllow={allow} />
+          </SettingRow>
+        ) : null}
+      </SettingsSection>
+      <Label>In the Run: a refused call’s note</Label>
+      <ToolCallCard name="bash" status="completed" exitCode={1} args={{ command: "uv sync --dev" }}
+        output={"error: Failed to fetch: https://files.pythonhosted.org/packages/…/idna-3.19-py3-none-any.whl\n  cause: dns error"}
+        note={<NetworkRefusedNote host="files.pythonhosted.org" project="jervasion" organization="Acme" allowed={allowed}
+          onAllow={() => setAllowed(true)} onSettings={() => {}} />} />
+    </Col>
+  );
+}
+
 export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
   const [source, setSource] = useState(PROMPT);
   const [prompt, setPrompt] = useState<"add" | "replace" | "inherit">("add");
@@ -186,6 +236,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-layout" title="Settings page" note="A left menu with sub-pages (the roles under Agents), rows of label and control, and on a project each value's source with Reset.">
         <Panes mode={mode}>
           <SettingsDemo />
+        </Panes>
+      </Block>
+      <Block id="s-network" title="HostChips readOnly / HostPresets / RefusedHosts / NetworkRefusedNote" note="What an agent may reach. An organisation’s hosts on a project’s page are read-only chips under “From Acme”; what is always reachable is muted. Presets add a toolchain by name and tick one the list already reaches whole. Refused recently is a table with Allow on each and Allow all. In the Run, a tool call whose output names a refused host carries the note as ToolCallCard’s note, under it, never behind a click.">
+        <Panes mode={mode}>
+          <NetworkDemo />
         </Panes>
       </Block>
       <Block id="s-search" title="SearchResultRow" note="Memory's search: a ranked row per memory, task, epic or project in ArtifactRow's anatomy. The lead says what it is in the sidebar's grammar; which search found it is a quiet fact; why it ranked where it did is behind the click. No score chips, no bars.">

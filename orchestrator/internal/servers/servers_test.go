@@ -120,10 +120,11 @@ func TestAPreviewsEgressIsWhatItsSettingsAllow(t *testing.T) {
 	if n, _ := Egress(nil); n.Unrestricted || len(n.Egress) != 0 {
 		t.Errorf("no egress = %+v", n)
 	}
-	// What lux would refuse, failing the whole preview, is left out.
-	n, refused = Egress([]string{"*.github.com", "10.0.0.0/33", "not a host", "10.0.0.0/8", "github.com"})
-	if !reflect.DeepEqual(n.Egress, []lux.EgressRule{{CIDR: "10.0.0.0/8"}, {Host: "github.com"}}) ||
-		!reflect.DeepEqual(refused, []string{"*.github.com", "10.0.0.0/33", "not a host"}) {
+	// What lux would refuse, failing the whole preview, is left out; a
+	// wildcard lux takes (lux#68) is kept.
+	n, refused = Egress([]string{"*.github.com", "*.com", "10.0.0.0/33", "not a host", "10.0.0.0/8", "github.com"})
+	if !reflect.DeepEqual(n.Egress, []lux.EgressRule{{Host: "*.github.com"}, {CIDR: "10.0.0.0/8"}, {Host: "github.com"}}) ||
+		!reflect.DeepEqual(refused, []string{"*.com", "10.0.0.0/33", "not a host"}) {
 		t.Errorf("egress = %+v, refused %q", n, refused)
 	}
 }
