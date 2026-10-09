@@ -1,4 +1,4 @@
--- 098_image_containers.sql — "Can run containers", a property of an image
+-- 099_image_containers.sql — "Can run containers", a property of an image
 -- version like its Containerfile.
 --
 -- A version that can run containers is checked by the builder once its

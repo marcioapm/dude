@@ -8,6 +8,7 @@ import {
   type Effort,
   type FullDeliveryPolicy,
 } from "./hierarchy.ts";
+import { agentEgressSchema } from "./servers.ts";
 
 /**
  * Settings in two layers: the organization's defaults, and each project's
@@ -132,11 +133,32 @@ export interface RoleSettings {
 
 export type DeliverySettings = { [K in keyof FullDeliveryPolicy]: Setting<FullDeliveryPolicy[K]> };
 
+/**
+ * What an agent's Run may reach (the Network page). On the organisation's
+ * settings, `egress` is its list; on a project's, the project's own, with
+ * `mode` ("add": on top of the organisation's, which is
+ * `organizationEgress`; "only": in its place, an override).
+ */
+export interface NetworkSettings {
+  egress: Setting<string[]>;
+  mode?: Setting<AgentEgressMode>;
+  organizationEgress?: string[];
+  /** The operator's own list (agent.egress), under every organisation's. */
+  operator: string[];
+  /** Always reachable, never listed: the model's host, "dude's tools". */
+  always: string[];
+  /** Everything a Run started now gets, each once; ["*"] when unrestricted. */
+  effective: string[];
+}
+
+export type AgentEgressMode = "add" | "only";
+
 export interface SettingsResponse {
   organization: { id: string; name: string };
   project?: { id: string; name: string };
   roles: Record<SettingsRole, RoleSettings>;
   delivery: DeliverySettings;
+  network: NetworkSettings;
   /** Whether the caller may change these. */
   canEdit: boolean;
 }
@@ -183,9 +205,24 @@ export const settingsPatchSchema = z
       })
       .strict()
       .optional(),
+    /** An organisation's list, or a project's own and its mode (a project's only). */
+    network: z.object({ egress: agentEgressSchema.optional(), mode: z.enum(["add", "only"]).optional() }).strict().optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
+
+/** One-click Allow: names appended to a project's list. */
+export const allowNamesSchema = z.object({ names: agentEgressSchema.refine((n) => n.length > 0, "at least one name") }).strict();
+
+/** A name agents of a project looked up and lux refused, as its Network page lists it. */
+export interface RefusedName {
+  name: string;
+  /** How many of the project's Runs were refused it. */
+  runs: number;
+  /** The roles whose Runs looked it up, as their settings name them. */
+  roles: string[];
+  lastAt: string;
+}
 
 export const savePromptSchema = z
   .object({

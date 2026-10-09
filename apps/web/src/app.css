@@ -744,6 +744,18 @@ body {
 .previewSecretsNote {
   margin-top: var(--ds-space-12);
 }
+/* Settings → Network: the small headings between a row's chip lists. */
+.networkLabel {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.networkFrom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+}
 
 /* Memory's settings pages: layout only. The rows, lines, leads, lists and
    picker are the design system's. */
