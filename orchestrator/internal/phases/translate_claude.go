@@ -174,11 +174,11 @@ func (t *translator) claudeBlock(ctx context.Context, tx pgx.Tx, s *Syncer, b cl
 		if _, seen := t.seenCalls[b.ID]; seen {
 			return nil
 		}
-		name, args := claudeTool(b.Name, input)
+		name := claudeToolName(b.Name)
 		t.seenCalls[b.ID] = name
 		t.openCalls[b.ID] = true
 		return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
-			map[string]any{"tool": name, "callId": b.ID, "input": args, "title": b.Name})
+			map[string]any{"tool": name, "callId": b.ID, "input": input, "title": b.Name})
 	}
 	return nil
 }
@@ -236,30 +236,29 @@ func claudeOutput(b claudeBlock, raw json.RawMessage) map[string]any {
 }
 
 // claudeTools maps Claude Code's tool names onto the names the chat's tool
-// cards know (OpenCode's), with the arguments renamed where theirs differ.
-// A tool not here passes through by its own name.
+// cards know (OpenCode's). A tool not here passes through by its own name.
 var claudeTools = map[string]string{
 	"Bash": "bash", "Read": "read", "Edit": "edit", "MultiEdit": "multiedit", "Write": "write",
 	"Grep": "grep", "Glob": "glob", "WebFetch": "webfetch", "WebSearch": "websearch",
 	"Task": "task", "Agent": "task", "NotebookEdit": "edit",
 }
 
-// claudeTool is the name and arguments a Claude Code tool call is recorded
-// under. dude's own MCP tools (mcp__dude__<tool>) are recorded by the
-// tool's own name, as OpenCode's are; another server's keep the server
-// (server_tool, OpenCode's form).
-func claudeTool(name string, input map[string]any) (string, map[string]any) {
+// claudeToolName is the name a Claude Code tool call is recorded under.
+// dude's own MCP tools (mcp__dude__<tool>) are recorded by the tool's own
+// name, as OpenCode's are; another server's keep the server (server_tool,
+// OpenCode's form).
+func claudeToolName(name string) string {
 	if mapped, ok := claudeTools[name]; ok {
-		return mapped, input
+		return mapped
 	}
 	if rest, ok := strings.CutPrefix(name, "mcp__"); ok {
 		server, tool, _ := strings.Cut(rest, "__")
 		if server == "dude" {
-			return tool, input
+			return tool
 		}
-		return server + "_" + tool, input
+		return server + "_" + tool
 	}
-	return name, input
+	return name
 }
 
 // claudePlan reports whether a tool call is the agent's plan, and the plan
