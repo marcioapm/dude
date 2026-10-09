@@ -208,7 +208,7 @@ export function ImagesGallerySection({ mode }: { readonly mode: PaneMode }) {
             <span data-testid="run-header-facts" style={{ display: "inline-flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
               <MachineChip icon="cube" name="agents-podman" spec="v3"
                 tooltip={<MachineTip name="agents-podman v3">Fixed when the session started.</MachineTip>} />
-              <CanRunContainersBadge tooltip="This Run can start containers inside it. Fixed when the session started: its resumes keep it." />
+              <CanRunContainersBadge tooltip="This Run can start containers inside it. Set when the session started; resuming keeps it." />
             </span>
             <Label>On</Label>
             <ContainersFieldDemo on />

@@ -362,7 +362,7 @@ def test_a_run_that_can_run_containers_says_so_in_its_header(
     header = page.locator("header").filter(has=page.get_by_test_id("run-image"))
     badge = header.get_by_test_id("can-run-containers")
     expect(badge).to_have_text("Can run containers")
-    expect(badge).to_have_attribute("aria-label", "Can run containers: this Run can start containers inside it")
+    expect(badge).to_have_attribute("aria-label", "Can run containers")
     assert badge.get_attribute("title") is None
     # After the image chip, in the same line of facts.
     assert header.evaluate("""h => {
@@ -385,7 +385,7 @@ def test_a_run_that_can_run_containers_says_so_in_its_header(
     page.set_viewport_size({"width": 1440, "height": 1000})
     badge.focus()
     tip = page.get_by_role("tooltip")
-    expect(tip).to_have_text("This Run can start containers inside it. Fixed when the session started: its resumes keep it.")
+    expect(tip).to_have_text("This Run can start containers inside it. Set when the session started; resuming keeps it.")
     _shoot(page, "11-run-can-run-containers-tip-1440", width=1440)
 
     # A Run on dude's fallback, with agent.nested_containers off: nothing.
