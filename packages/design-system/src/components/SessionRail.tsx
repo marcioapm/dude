@@ -103,12 +103,15 @@ export interface PublishedFile {
   readonly contentType: string;
   /** How many times it was published under this name; more than one shows as "v3". */
   readonly versions?: number | undefined;
+  /** What the agent said it is for, one short line: a secondary line under the name. */
+  readonly description?: string | undefined;
 }
 
 /**
  * What a brainstorm session's agent published, newest first: each file's
- * kind glyph and name; picking one opens it in the viewer. The name is the
- * file's own; its folder is in the tooltip.
+ * kind glyph and name, and under it what the agent said it is for when it
+ * said; picking one opens it in the viewer. The name is the file's own;
+ * its folder is in the tooltip.
  */
 export function PublishedFiles({ files, onOpen, max = 8 }: {
   readonly files: ReadonlyArray<PublishedFile>;
@@ -120,12 +123,15 @@ export function PublishedFiles({ files, onOpen, max = 8 }: {
     <ul className={styles["files"]} data-testid="published-files">
       {shown.map((f) => (
         <li key={f.name}>
-          <button type="button" className={styles["file"]} title={f.name} onClick={() => onOpen(f.name)} data-name={f.name}>
-            <span className={styles["published"]}>
-              <Icon name={ARTIFACT_KIND_SPECS[artifactKind(f.contentType, f.name)].glyph} size={12} className={styles["glyph"]} />
-              <span className={styles["filePath"]}>{f.name.slice(f.name.lastIndexOf("/") + 1)}</span>
+          <button type="button" className={cx(styles["file"], styles["publishedFile"])} title={f.name} onClick={() => onOpen(f.name)} data-name={f.name}>
+            <span className={styles["fileLine"]}>
+              <span className={styles["published"]}>
+                <Icon name={ARTIFACT_KIND_SPECS[artifactKind(f.contentType, f.name)].glyph} size={12} className={styles["glyph"]} />
+                <span className={styles["filePath"]}>{f.name.slice(f.name.lastIndexOf("/") + 1)}</span>
+              </span>
+              {(f.versions ?? 1) > 1 ? <span className={styles["version"]}>v{f.versions}</span> : null}
             </span>
-            {(f.versions ?? 1) > 1 ? <span className={styles["version"]}>v{f.versions}</span> : null}
+            {f.description ? <span className={styles["fileDescription"]} title={f.description} data-testid="published-file-description">{f.description}</span> : null}
           </button>
         </li>
       ))}

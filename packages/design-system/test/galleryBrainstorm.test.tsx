@@ -75,13 +75,22 @@ test("SessionTitle: untitled reads New session, muted; one who can chat renames 
   expect(notices[1]).toContain("Ana renamed it “Billing v2”");
 });
 
-test("PublishedFiles: each file by its own name and kind, a version mark when published again, the rest as N more", async () => {
+test("PublishedFiles: each file by its own name and kind, a version mark when published again, its description under it, the rest as N more", async () => {
   const el = await mount();
   const pane = el.querySelector("#bs-files [data-theme]")!;
   const [full, capped] = [...pane.querySelectorAll("[data-testid='published-files']")];
-  const names = [...full!.querySelectorAll("button")].map((b) => [b.getAttribute("data-name"), b.getAttribute("title"), b.textContent]);
-  expect(names[0]).toEqual(["design/metering.md", "design/metering.md", "metering.mdv3"]);
-  expect(names[1]).toEqual(["usage-by-kind.csv", "usage-by-kind.csv", "usage-by-kind.csv"]);
+  const names = [...full!.querySelectorAll("button")].map((b) => {
+    const description = b.querySelector("[data-testid='published-file-description']");
+    return [b.getAttribute("data-name"), b.getAttribute("title"), description?.textContent ?? null, description?.getAttribute("title") ?? null];
+  });
+  expect(names).toEqual([
+    ["design/metering.md", "design/metering.md", "How usage is metered and billed", "How usage is metered and billed"],
+    ["usage-by-kind.csv", "usage-by-kind.csv", "Usage per kind, last 30 days", "Usage per kind, last 30 days"],
+    ["flow.svg", "flow.svg", null, null],
+    ["rollup.json", "rollup.json", null, null],
+  ]);
+  const versionMark = (b: Element) => [...b.querySelectorAll("span")].filter((s) => s.children.length === 0 && /^v\d+$/.test(s.textContent ?? "")).map((s) => s.textContent);
+  expect([...full!.querySelectorAll("button")].map(versionMark)).toEqual([["v3"], [], [], []]);
   expect(full!.querySelectorAll("svg").length).toBe(4);
   expect(capped!.querySelectorAll("button")).toHaveLength(2);
   expect(capped!.textContent).toContain("1 more");

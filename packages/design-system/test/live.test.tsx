@@ -4,6 +4,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LiveDiff, splitRows, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
 import { FileGallery, type GalleryFile } from "../src/components/FileGallery.tsx";
@@ -101,7 +103,42 @@ describe("FileGallery", () => {
     expect(html).toContain("Download all");
     expect(html).toContain("3 KB");
   });
+
+  test("a file's description is a line under its name, in a card and a row, the latest version's; none, no line", async () => {
+    const described: GalleryFile[] = [
+      { name: "shot.png", versions: [{ ...v("shot.png", "image/png"), description: "The signed-in page" }] },
+      { name: "NOTES.md", versions: [
+        { ...v("NOTES.md", "text/markdown", 2), description: "With numbers" },
+        { ...v("NOTES.md", "text/markdown", 1), description: "First draft" },
+      ] },
+      { name: "plain.md", versions: [v("plain.md", "text/markdown")] },
+    ];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<FileGallery files={described} onOpen={() => {}} onDownload={() => {}} />));
+      const card = host.querySelector("[data-testid='file-card'][data-name='shot.png']")!;
+      const row = (name: string) => host.querySelector(`[data-testid='file-row'][data-name='${name}']`)!;
+      const description = (scope: Element) => [...scope.querySelectorAll("[data-testid='file-description']")]
+        .map((d) => [d.textContent, d.getAttribute("title")]);
+      expect(textIn(card, "The signed-in page")).not.toBeNull();
+      expect(description(card)).toEqual([["The signed-in page", "The signed-in page"]]);
+      expect(textIn(row("NOTES.md"), "With numbers")).not.toBeNull();
+      expect(description(row("NOTES.md"))).toEqual([["With numbers", "With numbers"]]);
+      expect(textIn(host, "First draft")).toBeNull();
+      expect(description(row("plain.md"))).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
 });
+
+/** The element within `scope` whose own text is exactly `text`, as getByText finds it. */
+function textIn(scope: Element, text: string): Element | null {
+  return [...scope.querySelectorAll("*")].find((e) => e.children.length === 0 && e.textContent === text) ?? null;
+}
 
 describe("artifactKind", () => {
   test("knows video and pages", () => {

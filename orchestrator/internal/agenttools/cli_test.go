@@ -116,7 +116,8 @@ func TestTheCLIWorksThroughLuxsSocketWithoutTheToken(t *testing.T) {
 		t.Errorf("memory add without content: %v\n%s", err, out)
 	}
 
-	// Publishing is local: into $LUX_ARTIFACTS, nothing sent anywhere.
+	// Publishing on an older lux ($LUX_ARTIFACTS set) is a local copy, nothing
+	// sent anywhere; on lux#77 it is lux-shim's (cmd/dude's tests).
 	notes := filepath.Join(t.TempDir(), "notes.md")
 	_ = os.WriteFile(notes, []byte("# Notes\n"), 0o644)
 	if out, err = dude("publish", notes, "--name", "design/notes.md"); err != nil {

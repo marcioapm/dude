@@ -109,6 +109,29 @@
   gap: var(--ds-space-6);
   min-width: 0;
 }
+/* A published file's button holds its name line, then its description. */
+.publishedFile {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0;
+}
+.fileLine {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.fileDescription {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: calc(12px + var(--ds-space-6));
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
 .glyph {
   flex-shrink: 0;
   color: var(--ds-color-text-muted);
