@@ -846,15 +846,17 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		// edit or removal of the size or tier, a new version of the image or
 		// a change of the egress lists leaves this Run's record — and its
 		// resumes — alone.
+		// can_run_containers: the sandbox of the lux Run lux returned (a
+		// retried submit's is the first one's), which its resumes keep.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
 			machine = $10::jsonb, model_tier = NULLIF($11, ''), image = $12::jsonb, image_waiting_since = NULL, network = $13::jsonb,
-			effort = NULLIF($14, ''),
+			effort = NULLIF($14, ''), can_run_containers = $15,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
 			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got, spec.Network,
-			spec.Labels["dude.effort"])
+			spec.Labels["dude.effort"], lr.NestedContainers(spec))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

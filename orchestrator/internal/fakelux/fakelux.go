@@ -1645,6 +1645,11 @@ func (s *Server) view(run *Run) map[string]any {
 	// as normalized and a credential marked runnerOnly (lux's Normalize).
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	// lux's RunSpec.Sandbox is a struct: a Run that asked for nothing is
+	// returned with "sandbox": {}, never without it.
+	if _, ok := spec["sandbox"]; !ok && spec != nil {
+		spec["sandbox"] = map[string]any{}
+	}
 	runnerOnly := runnerOnlySecrets(run.Spec)
 	if secrets, ok := spec["secrets"].([]any); ok {
 		for _, sec := range secrets {

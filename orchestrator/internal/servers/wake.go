@@ -881,16 +881,18 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	var holds string
 	var live bool
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// machine: the size this lux Run was submitted on; a later generation
-		// records its own. Its first start begins here, before any of its
-		// events (lux_start_event 1), so a failure before its first running
-		// is a failed start; StartBefore 0 makes every event of it newer
-		// than the submit's answer. Recorded only on a live preview.
+		// machine and image: what this lux Run was submitted with;
+		// can_run_containers: its sandbox as lux returned it. A later
+		// generation records its own. Its first start begins here, before
+		// any of its events (lux_start_event 1), so a failure before its
+		// first running is a failed start; StartBefore 0 makes every event
+		// of it newer than the submit's answer. Recorded only on a live
+		// preview.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
 			machine = $7::jsonb, image = $8::jsonb, image_waiting_since = NULL, started_at = COALESCE(started_at, now()), lux_start_event = 1,
-			preview_secrets = $9, carried_servers = '[]'
+			preview_secrets = $9, carried_servers = '[]', can_run_containers = $10
 			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6 AND `+liveStatus, r.ID, lr.ID, lr.State, db.NonNil(repos), branch,
-			r.Generation, machine, got, acceptedSecrets(lr)); err != nil {
+			r.Generation, machine, got, acceptedSecrets(lr), lr.NestedContainers(spec)); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT COALESCE(lux_run_id, ''), `+liveStatus+` FROM runs WHERE id = $1`, r.ID).Scan(&holds, &live)

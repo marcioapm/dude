@@ -554,6 +554,12 @@ export const runSchema = z.object({
     .nullable()
     .default(null),
   /**
+   * Whether it asked lux to let it start containers inside it, as recorded
+   * when it was submitted; null for a Run not yet submitted, or from
+   * before dude recorded it.
+   */
+  canRunContainers: z.boolean().nullable().default(null),
+  /**
    * While it waits for its image (its dude layer, or its first version): the
    * job, and where it is; builderOfflineSince when the builder has not been
    * heard from for 2 minutes, from its last heartbeat (or, never seen, from
