@@ -98,6 +98,20 @@ func TestATiersRunIsLabelledWithTheTier(t *testing.T) {
 	}
 }
 
+// lux names the tool behind a cost by the app label: a phase Run and a
+// session both carry it, though a session drops dude.task.
+func TestEveryRunIsLabelledAsDudes(t *testing.T) {
+	c := AgentConfig{LLMURL: "https://llm.example/v1"}
+	for _, in := range []specInput{
+		{RunID: "run_1", TaskID: "wi_1", Phase: "implement", Model: "claude-fable-5-1"},
+		{RunID: "run_1", TaskID: "wi_1", SessionID: "ses_1", Model: "claude-fable-5-1"},
+	} {
+		if got := buildSpec(c, in).Labels[lux.AppLabel]; got != lux.App {
+			t.Errorf("%+v: app label = %q", in, got)
+		}
+	}
+}
+
 // Building one Run's env must not change the next one's.
 func TestRunEnvsAreTheirOwn(t *testing.T) {
 	a := llmSpec("claude-a", "")
