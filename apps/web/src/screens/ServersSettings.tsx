@@ -13,7 +13,7 @@ import { egressProblem, type MachineSizeWithUse, type PreviewSecret, type Previe
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
-import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
+import { canRunContainers, ImageField, imageWords, type ImageChoices } from "../images.tsx";
 import { PreviewSecretsRow } from "./PreviewSecrets.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
@@ -142,6 +142,13 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             onChange={(imageId) => savePreviews({ imageId }, imageId ? "Image saved" : "Image reset")}
             onClearLegacy={() => savePreviews({ image: null }, "Typed image cleared")} />
         </SettingRow>
+        {canRunContainers(images.images, previews.imageId ?? project.runtimeImageId ?? images.defaultImageId) ? (
+          <div data-testid="preview-containers-note">
+            <SettingsNote icon="cube">
+              This image can run containers. A preview keeps its containers while it sleeps, so it wakes in seconds instead of rebuilding them. Sleeping takes longer and stores the containers’ images and data.
+            </SettingsNote>
+          </div>
+        ) : null}
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
           <HostChips hosts={previews.egress} validate={egressProblem} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>

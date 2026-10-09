@@ -180,7 +180,7 @@ func run(log *slog.Logger) error {
 	}()
 	serverService := preview.service(database, luxClient, log, set.ConsoleURL)
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
-		Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
+		DefaultImageContainers: agent.NestedContainers, Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}

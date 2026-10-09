@@ -1,10 +1,13 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { CodeEditor, type CodeCompletion, type CodeDiagnostic } from "../../components/CodeEditor.tsx";
-import { ImagePicker, ImageMark, type ImageChoiceView } from "../../components/ImagePicker.tsx";
+import { CanRunContainersBadge, ImagePicker, ImageMark, type ImageChoiceView } from "../../components/ImagePicker.tsx";
 import { BuildQueueStrip, BuildStages, ImageHistory, ImageState, type ImageHistoryVersion } from "../../components/Images.tsx";
 import { LogStream } from "../../components/LogStream.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
+import { Checkbox } from "../../primitives/Checkbox.tsx";
+import { Callout } from "../../primitives/Layout.tsx";
+import { Icon } from "../../icons/index.tsx";
 
 /*
  * The image library's pieces with made-up images; the app's Containerfile
@@ -14,6 +17,7 @@ import { Badge } from "../../primitives/Badge.tsx";
 
 const IMAGES: ImageChoiceView[] = [
   { id: "base", name: "acme-base", description: "Debian, Node 26, Java 25, Python 3.14, Playwright", version: 7, isDefault: true },
+  { id: "podman", name: "agents-podman", description: "Debian, git and rootless podman", version: 3, canRunContainers: true },
   { id: "pnpm", name: "node-pnpm", description: "pnpm and turbo, for the dashboard", version: 4, status: { kind: "building", version: 5 } },
   { id: "uv", name: "python-uv", description: "uv and the Postgres client", version: 2, status: { kind: "waiting", version: 3 } },
   { id: "rails", name: "rails-legacy", description: "Ruby 3.1 and Node 18, for the old billing app", version: 3, status: { kind: "failed", version: 4 } },
@@ -107,6 +111,40 @@ const HISTORY: ImageHistoryVersion[] = [
   { id: "v1", number: 1, state: "superseded", containerfile: "FROM image:acme-base\nRUN npm install -g pnpm\n", note: "Rebuild on acme-base v3", author: null, when: "3 Sep", builtOn: "acme-base v3" },
 ];
 
+/** A history in which v2 turned "Can run containers" on and v3 off again. */
+const CONTAINERS_HISTORY: ImageHistoryVersion[] = [
+  { id: "c3", number: 3, state: "published", containerfile: "FROM image:acme-base\nRUN apt-get install -y git\n", note: "No podman: the tests moved to CI", author: { id: "ep", name: "Eli Park" }, when: "today, 09:12", canRunContainers: false },
+  { id: "c2", number: 2, state: "superseded", containerfile: "FROM image:acme-base\nRUN apt-get install -y git podman fuse-overlayfs uidmap\n", note: "Run podman for the tests", author: { id: "mm", name: "Márcio Martins" }, when: "yesterday, 16:44", canRunContainers: true },
+  { id: "c1", number: 1, state: "superseded", containerfile: "FROM image:acme-base\nRUN apt-get install -y git\n", note: "First", author: { id: "mm", name: "Márcio Martins" }, when: "3 Sep", canRunContainers: false },
+];
+
+/** The image page's field: the box, its description, and the hint and warning beside it, each naming the box. */
+function ContainersFieldDemo({ on, hint, warning }: { readonly on: boolean; readonly hint?: boolean; readonly warning?: boolean }) {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const warningId = `${id}-warning`;
+  const ids = [hint ? hintId : null, warning ? warningId : null].filter(Boolean).join(" ");
+  const line = { display: "flex", gap: 6, margin: "0 0 0 22px", fontSize: "var(--ds-text-xs)", color: "var(--ds-color-text-secondary)" } as const;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <Checkbox checked={on} label="Can run containers" aria-describedby={ids || undefined}
+        description="Runs in this image can start containers inside with podman or Docker. dude checks the build can, and fails it if not." />
+      {hint ? (
+        <p id={hintId} style={line}>
+          <Icon name="warning" size={12} style={{ color: "var(--ds-tone-attention-fg)", marginTop: 2 }} />
+          This Containerfile doesn't install podman or Docker. The build will fail its container check unless the base has them.
+        </p>
+      ) : null}
+      {warning ? (
+        <p id={warningId} style={line}>
+          <Icon name="warning" size={12} style={{ color: "var(--ds-tone-attention-fg)", marginTop: 2 }} />
+          New previews of this image can't run containers. Existing ones keep theirs until they start a fresh run.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 const LOG = [
   "build of node-pnpm v5 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64",
   "resolve image:acme-base → v7 = 895757147740.dkr.ecr.eu-north-1.amazonaws.com/dude/custom@sha256:c41d…",
@@ -155,6 +193,50 @@ export function ImagesGallerySection({ mode }: { readonly mode: PaneMode }) {
             <ImageState kind="draft">Draft not built</ImageState>
             <span style={{ display: "inline-flex", gap: 8 }}><ImageMark isDefault /><ImageMark /></span>
             <LogStream lines={LOG} title="Build log" live maxHeight={200} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="i-containers" title="Can run containers" note="A property of each image version, saved with its draft by a Checkbox under the editor. Badges (CanRunContainersBadge; lowercase in the picker) show only the published version's value. The hint (box on, no podman or Docker named) and the off warning (box off where previews run it) are muted lines with the warning glyph, never a Callout, and describe the box. A version marked so gets a Check containers stage between Built and Published; a passed check stays done when the push after it fails. A Run lux cannot place yet says why in an attention Callout, with Waiting for a host beside its status.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>Badges: header, list, picker</Label>
+            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+              <CanRunContainersBadge size="md" /><CanRunContainersBadge /><CanRunContainersBadge lower />
+            </span>
+            <Label>On</Label>
+            <ContainersFieldDemo on />
+            <Label>On, nothing installs an engine</Label>
+            <ContainersFieldDemo on hint />
+            <Label>Off, where previews run it</Label>
+            <ContainersFieldDemo on={false} warning />
+            <Label>Checking, then failed, then passed with its push failing</Label>
+            <BuildStages stages={[
+              { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+              { id: "build", label: "Built", detail: "rootless · 1.5 CPU · 1.5 GB", state: "done" },
+              { id: "check", label: "Check containers", detail: "podman or Docker, fuse-overlayfs, newuidmap/newgidmap, subuid", state: "current" },
+              { id: "done", label: "Pushed and published", detail: "dude/custom, then live", state: "todo" },
+            ]} />
+            <BuildStages stages={[
+              { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+              { id: "build", label: "Built", detail: "rootless · 1.5 CPU · 1.5 GB", state: "done" },
+              { id: "check", label: "Check containers", detail: "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap", state: "failed" },
+              { id: "done", label: "Not published", detail: "Not pushed · v4 is still live", state: "todo" },
+            ]} />
+            <BuildStages stages={[
+              { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
+              { id: "build", label: "Built", detail: "rootless · 1.5 CPU · 1.5 GB", state: "done" },
+              { id: "check", label: "Check containers", detail: "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent", state: "done" },
+              { id: "done", label: "Not published", detail: "pushing to the registry failed: 502 Bad Gateway", state: "failed" },
+            ]} />
+            <Label>Waiting for a host</Label>
+            <Callout tone="attention">
+              <b>Waiting for a host that can run containers.</b> lux has no host that can run containers. An admin can add one to a pool. Nothing is spent meanwhile.
+            </Callout>
+            <span style={{ display: "inline-flex", gap: 8 }}>
+              <Badge size="sm" icon="clock">Waiting for a host</Badge>
+            </span>
+            <Label>History: turned on in v2, off in v3</Label>
+            <ImageHistory versions={CONTAINERS_HISTORY} publishedId="c3" initialId="c2" />
           </Col>
         </Panes>
       </Block>

@@ -890,6 +890,18 @@ body {
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+.imageNested {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.imageNested > svg {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
 .imageLegacy code {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-mono);
@@ -966,6 +978,43 @@ body {
 }
 .lintOk {
   color: var(--ds-tone-success-fg);
+}
+/* "Can run containers": under the editor, saved with the draft. */
+.imageContainers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-4) 0;
+}
+.imageContainersHint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+  margin: 0 0 0 22px;
+  font-size: var(--ds-text-xs);
+  line-height: 1.45;
+  color: var(--ds-color-text-secondary);
+  max-width: var(--ds-measure-message);
+}
+.imageContainersHint > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ds-tone-attention-fg);
+}
+.imageFlagChange {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-accent-text);
+}
+.buildFix {
+  margin: calc(-1 * var(--ds-space-8)) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.buildFix code {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
 }
 .imageSaveBar {
   display: flex;

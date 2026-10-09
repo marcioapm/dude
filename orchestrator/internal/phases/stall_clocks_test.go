@@ -73,19 +73,45 @@ func TestAResumeLuxAnswersRunningClearsItsTimeAway(t *testing.T) {
 
 // Leaving running is stamped once: later frames on the way to running
 // again (stopping, then resuming, each in its own batch) keep the first
-// departure, so the whole wait is time away.
+// departure, so the whole wait is time away. Entering and leaving resuming
+// each tell the Run page to read its waiting reason again.
 func TestFramesOnTheWayBackKeepTheFirstDeparture(t *testing.T) {
 	w := newResumeWorld(t)
 	w.exec(`UPDATE runs SET status = 'running', lux_state = 'running', left_running_at = NULL WHERE id = $1`, w.run.ID)
+	const changed = `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'servers.changed'`
+	lastChange := func() string {
+		t.Helper()
+		var state string
+		if err := w.owner.QueryRow(w.ctx, `SELECT payload->>'luxState' FROM events
+			WHERE run_id = $1 AND event_type = 'servers.changed' ORDER BY cursor DESC LIMIT 1`, w.run.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
 	w.follow(luxState(1, "stopping"))
 	first := w.clock("left_running_at")
 	if first == nil {
 		t.Fatal("leaving running was not stamped")
 	}
 	time.Sleep(30 * time.Millisecond)
+	before := w.count(changed)
 	w.follow(luxState(1, "resuming"))
 	if last := w.clock("left_running_at"); last == nil || !last.Equal(*first) {
 		t.Fatalf("the departure moved from %v to %v on a later frame away from running", first, last)
+	}
+	if after := w.count(changed); after != before+1 {
+		t.Fatalf("resuming published %d servers.changed, want 1", after-before)
+	}
+	if state := lastChange(); state != "resuming" {
+		t.Fatalf("resuming's servers.changed says lux state %q", state)
+	}
+	before = w.count(changed)
+	w.follow(running(2))
+	if after := w.count(changed); after != before+1 {
+		t.Fatalf("running again published %d servers.changed, want 1 to clear the waiting notice", after-before)
+	}
+	if state := lastChange(); state != "running" {
+		t.Fatalf("running again's servers.changed says lux state %q", state)
 	}
 }
 
