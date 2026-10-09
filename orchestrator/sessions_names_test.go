@@ -42,8 +42,7 @@ func TestASessionStartsUntitled(t *testing.T) {
 	}
 }
 
-// A file the brainstorm writes into $LUX_ARTIFACTS mid-conversation is
-// collected when its container stops, as any agent's: recorded on its
+// A file the brainstorm publishes mid-conversation is recorded on its
 // Run, its artifact.created on the session (so only members see it) and on
 // no task. (Who may read its bytes: TestASessionsArtifactsAreItsMembersAlone.)
 func TestABrainstormsPublishedFileIsItsSessions(t *testing.T) {
@@ -54,18 +53,18 @@ func TestABrainstormsPublishedFileIsItsSessions(t *testing.T) {
 	run := s.started(id)
 	// The scripted agent does its own work in the container from a later message.
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "write it up\n" +
-		`tool: artifact {"path":"design.md","content":"# Metering\n\nCount each run once."}`})
-	s.until("the second turn", func() bool {
-		v := s.luxRun(run)
-		return v != nil && len(v.inputs) > 0 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, run) == 1
-	})
-	mustExec(t, s.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, run)
+		`tool: artifact {"path":"design.md","content":"# Metering\n\nCount each run once.","description":"How metering counts runs"}`})
+	// Recorded while the session's Run goes on: nothing pauses it.
 	var artifact string
 	s.until("the file recorded", func() bool {
 		s.pump()
-		_ = s.owner.QueryRow(context.Background(), `SELECT id FROM artifacts WHERE run_id = $1 AND name = 'design.md'`, run).Scan(&artifact)
+		_ = s.owner.QueryRow(context.Background(), `SELECT id FROM artifacts WHERE run_id = $1 AND name = 'design.md'
+			AND description = 'How metering counts runs'`, run).Scan(&artifact)
 		return artifact != ""
 	})
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run); n != 1 {
+		t.Error("the session's Run stopped before its file was recorded")
+	}
 	if n := s.count(`SELECT count(*) FROM events WHERE event_type = 'artifact.created' AND session_id = $1 AND run_id = $2
 		AND task_id IS NULL AND payload->>'artifactId' = $3`, id, run, artifact); n != 1 {
 		t.Errorf("artifact.created on the session: %d, want 1", n)

@@ -170,14 +170,14 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-files" title="PublishedFiles"
-        note="The rail's Files: what the session's agent published for its members, newest first, each by its kind's glyph and name, a version mark when published again. Picking one opens it in the task's file viewer (FileViewer, ArtifactPreview). Long lists end in “N more”.">
+        note="The rail's Files: what the session's agent published for its members, newest first, each by its kind's glyph and name, a version mark when published again, and under the name, muted, the one line the agent said it is for when it said one. Picking one opens it in the task's file viewer (FileViewer, ArtifactPreview). Long lists end in “N more”.">
         <Panes mode={mode}>
           <div style={{ width: 300 }}>
             <SessionRail>
               <SessionRailBlock label="Files 4">
                 <PublishedFiles onOpen={() => undefined} files={[
-                  { name: "design/metering.md", contentType: "text/markdown", versions: 3 },
-                  { name: "usage-by-kind.csv", contentType: "text/csv" },
+                  { name: "design/metering.md", contentType: "text/markdown", versions: 3, description: "How usage is metered and billed" },
+                  { name: "usage-by-kind.csv", contentType: "text/csv", description: "Usage per kind, last 30 days" },
                   { name: "flow.svg", contentType: "image/svg+xml" },
                   { name: "rollup.json", contentType: "application/json" },
                 ]} />

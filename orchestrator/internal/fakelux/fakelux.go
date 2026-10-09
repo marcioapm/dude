@@ -13,8 +13,6 @@
 package fakelux
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,9 +63,12 @@ type Behaviour struct {
 	Ask string
 	// Tools start and do not finish: a long command.
 	KeepToolsOpen bool
-	// Files the agent writes into $LUX_ARTIFACTS, name → content: listed as
-	// the Run's artifacts once its container exits, as lux collects them.
+	// Files the agent publishes as it finishes its turn, name → content
+	// (with LegacyArtifacts, written into $LUX_ARTIFACTS and collected when
+	// its container exits).
 	Publish map[string]string
+	// What each published file is for, by name.
+	Descriptions map[string]string
 	// Fail before the agent starts (a bad image, a failed clone): lux
 	// reports such an exit without a snapshot, ever.
 	FailToStart bool
@@ -79,8 +80,8 @@ type Behaviour struct {
 	// an edit tool call, in its first turn: uncommitted work, which exec
 	// sees and the live diff shows. Paths are in the first repository.
 	Edits map[string]string
-	// Files written into $LUX_ARTIFACTS in its first turn, as it works —
-	// before a Hang — rather than as it finishes (Publish).
+	// Files published in its first turn, as it works — before a Hang —
+	// rather than as it finishes (Publish).
 	PublishNow map[string]string
 	// Files written into its checkout in the turn that finishes, after a
 	// Hang is woken.
@@ -190,7 +191,8 @@ type Run struct {
 	// Its next placement goes to another host (a migrate).
 	moveNext  bool
 	artifacts []*artifact
-	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
+	// LegacyArtifacts only: written into $LUX_ARTIFACTS by the agent's
+	// turns and not yet collected.
 	published map[string]string
 
 	// Its checkout, a real git clone made when first needed: the
@@ -471,9 +473,15 @@ func (run *Run) stopRequested() {
 
 type artifact struct {
 	ID, Path, ContentType, SHA256 string
-	Epoch                         int
-	Size                          int64
-	Content                       string
+	// 1 for the first at its path, counting up; 0 from LegacyArtifacts,
+	// as an older lux lists none.
+	Version     int
+	Description string
+	Epoch       int
+	Size        int64
+	Content     string
+	// Uploaded, so it can be downloaded.
+	Available bool
 }
 
 // deliverQueued hands queued input to an idle agent, which takes it as a
@@ -549,6 +557,8 @@ type Server struct {
 	IdleCheck time.Duration
 	// Tenant servers deleted or expired, in order.
 	DeletedServers []string
+	// What happened to tenant servers, in order (TenantCalls).
+	tenantCalls []string
 	// The tenant's servers and its event feed (tenant.go).
 	feedState
 	// How lux acknowledges input. By default as lux does now: "accepted"
@@ -630,6 +640,14 @@ type Server struct {
 	execPlay
 	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
 	stallReviews map[string]int
+	// LegacyArtifacts is a lux before artifact-publish (lux#77): no
+	// lux-shim publish and no artifact.published; what is written into
+	// $LUX_ARTIFACTS is collected when the container exits, and listed with
+	// no version or description.
+	LegacyArtifacts bool
+	// The stand-in lux-shim commands in a checkout run (publish.go).
+	shimOnce sync.Once
+	shimPath string
 }
 
 // SetUsage is what lux reports as the Run's usage from now on.
@@ -691,6 +709,12 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for name, text := range step.Publish {
 		published[name] = text + "\n"
 	}
+	descriptions := map[string]string{}
+	for _, files := range []map[string]string{step.Publish, step.PublishNow} {
+		for name := range files {
+			descriptions[name] = fakeagent.Description(name)
+		}
+	}
 	tools := []string{"todowrite", "read"}
 	if step.LongCommand {
 		tools = []string{"bash"}
@@ -726,7 +750,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
+		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
 
@@ -1054,6 +1078,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/servers", s.createTenantServer)
 	mux.HandleFunc("GET /v1/servers/{sid}", s.getTenantServer)
 	mux.HandleFunc("DELETE /v1/servers/{sid}", s.deleteTenantServer)
+	mux.HandleFunc("PATCH /v1/servers/{sid}", s.patchTenantServer)
 	mux.HandleFunc("POST /v1/servers/{sid}/attach", s.attachTenantServer)
 	mux.HandleFunc("POST /v1/servers/{sid}/detach", s.detachTenantServer)
 	mux.HandleFunc("GET /v1/events", s.feedHandler)
@@ -1337,12 +1362,7 @@ func (s *Server) turn(run *Run) {
 			s.callTool(run, c[0], c[1])
 		}
 		s.edit(run, b.Edits)
-		for name, content := range b.PublishNow {
-			if run.published == nil {
-				run.published = map[string]string{}
-			}
-			run.published[name] = content
-		}
+		s.save(run, b.PublishNow, b.Descriptions)
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
@@ -1393,13 +1413,8 @@ func (s *Server) turn(run *Run) {
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
-	if !asking && len(b.Publish) > 0 {
-		if run.published == nil {
-			run.published = map[string]string{}
-		}
-		for name, content := range b.Publish {
-			run.published[name] = content
-		}
+	if !asking {
+		s.save(run, b.Publish, b.Descriptions)
 	}
 	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})
 	// The prompt's response, as the ACP adapter relays it: with the turn's
@@ -1603,9 +1618,10 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 	}
 }
 
-// exited is the container going away: lux collects what the agent put in
-// $LUX_ARTIFACTS and, a moment later, the host reports it. The report trails
-// the exit, as it does in lux, so dude must wait for it. Callers hold s.mu.
+// exited is the container going away: a moment later the host reports it,
+// and with LegacyArtifacts what the agent put in $LUX_ARTIFACTS is
+// collected then. The report trails the exit, as it does in lux, so dude
+// must wait for it. Callers hold s.mu.
 func (s *Server) exited(run *Run) {
 	if len(run.placements) == 0 {
 		return
@@ -1626,11 +1642,7 @@ func (s *Server) exited(run *Run) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for name, content := range published {
-			sum := sha256.Sum256([]byte(content))
-			s.nextArt++
-			run.artifacts = append(run.artifacts, &artifact{ID: fmt.Sprintf("art_%d", s.nextArt),
-				Path: lux.PublishedPrefix + name, ContentType: mimeFor(name), SHA256: hex.EncodeToString(sum[:]),
-				Epoch: p.Epoch, Size: int64(len(content)), Content: content})
+			s.addArtifact(run, name, content, p.Epoch).Available = true
 		}
 		done := time.Now()
 		p.SnapshotDoneAt = &done
@@ -1758,21 +1770,6 @@ func (s *Server) view(run *Run) map[string]any {
 func generic(spec map[string]any) bool {
 	w, _ := spec["workload"].(map[string]any)
 	return w["adapter"] == "generic"
-}
-
-func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	run := s.find(w, r)
-	if run == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := []any{}
-	for _, a := range run.artifacts {
-		out = append(out, map[string]any{"id": a.ID, "epoch": a.Epoch, "path": a.Path, "contentType": a.ContentType,
-			"size": a.Size, "sha256": a.SHA256, "available": true})
-	}
-	writeJSON(w, 200, map[string]any{"artifacts": out})
 }
 
 func (s *Server) downloadArtifact(w http.ResponseWriter, r *http.Request) {

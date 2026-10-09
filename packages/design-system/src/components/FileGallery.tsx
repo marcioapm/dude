@@ -23,6 +23,8 @@ export interface FileVersion {
   readonly session: string;
   /** 1 for the first of its name. */
   readonly version: number;
+  /** What its maker said it is for, one short line; shown under the name. */
+  readonly description?: string | undefined;
 }
 
 /** A file: its versions, newest first — the first is the file. */
@@ -113,6 +115,7 @@ export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAl
                   <span className={styles["caption"]}>
                     <span className={styles["name"]}>
                       <b>{f.name}</b>
+                      <Description of={latest} />
                       <small>
                         {ARTIFACT_KIND_SPECS[kind].label} · {formatBytes(latest.sizeBytes)}
                         {f.versions.length > 1 ? <> · <span className={styles["version"]}>v{latest.version}</span></> : null}
@@ -156,6 +159,7 @@ function FileRow({ file, kind, onOpen, onDownload }: { file: GalleryFile; kind: 
         </span>
         <span className={styles["name"]}>
           <b>{file.name}</b>
+          <Description of={latest} />
           <small>
             {ARTIFACT_KIND_SPECS[kind].label} · {formatBytes(latest.sizeBytes)}
             {file.versions.length > 1 ? <> · <span className={styles["version"]}>v{latest.version}</span></> : null}
@@ -170,6 +174,11 @@ function FileRow({ file, kind, onOpen, onDownload }: { file: GalleryFile; kind: 
       <IconButton icon="download" size="sm" label={`Download ${file.name}`} onClick={onDownload} />
     </li>
   );
+}
+
+/** A version's description under its name, in full on hover; nothing without one. */
+function Description({ of }: { of: FileVersion }) {
+  return of.description ? <span className={styles["description"]} title={of.description} data-testid="file-description">{of.description}</span> : null;
 }
 
 // ---------------------------------------------------------------------------

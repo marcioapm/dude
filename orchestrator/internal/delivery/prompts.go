@@ -250,18 +250,21 @@ const commitNote = "Commit your work when you are done. Only committed changes a
 const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
 	"package; Chromium is installed). Record the whole flow as a video — create the browser context with " +
 	"`record_video_dir` — and take a screenshot at each step that matters. When you are done, close the " +
-	"context so the video is written, then publish the video and the screenshots: copy them into " +
-	"`$LUX_ARTIFACTS` (for example `$LUX_ARTIFACTS/walkthrough.webm`, `$LUX_ARTIFACTS/01-signed-in.png`), " +
-	"named so the order reads. Read the browser console as you go, and report what it says. A flow that does " +
+	"context so the video is written, then publish the video and each screenshot with " +
+	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish /tmp/videos/abc.webm " +
+	"--name walkthrough.webm --description \"The sign-in flow, end to end\"`, `--name 01-signed-in.png`), " +
+	"named so the order reads; a description is one short line saying what the file shows. Read the browser console as you go, and report what it says. A flow that does " +
 	"not work is a finding, with the step it failed at; one that works needs no finding — say what you did."
 
 // publishNote tells an agent how to hand a person something that is not
 // code. Every phase may: an implementer's design notes, a reviewer's
 // reproduction, a tester's screenshots.
 const publishNote = "To give the people following this work a file — notes, a design, a report, a " +
-	"screenshot — write it into the directory named by the LUX_ARTIFACTS environment variable " +
-	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the task, Markdown " +
-	"rendered. Publish what a person would want to read; don't copy code there."
+	"screenshot — run `dude publish FILE --name NAME --description \"…\"` (for example " +
+	"`dude publish notes.md --name notes.md --description \"Why the export streams rows\"`); the description " +
+	"is one short line saying what the file is for. They see each one next to the task at once, while you " +
+	"work, Markdown rendered; publishing the same name again adds a new version. Publish what a person would " +
+	"want to read; don't publish code."
 
 // ask is how this agent stops for a person: dude's ask_person tool.
 // Without dude's tools it cannot ask, and decides for itself.
@@ -295,7 +298,8 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"`dude repo list` and `dude repo request`, `dude memory search QUERY`, `dude memory show ID` and " +
 	"`dude memory add --title T --content C` for memory, `dude diff [RUN] [PATH...]` for what a Run of your " +
-	"task changed, and `dude publish FILE` to keep a file for people."
+	"task changed, and `dude publish FILE --name NAME --description \"…\"` to keep a file for people " +
+	"(the description: one short line of what the file is for)."
 
 // PromptRoleForPhase is whose prompt and settings each phase runs with: an
 // agent role, or the fixer's — the implementer's model, told something
