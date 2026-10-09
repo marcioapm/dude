@@ -482,14 +482,36 @@ def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
 
 
 def _published(client: ApiClient, session: str, name: str) -> dict:
-    """Ask the session's agent to publish a file, after its first turn, and wait until it is listed
-    (collected when the brainstorm parks after its warm period)."""
+    """Ask the session's agent to publish a file, after its first turn, and wait until it is listed."""
     said = len(_said(client, session))
     client.post(f"/v1/brainstorms/{session}/chat",
                 {"text": "write it up\n" + _tool("artifact", {"path": name, "content": "# Metering\n\nCount each run once."})})
     wait_until(lambda: len(_said(client, session)) > said, timeout=60, message="the agent never answered")
     return wait_until(lambda: next((a for a in client.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"]
                                     if a["name"] == name), None), timeout=90, message=f"{name} was never listed")
+
+
+def test_a_file_published_again_is_its_next_version_with_its_own_description(client: ApiClient, env):
+    """dude publish of a name already published is a new version, in lux and
+    so in dude: both listed, newest first, each with what the agent said."""
+    _scripted_brainstorm(client)
+    session = client.post("/v1/brainstorms", {}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "write it up\n" +
+        _tool("artifact", {"path": "design.md", "content": "# Draft", "description": "First draft"})})
+    wait_until(lambda: client.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"], timeout=30,
+               message="the first version never reached dude")
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "again, with numbers\n" +
+        _tool("artifact", {"path": "design.md", "content": "# Metering\n\nWith numbers.", "description": "With the numbers"})})
+
+    def both():
+        found = [a for a in client.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"] if a["name"] == "design.md"]
+        return found if len(found) == 2 else None
+
+    found = wait_until(both, timeout=30, message="the second version never reached dude")
+    assert [(a["version"], a["versions"], a["description"]) for a in found] == [(2, 2, "With the numbers"), (1, 2, "First draft")]
+    assert "With numbers." in client.get(f"/v1/artifacts/{found[0]['id']}/content").text
 
 
 def test_a_sessions_files_are_what_its_agent_published_for_its_members_alone(client: ApiClient, env):

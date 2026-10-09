@@ -452,6 +452,8 @@ func Script(phase, model, runID string) string {
 			// lux-fake writes one line; the file's line breaks stay escaped.
 			fmt.Fprintf(&b, "write %s %s\n", path, strings.ReplaceAll(LiveEdits[path], "\n", " "))
 		}
+		// Its notes as it works (lux-fake writes text, so not the screenshot).
+		b.WriteString(publishScript(Notes, LiveNotes[0], Description(Notes)))
 		b.WriteString("sleep 3600")
 		return b.String()
 	}
