@@ -91,7 +91,7 @@ type translator struct {
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
 // process, the last of it recorded, and its plan as TaskCreate and
-// TaskUpdate built it; the half of a Claude turn's end that has arrived
+// TaskUpdate built it, with the number the next task gets; the half of a Claude turn's end that has arrived
 // (claudeTurnEnd), and the idle held until the other half; the tokens of
 // the Codex turn in progress; and why the turn in progress failed, from a
 // harness line that said so, which its end fails the Run with.
@@ -99,6 +99,7 @@ type harnessState struct {
 	claudeCost     float64
 	claudeCostSeen float64
 	claudeTasks    []map[string]any
+	claudeTaskNext int
 	claudeHalf     string
 	claudeUsage    *claudeUsage
 	claudeIdle     bool
@@ -114,6 +115,7 @@ type harnessStateJSON struct {
 	ClaudeCost     float64          `json:"claudeCost,omitempty"`
 	ClaudeCostSeen float64          `json:"claudeCostSeen,omitempty"`
 	ClaudeTasks    []map[string]any `json:"claudeTasks,omitempty"`
+	ClaudeTaskNext int              `json:"claudeTaskNext,omitempty"`
 	ClaudeHalf     string           `json:"claudeHalf,omitempty"`
 	ClaudeUsage    *claudeUsage     `json:"claudeUsage,omitempty"`
 	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
@@ -123,7 +125,7 @@ type harnessStateJSON struct {
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
-		ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
+		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -136,7 +138,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
-		claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
+		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
 	if j.CodexTurn != nil {
 		h.codexTurn = *j.CodexTurn
 	}
@@ -675,6 +677,14 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		return err
 	}
 	if !first {
+		// A new process: a Claude turn whose result never came ends with
+		// what it had, before the process's totals start again.
+		if t.claudeHalf != "" {
+			if err := t.claudeTurnEnd(ctx, tx, s); err != nil {
+				return err
+			}
+		}
+		t.claudeProcessStarted()
 		// The resumed agent has its session back: lux reports it running.
 		// Its state event says so too, but trails the agent's records on
 		// the stream, the first busy included.
