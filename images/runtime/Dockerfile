@@ -12,7 +12,7 @@
 #
 # That script builds the dude CLI for the target architecture into bin/ first.
 
-FROM debian:bookworm-slim AS agent-user
+FROM docker.io/library/debian:bookworm-slim AS agent-user
 # A lux Run maps only ids 0-65535; these ranges assume uid 1000 and must match
 # SubIDs in orchestrator/internal/images/images.go. `>` replaces the file
 # useradd writes (only agent's line on this base).
