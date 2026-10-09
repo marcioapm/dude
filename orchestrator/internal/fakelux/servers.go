@@ -307,11 +307,26 @@ func (s *Server) Migrate(id string) {
 	}
 	run.Calls = append(run.Calls, "migrate")
 	run.busy = false
-	s.setState(run, "stopping")
+	s.setStateWith(run, "stopping", "migrate")
+	if s.OnStage != nil {
+		// Only a test holding the boundary splits the move; otherwise it is
+		// one change, as lux's transaction is. A stop or terminate meanwhile
+		// wins: the move is then over.
+		epoch := run.Epoch
+		s.mu.Unlock()
+		s.OnStage(epoch, "stopping")
+		s.mu.Lock()
+		if run.State != "stopping" || run.Epoch != epoch {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.setStateWith(run, "stopped", "migrate")
 	run.Epoch++
 	run.starts++
 	run.moveNext = true
+	// lux's waiting since on a move is needs_host_since, the now() of the
+	// transaction that also ended the placement.
 	accepted := time.Now()
 	run.acceptedAt = &accepted
 	s.setStateWith(run, "resuming", "auto-resume after migrate")
