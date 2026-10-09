@@ -12,8 +12,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
-// RunImage is what a Run got from the library (runs.image): kept as it
-// was, so its page and its resumes say what it started with.
+// RunImage is the library image a Run was submitted on (runs.image); null
+// for a typed image or DUDE_AGENT_IMAGE. An agent Run's resume reuses the
+// spec lux holds (nesting included), not this; a preview's new generation
+// resolves its image again and records it again.
 type RunImage struct {
 	ImageID   string `json:"imageId"`
 	Name      string `json:"name"`
