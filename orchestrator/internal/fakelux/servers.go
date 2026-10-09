@@ -190,6 +190,9 @@ func (s *Server) startServer(run *Run, sv *server) {
 	gen, epoch := sv.gen, run.Epoch
 	sv.ExitCode, sv.Error, sv.StopReason, sv.StoppedEpoch = nil, "", "", nil
 	s.setServer(run, sv, lux.ServerStarting)
+	if sv.tenant != nil {
+		s.tenantCalls = append(s.tenantCalls, "start "+sv.tenant.ID)
+	}
 	if sv.Command == nil {
 		return // someone else serves the port: ready when it opens
 	}

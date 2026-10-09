@@ -531,6 +531,8 @@ type Server struct {
 	IdleCheck time.Duration
 	// Tenant servers deleted or expired, in order.
 	DeletedServers []string
+	// What happened to tenant servers, in order (TenantCalls).
+	tenantCalls []string
 	// The tenant's servers and its event feed (tenant.go).
 	feedState
 	// How lux acknowledges input. By default as lux does now: "accepted"
@@ -1028,6 +1030,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/servers", s.createTenantServer)
 	mux.HandleFunc("GET /v1/servers/{sid}", s.getTenantServer)
 	mux.HandleFunc("DELETE /v1/servers/{sid}", s.deleteTenantServer)
+	mux.HandleFunc("PATCH /v1/servers/{sid}", s.patchTenantServer)
 	mux.HandleFunc("POST /v1/servers/{sid}/attach", s.attachTenantServer)
 	mux.HandleFunc("POST /v1/servers/{sid}/detach", s.detachTenantServer)
 	mux.HandleFunc("GET /v1/events", s.feedHandler)
