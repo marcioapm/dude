@@ -3,6 +3,7 @@ package fakelux
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -339,6 +340,7 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 		t.ExpireAfter = &expire
 	}
 	s.tservers[t.ID] = t
+	s.tenantCalls = append(s.tenantCalls, "create "+t.ID+" "+t.Name)
 	s.serverEvent(t, "server.created", map[string]any{"by": "key", "wake": wake, "lifetime": lifetime})
 	if in.RunID != "" {
 		if status, code, msg := s.attach(t, in.RunID); status != 0 {
@@ -477,7 +479,90 @@ func (s *Server) removeTenantServer(t *tenantServer, typ, why string) {
 	s.detach(t, why)
 	delete(s.tservers, t.ID)
 	s.DeletedServers = append(s.DeletedServers, t.ID)
+	s.tenantCalls = append(s.tenantCalls, "delete "+t.ID)
 	s.serverEvent(t, typ, map[string]any{"reason": why})
+}
+
+// patchTenantServer is PATCH /v1/servers/{id}: the fields given change,
+// at the server's next start (its process record too, while attached), as
+// lux's patchServer. Only the fields dude sends are taken.
+func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Port    *int               `json:"port"`
+		Command *[]string          `json:"command"`
+		Workdir *string            `json:"workdir"`
+		Env     *map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, 400, "bad_request", err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tfind(w, r)
+	if t == nil {
+		return
+	}
+	if msg := checkPatch(in.Port, in.Workdir, in.Env); msg != "" {
+		writeErr(w, 422, "invalid_server", msg)
+		return
+	}
+	var changed []string
+	if in.Port != nil {
+		t.Port, changed = *in.Port, append(changed, "port")
+	}
+	if in.Command != nil {
+		t.Command, changed = *in.Command, append(changed, "command")
+		if len(t.Command) == 0 {
+			t.Command = nil
+		}
+	}
+	if in.Workdir != nil {
+		t.Workdir, changed = *in.Workdir, append(changed, "workdir")
+	}
+	if in.Env != nil {
+		t.Env, changed = maps.Clone(*in.Env), append(changed, "env")
+	}
+	if p := t.proc; p != nil {
+		p.Port, p.Command, p.Workdir, p.Env = t.Port, t.Command, t.Workdir, t.Env
+	}
+	s.tenantCalls = append(s.tenantCalls, "patch "+t.ID+" "+strings.Join(changed, ","))
+	s.serverEvent(t, "server.updated", map[string]any{"by": "key", "changed": changed})
+	writeJSON(w, 200, s.tview(t))
+}
+
+// envNameRe is lux's spec envRe.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// checkPatch is what lux's ValidateServer refuses of a PATCH's port,
+// workdir and env.
+func checkPatch(port *int, workdir *string, env *map[string]string) string {
+	if port != nil && (*port < 1 || *port > 65535) {
+		return "server.port: need 1-65535"
+	}
+	if workdir != nil && (strings.ContainsRune(*workdir, 0) || slices.Contains(strings.Split(*workdir, "/"), "..")) {
+		return "server.workdir: no .. and no NUL"
+	}
+	if env != nil {
+		for k := range *env {
+			if !envNameRe.MatchString(k) {
+				return fmt.Sprintf("server.env: invalid name %q", k)
+			}
+			if strings.HasPrefix(k, "LUX_") {
+				return fmt.Sprintf("server.env: %q: the LUX_ prefix is reserved", k)
+			}
+		}
+	}
+	return ""
+}
+
+// TenantCalls is what happened to tenant servers, in order: "create <id>
+// <name>", "patch <id> <fields>", "start <id>" (its process started in
+// its Run), "delete <id>".
+func (s *Server) TenantCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.tenantCalls)
 }
 
 func (s *Server) attachTenantServer(w http.ResponseWriter, r *http.Request) {

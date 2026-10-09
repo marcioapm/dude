@@ -307,6 +307,21 @@ added keep their old labels until they are replaced.
   is gone" — and then its Run cancelled. lux's own 30-day expiry is the
   safety net; a server lux expires or someone deletes ends its preview.
 
+**When a recipe change reaches a preview.** A preview's servers are made
+what the project's recipes say at each wake, before lux starts them, and
+when it is declared: a request to an asleep preview's URL starts it with
+the recipe as it is now, whether its Run is resumed, replaced or submitted.
+A server whose port, command, setup, working directory or env changed is
+updated in lux (`PATCH /v1/servers/{id}`, only the fields that differ;
+nothing when none do); a recipe newly marked to start in previews gets a
+server; one removed, or no longer started in previews, has its server
+deleted, and a preview left with none ends. A preview running when the
+recipe is saved keeps what it started with until it next sleeps and wakes.
+Preview secrets are not part of a recipe: a new value reaches previews when
+they next wake, as before. On a lux without `preview.domain`, previews start
+at once and keep the servers they were declared with; a recipe change
+reaches the next preview.
+
 Every orchestrator follows the feed; each event is applied once, keyed in
 the database, and a wake is acted on by one orchestrator. The feed's
 position is kept in `lux_feed`: the highest event id whose lux time is
