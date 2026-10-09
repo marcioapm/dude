@@ -63,16 +63,13 @@ func TestARecipeEditReachesTheNextWakeOnEveryPath(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			w.recipe("web", 3000, "npm run dev", "", nil, true)
-			_, runID := w.declare()
-			web := w.serverID(runID, "web")
-			if path != "first submit" {
-				w.open(web)
-				w.running(runID, "web")
-				w.lux.Idle(web)
-				w.until("parked", func() bool {
-					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
-				})
+			var runID, web string
+			if path == "first submit" {
+				w.recipe("web", 3000, "npm run dev", "", nil, true)
+				_, runID = w.declare()
+				web = w.serverID(runID, "web")
+			} else {
+				runID, web = w.asleepPreview()
 			}
 			if path == "replacement" {
 				w.previews.Lux = &countingLux{Client: w.previews.Lux,
@@ -288,11 +285,11 @@ func TestAPreviewWhoseLastRecipeIsRemovedEnds(t *testing.T) {
 	}
 }
 
-// A server of the preview already in lux when it is declared (a create
-// whose answer was lost) is adopted at the recipe as it is now.
-func TestAnAdoptedServerTakesTheCurrentRecipe(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
+// staleWebServer starts a preview of the recipe web "npm run dev -- --new"
+// and makes its web server in lux first, of the older "npm run dev", as a
+// create whose answer was lost.
+func (w *world) staleWebServer() (runID string, old lux.TenantServer) {
+	w.t.Helper()
 	w.recipe("web", 3000, "npm run dev -- --new", "", nil, true)
 	task, runID := w.startPreview()
 	old, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
@@ -300,18 +297,31 @@ func TestAnAdoptedServerTakesTheCurrentRecipe(t *testing.T) {
 		Hostname: servers.PreviewHostname(previewDomain, "web", w.previewOf(task), ""), Wake: "request", Lifetime: "owner",
 		Labels: map[string]string{"dude.preview": runID}})
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
-	w.until("asleep", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
-	})
+	return runID, old
+}
+
+// adoptedAtTheNewRecipe: dude holds old, and lux has it at the new command.
+func (w *world) adoptedAtTheNewRecipe(runID string, old lux.TenantServer) {
+	w.t.Helper()
 	if w.serverID(runID, "web") != old.ID {
-		t.Fatal("the server in lux was not adopted")
+		w.t.Fatal("the server in lux was not adopted")
 	}
 	sv, _ := w.lux.TenantServer(old.ID)
 	if want := servers.ShellCommand(nil, "npm run dev -- --new"); !slices.Equal(sv.Command, want) {
-		t.Fatalf("adopted with command %v; want %v (calls %v)", sv.Command, want, w.lux.TenantCalls())
+		w.t.Fatalf("adopted with command %v; want %v (calls %v)", sv.Command, want, w.lux.TenantCalls())
 	}
+}
+
+// A server of the preview already in lux when it is declared (a create
+// whose answer was lost) is adopted at the recipe as it is now.
+func TestAnAdoptedServerTakesTheCurrentRecipe(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	runID, old := w.staleWebServer()
+	w.untilAsleep(runID)
+	w.adoptedAtTheNewRecipe(runID, old)
 	if !slices.Contains(w.lux.TenantCalls(), fmt.Sprintf("patch %s command", old.ID)) {
 		t.Errorf("lux saw %v; want only its command patched", w.lux.TenantCalls())
 	}
@@ -471,29 +481,13 @@ func TestWhatLuxAnswersAPatchDecidesTheWake(t *testing.T) {
 func TestAConflictPatchingAnAdoptedServerIsTriedAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	w.recipe("web", 3000, "npm run dev -- --new", "", nil, true)
 	c := w.refusing()
 	c.patches = []error{&lux.Error{Status: 409, Code: "conflict", Message: "the server changed meanwhile"}}
-	task, runID := w.startPreview()
-	old, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 3000,
-		Command: servers.ShellCommand(nil, "npm run dev"), Workdir: servers.Workdir("target", ""), Env: map[string]string{"PORT": "1"},
-		Hostname: servers.PreviewHostname(previewDomain, "web", w.previewOf(task), ""), Wake: "request", Lifetime: "owner",
-		Labels: map[string]string{"dude.preview": runID}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	runID, old := w.staleWebServer()
 	w.until("lux's 409", func() bool { return c.refusals() == 1 })
 	w.letGo(runID)
-	w.until("asleep", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
-	})
-	if w.serverID(runID, "web") != old.ID {
-		t.Fatal("the server in lux was not adopted")
-	}
-	sv, _ := w.lux.TenantServer(old.ID)
-	if want := servers.ShellCommand(nil, "npm run dev -- --new"); !slices.Equal(sv.Command, want) {
-		t.Fatalf("command %v; want %v (calls %v)", sv.Command, want, w.lux.TenantCalls())
-	}
+	w.untilAsleep(runID)
+	w.adoptedAtTheNewRecipe(runID, old)
 }
 
 // A server whose recipe was removed, and whose delete in lux failed, is
