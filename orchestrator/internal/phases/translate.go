@@ -1021,6 +1021,16 @@ func (t *translator) flushText(ctx context.Context, tx pgx.Tx, s *Syncer, buf *s
 	return s.event(ctx, tx, t.run, event, ledger.ActorAgent, payload)
 }
 
+// flushWhole records text a harness sent whole (Claude Code's and Codex's
+// messages and thoughts) into buf's event, ending whatever was before.
+func (t *translator) flushWhole(ctx context.Context, tx pgx.Tx, s *Syncer, buf *strings.Builder, event, text string) error {
+	if err := t.flush(ctx, tx, s); err != nil {
+		return err
+	}
+	buf.WriteString(text)
+	return t.flushText(ctx, tx, s, buf, event)
+}
+
 // usageUpdate: ACP's running report of the conversation's size, and of cost
 // when the agent knows prices. Recorded whenever either moves — a cost of
 // zero means unknown, not free, and must not hide the tokens.

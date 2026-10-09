@@ -147,17 +147,9 @@ func claudeText(blocks []claudeBlock) string {
 func (t *translator) claudeBlock(ctx context.Context, tx pgx.Tx, s *Syncer, b claudeBlock) error {
 	switch b.Type {
 	case "text":
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
-		}
-		t.message.WriteString(b.Text)
-		return t.flushText(ctx, tx, s, &t.message, evAgentMessage)
+		return t.flushWhole(ctx, tx, s, &t.message, evAgentMessage, b.Text)
 	case "thinking":
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
-		}
-		t.thought.WriteString(b.Thinking)
-		return t.flushText(ctx, tx, s, &t.thought, evAgentThought)
+		return t.flushWhole(ctx, tx, s, &t.thought, evAgentThought, b.Thinking)
 	case "tool_use":
 		if err := t.flush(ctx, tx, s); err != nil {
 			return err
