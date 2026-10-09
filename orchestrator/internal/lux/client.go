@@ -135,7 +135,7 @@ const (
 	PublishedPrefix = "/.lux/artifacts/"
 )
 
-// AppLabel is App on every Run and server dude submits: lux names the tool
+// Every Run and server dude submits carries AppLabel=App: lux names the tool
 // behind a cost by it.
 const (
 	AppLabel = "app"
