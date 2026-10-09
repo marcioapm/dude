@@ -29,7 +29,7 @@ import (
 // nothing serving it, and when one has gone unused; the sweep acts:
 //
 //	pending ─servers created─▶ paused (asleep, no Run yet)
-//	paused ─wake─▶ scheduled (Run resumed with a sync, or submitted and the servers attached) ─lux─▶ running
+//	paused ─wake─▶ scheduled (servers made what the recipes say now; Run resumed with a sync, or submitted and the servers attached) ─lux─▶ running
 //	running ─every server idle─▶ paused (Run stopped)
 //	running ─branch moved─▶ running (POST /sync)
 //	any ─DELETE, task over, unused past ReapAfter, servers gone─▶ completed (servers deleted, then Run cancelled)
@@ -271,68 +271,10 @@ func (p *Previews) previewServers(ctx context.Context, org, runID string) ([]pre
 }
 
 // createServers makes the preview's lux servers, one per project server
-// marked to start in previews, then leaves it asleep. Each is looked for
-// among the preview's servers in lux first, so a create whose answer was
-// lost is not made twice; a hostname another preview holds (409
-// hostname_taken) is chosen again once, salted with this preview's id.
+// marked to start in previews (reconcileServers), then leaves it asleep.
 func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
-	var recipes []Recipe
-	var settings PreviewSettings
-	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var err error
-		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id
-			WHERE t.id = $1`, r.TaskID).Scan(&of.TaskKey, &of.ProjectSlug); err != nil {
-			return err
-		}
-		return loadSettings(ctx, tx, r.ProjectID, &settings)
-	}); err != nil {
+	if done, err := p.reconcileServers(ctx, r); err != nil || done {
 		return err
-	}
-	have, err := p.previewServers(ctx, r.Org, r.ID)
-	if err != nil {
-		return err
-	}
-	primary, err := p.primaryRepoName(ctx, r)
-	if err != nil {
-		return err
-	}
-	for _, rc := range recipes {
-		if !rc.Autostart || slices.ContainsFunc(have, func(s previewServer) bool { return s.Name == rc.Name }) {
-			continue
-		}
-		in, err := rc.Input(primary)
-		if err != nil {
-			p.Log.Warn("a preview server lux would refuse was left out", "run", r.ID, "server", rc.Name, "error", err)
-			continue
-		}
-		sv, err := p.createServer(ctx, r, of, in, settings)
-		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			return p.fail(ctx, r.previewRun, fmt.Sprintf("lux refused preview server %s: %s", rc.Name, le.Message))
-		}
-		if err != nil {
-			return err
-		}
-		var kept string
-		if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
-				VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (run_id, name) DO UPDATE SET name = preview_servers.name
-				RETURNING lux_server_id`,
-				r.ID, r.Org, rc.Name, sv.ID, deref(sv.Hostname), sv.URL).Scan(&kept)
-		}); err != nil {
-			return err
-		}
-		if kept != sv.ID {
-			// Another orchestrator recorded its own server for this one
-			// first: the one made here is an orphan, deleted.
-			if err := p.Lux.DeleteServer(ctx, sv.ID); err != nil && !lux.IsNotFound(err) {
-				return err
-			}
-		}
 	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', dude_pause = 'unused', next_attempt_at = NULL
@@ -498,6 +440,12 @@ func (p *Previews) wake(ctx context.Context, r wakeRun) (bool, error) {
 }
 
 func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
+	// Before any path below attaches, resumes or submits: lux starts the
+	// servers as they are when the Run comes up, so the project's recipes
+	// as they are now reach this very start.
+	if done, err := p.reconcileServers(ctx, r); err != nil || done {
+		return err
+	}
 	if r.LuxRunID != "" {
 		cancel := false
 		lr, err := p.Lux.Get(ctx, r.LuxRunID)
