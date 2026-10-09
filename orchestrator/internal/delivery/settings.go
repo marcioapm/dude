@@ -37,8 +37,8 @@ const (
 	HarnessCodex      = "codex"
 )
 
-// HarnessLabel is a harness as a person reads it.
-var HarnessLabel = map[string]string{HarnessOpenCode: "OpenCode", HarnessClaudeCode: "Claude Code", HarnessCodex: "Codex"}
+// harnessLabel is a harness as a person reads it.
+var harnessLabel = map[string]string{HarnessOpenCode: "OpenCode", HarnessClaudeCode: "Claude Code", HarnessCodex: "Codex"}
 
 // roleLayer is one layer's config for a role, as stored: agent_models on a
 // project, default_agent_models on an organization ({role -> config}).
@@ -84,7 +84,7 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 			if rs.Context == "" && l.Context != nil {
 				rs.Context = *l.Context
 			}
-			if rs.Harness == "" && l.Harness != nil && HarnessLabel[*l.Harness] != "" {
+			if rs.Harness == "" && l.Harness != nil && harnessLabel[*l.Harness] != "" {
 				rs.Harness = *l.Harness
 			}
 		}
@@ -115,7 +115,7 @@ func HarnessFits(harness, model, tier, who string, anthropic bool) string {
 		return ""
 	}
 	return fmt.Sprintf("The %s runs on %s, which takes %s, but its tier %s requests %s. An admin picks another harness or tier in Agents.",
-		who, HarnessLabel[harness], wants, tier, model)
+		who, harnessLabel[harness], wants, tier, model)
 }
 
 // The no-progress limit: a role's default, and the least a stored one is

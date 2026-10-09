@@ -436,7 +436,7 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	default:
 		cmd = append(cmd, "--effort", in.Effort)
 	}
-	spec.Workload.Command = append(cmd, HarnessArgs(in.Options)...)
+	spec.Workload.Command = append(cmd, harnessArgs(in.Options)...)
 	if c.LLMURL != "" {
 		spec.Env["ANTHROPIC_BASE_URL"] = anthropicBaseURL(c.LLMURL)
 	}
@@ -526,7 +526,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
-	args := HarnessArgs(in.Options)
+	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""
 		switch {
@@ -605,12 +605,12 @@ func tomlString(s string) string {
 	return strings.ReplaceAll(string(b), "\x7f", `\u007f`)
 }
 
-// HarnessArgs are a tier's extra command-line arguments for Claude Code or
+// harnessArgs are a tier's extra command-line arguments for Claude Code or
 // Codex: its options' "args", a list of strings. Claude Code's are appended
 // to its command; Codex takes only their -c overrides (codexSettings).
 // Anything else in options is OpenCode's and means nothing to them
-// (IgnoredOptions names it).
-func HarnessArgs(options map[string]any) []string {
+// (ignoredOptions names it).
+func harnessArgs(options map[string]any) []string {
 	list, _ := options["args"].([]any)
 	var out []string
 	for _, a := range list {
@@ -621,9 +621,9 @@ func HarnessArgs(options map[string]any) []string {
 	return out
 }
 
-// IgnoredOptions are the keys of a tier's options a Run on harness does
+// ignoredOptions are the keys of a tier's options a Run on harness does
 // not use: every key but "args" on Claude Code or Codex, none on OpenCode.
-func IgnoredOptions(harness string, options map[string]any) []string {
+func ignoredOptions(harness string, options map[string]any) []string {
 	if harness != delivery.HarnessClaudeCode && harness != delivery.HarnessCodex {
 		return nil
 	}
@@ -666,7 +666,7 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	if s.Log == nil {
 		return
 	}
-	if ignored := IgnoredOptions(in.Harness, in.Options); len(ignored) > 0 {
+	if ignored := ignoredOptions(in.Harness, in.Options); len(ignored) > 0 {
 		s.Log.Info("the tier's options other than args are OpenCode's; ignored on this harness",
 			"run", r.ID, "harness", in.Harness, "tier", in.ModelTier, "ignored", ignored)
 	}

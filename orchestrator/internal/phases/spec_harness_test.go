@@ -157,13 +157,13 @@ func TestAHarnessThatCannotRunItsTiersModelIsSaidSo(t *testing.T) {
 // only "args" means anything, and the rest is named to be logged.
 func TestATiersArgsAreTheOnlyOptionsOtherHarnessesTake(t *testing.T) {
 	options := map[string]any{"args": []any{"--a", "b", 3}, "thinking": map[string]any{}, "effort": "max"}
-	if got := HarnessArgs(options); !reflect.DeepEqual(got, []string{"--a", "b"}) {
+	if got := harnessArgs(options); !reflect.DeepEqual(got, []string{"--a", "b"}) {
 		t.Errorf("args = %v", got)
 	}
-	if got := IgnoredOptions(delivery.HarnessCodex, options); !reflect.DeepEqual(got, []string{"effort", "thinking"}) {
+	if got := ignoredOptions(delivery.HarnessCodex, options); !reflect.DeepEqual(got, []string{"effort", "thinking"}) {
 		t.Errorf("ignored = %v", got)
 	}
-	if got := IgnoredOptions(delivery.HarnessOpenCode, options); got != nil {
+	if got := ignoredOptions(delivery.HarnessOpenCode, options); got != nil {
 		t.Errorf("OpenCode ignores %v", got)
 	}
 }
