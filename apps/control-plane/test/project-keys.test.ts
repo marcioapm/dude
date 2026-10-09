@@ -165,3 +165,15 @@ test("two creates at once deriving one key: both are made, under distinct keys",
   // Whichever lands first is ORDE; the other derives again and takes its next.
   expect([["ORDE", "OWOR"], ["OAPI", "ORDE"]]).toContainEqual([bySlug["orders-api"]!, bySlug["orders-worker"]!]);
 }, 20_000);
+
+test("a project holding a harness that is not one any more (aider) can still be saved, which drops it", async () => {
+  const made = await create("Legacy", "legacy");
+  const { id } = (await made.json()) as { id: string };
+  await owner`UPDATE projects SET agent_models = '{"reviewer": {"harness": "aider", "context": "old"}}' WHERE id = ${id}`;
+  // The editor sends agentModels back whole, as it read it, with its change.
+  const res = await call("PATCH", `/v1/projects/${id}`, { description: "edited", agentModels: { reviewer: { harness: "aider", context: "old" } } });
+  expect(res.status).toBe(200);
+  const [row] = await owner`SELECT description, agent_models FROM projects WHERE id = ${id}`;
+  expect(row.description).toBe("edited");
+  expect(row.agent_models).toEqual({ reviewer: { context: "old" } });
+});

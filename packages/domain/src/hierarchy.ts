@@ -65,8 +65,13 @@ export const agentModelConfigSchema = z.object({
    */
   tier: z.string().min(1).max(100).optional(),
   model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
-  /** The coding agent its Runs run on; layered like machineSize (resolveHarness). */
-  harness: harnessSchema.optional(),
+  /**
+   * The coding agent its Runs run on; layered like machineSize (resolveHarness).
+   * A stored value that names no harness reads as unset, as resolveHarness and
+   * the orchestrator treat it, so a project holding one can still be saved.
+   * A settings change names one exactly (settingsPatchSchema).
+   */
+  harness: harnessSchema.optional().catch(undefined),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
