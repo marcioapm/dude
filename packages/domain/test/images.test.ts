@@ -4,7 +4,9 @@ import {
   BUILDER_OFFLINE_SECONDS,
   buildArgsSchema,
   firstFrom,
+  fromImage,
   imageCycle,
+  lacksContainerEngine,
   imageDraftSchema,
   imageNameSchema,
   imageReferences,
@@ -13,6 +15,7 @@ import {
   shortDigest,
   type LintContext,
 } from "../src/images.ts";
+import { waitsForContainerHost } from "../src/servers.ts";
 
 const LIB: LintContext = { images: ["acme-base", "node-pnpm"] };
 const lint = (text: string, ctx = LIB) => lintContainerfile(text, ctx);
@@ -175,4 +178,38 @@ describe("resolveRoleImage", () => {
 test("the builder's liveness limits are the ones the orchestrator uses (tests/fixtures/images/builder.json)", async () => {
   const shared = await Bun.file(`${import.meta.dir}/../../../tests/fixtures/images/builder.json`).json();
   expect({ offlineSeconds: BUILDER_OFFLINE_SECONDS, giveUpMinutes: BUILDER_GIVE_UP_MINUTES }).toEqual(shared);
+});
+
+describe("lacksContainerEngine: the pre-build hint for a version that can run containers", () => {
+  const lib = [{ name: "abs-preview", canRunContainers: true }, { name: "node-22", canRunContainers: false }];
+  test("warns when nothing installs podman or Docker and the base is no library image that can", () => {
+    expect(lacksContainerEngine("FROM node:22-bookworm\nRUN apt-get install -y git\n", lib)).toBe(true);
+    expect(lacksContainerEngine("FROM image:node-22\nRUN true\n", lib)).toBe(true);
+  });
+  test("stays quiet when an instruction names podman or docker", () => {
+    expect(lacksContainerEngine("FROM debian\nRUN apt-get install -y podman\n", lib)).toBe(false);
+    expect(lacksContainerEngine("FROM docker.io/library/debian\n", lib)).toBe(false);
+    expect(lacksContainerEngine("FROM debian\nRUN curl get.docker.com | sh\n", lib)).toBe(false);
+  });
+  test("a comment naming podman is not an install", () => {
+    expect(lacksContainerEngine("FROM debian\n# podman later\nRUN true\n", lib)).toBe(true);
+  });
+  test("stays quiet FROM a library image that can run containers", () => {
+    expect(lacksContainerEngine("FROM image:abs-preview\nRUN npm i\n", lib)).toBe(false);
+  });
+  test("fromImage names a first FROM image:", () => {
+    expect(fromImage("FROM image:agents-podman AS b\n")).toBe("agents-podman");
+    expect(fromImage("FROM debian\nFROM image:x\n")).toBeNull();
+  });
+});
+
+describe("waitsForContainerHost: lux's reason, read as the nested one", () => {
+  test("lux's words for one host and for several", () => {
+    expect(waitsForContainerHost("waiting for capacity: 1 host in its pool does not support nested containers")).toBe(true);
+    expect(waitsForContainerHost("waiting for capacity: 3 hosts in its pool lack cpus (requested 4), 2 do not support nested containers")).toBe(true);
+  });
+  test("any other reason, or none, is not", () => {
+    expect(waitsForContainerHost("waiting for capacity: 1 host in its pool lacks memory (requested 16.0 GiB)")).toBe(false);
+    expect(waitsForContainerHost(null)).toBe(false);
+  });
 });

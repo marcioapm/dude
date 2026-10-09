@@ -7,6 +7,8 @@
 //	dude-image-builder             run until SIGINT/SIGTERM
 //	dude-image-builder --version   print the version
 //	dude-image-builder validate    check the configuration as startup does
+//	dude-image-builder containers-check
+//	                               inside an image: can it run containers (JSON)
 //
 // Its settings (dude's configuration file, or each variable):
 //
@@ -43,11 +45,16 @@ func main() {
 		fmt.Println(version.Version)
 		return
 	}
+	// Run by the builder itself inside a built image, with nothing of the
+	// host's: a static binary needs nothing of the image either.
+	if len(os.Args) > 1 && os.Args[1] == images.CheckCommand {
+		os.Exit(images.CheckMain())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "validate" {
 		os.Exit(validate(os.Args[2:], config.Options{}, os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 {
-		fmt.Fprintln(os.Stderr, "usage: dude-image-builder [--version | validate]")
+		fmt.Fprintln(os.Stderr, "usage: dude-image-builder [--version | validate | "+images.CheckCommand+"]")
 		os.Exit(2)
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -142,7 +149,11 @@ func run(log *slog.Logger) error {
 	for _, w := range cfg.Warnings {
 		log.Warn(w)
 	}
-	podman := images.CLI{Limits: s.Limits, Authfile: s.Authfile, TLSVerify: true}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding its own executable, which checks images that can run containers: %w", err)
+	}
+	podman := images.CLI{Limits: s.Limits, Authfile: s.Authfile, TLSVerify: true, Self: self}
 	// podman only warns when it cannot apply --memory or the CPU quota, and
 	// builds unlimited: the builder does not start on such a host.
 	if err := images.CheckLimits(ctx, podman); err != nil {

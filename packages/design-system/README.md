@@ -1333,6 +1333,43 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   Containerfile in a `DiffFile` against the one before it or against the
   published one; "Publish vN again" only on a built version that is not the
   published one, and only through a confirming `Dialog`.
+- **"Can run containers" is a property of each image version**, saved
+  with its draft like the Containerfile. The image page asks it with a
+  `Checkbox` under the `CodeEditor` (a form value saved later, so never a
+  `Switch`); a draft that flips it says so in the editor's footer ("Can
+  run containers turned on", accent text, `cube` 12px).
+- **Badges show the published version's value only**, never a draft's:
+  `CanRunContainersBadge` (`cube`, neutral, tinted) beside "Default base"
+  in the image's header at `size="md"`, in a list row at `sm`, and in the
+  picker's trail `lower` ("can run containers", as the picker writes
+  "default"). `ImageChoiceView.canRunContainers` puts it there.
+- **What the box needs said beside it is a muted line, not a `Callout`**:
+  the `warning` glyph at 12px in attention ink, 22px in under the
+  description, xs secondary text. Two of them: the hint (box on, nothing
+  named installs podman or Docker, the base cannot either) and the off
+  warning (box off on a published version that can, where previews run
+  it). Each has an id the `Checkbox` names in `aria-describedby`, so the
+  box is announced with them; its label alone names it.
+- **History says when it flipped**: `ImageHistoryVersion.canRunContainers`
+  (absent where an image says nothing of it) adds "Can run containers
+  turned on/off" to a version's item when it differs from the next older
+  version that was not cancelled, and a strip on the chrome shade above
+  the diff: "Can run containers off → on" (before in deletion ink, after
+  in addition ink), or the value alone for a whole version. No strip when
+  it did not change.
+- **The check is one optional `BuildStages` cell**, "Check containers",
+  between Built and Published, only for a version marked so: current
+  while it checks, failed with what is missing (the stage after it
+  "Not published · Not pushed · vN is still live"), done with what it
+  found. A check that passed stays done when the push after it fails; the
+  failure is the last cell's.
+- **A Run lux cannot place yet says why**: an attention `Callout` where
+  `PreparingImage` sits (pinned over the transcript; under
+  `PreviewStages` on a task's Servers tab), the lead bold, lux's reason
+  in dude's words when it is about nested containers, else as lux wrote
+  it, one period at its end. The Run's header shows a `Badge icon="clock"`
+  "Waiting for a host" beside its status (`ChatTranscriptSession.statusNote`),
+  never among the facts under the title.
 
 ### Do / Don't
 
@@ -1387,7 +1424,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
-`footer`, `onOpenChange`), Checkbox, ChoiceList (a radio group of a few ways to act, each
+`footer`, `onOpenChange`), Checkbox (named by its `label`; its
+`description` and `aria-describedby`, the ids of hints beside it, describe
+it), ChoiceList (a radio group of a few ways to act, each
 with a sentence; `disabledReason` says why one cannot be chosen),
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
@@ -1605,12 +1644,15 @@ MarkdownCheatsheet.
 - **CodeEditor** — CodeMirror 6, lazy: `language`, `diagnostics`,
   `complete`, `header`, `after` (read-only, under the text) and `footer`.
   `CodeEditorCore` is the chunk it loads; nothing imports it directly.
-- **ImagePicker / ImageMark / ImageStatusBadge** — the image combobox, an
-  image's cube mark, and a newer version's state as a badge.
+- **ImagePicker / ImageMark / ImageStatusBadge / CanRunContainersBadge** —
+  the image combobox, an image's cube mark, a newer version's state as a
+  badge, and "Can run containers" (`size` `sm` | `md`, `lower` for the
+  picker's lowercase) for an image whose published version can.
 - **BuildQueueStrip / BuildStages / ImageState** — the builder's queue in a
   line, a build's stages, an image's state in a row.
 - **ImageHistory** — versions and their Containerfile diffs, with Publish
-  again. The rules are under *Images*.
+  again, and "Can run containers" where a version flipped it
+  (`canRunContainers`). The rules are under *Images*.
 
 `src/components/` — live work:
 
@@ -1627,7 +1669,8 @@ MarkdownCheatsheet.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
 - **SessionHeader** — the transcript's header on its own, for an agent
-  session whose views sit under it.
+  session whose views sit under it. `statusNote` sits beside the status;
+  the title row and the facts under it wrap rather than clip each other.
 - **`.ds-live-dot`** (base.css) — the one breathing dot, on
   `--ds-color-live`: beside what is changing now (a view's name, a label).
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /

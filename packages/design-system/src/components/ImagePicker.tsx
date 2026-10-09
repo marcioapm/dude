@@ -26,6 +26,8 @@ export interface ImageChoiceView {
   readonly archived?: boolean | undefined;
   /** A newer version building or waiting, or one that failed. */
   readonly status?: { readonly kind: "building" | "waiting" | "failed"; readonly version: number } | null | undefined;
+  /** Its published version can run containers. */
+  readonly canRunContainers?: boolean | undefined;
 }
 
 export interface ImagePickerProps {
@@ -57,6 +59,15 @@ export function ImageStatusBadge({ status }: { readonly status: ImageChoiceView[
   return (
     <Badge size="sm" tone={tone} emphasis="tinted" dot={status.kind === "building"}>
       {words}
+    </Badge>
+  );
+}
+
+/** "Can run containers": an image whose published version can, wherever it is listed. */
+export function CanRunContainersBadge({ size = "sm", lower }: { readonly size?: "sm" | "md" | undefined; readonly lower?: boolean | undefined }) {
+  return (
+    <Badge size={size} icon="cube" emphasis="tinted" data-testid="can-run-containers">
+      {lower ? "can run containers" : "Can run containers"}
     </Badge>
   );
 }
@@ -224,6 +235,7 @@ export function ImagePicker({
                         </Badge>
                       ) : null}
                       <ImageStatusBadge status={row.image.status} />
+                      {row.image.canRunContainers ? <CanRunContainersBadge lower /> : null}
                       <span className={cx(styles["version"], "ds-tnum")}>{row.image.version ? `v${row.image.version}` : "—"}</span>
                     </span>
                   </>

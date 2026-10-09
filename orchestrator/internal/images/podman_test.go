@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -234,5 +235,335 @@ func TestPodmanFinishOnAnImageWithoutAShellSaysWhatItNeeds(t *testing.T) {
 	}
 	if got := Failure("finishing", log, err, c.Limits.Memory, false); got != "the dude layer needs /bin/sh and glibc in the image" {
 		t.Errorf("Failure = %q\n%s", got, log)
+	}
+}
+
+// localPodman is rootless podman for tests that need no registry.
+func localPodman(t *testing.T) CLI {
+	t.Helper()
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman is not on PATH")
+	}
+	return CLI{Limits: Limits{Platform: "", CPUs: 1.5, Memory: "1536m", Timeout: 10 * time.Minute}}
+}
+
+// localBuild builds containerfile as tag with local images only.
+func localBuild(t *testing.T, containerfile, tag string) {
+	t.Helper()
+	dir, err := contextDir(containerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	out, err := exec.Command("podman", "build", "--pull=missing", "-q", "-t", tag, "-f", dir+"/Containerfile", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("build %s: %v\n%s", tag, err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "--ignore", tag).Run() })
+}
+
+// localLayer is a stand-in dude layer, as layerFor, held locally.
+func localLayer(t *testing.T) string {
+	t.Helper()
+	tag := fmt.Sprintf("localhost/dude-test-layer:%d", time.Now().UnixNano())
+	script := base64.StdEncoding.EncodeToString([]byte(testSetup))
+	localBuild(t, "FROM docker.io/library/busybox:1 AS files\n"+
+		"RUN mkdir -p /rootfs/usr/local/share/dude && echo "+script+" | base64 -d > /rootfs/usr/local/share/dude/setup.sh"+
+		" && echo '{}' > /rootfs/usr/local/share/dude/opencode.json\n"+
+		"FROM scratch\nCOPY --from=files /rootfs/ /rootfs/\n", tag)
+	return tag
+}
+
+// localFinish builds userContainerfile and finishes it with a stand-in
+// dude layer, as a build job does, all locally.
+func localFinish(t *testing.T, userContainerfile string) string {
+	t.Helper()
+	stamp := time.Now().UnixNano()
+	user := fmt.Sprintf("localhost/dude-test-user:%d", stamp)
+	localBuild(t, userContainerfile, user)
+	final := fmt.Sprintf("localhost/dude-test-final:%d", stamp)
+	localBuild(t, FinishContainerfile(user, localLayer(t)), final)
+	return final
+}
+
+// staticSelf is dude-image-builder built static, as the release ships it,
+// for CheckContainers to run in an image.
+func staticSelf(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir() + "/dude-image-builder"
+	cmd := exec.Command("go", "build", "-o", bin, "../../cmd/dude-image-builder")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the builder: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// The dude layer's step gives agent subordinate ids within a Run's 65536
+// when the image has none, and keeps a line the image has for it.
+func TestPodmanTheLayerGivesAgentSubordinateIdsARunCanMap(t *testing.T) {
+	localPodman(t)
+	for _, c := range []struct {
+		name, base, want string
+	}{
+		{"debian, none", "docker.io/library/debian:bookworm-slim", "agent:1:999\nagent:1001:64535"},
+		// node holds uid 1000 (agent is its second name) and has
+		// node:100000:65536: agent's line is by uid, the image's kept.
+		{"node, uid 1000 is node's", "docker.io/library/node:24-bookworm-slim", "node:100000:65536\n1000:1:999\n1000:1001:64535"},
+		{"one of agent's own, kept", "docker.io/library/debian:bookworm-slim\nRUN printf 'agent:200:300\\n' > /etc/subuid && cp /etc/subuid /etc/subgid", "agent:200:300"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			final := localFinish(t, "FROM "+c.base+"\nRUN command -v git || (apt-get update && apt-get install -y --no-install-recommends git)\n")
+			for _, f := range []string{"/etc/subuid", "/etc/subgid"} {
+				if got := runIn(t, final, "cat", f); got != c.want {
+					t.Errorf("%s = %q, want %q", f, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// On an image whose uid 1000 is node's, agent's lines by name are not the
+// workload's: podman looks the caller up as node or 1000 and, finding
+// neither, runs with a single id. The layer adds 1000's lines all the same,
+// the check counts those alone, and podman maps them as the workload.
+func TestPodmanAgentLinesBehindAnotherNameAreNotTheWorkloads(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	final := localFinish(t, "FROM docker.io/library/node:24-bookworm-slim\n"+
+		"RUN apt-get update && apt-get install -y --no-install-recommends git podman fuse-overlayfs uidmap libcap2-bin"+
+		" && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap"+
+		" && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap"+
+		" && printf 'agent:1:999\\nagent:1001:64535\\n' > /etc/subuid && cp /etc/subuid /etc/subgid\n")
+	if got := runIn(t, final, "cat", "/etc/subuid"); got != "agent:1:999\nagent:1001:64535\n1000:1:999\n1000:1001:64535" {
+		t.Errorf("/etc/subuid = %q", got)
+	}
+	var log bytes.Buffer
+	found, err := c.CheckContainers(context.Background(), final, &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if got := strings.Join(found.Subuid, ","); got != "1000:1:999,1000:1001:64535" || !found.Passed() {
+		t.Errorf("the check's subuid = %s, passed %v", got, found.Passed())
+	}
+	// As the workload, the map podman makes: its own id and both ranges.
+	// The mappers carry file capabilities: under a rootless podman a
+	// setuid-root newuidmap cannot write uid_map.
+	if got := runAs(t, "1000", final, "sh", "-c", "podman unshare cat /proc/self/uid_map 2>/dev/null | wc -l"); got != "3" {
+		t.Errorf("podman's uid_map as the workload has %s lines, want 3", got)
+	}
+}
+
+// The check, run in a finished image as the builder runs it: podman,
+// fuse-overlayfs and newuidmap/newgidmap with their file capabilities, and
+// the layer's ids, pass; the same image without them fails, naming each.
+func TestPodmanChecksAFinishedImageCanRunContainers(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	able := localFinish(t, "FROM docker.io/library/alpine:3\n"+
+		"RUN apk add --no-cache git podman fuse-overlayfs shadow-uidmap libcap-setcap"+
+		" && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap\n")
+	var log bytes.Buffer
+	found, err := c.CheckContainers(context.Background(), able, &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if !found.Passed() || !strings.HasPrefix(found.Detail(), "podman 5.") {
+		t.Errorf("found %+v: %s", found, found.Detail())
+	}
+	if got := strings.Join(found.Subuid, ","); got != "agent:1:999,agent:1001:64535" {
+		t.Errorf("subuid = %s", got)
+	}
+	// newuidmap and newgidmap without their capabilities: cp drops the
+	// xattr Alpine's package ships them with.
+	nocap := localFinish(t, "FROM docker.io/library/alpine:3\nRUN apk add --no-cache git podman fuse-overlayfs shadow-uidmap"+
+		" && for m in newuidmap newgidmap; do cp /usr/bin/$m /tmp/$m && mv /tmp/$m /usr/bin/$m; done\n")
+	found, err = c.CheckContainers(context.Background(), nocap, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Can't run containers: newuidmap has no cap_setuid file capability and newgidmap has no cap_setgid file capability."; found.Sentence() != want {
+		t.Errorf("sentence = %q", found.Sentence())
+	}
+	plain := localFinish(t, "FROM docker.io/library/debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git\n")
+	found, err = c.CheckContainers(context.Background(), plain, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Can't run containers: the image has no podman or rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."; found.Passed() || found.Sentence() != want {
+		t.Errorf("sentence = %q", found.Sentence())
+	}
+}
+
+// expiring is a context whose deadline passes when expire is called.
+type expiring struct {
+	context.Context
+	done chan struct{}
+}
+
+func (e *expiring) Done() <-chan struct{} { return e.done }
+func (e *expiring) Err() error {
+	select {
+	case <-e.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (e *expiring) expire() { close(e.done) }
+
+// A check stopped while it runs, by the job's time limit or the builder
+// stopping, leaves no container behind: here the image's /etc/subuid is a
+// FIFO nothing writes, so the check blocks reading it until it is stopped.
+func TestPodmanACancelledCheckLeavesNoContainer(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	image := fmt.Sprintf("localhost/dude-test-hang:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/alpine:3\nRUN echo agent:x:1000:1000::/home/agent:/bin/sh >> /etc/passwd && mkfifo /etc/subuid\n", image)
+	running := func() string {
+		out, _ := exec.Command("podman", "ps", "--filter", "ancestor="+image, "--filter", "status=running", "--format", "{{.Names}}").Output()
+		return strings.TrimSpace(string(out))
+	}
+	// A podman client deaf to SIGTERM is killed once WaitDelay passes,
+	// and its container outlives it: only the removal after it stops it.
+	deaf := filepath.Join(t.TempDir(), "podman")
+	if err := os.WriteFile(deaf, []byte("#!/bin/sh\ntrap '' TERM\npodman \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, how := range []string{"timeout", "shutdown", "a client deaf to SIGTERM", "a client deaf to SIGTERM on timeout"} {
+		t.Run(how, func(t *testing.T) {
+			c := c
+			if strings.HasPrefix(how, "a client deaf") {
+				c.Bin = deaf
+			}
+			parent, cancel := context.WithCancel(context.Background())
+			ctx, stop := context.Context(parent), cancel
+			if strings.HasSuffix(how, "timeout") {
+				e := &expiring{Context: parent, done: make(chan struct{})}
+				ctx, stop = e, e.expire
+			}
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.CheckContainers(ctx, image, &bytes.Buffer{})
+				done <- err
+			}()
+			var name string
+			for deadline := time.Now().Add(60 * time.Second); name == "" && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+				name = running()
+			}
+			if name == "" {
+				t.Fatal("the check's container never ran")
+			}
+			t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", "-t", "0", "--ignore", name).Run() })
+			stop()
+			if err := <-done; err == nil {
+				t.Fatal("a stopped check returned no error")
+			}
+			if exec.Command("podman", "container", "exists", name).Run() == nil {
+				t.Errorf("container %s is left after the check returned", name)
+			}
+		})
+	}
+}
+
+// The check runs under the limits a build's RUN steps have: the same CPU
+// quota, memory, no swap beyond it, and process cap, read from inside each.
+func TestPodmanTheCheckRunsUnderTheBuildsLimits(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	const read = "cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max; ulimit -u"
+	dir, err := contextDir("FROM docker.io/library/alpine:3\nRUN echo limits; " + read + "; echo end\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	tag := fmt.Sprintf("localhost/dude-test-limits:%d", time.Now().UnixNano())
+	var log bytes.Buffer
+	build := c
+	build.Limits.Platform = "linux/" + map[string]string{"aarch64": "arm64", "x86_64": "amd64"}[strings.TrimSpace(uname(t))]
+	if err := build.Build(context.Background(), dir, tag, nil, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "--ignore", tag).Run() })
+	inBuild := between(log.String(), "limits\n", "end\n")
+	// The check blocks on a FIFO at /etc/subuid while its limits are read.
+	image := fmt.Sprintf("localhost/dude-test-hang:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/alpine:3\nRUN echo agent:x:1000:1000::/home/agent:/bin/sh >> /etc/passwd && mkfifo /etc/subuid\n", image)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _, _ = c.CheckContainers(ctx, image, &bytes.Buffer{}); close(done) }()
+	defer func() { cancel(); <-done }()
+	var name string
+	for deadline := time.Now().Add(60 * time.Second); name == "" && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		out, _ := exec.Command("podman", "ps", "--filter", "ancestor="+image, "--filter", "status=running", "--format", "{{.Names}}").Output()
+		name = strings.TrimSpace(string(out))
+	}
+	if name == "" {
+		t.Fatal("the check's container never ran")
+	}
+	out, err := exec.Command("podman", "exec", name, "sh", "-c", read).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if inCheck := string(out); inBuild == "" || inCheck != inBuild {
+		t.Errorf("limits in the check:\n%s\nin a build's RUN step:\n%s", inCheck, inBuild)
+	}
+}
+
+// between is the text in s from after the line start to before the line end.
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	s = s[i+len(start):]
+	if j := strings.Index(s, end); j >= 0 {
+		return s[:j]
+	}
+	return ""
+}
+
+// Rootless Docker, as Alpine packages it, can run containers; without
+// RootlessKit its launcher alone cannot.
+func TestPodmanChecksAFinishedRootlessDockerImage(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	const docker = "FROM docker.io/library/alpine:3\n" +
+		"RUN apk add --no-cache git docker docker-rootless-extras slirp4netns fuse-overlayfs shadow-uidmap libcap-setcap" +
+		" && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap\n"
+	var log bytes.Buffer
+	found, err := c.CheckContainers(context.Background(), localFinish(t, docker), &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if !found.Passed() || !strings.HasPrefix(found.Detail(), "rootless Docker ") {
+		t.Errorf("rootless Docker: %s", found.Sentence())
+	}
+	found, err = c.CheckContainers(context.Background(), localFinish(t, docker+"RUN rm /usr/bin/rootlesskit\n"), &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Can't run containers: rootless Docker has no rootlesskit."; found.Passed() || found.Sentence() != want {
+		t.Errorf("without rootlesskit: %q", found.Sentence())
+	}
+}
+
+// TestPodmanFinishOnAnImageWithoutAShellSaysWhatItNeeds, with no registry.
+func TestPodmanLocalFinishWithoutAShellSaysWhatItNeeds(t *testing.T) {
+	c := localPodman(t)
+	user := fmt.Sprintf("localhost/dude-test-noshell:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/busybox:1 AS b\nFROM scratch\nCOPY --from=b /bin/busybox /busybox\n", user)
+	dir, err := contextDir(FinishContainerfile(user, localLayer(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	out, err := exec.Command("podman", "build", "--pull=never", "-t", user+"-final", "-f", dir+"/Containerfile", dir).CombinedOutput()
+	if err == nil {
+		t.Fatalf("finish passed on an image with no /bin/sh\n%s", out)
+	}
+	if got := Failure("finishing", string(out), err, c.Limits.Memory, false); got != "the dude layer needs /bin/sh and glibc in the image" {
+		t.Errorf("Failure = %q\n%s", got, out)
 	}
 }
