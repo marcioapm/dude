@@ -95,18 +95,32 @@ describe("the session's model", () => {
   test("the header says the tier and the model it requested, as the Run recorded them", async () => {
     const page = await session({ client: new RunClient({ model: "claude-opus-5-5", modelTier: "Coder", effort: null }) });
     const chip = await until(() => modelChip(page), "the model chip");
-    expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-opus-5-5");
-    expect(chip.textContent).toBe("Coder ·claude-opus-5-5");
+    expect(chip.getAttribute("aria-label")).toBe("OpenCode, Model: Coder, requests claude-opus-5-5");
+    expect(chip.textContent).toBe("OpenCode ·Coder ·claude-opus-5-5");
     expect(await tipOf(chip)).toBe("Coder" +
-      "The Implementer’s tier. When this session started, Coder asked the proxy for claude-opus-5-5; changing Coder now changes the next session, not this one." +
+      "It runs on OpenCode. The Implementer’s tier. When this session started, Coder asked the proxy for claude-opus-5-5; changing Coder now changes the next session, not this one." +
       "That is what dude asked for; how the proxy served it is the proxy’s to say.");
   });
 
   test("and the effort the tier asked for, when it asked for one", async () => {
     const page = await session({ client: new RunClient({ model: "claude-sonnet-5", modelTier: "Coder", effort: "medium" }) });
     const chip = await until(() => modelChip(page), "the model chip");
-    expect(chip.textContent).toBe("Coder ·claude-sonnet-5· medium");
+    expect(chip.textContent).toBe("OpenCode ·Coder ·claude-sonnet-5· medium");
     expect(await tipOf(chip)).toContain("Coder asked the proxy for claude-sonnet-5 at effort medium;");
+  });
+
+  test("and the harness that ran it, first: Claude Code · Coder · claude-sonnet-5 · high", async () => {
+    const page = await session({ client: new RunClient({ harness: "claude-code", model: "claude-sonnet-5", modelTier: "Coder", effort: "high" }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.textContent).toBe("Claude Code ·Coder ·claude-sonnet-5· high");
+    expect(page.querySelector("[data-testid=run-model-harness]")?.textContent).toBe("Claude Code ·");
+    expect(await tipOf(chip)).toContain("It runs on Claude Code.");
+  });
+
+  test("the scripted agent names no harness", async () => {
+    const page = await session({ client: new RunClient({ harness: "scripted", model: "fake/scripted", modelTier: "Coder", effort: null }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.textContent).toBe("Coder ·fake/scripted");
   });
 
   test("a fix Run names the Fixer", async () => {
@@ -115,7 +129,7 @@ describe("the session's model", () => {
   });
 
   test("a Run from before tiers shows its model alone", async () => {
-    const page = await session({ client: new RunClient({ model: "llm-anthropic/claude-sonnet-5", modelTier: null, effort: null }) });
+    const page = await session({ client: new RunClient({ harness: null, model: "llm-anthropic/claude-sonnet-5", modelTier: null, effort: null }) });
     const chip = await until(() => modelChip(page), "the model chip");
     expect(chip.getAttribute("aria-label")).toBe("Model: llm-anthropic/claude-sonnet-5");
     expect(chip.textContent).toBe("llm-anthropic/claude-sonnet-5");
