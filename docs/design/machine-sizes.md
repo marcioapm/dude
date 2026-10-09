@@ -37,7 +37,7 @@ size. This is how sizes are kept, chosen, sent to lux and shown.
 ## Who runs on what
 
 - **Every agent role names a size**: `machineSize` in a role's settings,
-  on the same two layers as its model, effort and time limit —
+  on the same two layers as its model tier and time limit —
   `organizations.default_agent_models[role]` and
   `projects.agent_models[role]` — resolved a field at a time. The fixer
   follows the implementer where it names none (`modelFallback`). Unset at
@@ -45,8 +45,8 @@ size. This is how sizes are kept, chosen, sent to lux and shown.
   default. The settings response carries it as a `Setting` with its source;
   on a project also what the organisation's layer names (what Reset goes
   back to), and for the fixer whether its value is the implementer's.
-- **The investigator** is a configurable role like the others (model,
-  effort, time limit, machine) and always on. Before, it had no settings
+- **The investigator** is a configurable role like the others (model tier,
+  time limit, machine) and always on. Before, it had no settings
   page; the phase already resolved its model through the same layers, so
   nothing changes for an organisation that sets nothing.
 - **Branch previews** name a size in `projects.preview_settings.machineSize`

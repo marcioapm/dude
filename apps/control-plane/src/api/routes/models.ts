@@ -20,9 +20,9 @@ import {
   removeModelTierSchema,
   reorderModelTiersSchema,
   replaceTier,
-  resolveEffort,
   resolveTier,
   testModelSchema,
+  TIER_JSON_TOO_BIG,
   type AgentModels,
   type ModelTestResult,
   type ModelTier,
@@ -69,10 +69,9 @@ export async function checkTiers(scope: OrgScope, models: Record<string, { tier?
 }
 
 /**
- * Who names each tier, with the effort each runs at: the organization's
- * roles and each project's overrides. A fixer that names none of its own
- * runs on the implementer's (resolveTier), and is listed under the layer
- * whose implementer it takes.
+ * Who names each tier: the organization's roles and each project's
+ * overrides. A fixer that names none of its own runs on the implementer's
+ * (resolveTier), and is listed under the layer whose implementer it takes.
  */
 async function usage(scope: OrgScope, tiers: readonly ModelTier[]): Promise<Map<string, ModelTierUse[]>> {
   const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels }>;
@@ -89,21 +88,21 @@ async function usage(scope: OrgScope, tiers: readonly ModelTier[]): Promise<Map<
   const roles = (models: AgentModels | undefined) => (models ?? {}) as Record<string, { tier?: string } | undefined>;
   const orgLayers = { organization: org?.models };
   for (const [role, config] of Object.entries(roles(org?.models))) {
-    add(config?.tier, { kind: "organization", role, project: null, effort: resolveEffort(role, orgLayers) });
+    add(config?.tier, { kind: "organization", role, project: null });
   }
   const orgFixer = resolveTier("fixer", orgLayers, tiers);
   if (orgFixer.from === "implementer") {
-    add(orgFixer.tierId, { kind: "organization", role: "fixer", project: null, inherited: true, effort: resolveEffort("fixer", orgLayers) });
+    add(orgFixer.tierId, { kind: "organization", role: "fixer", project: null, inherited: true });
   }
   for (const p of projects) {
     const project = { id: p.id, name: p.name, imageUrl: p.imageUrl };
     const layers = { project: p.models, organization: org?.models };
     for (const [role, config] of Object.entries(roles(p.models))) {
-      add(config?.tier, { kind: "project", role, project, effort: resolveEffort(role, layers) });
+      add(config?.tier, { kind: "project", role, project });
     }
     const fixer = resolveTier("fixer", layers, tiers);
     if (fixer.from === "implementer" && resolveTier("implementer", layers, tiers).from === "project") {
-      add(fixer.tierId, { kind: "project", role: "fixer", project, inherited: true, effort: resolveEffort("fixer", layers) });
+      add(fixer.tierId, { kind: "project", role: "fixer", project, inherited: true });
     }
   }
   return out;
@@ -158,6 +157,26 @@ function nameTaken(err: unknown, name: string): never {
   throw err;
 }
 
+const SIZE_CHECKS: Readonly<Record<string, "options" | "headers">> = {
+  model_tiers_options_check: "options",
+  model_tiers_headers_check: "headers",
+};
+
+/**
+ * What Postgres refuses in a tier the schema took, as a 400 naming the
+ * field: options or headers over 4096 bytes as jsonb renders them (numbers
+ * print in full: 1e21 is 22 digits), CHECK 23514. A NUL never gets here:
+ * the schema refuses it. Otherwise as nameTaken.
+ */
+function tierRefused(err: unknown, input: ModelTierInput): never {
+  const field = err instanceof SQL.PostgresError && err.errno === "23514" ? SIZE_CHECKS[err.constraint ?? ""] : undefined;
+  if (field) {
+    throw badRequest(`request body failed validation: ${field}: ${TIER_JSON_TOO_BIG}`,
+      { formErrors: [], fieldErrors: { [field]: [TIER_JSON_TOO_BIG] } });
+  }
+  return nameTaken(err, input.name);
+}
+
 const tierInput = async (ctx: RequestContext): Promise<ModelTierInput> =>
   (await parseBody(ctx.request, modelTierInputSchema)) as ModelTierInput;
 
@@ -167,16 +186,17 @@ async function createTier(ctx: RequestContext): Promise<Response> {
   const id = newId("modelTier");
   await withOrg(ctx.principal.organizationId, async (scope) => {
     await scope.sql`
-      INSERT INTO model_tiers (id, organization_id, name, description, model, position, updated_by)
-      VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.description}, ${input.model},
+      INSERT INTO model_tiers (id, organization_id, name, description, model, effort, options, headers, position, updated_by)
+      VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.description}, ${input.model}, ${input.effort},
+              ${input.options}::jsonb, ${input.headers}::jsonb,
               (SELECT COALESCE(max(position) + 1, 0) FROM model_tiers), ${ctx.principal.personId})`
-      .catch((err: unknown) => nameTaken(err, input.name));
+      .catch((err: unknown) => tierRefused(err, input));
     await record(scope, ctx, { [id]: { added: input } });
   });
   return json(await tiersResponse(ctx), 201);
 }
 
-/** Editing a tier's model moves every agent on it from its next session; running ones keep theirs. */
+/** Editing a tier's model or settings moves every agent on it from its next session; running ones keep theirs. */
 async function updateTier(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const id = ctx.params.id!;
@@ -184,8 +204,9 @@ async function updateTier(ctx: RequestContext): Promise<Response> {
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = await scope.sql`
       UPDATE model_tiers SET name = ${input.name}, description = ${input.description}, model = ${input.model},
+        effort = ${input.effort}, options = ${input.options}::jsonb, headers = ${input.headers}::jsonb,
         updated_at = now(), updated_by = ${ctx.principal.personId}
-      WHERE id = ${id} RETURNING id`.catch((err: unknown) => nameTaken(err, input.name));
+      WHERE id = ${id} RETURNING id`.catch((err: unknown) => tierRefused(err, input));
     if (rows.length === 0) throw notFound(`no model tier ${id}`);
     await record(scope, ctx, { [id]: { edited: input } });
   });
@@ -288,26 +309,17 @@ async function proxyModels(ctx: RequestContext): Promise<ProxyModels> {
 }
 
 /**
- * One small request to the proxy for a model, for each distinct request the
- * tier's agents send (the orchestrator folds efforts that go out alike), or
- * once without an effort for a tier none use. A check, never a gate: saving
- * a tier does not depend on it.
+ * One small request to the proxy for a tier's model, with the tier's
+ * effort, options and headers as the dialog has them, sent as its agent
+ * sends it. A check, never a gate: saving a tier does not depend on it.
  */
 async function testModel(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const input = await parseBody(ctx.request, testModelSchema);
-  const efforts = await withOrg(ctx.principal.organizationId, async (scope) => {
-    if (!input.tierId) return [null];
-    const tiers = await listTiers(scope);
-    if (!tiers.some((t) => t.id === input.tierId)) throw notFound(`no model tier ${input.tierId}`);
-    const uses = (await usage(scope, tiers)).get(input.tierId) ?? [];
-    const distinct = [...new Set(uses.map((u) => u.effort))];
-    return distinct.length ? distinct : [null];
-  });
   const res = await orchestrator(ctx.principal.organizationId, "POST", "/internal/llm/test",
-    JSON.stringify({ model: input.model, efforts }), undefined, config().orchestratorTimeouts.testMessageMs);
+    JSON.stringify(input), undefined, config().orchestratorTimeouts.testMessageMs);
   if (!res.ok) return res;
-  return json((await res.json()) as { model: string; results: ModelTestResult[] });
+  return json((await res.json()) as { model: string; result: ModelTestResult });
 }
 
 export function registerModelRoutes(router: Router): void {

@@ -3,6 +3,9 @@ package api
 import (
 	"net/http"
 	"net/url"
+	"slices"
+
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 )
 
 // llmRoutes are the LLM proxy as the Models page uses it: the models it
@@ -24,11 +27,14 @@ func (s *Server) llmRoutes(mux *http.ServeMux) {
 		return nil
 	}))
 	// A check, never a gate. The backend has decided who may send one
-	// (POST /v1/models/test: admins), as for memory reindex.
+	// (POST /v1/models/test: admins), as for memory reindex, and sends the
+	// tier's settings as the dialog has them (saved or not).
 	mux.Handle("POST /internal/llm/test", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		var in struct {
-			Model   string    `json:"model"`
-			Efforts []*string `json:"efforts"`
+			Model   string            `json:"model"`
+			Effort  *string           `json:"effort"`
+			Options map[string]any    `json:"options"`
+			Headers map[string]string `json:"headers"`
 		}
 		if err := read(r, &in); err != nil {
 			return err
@@ -39,24 +45,14 @@ func (s *Server) llmRoutes(mux *http.ServeMux) {
 		if s.LLM.URL == "" {
 			return fail(http.StatusServiceUnavailable, "unavailable", "the LLM proxy is not configured (DUDE_LLM_URL)")
 		}
-		if len(in.Efforts) > 5 {
-			return fail(http.StatusBadRequest, "bad_request", "at most five efforts: none, low, medium, high and max")
-		}
-		efforts := make([]string, 0, len(in.Efforts))
-		for _, e := range in.Efforts {
-			switch {
-			case e == nil:
-				efforts = append(efforts, "")
-			case *e == "low" || *e == "medium" || *e == "high" || *e == "max":
-				efforts = append(efforts, *e)
-			default:
-				return fail(http.StatusBadRequest, "bad_request", "no effort %q", *e)
+		t := llm.TestTier{Model: in.Model, Options: in.Options, Headers: in.Headers}
+		if in.Effort != nil {
+			if !slices.Contains(llm.Efforts, *in.Effort) {
+				return fail(http.StatusBadRequest, "bad_request", "no effort %q", *in.Effort)
 			}
+			t.Effort = *in.Effort
 		}
-		if len(efforts) == 0 {
-			efforts = []string{""}
-		}
-		write(w, http.StatusOK, map[string]any{"model": in.Model, "results": s.LLM.Test(r.Context(), in.Model, efforts)})
+		write(w, http.StatusOK, map[string]any{"model": in.Model, "result": s.LLM.Test(r.Context(), t)})
 		return nil
 	}))
 }

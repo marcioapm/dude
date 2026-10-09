@@ -18,7 +18,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-compact);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   border-radius: 0;
@@ -52,11 +52,13 @@
   border-radius: var(--ds-radius-control);
 }
 
+/* At the row's end, as on ToolCallCard and ThinkingBlock; a row with no
+   detail keeps its width, so the times of a column of events line up. */
 .chevron {
   display: inline-grid;
   place-items: center;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   color: var(--ds-color-text-muted);
 }
@@ -113,7 +115,7 @@
 
 .json {
   margin: 0;
-  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) calc(var(--ds-space-6) + 12px + var(--ds-space-8));
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) calc(var(--ds-space-8) + 16px + var(--ds-space-8));
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-xs);
   line-height: var(--ds-leading-normal);

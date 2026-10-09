@@ -93,7 +93,7 @@ describe("the session's model", () => {
   const modelChip = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=run-model]");
 
   test("the header says the tier and the model it requested, as the Run recorded them", async () => {
-    const page = await session({ client: new RunClient({ model: "claude-opus-5-5", modelTier: "Coder" }) });
+    const page = await session({ client: new RunClient({ model: "claude-opus-5-5", modelTier: "Coder", effort: null }) });
     const chip = await until(() => modelChip(page), "the model chip");
     expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-opus-5-5");
     expect(chip.textContent).toBe("Coder ·claude-opus-5-5");
@@ -102,13 +102,20 @@ describe("the session's model", () => {
       "That is what dude asked for; how the proxy served it is the proxy’s to say.");
   });
 
+  test("and the effort the tier asked for, when it asked for one", async () => {
+    const page = await session({ client: new RunClient({ model: "claude-sonnet-5", modelTier: "Coder", effort: "medium" }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.textContent).toBe("Coder ·claude-sonnet-5· medium");
+    expect(await tipOf(chip)).toContain("Coder asked the proxy for claude-sonnet-5 at effort medium;");
+  });
+
   test("a fix Run names the Fixer", async () => {
     const page = await session({ client: new RunClient({ phase: "fix", role: "implementer", modelTier: "Coder" }) });
     expect(await tipOf(await until(() => modelChip(page), "the model chip"))).toContain("The Fixer’s tier.");
   });
 
   test("a Run from before tiers shows its model alone", async () => {
-    const page = await session({ client: new RunClient({ model: "llm-anthropic/claude-sonnet-5", modelTier: null }) });
+    const page = await session({ client: new RunClient({ model: "llm-anthropic/claude-sonnet-5", modelTier: null, effort: null }) });
     const chip = await until(() => modelChip(page), "the model chip");
     expect(chip.getAttribute("aria-label")).toBe("Model: llm-anthropic/claude-sonnet-5");
     expect(chip.textContent).toBe("llm-anthropic/claude-sonnet-5");

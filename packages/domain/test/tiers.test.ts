@@ -34,7 +34,46 @@ describe("a tier's model", () => {
   test("may be unset", () => {
     const r = tier({ model: null });
     expect(r.success && r.data.model).toBeNull();
-    expect(modelTierInputSchema.parse({ name: "Fast" })).toEqual({ name: "Fast", description: "", model: null });
+    expect(modelTierInputSchema.parse({ name: "Fast" })).toEqual({ name: "Fast", description: "", model: null, effort: null, options: null, headers: null });
+  });
+});
+
+describe("a tier's effort, options and headers", () => {
+  test("an effort is none, low, medium, high or max; null is the model's default", () => {
+    for (const e of ["none", "low", "medium", "high", "max", null]) expect(tier({ effort: e }).success).toBe(true);
+    for (const e of ["xhigh", "minimal", "", "High"]) expect(tier({ effort: e }).success).toBe(false);
+  });
+
+  test("options are a JSON object of at most 4 KB as Postgres renders it", () => {
+    expect(tier({ options: { effort: "xhigh", thinking: { display: "omitted" } } }).success).toBe(true);
+    for (const o of [[], "x", 3]) expect(tier({ options: o }).success).toBe(false);
+    // {"k": "…"}: 9 bytes around the value as jsonb text, 2 fewer than JSON.stringify's.
+    expect(tier({ options: { k: "x".repeat(4096 - 9) } }).success).toBe(true);
+    expect(errorOf(tier({ options: { k: "x".repeat(4096 - 8) } }))).toBe("At most 4096 bytes as JSON");
+  });
+
+  test("headers are token names with one-line string values, at most 4 KB", () => {
+    expect(tier({ headers: { "X-Team": "dude", "anthropic-beta": "context-1m" } }).success).toBe(true);
+    expect(errorOf(tier({ headers: { "X Team": "dude" } }))).toBe("Header names are letters, digits and !#$%&'*+.^_`|~-");
+    expect(errorOf(tier({ headers: { "X-Team": "a\r\nInjected: 1" } }))).toBe("A header's value is one line");
+    expect(tier({ headers: { "X-Team": 3 } }).success).toBe(false);
+    expect(errorOf(tier({ headers: { h: "x".repeat(4096) } }))).toBe("At most 4096 bytes as JSON");
+  });
+
+  test("no string in options or headers, key or value, holds a NUL, which jsonb cannot store", () => {
+    const nul = "No NUL characters (\\u0000)";
+    expect(errorOf(tier({ options: { a: "\u0000" } }))).toBe(nul);
+    expect(errorOf(tier({ options: { deep: [{ "k\u0000": 1 }] } }))).toBe(nul);
+    expect(errorOf(tier({ headers: { "X-Team": "a\u0000b" } }))).toBe(nul);
+    const test = testModelSchema.safeParse({ model: "gpt-6-sol", options: { a: "\u0000" } });
+    expect(test.success ? null : test.error.issues[0]!.message).toBe(nul);
+  });
+
+  test("a backslash followed by u0000 is six characters, not a NUL, and is kept", () => {
+    expect(tier({ options: { stop: "\\u0000" } }).success).toBe(true);
+    expect(tier({ options: { "\\u0000": 1 } }).success).toBe(true);
+    expect(tier({ headers: { "X-A": "\\u0000" } }).success).toBe(true);
+    expect(testModelSchema.safeParse({ model: "gpt-6-sol", options: { re: "\\u0000" } }).success).toBe(true);
   });
 });
 
@@ -57,9 +96,11 @@ describe("a tier's name and description", () => {
 });
 
 describe("a test message", () => {
-  test("names a model and the tier it is for, none for a new one", () => {
-    expect(testModelSchema.parse({ model: "gpt-5.6-sol" })).toEqual({ model: "gpt-5.6-sol", tierId: null });
+  test("names a model and the tier's settings as the dialog has them", () => {
+    expect(testModelSchema.parse({ model: "gpt-5.6-sol" })).toEqual({ model: "gpt-5.6-sol", effort: null, options: null, headers: null });
+    expect(testModelSchema.parse({ model: "gpt-6-sol", effort: "none" }).effort).toBe("none");
     expect(testModelSchema.safeParse({ model: "llm-openai/gpt-5.6-sol" }).success).toBe(false);
+    expect(testModelSchema.safeParse({ model: "gpt-5.6-sol", tierId: "mtr_x" }).success).toBe(false);
   });
 });
 
@@ -69,7 +110,7 @@ describe("resolving a role's tier", () => {
   test("the project's, then the organization's", () => {
     expect(resolveTier("reviewer", { project: { reviewer: { tier: "fast" } }, organization: { reviewer: { tier: "thinker" } } }, tiers))
       .toEqual({ tierId: "fast", from: "project" });
-    expect(resolveTier("reviewer", { project: { reviewer: { effort: "low" } }, organization: { reviewer: { tier: "thinker" } } }, tiers))
+    expect(resolveTier("reviewer", { project: { reviewer: { timeLimitMinutes: 45 } }, organization: { reviewer: { tier: "thinker" } } }, tiers))
       .toEqual({ tierId: "thinker", from: "organization" });
   });
 
@@ -91,8 +132,8 @@ describe("resolving a role's tier", () => {
 
 describe("moving what named a tier", () => {
   test("every role naming it, its other fields kept", () => {
-    const models = { reviewer: { tier: "fast", effort: "low" as const }, implementer: { tier: "coder" } };
-    expect(replaceTier(models, "fast", "thinker")).toEqual({ reviewer: { tier: "thinker", effort: "low" }, implementer: { tier: "coder" } });
+    const models = { reviewer: { tier: "fast", timeLimitMinutes: 45 }, implementer: { tier: "coder" } };
+    expect(replaceTier(models, "fast", "thinker")).toEqual({ reviewer: { tier: "thinker", timeLimitMinutes: 45 }, implementer: { tier: "coder" } });
   });
 
   test("nothing naming it is the same object", () => {

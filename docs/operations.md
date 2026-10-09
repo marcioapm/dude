@@ -584,22 +584,24 @@ dude gives every real agent Run these, and nothing else about its model:
 
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
   orchestrator's variables of the same names;
-- `OPENCODE_CONFIG_CONTENT`, the Run's model and effort as inline OpenCode
-  config. The model is the one the role's tier requests, declared under the
-  provider its name goes through (`claude-*`: `llm-anthropic`; anything else:
-  `llm-openai`), e.g.
-  `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{}}}},"agent":{"build":{"reasoningEffort":"high"}}}`
-  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode
-  deep-merges it over its file config, so a model the file declares keeps its
-  `limit` and `reasoning`.
+- `OPENCODE_CONFIG_CONTENT`, the Run's model and its tier's settings as
+  inline OpenCode config. The model is the one the role's tier requests,
+  declared under the provider its name goes through (`claude-*`:
+  `llm-anthropic`; anything else: `llm-openai`), with the tier's effort as
+  model options and its headers as model headers, e.g.
+  `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`
+  (`phases.openCodeConfig`; the mapping per provider is in
+  [`design/model-tiers.md`](design/model-tiers.md)). OpenCode deep-merges it
+  over its file config, so a model the file declares keeps its `limit` and
+  `reasoning`.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
 the URL and key from the environment. The dev image
 (`images/runtime/opencode.json`) and the production image define the same
-two providers, `llm-anthropic` (`@ai-sdk/anthropic`) and `llm-openai`
-(`@ai-sdk/openai-compatible`); dude writes every Run's model under one of
-them:
+two providers, `llm-anthropic` (`@ai-sdk/anthropic`, the Messages API) and
+`llm-openai` (`@ai-sdk/openai`, the Responses API); dude writes every Run's
+model under one of them:
 
 ```json
 {
@@ -613,7 +615,7 @@ them:
         "modalities": { "input": ["text", "image"], "output": ["text"] } } }
     },
     "llm-openai": {
-      "npm": "@ai-sdk/openai-compatible",
+      "npm": "@ai-sdk/openai",
       "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
       "models": { "gpt-5.6-sol": { "name": "GPT 5.6 Sol", "attachment": true,
         "modalities": { "input": ["text", "image"], "output": ["text"] } } }
@@ -621,6 +623,13 @@ them:
   }
 }
 ```
+
+`llm-openai` must be `@ai-sdk/openai`, not `@ai-sdk/openai-compatible`: the
+proxy passes reasoning summaries through its `/v1/responses` and drops them
+from Chat Completions, so with the compatible provider a GPT agent's
+thoughts never reach the chat. Both packages are bundled into the OpenCode
+binary (`createOpenAI` is in its own chunk), so OpenCode loads them with no
+npm fetch: a Run's egress needs only the LLM's host.
 
 Every model must declare `"attachment": true` and
 `"modalities": {"input": ["text", "image"], "output": ["text"]}`. OpenCode
@@ -633,7 +642,7 @@ each model it defines; the dev catalog's are checked by
 
 The file must not live in `/etc/opencode/`: on Linux that is OpenCode's
 managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
-it sets would override each Run's model and effort. Both images use
+it sets would override each Run's model and its tier's settings. Both images use
 `/usr/local/share/dude/opencode.json`.
 
 A role names a model tier, and a tier the model dude requests, as the proxy
@@ -665,8 +674,11 @@ Run as the secrets `opencode_auth` and `opencode_config`
 - Role models are tiers since migration 069, which made each organization's
   tiers from the models its roles named (see
   [`design/model-tiers.md`](design/model-tiers.md), "Upgrade").
-- A Run keeps the URL, model and effort it started with; only the key is
-  supplied again on each resume.
+- A Run keeps the URL, model and tier settings it started with (lux keeps
+  the spec's env); only the key is supplied again on each resume.
+- Since migration 099 a role has no effort of its own: its tier's is sent.
+  The migration deletes `effort` from every role config; tiers there before
+  keep the model's default until an admin sets one in Models.
 
 ### dude-backend
 
