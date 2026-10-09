@@ -4,12 +4,12 @@
  * opens them; the orchestrator checks again.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import type { NavProject } from "@dude/design-system";
 import { firstName } from "@dude/design-system";
 import { PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
 import { Button, Callout, Checkbox, ChoiceList, Dialog, Select } from "@dude/design-system/primitives";
-import type { SessionDetail, SessionLink, SessionMemberView } from "@dude/domain";
+import { sessionTitle, type SessionDetail, type SessionLink, type SessionMemberView } from "@dude/domain";
 import type { ApiClient, Repository } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople } from "../people.tsx";
@@ -24,18 +24,14 @@ const HANDOVER_ROLES = [
   { value: "leave" as const, label: "Leave", description: "You lose the conversation; what you filed stays yours." },
 ];
 
-/** Which projects and repositories a session reads; a new session's too. */
-export function LinkDialog({ client, projects, linked, open, onClose, onSave, title = "Link projects", saveLabel = "Link", lead }: {
+/** Which projects and repositories a session reads. */
+export function LinkDialog({ client, projects, linked, open, onClose, onSave }: {
   client: ApiClient;
   projects: readonly NavProject[];
   linked: SessionDetail["session"]["projects"];
   open: boolean;
   onClose: () => void;
   onSave: (links: SessionLink[]) => Promise<void>;
-  title?: string;
-  saveLabel?: string;
-  /** Above the projects: a new session's title. */
-  lead?: ReactNode;
 }) {
   // Picked repositories by project; a project picked with none reads only its tasks.
   const [picked, setPicked] = useState<Map<string, Set<string>>>(new Map());
@@ -82,14 +78,13 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave, ti
     }
   };
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title={title}
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title="Link projects"
       description="The agent reads the projects you link: their tasks, pull requests and findings, and the repositories you tick, checked out read-only. It changes nothing."
       footerProblem={problem}
       footer={<>
         <Button variant="quiet" onClick={onClose}>Cancel</Button>
-        <Button variant="primary" disabled={busy} onClick={() => void save()} data-testid="link-save">{saveLabel}</Button>
+        <Button variant="primary" disabled={busy} onClick={() => void save()} data-testid="link-save">Link</Button>
       </>}>
-      {lead}
       <ul className="sessionLinkList" data-testid="link-projects">
         {projects.map((p) => (
           <li key={p.id}>
@@ -154,7 +149,7 @@ export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOw
   };
   const names = adding.map((id) => firstName(people.names.get(id) ?? "someone"));
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title={`Share “${detail.session.title}”`}
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title={`Share “${sessionTitle(detail.session)}”`}
       description="People you add see this conversation and its linked projects' checkouts. They can't see your other sessions."
       footerProblem={problem}
       footerStart={<span className="muted">They're told in their inbox. Nothing is posted anywhere else.</span>}
@@ -248,7 +243,7 @@ export function MakeOwnerDialog({ client, detail, member, onClose, onChanged }: 
   };
   return (
     <Dialog open={member !== null} onOpenChange={(o) => !o && onClose()} size="sm" tone="attention"
-      title={`Make ${name} the owner of “${detail.session.title}”?`}
+      title={`Make ${name} the owner of “${sessionTitle(detail.session)}”?`}
       description={`${name} decides who's in it from now on, and can hand it on.`}
       footerProblem={problem}
       footer={<>

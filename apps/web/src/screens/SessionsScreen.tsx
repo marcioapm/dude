@@ -1,15 +1,15 @@
 /**
  * Your brainstorm sessions: those you are in, newest activity first, and
- * starting a new one (a title, and what it reads).
+ * starting a new one — at once, untitled and linked to nothing: its agent
+ * names it, and its owner links projects from its rail.
  */
 
 import { useState } from "react";
-import { type NavProject } from "@dude/design-system";
 import { ScreenHeader, SessionRow } from "@dude/design-system/components";
-import { Button, EmptyState, Input } from "@dude/design-system/primitives";
-import type { SessionSummary } from "@dude/domain";
+import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
+import { sessionTitle, type SessionSummary } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
-import { LinkDialog } from "./SessionDialogs.tsx";
+import { errorText } from "../hooks/useSave.tsx";
 
 /** What the session's agent is doing, as its row says it. */
 export function sessionState(s: Pick<SessionSummary, "runStatus" | "dudePause">): string {
@@ -19,17 +19,33 @@ export function sessionState(s: Pick<SessionSummary, "runStatus" | "dudePause">)
   return "Talking";
 }
 
-export function SessionsScreen({ client, sessions, projects, onOpen }: {
+/**
+ * New session: made at once, with no dialog, and opened. Pressing it twice
+ * while the first is on its way makes one.
+ */
+export function useNewSession(client: ApiClient, onCreated: (id: string) => void): { start: () => void; busy: boolean } {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const start = () => {
+    if (busy) return;
+    setBusy(true);
+    void client.createSession().then(({ id }) => onCreated(id),
+      (err: unknown) => toast({ title: `Could not start a session: ${errorText(err)}`, tone: "danger" }))
+      .finally(() => setBusy(false));
+  };
+  return { start, busy };
+}
+
+export function SessionsScreen({ client, sessions, onOpen }: {
   client: ApiClient;
   sessions: readonly SessionSummary[] | null;
-  projects: readonly NavProject[];
   onOpen: (id: string) => void;
 }) {
-  const [creating, setCreating] = useState(false);
+  const fresh = useNewSession(client, onOpen);
   return (
     <div className="screen" data-testid="sessions">
       <ScreenHeader title="Sessions"
-        actions={<Button size="sm" variant="primary" onClick={() => setCreating(true)} data-testid="new-session">New session</Button>} />
+        actions={<Button size="sm" variant="primary" disabled={fresh.busy} onClick={fresh.start} data-testid="new-session">New session</Button>} />
       <div className="screenBody narrow">
         {sessions && sessions.length === 0 ? (
           <EmptyState icon="brainstorm" title="No sessions yet"
@@ -37,7 +53,7 @@ export function SessionsScreen({ client, sessions, projects, onOpen }: {
         ) : (
           <ul className="sessionList">
             {(sessions ?? []).map((s) => (
-              <SessionRow key={s.id} data-testid="session-row" data-session={s.id} title={s.title}
+              <SessionRow key={s.id} data-testid="session-row" data-session={s.id} title={sessionTitle(s)}
                 summary={s.filed > 0 ? `Filed ${s.filed}` : "Nothing filed yet"}
                 projects={s.projects.map((p) => ({ key: p.key, name: p.name, repositories: p.repositories.length }))}
                 state={sessionState(s)}
@@ -47,36 +63,6 @@ export function SessionsScreen({ client, sessions, projects, onOpen }: {
           </ul>
         )}
       </div>
-      <NewSessionDialog client={client} projects={projects} open={creating} onClose={() => setCreating(false)} onCreated={onOpen} />
     </div>
-  );
-}
-
-/** A new session's links before any are picked: one array, so the dialog keeps its picks across renders. */
-const NOTHING_LINKED: SessionSummary["projects"] = [];
-
-/** A new session: its title first, then the projects it reads. */
-export function NewSessionDialog({ client, projects, open, onClose, onCreated }: {
-  client: ApiClient;
-  projects: readonly NavProject[];
-  open: boolean;
-  onClose: () => void;
-  onCreated: (id: string) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const named = title.trim();
-  return (
-    <LinkDialog client={client} projects={projects} linked={NOTHING_LINKED} open={open} onClose={() => {
-      setTitle("");
-      onClose();
-    }} title="New session" saveLabel="Start"
-      onSave={async (links) => {
-        if (!named) throw new Error("Name the session first.");
-        const { id } = await client.createSession(named, links);
-        setTitle("");
-        onCreated(id);
-      }}
-      lead={<Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus data-testid="session-title"
-        placeholder="What you want to think through" />} />
   );
 }

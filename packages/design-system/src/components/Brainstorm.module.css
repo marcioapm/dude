@@ -253,3 +253,78 @@
 .can li[data-can="no"] {
   color: var(--ds-color-text-muted);
 }
+
+/* The session's name in its header: the screen title's type, edited in place.
+   It takes the header's free width (ScreenHeader's h1 is a flex item that
+   would otherwise shrink to its content), so the words are cut only when the
+   line is genuinely too short for them. */
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  line-height: var(--ds-leading-tight);
+}
+.titleWords {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.untitled {
+  color: var(--ds-color-text-muted);
+}
+.titleEdit {
+  padding: 0 var(--ds-space-4);
+  /* The words on the header's edge, the wash past it. A translate, not a
+     negative margin: the margin comes off the title's max-content, and the
+     button is then laid out short of its words, cutting a short name. */
+  translate: calc(-1 * var(--ds-space-4));
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: text;
+}
+.titleEdit:hover {
+  background: var(--ds-color-hover-wash);
+}
+.titleEdit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.titleGlyph {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+  opacity: 0;
+}
+.titleEdit:hover .titleGlyph,
+.titleEdit:focus-visible .titleGlyph {
+  opacity: 1;
+}
+.titleInput {
+  box-sizing: content-box;
+  min-width: 16ch;
+  max-width: 100%;
+  padding: 0 var(--ds-space-4);
+  translate: calc(-1 * var(--ds-space-4));
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-text-strong);
+  font: inherit;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  line-height: var(--ds-leading-tight);
+  /* The field's edge is the focus ring alone: it is only ever shown focused. */
+  box-shadow: 0 0 0 1px var(--ds-color-accent), 0 0 0 calc(1px + var(--ds-focus-ring-width)) var(--ds-color-selection);
+}
+.titleInput:focus {
+  outline: none;
+}

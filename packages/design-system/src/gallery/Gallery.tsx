@@ -163,10 +163,12 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
   [
     "Brainstorm",
     [
+      ["bs-title", "SessionTitle"],
       ["bs-proposal", "ProposalCard"],
       ["bs-row", "SessionRow / SharedMark"],
       ["bs-sidebar", "SidebarSessions"],
       ["bs-rail", "SessionPeople / LinkedProjects"],
+      ["bs-files", "PublishedFiles"],
     ],
   ],
   [

@@ -338,10 +338,12 @@ export interface ApiClientOptions {
   apiKey?: string | undefined;
 }
 
-/** A file an agent published, as the task lists it. `GET /v1/artifacts`. */
+/** A file an agent published, as its task or brainstorm session lists it. `GET /v1/artifacts`. */
 export interface Artifact {
   id: string;
-  taskId: string;
+  /** null for a brainstorm session's. */
+  taskId: string | null;
+  sessionId?: string | null;
   runId: string | null;
   name: string;
   contentType: string;
@@ -468,6 +470,16 @@ export class ApiClient {
 
   listArtifacts(taskId: string): Promise<{ artifacts: Artifact[] }> {
     return this.#request("GET", `/v1/artifacts${qs({ taskId })}`);
+  }
+
+  /** What a brainstorm session's agent published: every Run of the session's, for its members. */
+  listSessionArtifacts(sessionId: string): Promise<{ artifacts: Artifact[] }> {
+    return this.#request("GET", `/v1/artifacts${qs({ sessionId })}`);
+  }
+
+  /** The latest version of each of a session's files, as a zip. */
+  async sessionArtifactsZip(sessionId: string): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/brainstorms/${encodeURIComponent(sessionId)}/artifacts.zip`)).blob();
   }
 
   /**
@@ -1024,8 +1036,14 @@ export class ApiClient {
     return this.#request("GET", `/v1/brainstorms/${encodeURIComponent(id)}`);
   }
 
-  createSession(title: string, projects: SessionLink[] = []): Promise<{ id: string; title: string }> {
-    return this.#request("POST", "/v1/brainstorms", { title, projects });
+  /** A new session, untitled and linked to nothing: its agent names it, its owner links projects from its rail. */
+  createSession(): Promise<{ id: string; title: string | null }> {
+    return this.#request("POST", "/v1/brainstorms", {});
+  }
+
+  /** Name the session, as a member who can chat: the agent leaves a person's name alone. */
+  renameSession(id: string, title: string): Promise<{ id: string; title: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/title`, { title });
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */

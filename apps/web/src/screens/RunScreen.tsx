@@ -559,7 +559,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const switcher = (
     <Segmented<SessionView> label="Show" value={view} onChange={showView} data-testid="session-view"
       options={[
-        { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
+        conversationOption,
         // The agent's checkout, as it changes: only for a Run with one.
         ...(hasChanges ? [{ value: "changes" as const, label: (
           <>
@@ -569,7 +569,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           </>
         ) }] : []),
         // Debugging, not the daily view — hence last.
-        { value: "events", label: <><Icon name="list" size={13} />Events<span className="ds-tnum runCount">{events.length}</span></> },
+        eventsOption(events.length),
       ]} />
   );
 
@@ -591,23 +591,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
             selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
         ) : view === "events" ? (
-          <div className="runEvents" data-testid="event-log">
-            <EventStream>
-              {events.map((event) => (
-                <EventRow
-                  key={event.eventId}
-                  occurredAt={event.occurredAt}
-                  eventType={event.eventType}
-                   actor={{ type: event.actor.type === "person" ? "human" : event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
-                  summary={summarize(event)}
-                  // An element, not a string: EventRow only renders the detail
-                  // when the row is open, so the JSON is built for the handful
-                  // of rows an operator actually expands.
-                  detail={<PayloadDetail payload={event.payload} />}
-                />
-              ))}
-            </EventStream>
-          </div>
+          <EventLog events={events} people={people} />
         ) : (
           <div className="runChat">
             <ChatTranscript
@@ -825,6 +809,41 @@ export function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
 function namedActor(event: PersistedEvent, people: People): { name?: string } {
   const name = actorName(humanActor(event), people.names);
   return name ? { name } : {};
+}
+
+/** The view switch's Conversation option, as every session's bar has it. */
+export const conversationOption = { value: "chat" as const, label: <><Icon name="message" size={13} />Conversation</> };
+
+/** The view switch's Events option, with the ledger's count: last, being for debugging. */
+export function eventsOption(count: number) {
+  return { value: "events" as const, label: <><Icon name="list" size={13} />Events<span className="ds-tnum runCount">{count}</span></> };
+}
+
+/**
+ * Events: a session's ledger as it arrived, one row per event, each
+ * opening onto its payload. An agent session's, and a brainstorm
+ * session's (every Run of it, and the session's own events).
+ */
+export function EventLog({ events, people }: { events: readonly PersistedEvent[]; people: People }) {
+  return (
+    <div className="runEvents" data-testid="event-log">
+      <EventStream>
+        {events.map((event) => (
+          <EventRow
+            key={event.eventId}
+            occurredAt={event.occurredAt}
+            eventType={event.eventType}
+            actor={{ type: event.actor.type === "person" ? "human" : event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+            summary={summarize(event)}
+            // An element, not a string: EventRow only renders the detail
+            // when the row is open, so the JSON is built for the handful
+            // of rows an operator actually expands.
+            detail={<PayloadDetail payload={event.payload} />}
+          />
+        ))}
+      </EventStream>
+    </div>
+  );
 }
 
 /** A live Run's queued steers: what each waits for, and sending one again (interrupting, or after a failure). */
