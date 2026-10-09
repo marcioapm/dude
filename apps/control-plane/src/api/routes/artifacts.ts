@@ -81,11 +81,7 @@ type Owner = { taskId: string } | { sessionId: string };
 /** Versions listed of each name, newest first; `versions` still counts them all. */
 const VERSIONS_LISTED = 50;
 
-/**
- * The artifacts of a task's or a session's Runs, newest first, each with its
- * version among those of its name: every name, with at most its
- * VERSIONS_LISTED latest versions.
- */
+/** The artifacts of a task's or a session's Runs, newest first, each with its version among those of its name. */
 async function artifactsOf(organizationId: string, owner: Owner): Promise<ArtifactRow[]> {
   const taskId = "taskId" in owner ? owner.taskId : null;
   const sessionId = "sessionId" in owner ? owner.sessionId : null;

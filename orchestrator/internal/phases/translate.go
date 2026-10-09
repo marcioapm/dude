@@ -323,11 +323,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 }
 
 // artifactPublished records a file the agent published as soon as lux can
-// serve it, so the Files rail and the ledger show it while the Run goes on.
-// The final diff is left to the stop-time sweep, which records it as the
-// Run's diff: the hook publishes it only as the Run stops, and the sweep
-// runs then. Anything not under PublishedPrefix (artifacts.paths) is not
-// for people.
+// serve it, while the Run goes on. The final diff is left to the stop-time
+// sweep, which records it as the Run's diff; anything outside
+// PublishedPrefix (artifacts.paths) is not for people.
 func (t *translator) artifactPublished(ctx context.Context, tx pgx.Tx, f lux.Frame) error {
 	var ev struct {
 		ID string `json:"artifactId"`
@@ -338,9 +336,8 @@ func (t *translator) artifactPublished(ctx context.Context, tx pgx.Tx, f lux.Fra
 		return nil
 	}
 	art := ev.Artifact
-	art.ID, art.Epoch, art.Available = ev.ID, cmp.Or(f.Epoch, 1), true
-	r := t.run
-	return recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art)
+	art.ID, art.Epoch = ev.ID, cmp.Or(f.Epoch, 1)
+	return recordArtifact(ctx, tx, artifactRun{t.run.Org, t.run.ProjectID, t.run.TaskID, t.run.ID}, art)
 }
 
 // refused records a name lux would not resolve for the Run's agent: kept

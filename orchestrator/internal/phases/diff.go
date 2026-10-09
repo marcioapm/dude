@@ -239,9 +239,9 @@ func num(n int) *int { return &n }
 // a sha, or the branch lux checked out, whose first reflog entry is where
 // it started (lux checks a branch out with checkout -B, which records it).
 //
-// A patch is written to a temporary directory and published with lux-shim
-// publish, which keeps its own copy. A failed publish exits 3 after trying
-// every repository.
+// A patch is written to a temporary directory and published with lux-shim,
+// which keeps its own copy. A failed publish exits 3 after trying every
+// repository.
 const diffScript = `set -u
 dest=$1; shift
 base_of() {

@@ -123,8 +123,8 @@ type Artifact struct {
 	// Where it was in the container: /.lux/artifacts/<name> for what the
 	// workload published.
 	Path string `json:"path"`
-	// 1 for the first file at its path in the Run, counting up (lux#77; 0
-	// from an older lux).
+	// 1 for the first file at its path in the Run (lux#77; 0 from an older
+	// lux).
 	Version int `json:"version"`
 	// What the Run said the file is when it published it.
 	Description string `json:"description"`

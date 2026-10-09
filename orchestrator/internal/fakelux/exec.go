@@ -100,9 +100,9 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 
 // beforeStop runs the spec's workload.beforeStop hook, as lux does on every
 // stop it makes — dude's stop, cancel and pause, and its own timeout — in
-// the Run's checkout, where it publishes with lux-shim publish, as on
-// lux#77 (with LegacyArtifacts, $LUX_ARTIFACTS is a directory whose files
-// are then collected). Reported in the record stream between
+// the Run's checkout, where it publishes with lux-shim publish (with
+// LegacyArtifacts, into $LUX_ARTIFACTS, collected after). Reported in the
+// record stream between
 // lux.beforeStop start and done, as lux's shim reports it. A Run whose
 // checkout was never looked at or written to has nothing to diff, and the
 // fake skips the hook for it rather than clone for nothing. Callers hold
