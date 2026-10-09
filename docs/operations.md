@@ -709,8 +709,23 @@ there.
 
 Both keep their session under the agent's home (`~/.claude`, `~/.codex`),
 which is a state volume, as lux requires. A tier's `options` are OpenCode
-model options; on Claude Code and Codex only `{"args": ["…"]}` is used,
-appended to the command, and any other key is logged as ignored.
+model options; on Claude Code and Codex only `{"args": ["…"]}` is used, and
+any other key is logged as ignored. What the args do differs:
+
+- **Claude Code** appends them to its command as given (lux adds only plain
+  flags after them).
+- **Codex** takes only its config overrides, `-c key=value` (or
+  `--config key=value`), and writes each as a line of `config.toml`,
+  replacing dude's own line for that key or adding one. The value is JSON (a
+  string, number, boolean or a list of those) or a bare word, taken as a
+  string. Every other argument is dropped and logged, as is an override of a
+  key inside or above one dude sets as a table (`model_providers.dude`).
+  They cannot go on the command: lux adds its MCP servers as `-c` after
+  `app-server`, and Codex 0.144 then ignores everything given before the
+  subcommand, `-m` included.
+
+A tier's header values hold no DEL character, which HTTP does not allow and
+TOML does not allow raw.
 
 Claude Code takes only Anthropic models (`claude-*`), Codex only OpenAI's;
 OpenCode takes both. A role whose harness cannot run its tier's model fails

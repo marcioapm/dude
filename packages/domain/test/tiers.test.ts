@@ -56,6 +56,7 @@ describe("a tier's effort, options and headers", () => {
     expect(tier({ headers: { "X-Team": "dude", "anthropic-beta": "context-1m" } }).success).toBe(true);
     expect(errorOf(tier({ headers: { "X Team": "dude" } }))).toBe("Header names are letters, digits and !#$%&'*+.^_`|~-");
     expect(errorOf(tier({ headers: { "X-Team": "a\r\nInjected: 1" } }))).toBe("A header's value is one line");
+    expect(errorOf(tier({ headers: { "X-Team": "a\u007fb" } }))).toBe("A header's value holds no DEL character");
     expect(tier({ headers: { "X-Team": 3 } }).success).toBe(false);
     expect(errorOf(tier({ headers: { h: "x".repeat(4096) } }))).toBe("At most 4096 bytes as JSON");
   });
