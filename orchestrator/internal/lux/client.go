@@ -49,6 +49,30 @@ type Run struct {
 	// What it used, summed over its placements; nil from a lux that does
 	// not say. Only filled in by Get.
 	Usage *Usage `json:"usage,omitempty"`
+	// The id of the pool the Run is bound to; "" from a lux that does not
+	// say.
+	PoolID string `json:"poolId,omitempty"`
+	// In a resume's answer, when it asked to change resources (lux#51):
+	// what was asked and what the Run has from then on.
+	Resize *Resize `json:"resize,omitempty"`
+}
+
+// Resize is lux's answer to a resume's resources: Applied is what the Run
+// has from that resume on; Disk says why a smaller disk was not applied.
+type Resize struct {
+	Requested Resources `json:"requested"`
+	Applied   Resources `json:"applied"`
+	Disk      *DiskKept `json:"disk,omitempty"`
+}
+
+// DiskKept is a smaller disk lux refused to apply, in bytes: the Run keeps
+// Kept. Measured and Needed are absent without a measurement.
+type DiskKept struct {
+	Requested int64  `json:"requested"`
+	Kept      int64  `json:"kept"`
+	Reason    string `json:"reason"`
+	Measured  *int64 `json:"measuredBytes,omitempty"`
+	Needed    int64  `json:"neededBytes,omitempty"`
 }
 
 // Usage is a Run's resource counters, as lux rolls its placements up.
@@ -64,6 +88,8 @@ type StoredSpec struct {
 	Secrets []StoredSecret `json:"secrets"`
 	// lux always returns it, {} when the Run may not relax its container.
 	Sandbox *Sandbox `json:"sandbox"`
+	// What the Run gets now, a resume's resize included.
+	Resources *Resources `json:"resources"`
 }
 
 // StoredSecret is a secret the Run declared, as lux stores it: no value,
@@ -108,15 +134,6 @@ type Placement struct {
 	// asked for less the host's share (a newer lux; nil from one that does
 	// not say).
 	MemoryLimit *int64 `json:"memoryLimit,omitempty"`
-}
-
-// MemoryLimit is the memory limit of the Run's latest placement, when lux
-// reports one.
-func (r Run) MemoryLimit() *int64 {
-	if n := len(r.Placements); n > 0 {
-		return r.Placements[n-1].MemoryLimit
-	}
-	return nil
 }
 
 // Artifact is a file a Run produced, kept by lux after the Run ends.
@@ -755,6 +772,9 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (
 	if len(in.Sync) > 0 {
 		body["sync"] = in.Sync
 	}
+	if in.Resources != nil {
+		body["resources"] = in.Resources
+	}
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs/"+runID+"/resume", body, nil, &r)
 	return r, err
@@ -763,13 +783,15 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (
 // ResumeInput is what a resume carries: the secrets again (lux never keeps
 // them), input for the agent, repositories to add to the Run — cloned
 // before it starts, each reported as a git.clone event with the request id
-// — and checkouts to move to new commits before init (Sync).
+// — checkouts to move to new commits before init (Sync), and the size the
+// Run gets from then on (Resources, lux#51; nil keeps the one it has).
 type ResumeInput struct {
 	Secrets         []Secret
 	Input           string
 	RequestID       string
 	AddRepositories []Repository
 	Sync            []SyncRef
+	Resources       *Resources
 }
 
 func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {

@@ -704,6 +704,72 @@ def test_a_role_on_a_size_reaches_real_lux_with_its_resources_and_pool(client: A
     assert machine["memoryLimit"] == limit, (machine, placement)
 
 
+def test_a_paused_agent_resumes_on_the_size_its_role_names_now(client: ApiClient, env, owner_dsn: str, lux_project):
+    """lux#51 end to end: an agent paused on one size, its role moved to a
+    smaller one in the same pool, resumes on it without a restart. dude
+    sends resources on the resume; lux writes what it applied into the
+    Run's spec (cpus and memory as asked; the disk only if the saved state
+    fits, else it keeps it and says why); dude records lux's spec, not its
+    request, and the resumed container gets the new memory."""
+    project, _gh = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models(
+        {"implementer": "fake/hang", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    sizes = {}
+    for name, cpus, mem, disk in (("Medium", 2, 2048, 10), ("Small", 1, 1024, 5)):
+        made = client.post("/v1/machines/sizes", {"name": f"{name} {os.urandom(2).hex()}", "cpus": cpus, "memoryMiB": mem, "diskGiB": disk})
+        assert made.status_code == 201, made.text
+        sizes[name] = next(s for s in made.json()["sizes"] if s["name"].startswith(name + " "))
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": sizes["Medium"]["id"]}}})
+
+    task = client.create_task(project["id"], "Resized on lux")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
+                     timeout=120, interval=1, message="the agent never started on lux")
+    try:
+        wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND lux_state = 'running'", (run["id"],)),
+                   timeout=120, interval=1, message="lux never ran the agent")
+        lux_id = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
+        assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+        wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND status = 'paused' AND lux_state = 'stopped'",
+                                 (run["id"],)), timeout=120, interval=1, message="lux never stopped the paused run")
+
+        client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": sizes["Small"]["id"]}}})
+        assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+
+        def resized():
+            m = query(owner_dsn, "SELECT machine FROM runs WHERE id = %s", (run["id"],))[0]["machine"]
+            return m if m["name"] == sizes["Small"]["name"] else None
+
+        machine = wait_until(resized, timeout=120, interval=1, message="dude never recorded the new size")
+        requested = [e for e in _lux(env, "GET", f"/v1/runs/{lux_id}/events").json()["events"] if e["type"] == "resume.requested"]
+        assert len(requested) == 1, requested
+        resize = requested[0]["data"]["resources"]
+        assert resize["requested"] == {"cpus": 1, "memory": 1024 << 20, "disk": 5 * GIB}, resize
+        spec = _lux(env, "GET", f"/v1/runs/{lux_id}").json()["spec"]["resources"]
+        applied = resize["applied"]
+        assert (spec["cpus"], spec["memory"], spec["disk"]) == (1, 1024 << 20, applied["disk"]), (spec, resize)
+        assert (applied["cpus"], applied["memory"]) == (1, 1024 << 20), resize
+        # What dude recorded is lux's spec: the disk lux kept, when it kept one.
+        assert (machine["cpus"], machine["memoryMiB"], machine["diskGiB"]) == (spec["cpus"], spec["memory"] >> 20, spec["disk"] >> 30), (machine, spec)
+        assert machine["from"] == "project" and machine.get("note") is None, machine
+        if "disk" in resize:
+            assert spec["disk"] == 10 * GIB and machine["diskKept"] == {"requestedGiB": 5, "reason": resize["disk"]["reason"]}, (machine, resize)
+        else:
+            assert spec["disk"] == 5 * GIB and "diskKept" not in machine, (machine, resize)
+        print("resize:", resize)
+
+        # The resumed container has the new memory, and dude says so.
+        def placed():
+            ps = _lux(env, "GET", f"/v1/runs/{lux_id}").json().get("placements") or []
+            return ps[-1] if len(ps) >= 2 and ps[-1].get("memoryLimit") else None
+
+        placement = wait_until(placed, timeout=180, interval=1, message="lux never started the resized container")
+        assert 0 < placement["memoryLimit"] <= 1024 << 20, placement
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+        client.post(f"/v1/runs/{run['id']}/abort", {})
+
+
 # ---------------------------------------------------------------------------
 # A Run's stage (lux#81): dude reads stage and stageSince from lux's Run and
 # hears each stage event as servers.changed.

@@ -349,7 +349,7 @@ func (w *world) parked(wi string) string {
 		w.t.Fatalf("pause: %d %v", status, out)
 	}
 	w.until("lux to stop it", func() bool {
-		return w.lux.Runs()[0].State == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+		return w.lux.State(w.lux.Runs()[0].ID) == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
 	return runID
 }

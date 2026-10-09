@@ -44,17 +44,20 @@ type Artifacts struct {
 // RecordMemoryLimit adds to a Run's runs.machine the memory limit lux
 // reports for its latest placement, once: so a finished Run still says what
 // its container got. Nothing when lux reports none, the Run recorded no
-// machine, or the limit is already there. A failed write is logged, not
-// returned: the limit only informs the run chip, and the next read of the
-// lux Run writes it again.
+// machine, the limit is already there, or the placement is older than the
+// size recorded (sinceEpoch: a resume resized it). A failed write is
+// logged, not returned: the limit only informs the run chip, and the next
+// read of the lux Run writes it again.
 func RecordMemoryLimit(ctx context.Context, d *db.DB, log *slog.Logger, org, runID string, lr lux.Run) {
-	limit := lr.MemoryLimit()
-	if limit == nil {
+	n := len(lr.Placements)
+	if n == 0 || lr.Placements[n-1].MemoryLimit == nil {
 		return
 	}
+	latest := lr.Placements[n-1]
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET machine = jsonb_set(machine, '{memoryLimit}', to_jsonb($2::bigint))
-			WHERE id = $1 AND machine IS NOT NULL AND machine->>'memoryLimit' IS NULL`, runID, *limit)
+			WHERE id = $1 AND machine IS NOT NULL AND machine->>'memoryLimit' IS NULL
+			  AND COALESCE((machine->>'sinceEpoch')::int, 0) <= $3`, runID, *latest.MemoryLimit, latest.Epoch)
 		return err
 	})
 	if err != nil && ctx.Err() == nil {

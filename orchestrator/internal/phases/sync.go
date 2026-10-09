@@ -1862,13 +1862,21 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
+	spec, target, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}
 	if err != nil {
 		return lux.Run{}, 0, errCannotResume{err}
 	}
+	var recorded *delivery.Machine
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		recorded, err = LoadMachine(ctx, tx, r.ID)
+		return err
+	}); err != nil {
+		return lux.Run{}, 0, err
+	}
+	plan := PlanResize(ctx, s.Lux, recorded, target, lr)
 	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
 	if r.brainstorm() {
 		if err := s.sessionResume(ctx, r, spec, &in); err != nil {
@@ -1889,12 +1897,17 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		}
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
-	resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	defer func() {
+		if err == nil {
+			RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, resumed)
+		}
+	}()
+	resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	if len(in.Sync) > 0 && lux.SyncModesRefused(err) {
 		if r.brainstorm() {
 			// A lux without sync modes: resumed as it is, not brought current.
 			in.Sync = nil
-			resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+			resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 			return resumed, foreseen, err
 		}
 		// A lux that cannot keep the checkout current: read-only for the
@@ -1903,7 +1916,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 			return lux.Run{}, foreseen, err
 		}
 		in.Sync = nil
-		resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+		resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	}
 	return resumed, foreseen, err
 }
