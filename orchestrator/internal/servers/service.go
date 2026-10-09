@@ -85,9 +85,10 @@ type RunView struct {
 	Commit    *string    `json:"commit"`
 	// A preview's: how far it is from serving, and how long it may go
 	// unused before it is parked.
-	PreviewStage      *string  `json:"previewStage"`
-	ParksAfterMinutes *float64 `json:"parksAfterMinutes"`
-	TerminalURL       *string  `json:"terminalUrl"`
+	PreviewStage      *string    `json:"previewStage"`
+	PreviewStageSince *time.Time `json:"previewStageSince"`
+	ParksAfterMinutes *float64   `json:"parksAfterMinutes"`
+	TerminalURL       *string    `json:"terminalUrl"`
 	// A wakeable preview: its servers wake on request (opening a URL).
 	Wakeable bool `json:"wakeable"`
 	// A wakeable preview nothing serves now and no wake is due.
@@ -283,7 +284,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 	}
 	if r.Kind == KindPreview && r.Wakeable {
 		// Its servers are lux's own, read by label, not its Run's.
-		s.wakeableView(ctx, r, v, &out)
+		s.wakeableView(ctx, r, v, &out, luxRun)
 		out.Moved = nil
 		return out
 	}
@@ -295,7 +296,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		}
 	}
 	if r.Kind == KindPreview {
-		v.PreviewStage = Stage(r.Status, v.LuxState, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
+		v.PreviewStage, v.PreviewStageSince = previewProgress(r.Status, v.LuxState, luxRun, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
 	}
 	out.Moved = moved(out.Servers, luxRun)
 	return out
@@ -315,11 +316,60 @@ func phaseLabel(phase string) string {
 	return "Agent"
 }
 
+// luxStages is the preview stage each of lux's infrastructure stages shows
+// as; lux's stageSince is its timer. running is refined by servers, and
+// lux's resting or unknown stages fall back to Stage with no timer.
+var luxStages = map[string]string{"waiting": "scheduling", "image": "image", "volumes": "volumes",
+	"repositories": "cloning", "container": "container", "stopping": "stopping"}
+
+// previewProgress is a preview's stage and since when: infrastructure
+// timing from lux's stage, process timing from its servers. A lux without
+// stages (run.Stage "") gives Stage's coarse label and no timer.
+func previewProgress(status, state string, run lux.Run, list []lux.Server, withSetup func(string) bool) (*string, *time.Time) {
+	coarse := Stage(status, state, list, withSetup)
+	if coarse == nil || run.Stage == "" {
+		return coarse, nil
+	}
+	if stage, ok := luxStages[run.Stage]; ok {
+		return &stage, run.StageSince
+	}
+	if run.Stage != "running" {
+		return coarse, nil
+	}
+	// lux's stage=running precedes state=running (state is starting until
+	// luxd sees the shim up); servers decide setup/starting/ready.
+	coarse = Stage(status, "running", list, withSetup)
+	var since *time.Time
+	for _, sv := range list {
+		if !sv.FromSpec {
+			continue
+		}
+		var stamp *time.Time
+		switch *coarse {
+		case "ready":
+			stamp = sv.ReadySince
+		case "setup":
+			if sv.State == lux.ServerStarting && withSetup(sv.Name) {
+				stamp = sv.Since
+			}
+		case "starting":
+			if sv.State == lux.ServerStarting {
+				stamp = sv.Since
+			}
+		}
+		if stamp != nil && (since == nil || stamp.After(*since)) {
+			since = stamp
+		}
+	}
+	return coarse, since
+}
+
 // Stage is how far a preview is from serving: scheduling (waiting for a
 // host, or moving to another), cloning (its container starting: image,
 // checkout), setup (a server that starts after a setup step is starting),
 // starting (its servers are), ready (every server its spec starts is). Nil
-// for a preview that is parked or over.
+// for a preview that is parked or over. previewProgress refines it with
+// lux's stage when lux reports one.
 func Stage(status, luxState string, list []lux.Server, withSetup func(name string) bool) *string {
 	stage := func(s string) *string { return &s }
 	switch status {

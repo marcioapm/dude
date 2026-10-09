@@ -48,7 +48,7 @@ export interface ServerWords {
 export type ServerRunContext = Pick<ServersRun, "kind" | "previewStage"> | null | undefined;
 
 /** Before "starting servers", a preview's spec servers are waiting, not stopped. */
-const BEFORE_SERVERS: ReadonlySet<ServersRun["previewStage"]> = new Set(["scheduling", "cloning", "setup"]);
+const BEFORE_SERVERS: ReadonlySet<ServersRun["previewStage"]> = new Set(["scheduling", "image", "volumes", "cloning", "container", "setup"]);
 
 export function describeServer(server: RunServer, now: number, run?: ServerRunContext): ServerWords {
   const since = toMs(server.since) ?? now;
@@ -151,7 +151,8 @@ export function summarizeTaskServers(data: Pick<TaskServers, "run" | "servers" |
   }
   const run = data.run;
   const live = !TERMINAL_RUN_STATUSES.includes(run.state as RunStatus);
-  const booting = run.kind === "preview" && run.previewStage !== "ready" && live && !run.asleep;
+  // Stopping is on its way down, not coming up.
+  const booting = run.kind === "preview" && run.previewStage !== "ready" && run.previewStage !== "stopping" && live && !run.asleep;
   return {
     on: data.servers.filter(isOn),
     off: data.servers.filter((s) => !isOn(s)),

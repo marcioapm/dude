@@ -22,7 +22,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import RESUME_STARTED, RESUME_STOPPED, ApiClient, assert_timed_is_its_row, lux_stamp, query, wait_until
+from helpers import RESUME_STARTED, RESUME_STOPPED, ApiClient, assert_timed_is_its_row, execute, lux_stamp, query, wait_until
 
 pytestmark = pytest.mark.lux
 
@@ -702,3 +702,46 @@ def test_a_role_on_a_size_reaches_real_lux_with_its_resources_and_pool(client: A
     assert (machine["name"], machine["from"], machine["poolId"], machine["pool"]) == (size["name"], "project", pool["id"], pool["name"]), machine
     assert (machine["cpus"], machine["memoryMiB"], machine["diskGiB"]) == (1.5, 1536, 5), machine
     assert machine["memoryLimit"] == limit, (machine, placement)
+
+
+# ---------------------------------------------------------------------------
+# A Run's stage (lux#81): dude reads stage and stageSince from lux's Run and
+# hears each stage event as servers.changed.
+# ---------------------------------------------------------------------------
+
+
+def test_a_previews_stage_and_its_timer_are_luxs(client: ApiClient, env, org: dict, owner_dsn: str, lux_project):
+    """A branch preview no host can take (a size of 128 CPUs, past what the
+    test runners offer) stays at lux's waiting stage. dude's view shows it
+    as scheduling, timed from lux's own stageSince, and lux's stage event
+    reached dude's stream as a servers.changed of change "stage"."""
+    project, _gh = lux_project
+    size = f"msz_{os.urandom(6).hex()}"
+    execute(owner_dsn, "INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES (%s, %s, %s, 128, 1024, 5)",
+            (size, org["id"], f"Huge {size[-4:]}"))
+    execute(owner_dsn, "UPDATE projects SET preview_settings = jsonb_build_object('machineSize', %s::text) WHERE id = %s", (size, project["id"]))
+    task = client.create_task(project["id"], "Preview stages on lux")
+    started = client.post(f"/v1/tasks/{task['id']}/preview")
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run"]["id"]
+    try:
+        def waiting():
+            run = client.get(f"/v1/tasks/{task['id']}/servers").json()["run"]
+            if not run.get("luxRunId"):
+                return None
+            lr = _lux(env, "GET", f"/v1/runs/{run['luxRunId']}").json()
+            return lr["stage"] == "waiting" and (run, lr)
+
+        run, lr = wait_until(waiting, timeout=60, interval=1, message="the preview never reached lux's waiting stage")
+        assert run["wakeable"] is False and lr["state"] in ("submitted", "scheduled"), (run, lr)
+        assert run["previewStage"] == "scheduling", run
+        assert run["previewStageSince"] and lux_stamp(run["previewStageSince"]) == lux_stamp(lr["stageSince"]), (run, lr)
+
+        stages = [e for e in _lux(env, "GET", f"/v1/runs/{lr['id']}/events").json()["events"] if e["type"] == "stage"]
+        assert stages and stages[0]["data"]["stage"] == "waiting", stages
+        changed = wait_until(lambda: query(owner_dsn, """SELECT count(*) AS n FROM events WHERE run_id = %s AND event_type = 'servers.changed'
+                                                          AND payload->>'change' = 'stage'""", (run_id,))[0]["n"] or None,
+                             timeout=30, interval=0.5, message="lux's stage event never became servers.changed")
+        assert changed == len(stages), (changed, stages)
+    finally:
+        client.delete(f"/v1/tasks/{task['id']}/preview")

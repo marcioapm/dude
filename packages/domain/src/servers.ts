@@ -173,7 +173,7 @@ export interface RunServer {
 /** lux's state of a server that wakes on request (`/v1/servers`' `state`). */
 export type WakeableServerState = "ready" | "waking" | "asleep" | "stopped" | "unreachable" | "exited" | "no answer";
 
-export type PreviewStage = "scheduling" | "cloning" | "setup" | "starting" | "ready";
+export type PreviewStage = "scheduling" | "image" | "volumes" | "cloning" | "container" | "setup" | "starting" | "ready" | "stopping";
 
 /** lux's reason for a Run waiting because no host in its pool can run containers. */
 export function waitsForContainerHost(reason: string | null | undefined): boolean {
@@ -196,6 +196,7 @@ export interface TaskServers {
     branch: string | null;
     commit: string | null;
     previewStage: PreviewStage | null;
+    previewStageSince?: string | null;
     parksAfterMinutes: number | null;
     terminalUrl: string | null;
     /** A preview whose servers wake on request: opening a URL starts it. */
