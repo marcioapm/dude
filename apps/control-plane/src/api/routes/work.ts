@@ -73,7 +73,16 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
       'text', COALESCE(e.payload->>'text', ''), 'owner', NOT COALESCE((e.payload->>'conducted')::boolean, false),
       'left', runs.stall_left_at IS NOT NULL)
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
-  replaced_by AS "replacedBy"`;
+  replaced_by AS "replacedBy",
+  can_run_containers AS "canRunContainers"`;
+
+// A Run as the API returns it: canRunContainers absent when nothing was
+// recorded (not submitted yet, or from before migration 099).
+function runJson(row: Record<string, unknown>): Record<string, unknown> {
+  if (row["canRunContainers"] !== null) return row;
+  const { canRunContainers: _, ...rest } = row;
+  return rest;
+}
 
 const SESSION_SELECT = `
   id, organization_id AS "organizationId", run_id AS "runId",
@@ -276,7 +285,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     const runs = await scope.sql`
       SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
       ORDER BY attempt DESC`;
-    return { ...rows[0], runs };
+    return { ...rows[0], runs: (runs as Array<Record<string, unknown>>).map(runJson) };
   });
 
   if (!task) throw notFound(`task ${id} not found`);
@@ -334,7 +343,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
       payload: { attempt },
     });
 
-    return { run: rows[0]!, event };
+    return { run: runJson(rows[0]!), event };
   }).catch((err: unknown) => {
     if (err instanceof Error && err.message.includes("runs_task_id_attempt_key")) {
       return { raced: true as const };
@@ -358,7 +367,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const sessions = await scope.sql`
       SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM agent_sessions WHERE run_id = ${id}
       ORDER BY created_at ASC`;
-    return { ...rows[0], sessions };
+    return { ...runJson(rows[0]), sessions };
   });
 
   if (!run) throw notFound(`run ${id} not found`);

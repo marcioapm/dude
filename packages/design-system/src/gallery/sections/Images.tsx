@@ -4,6 +4,7 @@ import { CodeEditor, type CodeCompletion, type CodeDiagnostic } from "../../comp
 import { CanRunContainersBadge, ImagePicker, ImageMark, type ImageChoiceView } from "../../components/ImagePicker.tsx";
 import { BuildQueueStrip, BuildStages, ImageHistory, ImageState, type ImageHistoryVersion } from "../../components/Images.tsx";
 import { LogStream } from "../../components/LogStream.tsx";
+import { MachineChip, MachineTip } from "../../components/Machines.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
 import { Callout } from "../../primitives/Layout.tsx";
@@ -196,12 +197,18 @@ export function ImagesGallerySection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
-      <Block id="i-containers" title="Can run containers" note="A property of each image version, saved with its draft by a Checkbox under the editor. Badges (CanRunContainersBadge; lowercase in the picker) show only the published version's value. The hint (box on, no podman or Docker named) and the off warning (box off where previews run it) are muted lines with the warning glyph, never a Callout, and describe the box. A version marked so gets a Check containers stage between Built and Published; a passed check stays done when the push after it fails. A Run lux cannot place yet says why in an attention Callout, with Waiting for a host beside its status.">
+      <Block id="i-containers" title="Can run containers" note="A property of each image version, saved with its draft by a Checkbox under the editor. Badges (CanRunContainersBadge; lowercase in the picker) show only the published version's value; a Run's header shows the one it recorded at submit, after its image, with a title. The hint (box on, no podman or Docker named) and the off warning (box off where previews run it) are muted lines with the warning glyph, never a Callout, and describe the box. A version marked so gets a Check containers stage between Built and Published; a passed check stays done when the push after it fails. A Run lux cannot place yet says why in an attention Callout, with Waiting for a host beside its status.">
         <Panes mode={mode}>
           <Col>
             <Label>Badges: header, list, picker</Label>
             <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
               <CanRunContainersBadge size="md" /><CanRunContainersBadge /><CanRunContainersBadge lower />
+            </span>
+            <Label>A Run's header: after its image, with a title</Label>
+            <span data-testid="run-header-facts" style={{ display: "inline-flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <MachineChip icon="cube" name="agents-podman" spec="v3"
+                tooltip={<MachineTip name="agents-podman v3">Fixed when the session started.</MachineTip>} />
+              <CanRunContainersBadge title="This Run can start containers inside it." />
             </span>
             <Label>On</Label>
             <ContainersFieldDemo on />
