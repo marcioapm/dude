@@ -24,7 +24,7 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
 	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
-func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image string) (lux.Spec, *delivery.Machine, error) {
+func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, *delivery.Machine, error) {
 	var in specInput
 	var orgModels json.RawMessage
 	var briefing string
@@ -84,7 +84,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	if m, ok := sizes.ForRole(role, nil, orgModels); ok {
 		in.Machine = &m
 	}
-	in.Image = image
+	in.Image, in.NestedContainers = image.Ref, image.Nested
 	if stored != nil {
 		in.Image = stored.Image.Ref
 	}

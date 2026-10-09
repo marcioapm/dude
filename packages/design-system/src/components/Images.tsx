@@ -176,6 +176,8 @@ export interface ImageHistoryVersion {
   /** What it was built on: "acme-base v6". */
   readonly builtOn?: ReactNode;
   readonly error?: string | null | undefined;
+  /** Runs in it may start containers; absent where an image says nothing of it. */
+  readonly canRunContainers?: boolean | undefined;
 }
 
 export interface ImageHistoryProps {
@@ -201,6 +203,31 @@ const VERSION_BADGE: Partial<Record<ImageHistoryVersion["state"], { tone: "succe
 
 const versionName = (v: ImageHistoryVersion) => (v.number === null ? "draft" : `v${v.number}`);
 
+/** "on" or "off" for a version that says, else undefined. */
+const onOff = (v: ImageHistoryVersion | undefined) => (v?.canRunContainers === undefined ? undefined : v.canRunContainers ? "on" : "off");
+
+/** "Can run containers" as a version flipped it against the one before; null when it did not. */
+function flipped(v: ImageHistoryVersion, before: ImageHistoryVersion | undefined): "on" | "off" | null {
+  const now = onOff(v);
+  if (now === undefined || !before) return null;
+  return onOff(before) !== now ? now : null;
+}
+
+/**
+ * Each version's predecessor: the next older one not cancelled, in one
+ * pass from the oldest.
+ */
+function predecessors(versions: ReadonlyArray<ImageHistoryVersion>): Array<ImageHistoryVersion | undefined> {
+  const out = new Array<ImageHistoryVersion | undefined>(versions.length);
+  let older: ImageHistoryVersion | undefined;
+  for (let i = versions.length - 1; i >= 0; i--) {
+    const v = versions[i]!;
+    out[i] = older;
+    if (v.state !== "cancelled") older = v;
+  }
+  return out;
+}
+
 /**
  * Every version of an image, newest first — failed ones and the draft too —
  * and the selected one's Containerfile against the one before it or
@@ -213,7 +240,8 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
   const index = Math.max(0, versions.findIndex((v) => v.id === selected));
   const version = versions[index];
   const published = versions.find((v) => v.id === publishedId);
-  const base = against === "published" ? published : versions.slice(index + 1).find((v) => v.state !== "cancelled");
+  const before = useMemo(() => predecessors(versions), [versions]);
+  const base = against === "published" ? published : before[index];
   const diff = useMemo(() => (version ? lineDiff(base?.containerfile ?? "", version.containerfile) : null), [version, base]);
   if (!version || !diff) return <p className={styles["muted"]}>No versions yet.</p>;
   const canRepublish = onRepublish && version.id !== publishedId && (version.state === "superseded" || version.state === "published");
@@ -228,8 +256,9 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
   return (
     <div className={styles["history"]}>
       <ol className={styles["versions"]} aria-label="Versions">
-        {versions.map((v) => {
+        {versions.map((v, i) => {
           const badge = v.id === publishedId ? VERSION_BADGE.published : v.state === "superseded" ? null : VERSION_BADGE[v.state];
+          const flip = flipped(v, before[i]);
           return (
             <li key={v.id}>
               <button
@@ -250,6 +279,11 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
                     ) : null}
                   </span>
                   {v.note ? <span className={styles["versionNote"]}>{v.note}</span> : null}
+                  {flip ? (
+                    <span className={styles["versionFlag"]} data-testid="version-flag">
+                      <Icon name="cube" size={12} /> Can run containers turned {flip}
+                    </span>
+                  ) : null}
                   <small className={styles["muted"]}>
                     {v.author?.name ?? "dude"} · {v.when}
                     {v.builtOn ? <> · on {v.builtOn}</> : null}
@@ -291,6 +325,20 @@ export function ImageHistory({ versions, publishedId, onRepublish, onOpenBuild, 
           <p className={styles["versionError"]}>
             <Icon name="alert" size={14} /> {version.error}
           </p>
+        ) : null}
+        {onOff(version) !== undefined && (!base || onOff(base) !== onOff(version)) ? (
+          <div className={styles["propDiff"]} data-testid="flag-diff">
+            <Icon name="cube" size={14} />
+            <span>Can run containers</span>{" "}
+            {base && onOff(base) !== undefined ? (
+              <>
+                <s className={styles["propBefore"]}>{onOff(base)}</s> <span>→</span>{" "}
+                <ins className={styles["propAfter"]}>{onOff(version)}</ins>
+              </>
+            ) : (
+              <span className={styles["propValue"]}>{onOff(version)}</span>
+            )}
+          </div>
         ) : null}
         <DiffFile
           className={styles["diff"]}

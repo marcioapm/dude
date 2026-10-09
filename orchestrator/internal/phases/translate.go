@@ -276,6 +276,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// A silent report's facts end in its silence's start (stallFacts):
 		// when that is the silence the clocks move on, it moves with them,
 		// so a move is not a change of facts. Another silence stays put.
+		var was string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_state, '') FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID).Scan(&was); err != nil {
+			return err
+		}
 		var facts, since *string
 		if state == "running" {
 			if err := tx.QueryRow(ctx, `SELECT r.stall_fingerprint, extract(epoch FROM `+silentSince+`)::text
@@ -297,6 +301,14 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
 			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
+		}
+		// Waiting for a host, or no longer: the Run page reads why again
+		// (its waitingReason), as a preview's state change has it do.
+		if lux.Waiting(state) || lux.Waiting(was) {
+			if err := s.event(ctx, tx, t.run, EvServersChanged, ledger.ActorSystem,
+				map[string]any{"taskId": t.run.TaskID, "runId": t.run.ID, "change": "state", "luxState": state}); err != nil {
+				return err
+			}
 		}
 		if facts != nil && since != nil && strings.HasSuffix(*facts, "|"+*since) {
 			if _, err := tx.Exec(ctx, `UPDATE runs r SET stall_fingerprint = $2 || extract(epoch FROM `+silentSince+`)::text

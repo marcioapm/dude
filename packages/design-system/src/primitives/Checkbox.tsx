@@ -18,6 +18,8 @@ export interface CheckboxProps {
   readonly value?: string | undefined;
   readonly className?: string | undefined;
   readonly "aria-label"?: string | undefined;
+  /** Ids of text outside the label that says more about the choice: a hint, a warning shown beside it. */
+  readonly "aria-describedby"?: string | undefined;
 }
 
 /** Checkbox with optional label/description. 14px box, sized for dense rows. */
@@ -32,15 +34,20 @@ export function Checkbox({
   value,
   className,
   "aria-label": ariaLabel,
+  "aria-describedby": describedBy,
 }: CheckboxProps) {
   const id = useId();
+  // Named by its label alone; its description and any outside hint describe it.
+  const labelId = label ? `${id}-label` : undefined;
+  const describedByIds = [description ? `${id}-description` : null, describedBy || null].filter(Boolean).join(" ") || undefined;
   return (
     <div className={cx(styles["root"], className)} data-disabled={disabled ? "true" : undefined}>
       <RadixCheckbox.Root
         id={id}
         className={styles["box"]}
         disabled={disabled ?? false}
-        {...compact({ checked, defaultChecked, onCheckedChange, name, value, "aria-label": ariaLabel })}
+        {...compact({ checked, defaultChecked, onCheckedChange, name, value, "aria-label": ariaLabel,
+          "aria-labelledby": ariaLabel ? undefined : labelId, "aria-describedby": describedByIds })}
       >
         <RadixCheckbox.Indicator className={styles["indicator"]}>
           {checked === "indeterminate" ? (
@@ -52,8 +59,8 @@ export function Checkbox({
       </RadixCheckbox.Root>
       {label || description ? (
         <label className={styles["text"]} htmlFor={id}>
-          {label ? <span className={styles["label"]}>{label}</span> : null}
-          {description ? <span className={styles["description"]}>{description}</span> : null}
+          {label ? <span id={labelId} className={styles["label"]}>{label}</span> : null}
+          {description ? <span id={`${id}-description`} className={styles["description"]}>{description}</span> : null}
         </label>
       ) : null}
     </div>

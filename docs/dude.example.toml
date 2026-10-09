@@ -111,8 +111,9 @@ timeout = "4h"                                           # DUDE_AGENT_TIMEOUT
 # organisation's and project's lists (the Network settings page), besides
 # llm.url's host; "*" turns filtering off for everyone.
 # egress = ["pypi.org", "registry.npmjs.org"]            # DUDE_AGENT_EGRESS
-# Let agents run containers (docker/podman in the Run). Needs lux hosts
-# started with nested containers and an image with the engine.
+# The image above can run containers (rootless podman or Docker inside):
+# agents and previews on it ask lux for nested containers. A library
+# image says so per version instead; an image typed by hand never can.
 # nested_containers = true                               # DUDE_AGENT_NESTED_CONTAINERS
 
 [registry]

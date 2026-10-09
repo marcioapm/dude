@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,9 +33,15 @@ type fakePodman struct {
 	removed     []string
 	controllers []string
 	fail        func(op, tag, containerfile string) (string, error)
-	block       chan struct{}
+	// What the container check finds, per tag it was asked of; checked
+	// lists those tags in order.
+	found   Found
+	checked []string
+	block   chan struct{}
 	// Closed, when set, once a build is blocked on block.
 	blocked chan struct{}
+	// The job's stage at each push, in order.
+	pushStages []string
 }
 
 func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]string, log io.Writer) error {
@@ -70,6 +77,12 @@ func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]st
 }
 
 func (f *fakePodman) Push(_ context.Context, tag string, log io.Writer) (string, error) {
+	if p, ok := log.(*progress); ok {
+		_, stage := p.full()
+		f.mu.Lock()
+		f.pushStages = append(f.pushStages, stage)
+		f.mu.Unlock()
+	}
 	if f.fail != nil {
 		if out, err := f.fail("push", tag, ""); err != nil {
 			fmt.Fprint(log, out)
@@ -103,6 +116,13 @@ func (f *fakePodman) Remove(_ context.Context, tag string, _ io.Writer) error {
 	f.removed = append(f.removed, tag)
 	f.mu.Unlock()
 	return nil
+}
+
+func (f *fakePodman) CheckContainers(_ context.Context, tag string, _ io.Writer) (Found, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checked = append(f.checked, tag)
+	return f.found, nil
 }
 
 func (f *fakePodman) Controllers(context.Context) ([]string, error) {
@@ -631,5 +651,204 @@ func TestCheckLimitsRefusesAPodmanWithoutCPUAndMemoryControllers(t *testing.T) {
 		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
 			t.Errorf("%v: %v", c.have, err)
 		}
+	}
+}
+
+// able is what the check finds in an image that can run containers.
+var able = Found{Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
+	Newuidmap: Mapper{Path: "/usr/bin/newuidmap", FileCap: true}, Newgidmap: Mapper{Path: "/usr/bin/newgidmap", FileCap: true},
+	Subuid: []string{"agent:1:999", "agent:1001:64535"}, Subgid: []string{"agent:1:999", "agent:1001:64535"}}
+
+func TestAVersionThatCanRunContainersIsCheckedOnItsFinalBeforeItIsPushed(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	build := f.queue("img_p", "imv_p1", 1, "FROM debian\nRUN apt-get install -y podman\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	f.once()
+	// The final, with the dude layer's agent on it, is what is checked.
+	if got := strings.Join(f.podman.checked, " "); got != FinalTag(repo, "imv_p1", layer) {
+		t.Errorf("checked %q", got)
+	}
+	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_p1'`); got != "published" {
+		t.Fatalf("state = %s", got)
+	}
+	got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail', check_seconds IS NOT NULL FROM image_builds WHERE id = $1`, build)
+	if got[0] != "true" || got[1] != "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent" || got[2] != true {
+		t.Errorf("check = %v", got)
+	}
+	log := f.log(build)
+	for _, want := range []string{
+		"Check containers: v1 is marked Can run containers, so dude checks it.\n",
+		"check  engine  podman: /usr/bin/podman (5.4) · docker: not found\n",
+		"check  subuid  agent:1:999, agent:1001:64535\n",
+		"Check passed: it can run containers.\npushed " + repo + "@",
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestAVersionThatCannotRunContainersFailsItsBuildAndThePreviousStaysPublished(t *testing.T) {
+	f := setup(t)
+	f.image("img_n", "node-22")
+	f.queue("img_n", "imv_n4", 4, "FROM node:22\n")
+	f.once()
+	pushes := 0
+	f.podman.fail = func(op, _, _ string) (string, error) {
+		if op == "push" {
+			pushes++
+		}
+		return "", nil
+	}
+	build := f.queue("img_n", "imv_n5", 5, "FROM node:22\nRUN true\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_n5'`)
+	f.podman.found = Found{Subuid: able.Subuid, Subgid: able.Subgid}
+	f.once()
+	const sentence = "Can't run containers: the image has no podman or rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."
+	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_n5'`); got[0] != "failed" || got[1] != sentence {
+		t.Fatalf("v5 = %v", got)
+	}
+	if got := f.str(`SELECT published_version_id FROM images WHERE id = 'img_n'`); got != "imv_n4" {
+		t.Errorf("published = %s", got)
+	}
+	// The user image was pushed for children; the final, which failed its
+	// check, was not.
+	if pushes != 1 {
+		t.Errorf("%d pushes, want the user image's alone", pushes)
+	}
+	if got := f.str(`SELECT count(*) FROM image_finals WHERE image_version_id = 'imv_n5'`); got != "0" {
+		t.Errorf("%s finals", got)
+	}
+	if got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail' FROM image_builds WHERE id = $1`, build); got[0] != "false" ||
+		got[1] != "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap" {
+		t.Errorf("check = %v", got)
+	}
+	log := f.log(build)
+	for _, want := range []string{"check  fuse-overlayfs  not found\n", "check  newuidmap  missing\n", sentence + "\nNot pushed. v4 stays published.\n"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestAVersionNotMarkedIsNotChecked(t *testing.T) {
+	f := setup(t)
+	f.image("img_b", "acme-base")
+	f.queue("img_b", "imv_b1", 1, "FROM debian\n")
+	f.once()
+	if len(f.podman.checked) != 0 {
+		t.Errorf("checked %v", f.podman.checked)
+	}
+}
+
+// A published version that can run containers, finished again for a new
+// dude layer, is checked again: the new layer must keep it able.
+func TestAFinishOfAVersionThatCanRunContainersIsCheckedToo(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	f.queue("img_p", "imv_p1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	f.once()
+	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_p1', 'finish', $2)`, f.org, next)
+	f.podman.found = Found{}
+	f.once()
+	if got := f.row(`SELECT state, error FROM image_builds WHERE id = 'imb_fin'`); got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
+		t.Errorf("finish = %v", got)
+	}
+	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_p1'`); got != "published" {
+		t.Errorf("version = %s", got)
+	}
+}
+
+// The final's push, once its check passed, is the pushing stage; when it
+// fails the passed check stays saved beside the push's failure.
+func TestAPassedCheckIsDoneWhileTheFinalIsPushedAndAfterItsPushFails(t *testing.T) {
+	f := setup(t)
+	f.image("img_p", "agents-podman")
+	build := f.queue("img_p", "imv_p1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_p1'`)
+	f.podman.found = able
+	final := FinalTag(repo, "imv_p1", layer)
+	f.podman.fail = func(op, tag, _ string) (string, error) {
+		if op == "push" && tag == final {
+			return "Error: pushing " + tag + ": 502 Bad Gateway\n", errors.New("exit status 125")
+		}
+		return "", nil
+	}
+	f.once()
+	if got := strings.Join(f.podman.pushStages, " "); got != "pushing pushing" {
+		t.Errorf("stages at each push = %q, want the user image's and the final's both pushing", got)
+	}
+	got := f.row(`SELECT state, error, containers_check->>'passed' FROM image_builds WHERE id = $1`, build)
+	if got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "pushing to the registry failed: ") || got[2] != "true" {
+		t.Errorf("build = %v", got)
+	}
+}
+
+// A flagged build whose final lacks any one thing the check needs fails
+// with the check's sentence, pushes no final, and leaves v1 published; a
+// final with rootless Docker instead of podman passes.
+func TestAFlaggedBuildMissingAnyOneThingIsNotPublished(t *testing.T) {
+	docker := able
+	docker.Podman, docker.PodmanVersion = "", ""
+	docker.Docker, docker.Dockerd, docker.Rootlesskit, docker.Slirp4netns = "/usr/bin/dockerd-rootless.sh", "/usr/bin/dockerd", "/usr/bin/rootlesskit", "/usr/bin/slirp4netns"
+	for _, c := range []struct {
+		name string
+		drop func(*Found)
+	}{
+		{"no engine", func(f *Found) { f.Podman = "" }},
+		{"no fuse-overlayfs", func(f *Found) { f.FuseOverlayfs = "" }},
+		{"no newuidmap", func(f *Found) { f.Newuidmap = Mapper{} }},
+		{"no newgidmap", func(f *Found) { f.Newgidmap = Mapper{} }},
+		{"newuidmap without cap_setuid", func(f *Found) { f.Newuidmap.FileCap = false }},
+		{"newgidmap without cap_setgid", func(f *Found) { f.Newgidmap.FileCap = false }},
+		{"no subuid", func(f *Found) { f.Subuid = nil }},
+		{"no subgid", func(f *Found) { f.Subgid = nil }},
+		{"a range past the Run's ids", func(f *Found) { f.Subgid = []string{"agent:100000:65536"} }},
+		{"rootless Docker without slirp4netns", func(f *Found) { *f = docker; f.Slirp4netns = "" }},
+		{"rootless Docker", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			f.image("img_n", "node-22")
+			f.queue("img_n", "imv_n1", 1, "FROM node:22\n")
+			f.once()
+			var pushed []string
+			f.podman.fail = func(op, tag, _ string) (string, error) {
+				if op == "push" {
+					pushed = append(pushed, tag)
+				}
+				return "", nil
+			}
+			f.queue("img_n", "imv_n2", 2, "FROM node:22\nRUN true\n")
+			f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_n2'`)
+			found := able
+			if c.drop == nil {
+				found = docker
+			} else {
+				c.drop(&found)
+			}
+			f.podman.found = found
+			f.once()
+			final := FinalTag(repo, "imv_n2", layer)
+			got := f.row(`SELECT state, coalesce(error, '') FROM image_versions WHERE id = 'imv_n2'`)
+			published := f.str(`SELECT published_version_id FROM images WHERE id = 'img_n'`)
+			if c.drop == nil {
+				if got[0] != "published" || published != "imv_n2" || !slices.Contains(pushed, final) {
+					t.Errorf("v2 = %v, published %s, pushed %v", got, published, pushed)
+				}
+				return
+			}
+			if got[0] != "failed" || got[1] != found.Sentence() || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
+				t.Errorf("v2 = %v, want failed with %q", got, found.Sentence())
+			}
+			if published != "imv_n1" || slices.Contains(pushed, final) {
+				t.Errorf("published %s, pushed %v", published, pushed)
+			}
+		})
 	}
 }

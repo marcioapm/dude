@@ -19,6 +19,7 @@ import {
   BUILDER_OFFLINE_SECONDS,
   EventTypes,
   firstFrom,
+  fromImage,
   imageCycle,
   imageDraftSchema,
   imagePatchSchema,
@@ -86,7 +87,8 @@ const SUMMARY_COLUMNS = `
   i.id, i.name, i.description, i.archived_at AS "archivedAt", i.created_at AS "createdAt",
   ${person("cp", "i.created_by")} AS "createdBy",
   (i.id IS NOT DISTINCT FROM o.default_image_id) AS "isDefault",
-  (SELECT json_build_object('versionId', v.id, 'number', v.number, 'builtAt', v.built_at, 'userRef', v.user_ref)
+  (SELECT json_build_object('versionId', v.id, 'number', v.number, 'builtAt', v.built_at, 'userRef', v.user_ref,
+     'canRunContainers', v.can_run_containers)
    FROM image_versions v WHERE v.id = i.published_version_id) AS published,
   (SELECT json_build_object('versionId', v.id, 'number', v.number, 'state', v.state, 'error', v.error)
    FROM image_versions v WHERE v.image_id = i.id AND v.number IS NOT NULL
@@ -166,7 +168,8 @@ const BUILD_COLUMNS = `
   b.id, i.id AS "imageId", i.name AS "imageName", v.id AS "versionId", v.number AS version, b.kind, b.state, b.stage,
   b.layer_ref AS "layerRef", ${person("rp", "b.requested_by")} AS "requestedBy", b.requested_at AS "requestedAt",
   b.started_at AS "startedAt", b.finished_at AS "finishedAt", b.error, b.build_seconds AS "buildSeconds",
-  b.push_seconds AS "pushSeconds", CASE WHEN b.state = 'queued' THEN image_queue_ahead(b.id) END AS ahead`;
+  b.push_seconds AS "pushSeconds", v.can_run_containers AS "canRunContainers", b.containers_check AS "containersCheck",
+  b.check_seconds AS "checkSeconds", CASE WHEN b.state = 'queued' THEN image_queue_ahead(b.id) END AS ahead`;
 const BUILD_FROM = `image_builds b JOIN image_versions v ON v.id = b.image_version_id JOIN images i ON i.id = v.image_id`;
 
 /** The organization's running and waiting jobs, in the builder's order. */
@@ -193,7 +196,7 @@ async function imagesResponse(ctx: RequestContext): Promise<ImagesResponse> {
 const VERSION_COLUMNS = `
   v.id, v.image_id AS "imageId", v.number, v.state, v.containerfile, v.build_args AS "buildArgs", v.note, v.source,
   v.created_at AS "createdAt", v.updated_at AS "updatedAt", ${person("vp_", "v.created_by")} AS "createdBy",
-  v.user_ref AS "userRef", v.built_at AS "builtAt", v.error,
+  v.user_ref AS "userRef", v.built_at AS "builtAt", v.error, v.can_run_containers AS "canRunContainers",
   (SELECT COALESCE(json_agg(json_build_object('imageId', p.parent_image_id, 'name', pi.name, 'versionId', p.parent_version_id,
      'version', pv.number) ORDER BY pi.name), '[]')
    FROM image_version_parents p JOIN images pi ON pi.id = p.parent_image_id
@@ -209,7 +212,10 @@ async function detail(ctx: RequestContext, id: string): Promise<ImageDetail> {
     const builds = (await scope.sql`
       SELECT ${scope.sql.unsafe(BUILD_COLUMNS)} FROM ${scope.sql.unsafe(BUILD_FROM)}
       WHERE i.id = ${id} ORDER BY b.requested_at DESC, b.id DESC LIMIT 100`) as ImageBuild[];
-    return { image, versions, builds, builder: await builderInfo(scope), canEdit: await isOrgAdmin(ctx) };
+    const previewedBy = (await scope.sql`
+      SELECT p.id, p.name FROM projects p JOIN organizations o ON o.id = p.organization_id
+      WHERE COALESCE(p.preview_image_id, p.runtime_image_id, o.default_image_id) = ${id} ORDER BY p.name`) as Array<{ id: string; name: string }>;
+    return { image, previewedBy, versions, builds, builder: await builderInfo(scope), canEdit: await isOrgAdmin(ctx) };
   });
 }
 
@@ -281,7 +287,7 @@ async function picker(ctx: RequestContext): Promise<Response> {
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
       SELECT i.id, i.name, i.description, pv.number AS version, (i.id IS NOT DISTINCT FROM o.default_image_id) AS "isDefault",
-        i.archived_at IS NOT NULL AS archived,
+        i.archived_at IS NOT NULL AS archived, COALESCE(pv.can_run_containers, false) AS "canRunContainers",
         (SELECT json_build_object('kind', CASE v.state WHEN 'queued' THEN 'waiting' WHEN 'failed' THEN 'failed' ELSE 'building' END,
            'version', v.number)
          FROM image_versions v WHERE v.image_id = i.id AND v.number > COALESCE(pv.number, 0)
@@ -353,26 +359,49 @@ async function checkContainerfile(scope: OrgScope, image: { id: string; name: st
   return parents;
 }
 
-/** Save the image's draft (one per image), replacing its Containerfile and parents. */
+/**
+ * Save the image's draft (one per image), replacing its Containerfile and
+ * parents. "Can run containers" is the input's when it names it; else the
+ * draft keeps its own, and a new draft starts from the image's published
+ * version, or with none published, from the library image its first FROM
+ * names (its published version's).
+ */
 async function saveDraft(scope: OrgScope, ctx: RequestContext, image: { id: string; name: string }, input: ImageDraftInput): Promise<string> {
   const parents = await checkContainerfile(scope, image, input.containerfile);
-  const [existing] = (await scope.sql`SELECT id FROM image_versions WHERE image_id = ${image.id} AND state = 'draft' FOR UPDATE`) as Array<{ id: string }>;
+  const [existing] = (await scope.sql`
+    SELECT id, can_run_containers AS "canRunContainers" FROM image_versions WHERE image_id = ${image.id} AND state = 'draft' FOR UPDATE`) as Array<{
+    id: string;
+    canRunContainers: boolean;
+  }>;
   const id = existing?.id ?? newId("imageVersion");
+  const canRunContainers = input.canRunContainers ?? existing?.canRunContainers ?? (await inheritedContainers(scope, image.id, input.containerfile));
   if (existing) {
     await scope.sql`
       UPDATE image_versions SET containerfile = ${input.containerfile}, build_args = ${input.buildArgs}::jsonb, note = ${input.note},
-        created_by = ${ctx.principal.personId}, updated_at = now()
+        can_run_containers = ${canRunContainers}, created_by = ${ctx.principal.personId}, updated_at = now()
       WHERE id = ${id}`;
     await scope.sql`DELETE FROM image_version_parents WHERE version_id = ${id}`;
   } else {
     await scope.sql`
-      INSERT INTO image_versions (id, organization_id, image_id, containerfile, build_args, note, created_by)
-      VALUES (${id}, ${scope.organizationId}, ${image.id}, ${input.containerfile}, ${input.buildArgs}::jsonb, ${input.note}, ${ctx.principal.personId})`;
+      INSERT INTO image_versions (id, organization_id, image_id, containerfile, build_args, note, can_run_containers, created_by)
+      VALUES (${id}, ${scope.organizationId}, ${image.id}, ${input.containerfile}, ${input.buildArgs}::jsonb, ${input.note},
+        ${canRunContainers}, ${ctx.principal.personId})`;
   }
   for (const parent of parents) {
     await scope.sql`INSERT INTO image_version_parents (organization_id, version_id, parent_image_id) VALUES (${scope.organizationId}, ${id}, ${parent})`;
   }
   return id;
+}
+
+/** A new draft's "Can run containers": the image's published version's, else its first FROM image:'s published version's. */
+async function inheritedContainers(scope: OrgScope, imageId: string, containerfile: string): Promise<boolean> {
+  const parent = fromImage(containerfile);
+  const [row] = (await scope.sql`
+    SELECT COALESCE(
+      (SELECT v.can_run_containers FROM images i JOIN image_versions v ON v.id = i.published_version_id WHERE i.id = ${imageId}),
+      (SELECT v.can_run_containers FROM images i JOIN image_versions v ON v.id = i.published_version_id WHERE i.name = ${parent}),
+      false) AS can`) as Array<{ can: boolean }>;
+  return row?.can ?? false;
 }
 
 /** A taken name, as the unique constraint refuses it (SQLSTATE 23505 in Bun's errno). */
@@ -392,7 +421,9 @@ async function createImage(ctx: RequestContext): Promise<Response> {
       INSERT INTO images (id, organization_id, name, description, created_by)
       VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.description}, ${ctx.principal.personId})`.catch((err: unknown) => nameTaken(err, input.name));
     if (input.containerfile !== undefined) {
-      await saveDraft(scope, ctx, { id, name: input.name }, { containerfile: input.containerfile, buildArgs: input.buildArgs, note: input.note });
+      await saveDraft(scope, ctx, { id, name: input.name }, {
+        containerfile: input.containerfile, buildArgs: input.buildArgs, note: input.note, canRunContainers: input.canRunContainers,
+      });
     }
     await record(scope, ctx, EventTypes.ImageUpdated, { imageId: id, name: input.name, changed: { added: true } });
   });

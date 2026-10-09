@@ -38,9 +38,9 @@ type AgentConfig struct {
 	// under its organisation's and project's lists. "*" turns egress
 	// filtering off for every Run.
 	Egress []string
-	// Agents may run docker or podman in their Run
-	// (DUDE_AGENT_NESTED_CONTAINERS). lux places such Runs only on hosts
-	// offering nested containers, so it is off unless its hosts do.
+	// DefaultImage can run containers (DUDE_AGENT_NESTED_CONTAINERS): a Run
+	// on it, agent or preview, asks lux for nested containers. A library
+	// image says so per version instead (images.Site.Containers).
 	NestedContainers bool
 	// The most running time lux gives a phase Run (DUDE_AGENT_TIMEOUT,
 	// DefaultTimeout when unset): past it, lux stops the Run and it fails.
@@ -125,6 +125,9 @@ type specInput struct {
 	// A session's agent: its session, in place of a task.
 	SessionID string
 	Image     string
+	// Image can run containers: lux places the Run only on a host that
+	// allows them.
+	NestedContainers bool
 	// The model the Run's tier requests, as the proxy names it, and the
 	// tier's name (recorded on the Run and as a label).
 	Model, ModelTier string
@@ -273,7 +276,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	spec := lux.Spec{
 		Name: fmt.Sprintf("%s %s", step, owner),
 		Labels: map[string]string{
-			"dude.org": in.OrganizationID, "dude.task": in.TaskID,
+			lux.AppLabel: lux.App, "dude.org": in.OrganizationID, "dude.task": in.TaskID,
 			"dude.run": in.RunID, "dude.phase": step, "dude.role": in.Role,
 			"dude.harness": harnessOpenCode, "dude.model": in.Model,
 		},
@@ -356,7 +359,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 
 	// Before the scripted agent returns: the contract suite runs it on a
 	// real lux, which must place it like the agent it stands in for.
-	if c.NestedContainers {
+	if in.NestedContainers {
 		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
 	}
 

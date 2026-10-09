@@ -35,6 +35,8 @@ export const imageDraftSchema = z
     containerfile: containerfileSchema,
     buildArgs: buildArgsSchema,
     note: z.string().trim().max(500).default(""),
+    /** Omitted: the draft keeps its own value; a new draft starts from the published version's. */
+    canRunContainers: z.boolean().optional(),
   })
   .strict();
 export type ImageDraftInput = z.infer<typeof imageDraftSchema>;
@@ -47,6 +49,8 @@ export const newImageSchema = z
     containerfile: containerfileSchema.optional(),
     buildArgs: buildArgsSchema,
     note: z.string().trim().max(500).default(""),
+    /** Omitted: the published value of the library image its first FROM names, else false. */
+    canRunContainers: z.boolean().optional(),
   })
   .strict();
 export type NewImageInput = z.infer<typeof newImageSchema>;
@@ -64,7 +68,7 @@ export type ImageVersionState = (typeof IMAGE_VERSION_STATES)[number];
 export type ImageBuildState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type ImageBuildKind = "build" | "finish";
 /** Where a running build is. */
-export type ImageBuildStage = "resolving" | "building" | "pushing" | "finishing" | "publishing";
+export type ImageBuildStage = "resolving" | "building" | "pushing" | "finishing" | "checking" | "publishing";
 
 export interface ImagePerson {
   id: string;
@@ -89,6 +93,8 @@ export interface ImageVersion {
   userRef: string | null;
   builtAt: string | null;
   error: string | null;
+  /** Runs in it may start containers: the builder checks it can, and lux places them on hosts that allow it. */
+  canRunContainers: boolean;
   /** What it is built FROM in the library, and the parent version its build used. */
   parents: Array<{ imageId: string; name: string; versionId: string | null; version: number | null }>;
 }
@@ -111,6 +117,11 @@ export interface ImageBuild {
   error: string | null;
   buildSeconds: number | null;
   pushSeconds: number | null;
+  /** Its version can run containers, so the build checks it can (the "Check containers" stage). */
+  canRunContainers: boolean;
+  /** What that check found: passed, and one line of what it found; null before it ran. */
+  containersCheck: { passed: boolean; detail: string } | null;
+  checkSeconds: number | null;
   /** Jobs the builder takes before this one, of any organization; null unless queued. */
   ahead: number | null;
 }
@@ -149,7 +160,7 @@ export interface ImageSummary {
   createdAt: string;
   createdBy: ImagePerson | null;
   isDefault: boolean;
-  published: { versionId: string; number: number; builtAt: string | null; userRef: string | null } | null;
+  published: { versionId: string; number: number; builtAt: string | null; userRef: string | null; canRunContainers: boolean } | null;
   /** The newest numbered version, when it is not the published one: building, waiting or failed. */
   pending: { versionId: string; number: number; state: ImageVersionState; error: string | null } | null;
   /** Its draft, if someone is editing it. */
@@ -187,6 +198,12 @@ export interface ImagesResponse {
 
 export interface ImageDetail {
   image: ImageSummary;
+  /**
+   * The projects whose branch previews run this image: picked for previews,
+   * else the project's runtime image, else the organization's default, as
+   * the orchestrator chooses (images.Site.Pick).
+   */
+  previewedBy: Array<{ id: string; name: string }>;
   /** Newest first; the draft first of all. */
   versions: ImageVersion[];
   /** Newest first, without logs. */
@@ -203,6 +220,8 @@ export interface ImageChoice {
   version: number | null;
   isDefault: boolean;
   archived: boolean;
+  /** Its published version can run containers. */
+  canRunContainers: boolean;
   /** A newer version building or waiting, or failed since the published one. */
   status: { kind: "building" | "waiting" | "failed"; version: number } | null;
 }
@@ -216,6 +235,8 @@ export interface RunImage {
   /** The final image lux pulls, by digest. */
   ref: string;
   layer: string;
+  /** The version could run containers, so the Run asked lux for a host that allows them. Absent on Runs from before it. */
+  canRunContainers?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +408,26 @@ export function imageReferences(text: string): string[] {
     if (name && !out.includes(name)) out.push(name);
   }
   return out;
+}
+
+/**
+ * Whether the editor warns, before a build, that a version marked "Can run
+ * containers" will likely fail its container check: no instruction names
+ * podman or docker, and no FROM is a library image that can run containers
+ * (its published version). A registry base with an engine baked in is
+ * unknowable here; the hint says "unless the base has them".
+ */
+export function lacksContainerEngine(text: string, images: ReadonlyArray<{ name: string; canRunContainers: boolean }>): boolean {
+  const all = instructions(text);
+  if (all.some((i) => /podman|docker/i.test(i.args))) return false;
+  const able = new Set(images.filter((i) => i.canRunContainers).map((i) => i.name));
+  return !all.some((i) => i.keyword === "FROM" && able.has(IMAGE_REF.exec(flags(i.args).rest.split(/\s+/)[0] ?? "")?.[1] ?? ""));
+}
+
+/** The library image a Containerfile's first FROM names (`image:x` → x), or null. */
+export function fromImage(text: string): string | null {
+  const ref = firstFrom(text);
+  return ref ? (IMAGE_REF.exec(ref)?.[1] ?? null) : null;
 }
 
 /** A Containerfile's first FROM, as written ("image:acme-base", "debian:bookworm-slim"). */

@@ -135,10 +135,27 @@ const (
 	PublishedPrefix = "/.lux/artifacts/"
 )
 
+// Every Run and server dude submits carries AppLabel=App: lux names the tool
+// behind a cost by it.
+const (
+	AppLabel = "app"
+	App      = "dude"
+)
+
 // Terminal says whether lux will report nothing more without a resume.
 func Terminal(state string) bool {
 	switch state {
 	case "stopped", "succeeded", "failed", "cancelled", "terminated", "lost":
+		return true
+	}
+	return false
+}
+
+// Waiting is a state in which a Run has no host yet and lux's stateReason
+// says why it waits.
+func Waiting(state string) bool {
+	switch state {
+	case "submitted", "provisioning", "resuming":
 		return true
 	}
 	return false
