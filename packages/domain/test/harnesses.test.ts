@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { harnessMisfit, harnessSchema, modelProvider, resolveHarness } from "../src/harnesses.ts";
-import { agentModelConfigSchema } from "../src/hierarchy.ts";
+import { agentModelConfigSchema, storedAgentModelsSchema } from "../src/hierarchy.ts";
 import { settingsPatchSchema } from "../src/settings.ts";
 
 describe("a role's harness", () => {
@@ -19,7 +19,8 @@ describe("a role's harness", () => {
     expect(harnessSchema.options).toEqual(["opencode", "claude-code", "codex"]);
     expect(agentModelConfigSchema.safeParse({ harness: "claude-code" }).success).toBe(true);
     // A stored one that names no harness (an older or unknown value) reads as unset, the rest kept.
-    expect(agentModelConfigSchema.parse({ harness: "aider", tier: "mtr_1" })).toEqual({ harness: undefined, tier: "mtr_1" });
+    expect(storedAgentModelsSchema.parse({ reviewer: { harness: "aider", tier: "mtr_1" } })).toEqual({ reviewer: { harness: undefined, tier: "mtr_1" } });
+    for (const harness of ["aider", 42]) expect(agentModelConfigSchema.safeParse({ harness }).success).toBe(false);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "codex" } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: null } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "Codex" } } }).success).toBe(false);
