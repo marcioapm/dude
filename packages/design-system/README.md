@@ -1347,12 +1347,12 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `CanRunContainersBadge` at `sm`, after the image chip (or where it would
   be, for an image typed by hand or dude's fallback), given `tooltip`: then
   it is a focusable trigger, as `MachineChip` is, in `Tooltip side="bottom"
-  keepOnPress`, with the `aria-label` "Can run containers: this Run can
-  start containers inside it" and the tip "This Run can start containers
-  inside it. Fixed when the session started: its resumes keep it." Never a
-  native `title`. It shows what the Run recorded when it was submitted;
-  nothing when it cannot, or for a Run from before that was recorded — never
-  a guess from today's settings.
+  keepOnPress`, brighter on hover and while its tip is open, with the
+  `aria-label` "Can run containers" and the tip "This Run can start
+  containers inside it. Set when the session started; resuming keeps it."
+  Never a native `title`. It shows what the Run recorded when it was
+  submitted; nothing when it cannot, or for a Run from before that was
+  recorded — never a guess from today's settings.
 - **What the box needs said beside it is a muted line, not a `Callout`**:
   the `warning` glyph at 12px in attention ink, 22px in under the
   description, xs secondary text. Two of them: the hint (box on, nothing

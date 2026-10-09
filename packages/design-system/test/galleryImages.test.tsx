@@ -47,12 +47,12 @@ test("Can run containers renders in dark and light, comfortable and compact", as
     const facts = pane.querySelector("[data-testid=run-header-facts]")!;
     const badge = facts.lastElementChild as HTMLElement;
     expect(badge.getAttribute("data-testid")).toBe("can-run-containers");
-    expect(badge.getAttribute("aria-label")).toBe("Can run containers: this Run can start containers inside it");
+    expect(badge.getAttribute("aria-label")).toBe("Can run containers");
     expect(badge.hasAttribute("title")).toBe(false);
     await act(async () => badge.focus());
     expect(document.activeElement).toBe(badge);
     const tip = await until(() => document.querySelector("[role=tooltip]"));
-    expect(tip.textContent).toBe("This Run can start containers inside it. Fixed when the session started: its resumes keep it.");
+    expect(tip.textContent).toBe("This Run can start containers inside it. Set when the session started; resuming keeps it.");
     await act(async () => badge.blur());
     await until(() => document.querySelector("[role=tooltip]") ? null : true);
     expect(pane.querySelectorAll("[role=checkbox]")).toHaveLength(3);

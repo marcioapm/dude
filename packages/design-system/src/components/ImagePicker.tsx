@@ -83,7 +83,7 @@ export function CanRunContainersBadge({ size = "sm", lower, tooltip }: {
   return (
     <Tooltip content={tooltip} side="bottom" keepOnPress>
       <button type="button" className={styles["badgeTrigger"]} data-testid="can-run-containers"
-        aria-label="Can run containers: this Run can start containers inside it">
+        aria-label="Can run containers">
         {badge}
       </button>
     </Tooltip>

@@ -1271,7 +1271,7 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
   );
 }
 
-const CAN_RUN_CONTAINERS_TIP = "This Run can start containers inside it. Fixed when the session started: its resumes keep it.";
+const CAN_RUN_CONTAINERS_TIP = "This Run can start containers inside it. Set when the session started; resuming keeps it.";
 
 /**
  * The library image the Run got, as it was when it started: its name and

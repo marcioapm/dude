@@ -142,9 +142,9 @@ describe("whether the session can start containers", () => {
     const image = page.querySelector("[data-testid=run-image]")!;
     expect(image.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // A keyboard user reaches it, and a screen reader hears it, as the chips before it.
-    expect(shown.getAttribute("aria-label")).toBe("Can run containers: this Run can start containers inside it");
+    expect(shown.getAttribute("aria-label")).toBe("Can run containers");
     expect(shown.hasAttribute("title")).toBe(false);
-    expect(await tipOf(shown)).toBe("This Run can start containers inside it. Fixed when the session started: its resumes keep it.");
+    expect(await tipOf(shown)).toBe("This Run can start containers inside it. Set when the session started; resuming keeps it.");
   });
 
   test("on a typed image or dude's fallback (no image chip), the header still says so", async () => {

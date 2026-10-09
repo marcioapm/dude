@@ -220,3 +220,9 @@
   background: none;
   font: inherit;
 }
+/* As MachineChip: one step brighter while pointed at or its tip is open. */
+.badgeTrigger:hover > *,
+.badgeTrigger[data-state$="open"] > * {
+  background-image: linear-gradient(var(--ds-color-hover-wash), var(--ds-color-hover-wash));
+  color: var(--ds-color-text-primary);
+}
