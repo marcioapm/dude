@@ -268,6 +268,10 @@ type Sandbox struct {
 	NestedContainers bool `json:"nestedContainers,omitempty"`
 }
 
+// NestedContainers is whether the spec asks lux to let the Run start
+// containers inside it: what a submit records as runs.can_run_containers.
+func (s Spec) NestedContainers() bool { return s.Sandbox != nil && s.Sandbox.NestedContainers }
+
 type Image struct {
 	Ref string `json:"ref"`
 	// Logins the runner uses to pull Ref. The secret each names is
