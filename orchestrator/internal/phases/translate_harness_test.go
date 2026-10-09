@@ -582,12 +582,15 @@ func TestAClaudeResultThatFailedFailsItsOwnTurn(t *testing.T) {
 	}
 }
 
-// The recording is in lux's order: its last two records are the turn's
-// end, then the result line.
+// The recording retains the end, idle and result in lux's order.
 func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
 	recs := recorded(t, "claude-code-real.jsonl")
-	if got := []any{recs[len(recs)-2]["type"], recs[len(recs)-1]["type"]}; !slices.Equal(got, []any{"claude.turn_end", "claude.result"}) {
-		t.Errorf("last two records = %v", got)
+	last := recs[len(recs)-3:]
+	if got := []any{last[0]["type"], last[1]["type"], last[2]["type"]}; !slices.Equal(got, []any{"claude.turn_end", "lux.activity", "claude.result"}) {
+		t.Errorf("last three records = %v", got)
+	}
+	if last[1]["data"].(map[string]any)["activity"] != "idle" {
+		t.Errorf("intervening activity = %v", last[1])
 	}
 }
 
