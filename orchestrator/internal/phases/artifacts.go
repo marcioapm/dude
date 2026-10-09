@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,11 +19,12 @@ import (
 
 // Artifacts records what agents published, once lux has it.
 //
-// An agent publishes a file by writing it into $LUX_ARTIFACTS. lux collects
-// that directory whenever the container exits — finished, paused, aborted,
-// failed — uploads the files, and lists them on the Run. dude only records
-// them: the bytes stay in lux and are streamed from there when someone
-// opens one.
+// An agent publishes a file with `dude publish` (lux-shim publish). The
+// translator records it when lux's artifact.published arrives, while the
+// Run goes on. This sweep is the backstop: for an older lux, which collects
+// $LUX_ARTIFACTS only when the container exits, and for anything the
+// stream's follower missed. The bytes stay in lux and are streamed from
+// there when someone opens one.
 //
 // A Run is due for collection when it stops (a trigger sets
 // artifacts_due_at on every stopping status). lux reports an exit's
@@ -152,7 +154,8 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		ready = append(ready, art)
 	}
 	// The final diff the beforeStop hook left is dude's own: recorded as
-	// the Run's diff, never listed as a file for people. The latest exit's.
+	// the Run's diff, never listed as a file for people: the latest exit's,
+	// each repository's patch at its latest version.
 	var final []lux.Artifact
 	files := ready[:0]
 	for _, art := range ready {
@@ -163,11 +166,14 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		if _, ok := finalDiffRepo(art.Path); !ok {
 			continue // not one of its patches: a file it had not finished
 		}
-		switch {
+		switch i := slices.IndexFunc(final, func(f lux.Artifact) bool { return f.Path == art.Path }); {
 		case len(final) == 0 || art.Epoch > final[0].Epoch:
 			final = []lux.Artifact{art}
-		case art.Epoch == final[0].Epoch:
+		case art.Epoch < final[0].Epoch:
+		case i < 0:
 			final = append(final, art)
+		case art.Version > final[i].Version:
+			final[i] = art
 		}
 	}
 	// Never at the expense of the files: a diff lux refuses for good (gone,
@@ -181,8 +187,25 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Most were recorded from the stream already: one read, rather than
+		// a conflicting insert each.
+		rows, err := tx.Query(ctx, `SELECT storage_key FROM artifacts WHERE run_id = $1`, r.ID)
+		if err != nil {
+			return err
+		}
+		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		keys := make(map[string]bool, len(recorded))
+		for _, k := range recorded {
+			keys[k] = true
+		}
 		for _, art := range files {
-			if err := a.record(ctx, tx, r, art); err != nil {
+			if keys[art.ID] {
+				continue
+			}
+			if err := recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art); err != nil {
 				return err
 			}
 		}
@@ -234,7 +257,16 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 	return true, nil
 }
 
-func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Artifact) error {
+// artifactRun is the dude Run an artifact is recorded on.
+type artifactRun struct{ Org, ProjectID, TaskID, ID string }
+
+// recordArtifact records one artifact lux can serve, with artifact.created,
+// once per lux artifact id: from the stream, a replay of it, or the sweep.
+//
+// created_at is clock_timestamp(), not now(): versions of one name recorded
+// in one transaction keep lux's order in the listing, which numbers them by
+// created_at.
+func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
 	id := ids.New(ids.Artifact)
 	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
 	ctype := art.ContentType
@@ -242,10 +274,10 @@ func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Art
 		ctype = "application/octet-stream"
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type,
-			size_bytes, storage_key, sha256, epoch)
-		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9)
+			size_bytes, storage_key, sha256, epoch, description, created_at)
+		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
 		ON CONFLICT (organization_id, storage_key) DO NOTHING`,
-		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch)
+		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch, art.Description)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
@@ -253,7 +285,7 @@ func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Art
 		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
 		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID,
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype,
-			"sizeBytes": art.Size, "sha256": art.SHA256},
+			"sizeBytes": art.Size, "sha256": art.SHA256, "description": art.Description},
 	})
 	return err
 }

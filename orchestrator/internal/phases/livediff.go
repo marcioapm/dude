@@ -30,8 +30,8 @@ import (
 //     often after several reads that found nothing new.
 //   - When the container stops, for any reason lux can see coming — dude's
 //     finish, pause, park or abort, lux's own timeout or drain — lux runs
-//     it as the Run's beforeStop hook, which leaves the diff in
-//     $LUX_ARTIFACTS. The artifact collector records that as the final
+//     it as the Run's beforeStop hook, which publishes the diff as
+//     artifacts of the Run. The artifact collector records that as the final
 //     diff. One mechanism for every stop; a crash or a lost host runs no
 //     hook, and leaves the last live diff.
 //

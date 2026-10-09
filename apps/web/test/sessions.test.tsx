@@ -505,9 +505,9 @@ describe("a session's name", () => {
 });
 
 describe("a session's files", () => {
-  const art = (id: string, name: string, version: number, versions: number, contentType = "text/markdown"): Artifact => ({
-    id, taskId: null, sessionId: SESSION, runId: RUN, name, contentType, sizeBytes: 40, sha256: "x", epoch: 1, createdAt: at(30 - version),
-    phase: null, role: "brainstorm", version, versions });
+  const art = (id: string, name: string, version: number, versions: number, contentType = "text/markdown", description = ""): Artifact => ({
+    id, taskId: null, sessionId: SESSION, runId: RUN, name, contentType, sizeBytes: 40, sha256: "x", description, epoch: 1,
+    createdAt: at(30 - version), phase: null, role: "brainstorm", version, versions });
 
   class FilesClient extends SessionClient {
     artifacts: Artifact[] = [];
@@ -541,6 +541,25 @@ describe("a session's files", () => {
     });
     await until(() => page.querySelector("[data-testid=session-files-count]")?.textContent === "3" || null, "the new file");
     expect(client.asked).toBeGreaterThan(asked);
+  });
+
+  test("a file's latest description is a line under its name in the rail", async () => {
+    const client = new FilesClient(detail("read"));
+    client.artifacts = [art("art_d2", "design.md", 2, 2, "text/markdown", "Invoice PDF export, with the numbers"),
+      art("art_csv", "usage.csv", 1, 1, "text/csv"), art("art_d1", "design.md", 1, 2, "text/markdown", "First draft")];
+    const page = await sessionPage(client);
+    const block = await until(() => page.querySelector("[data-testid=session-files] [data-testid=published-files]"), "the files");
+    expect([...block.querySelectorAll("[data-testid=published-file-description]")].map((d) => d.textContent))
+      .toEqual(["Invoice PDF export, with the numbers"]);
+  });
+
+  // The listing returns a name's newest 50 versions; the rail names the latest's number, not how many came.
+  test("a file published more often than the listing returns is shown at its latest version", async () => {
+    const client = new FilesClient(detail("read"));
+    client.artifacts = Array.from({ length: 50 }, (_, i) => art(`art_n${60 - i}`, "notes.md", 60 - i, 60));
+    const page = await sessionPage(client);
+    const block = await until(() => page.querySelector("[data-testid=session-files] [data-testid=published-files]"), "the files");
+    expect([...block.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["notes.mdv60"]);
   });
 
   test("nothing published yet says so", async () => {

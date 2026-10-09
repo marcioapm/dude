@@ -149,9 +149,10 @@ def test_work_across_two_repositories_opens_a_pull_request_in_each(
 def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
     client: ApiClient, forge_project: dict, second_org: dict
 ):
-    """An agent writes a file into $LUX_ARTIFACTS; lux collects it when the
-    container exits; the orchestrator records it; the API lists it with the
-    task and streams its bytes from lux."""
+    """An agent publishes a file (lux-shim publish, lux#77); lux reports it
+    on the Run's stream once it can be downloaded; the orchestrator records
+    it; the API lists it with the task, with what the agent said it is for,
+    and streams its bytes from lux."""
     task = client.create_task(forge_project["id"], "Leave notes")
     client.post(f"/v1/tasks/{task['id']}/deliver")
 
@@ -160,7 +161,8 @@ def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
         return found or None
 
     artifacts = wait_until(published, timeout=60, message="the implementer's notes were never recorded")
-    assert [(a["name"], a["phase"], a["role"]) for a in artifacts] == [("NOTES.md", "implement", "implementer")], artifacts
+    assert [(a["name"], a["phase"], a["role"], a["description"]) for a in artifacts] == [
+        ("NOTES.md", "implement", "implementer", "What NOTES.md is for")], artifacts
     notes = artifacts[0]
     assert notes["contentType"].startswith("text/markdown") and notes["sizeBytes"] > 0
 
@@ -177,6 +179,37 @@ def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
 
     types = [e["eventType"] for e in client.events(taskId=task["id"])]
     assert "artifact.created" in types
+
+
+def test_a_file_an_agent_publishes_is_listed_while_its_run_keeps_running(client: ApiClient, forge_project: dict):
+    """The fake/live implementer publishes its notes, a screenshot and a page
+    as it works and never finishes its turn: each is listed with the task,
+    with its description, while the Run is still running — not when it
+    stops (lux#72)."""
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    assert resp.status_code == 200, resp.text
+    task = client.create_task(forge_project["id"], "Publish as you go")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),
+                     timeout=30, message="the implementer never started")
+    try:
+        def listed_while_running():
+            found = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
+            # Read after the list: running now means running when they were recorded,
+            # since nothing records a Run's files at its stop before it stops.
+            if len(found) < 3 or client.get_run(run["id"])["status"] != "running":
+                return None
+            return found
+
+        found = wait_until(listed_while_running, timeout=30, message="the files were not listed while the Run ran")
+        assert sorted((a["name"], a["description"], a["version"]) for a in found) == [
+            ("NOTES.md", "What NOTES.md is for", 1), ("coverage.html", "What coverage.html is for", 1),
+            ("screenshot.png", "What screenshot.png is for", 1)], found
+        assert client.get_run(run["id"])["status"] == "running"
+    finally:
+        # fake/live never ends its turn.
+        client.post(f"/v1/runs/{run['id']}/abort", {})
 
 
 def test_a_project_names_the_reviewers_every_delivery_runs(client: ApiClient, forge_project: dict):
