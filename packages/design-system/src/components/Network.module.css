@@ -1,0 +1,97 @@
+/* The agent network: presets, hosts refused, and the note under a tool call. */
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.presetsLabel {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.preset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+}
+.preset:hover:not(:disabled) {
+  background: var(--ds-color-hover-wash);
+}
+.preset:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.preset:disabled {
+  color: var(--ds-color-text-disabled);
+}
+.preset[data-has="true"] {
+  color: var(--ds-color-text-muted);
+}
+
+.refused {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.by {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.allowAll {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.allowAllNote {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+/* An attention wash under the call's output: something to act on, not a failure of dude's. */
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-tone-attention-bg);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.noteIcon {
+  flex-shrink: 0;
+  color: var(--ds-tone-attention-fg);
+}
+.noteText {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.noteText code {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+.noteActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.allowed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-success-fg);
+}

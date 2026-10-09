@@ -14,12 +14,12 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
-import type { AddServer, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RunServer, SessionsList, SettingsResponse, TaskServers } from "@dude/domain";
-import { egressProblem, secretHint, secretNameProblem } from "@dude/domain";
+import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
+import { egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -117,6 +117,7 @@ export class FixtureClient extends ApiClient {
     }
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
     if (as === "stalled") this.#stall();
+    if (as === "refused") this.#refuse();
     this.#nav = navigationFor(scenario);
     // The tree and the board say what the task's page does.
     if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
@@ -196,6 +197,25 @@ export class FixtureClient extends ApiClient {
     this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, stalled } : r)) };
     this.#events = [...this.#events, { ...this.#events[0]!, cursor: 10_000, eventId: "evt_stalled", eventType: "run.stalled",
       occurredAt: at, runId: RUN_ID, actor: { type: "system", id: "dude" }, payload: { conducted: false, text: STALLED_TEXT } }];
+  }
+
+  /**
+   * `dude.fixtures.run` = refused: the implementer's `uv sync` failed on a
+   * host lux refused it, which the Run says (agent.network.refused): the
+   * call carries the note with Allow.
+   */
+  #refuse() {
+    const at = (ago: number) => new Date(Date.now() - ago).toISOString();
+    const base = { ...this.#events[0]!, runId: RUN_ID, actor: { type: "system" as const, id: "dude" } };
+    this.#events = [...this.#events,
+      { ...base, cursor: 10_000, eventId: "evt_refused_call", eventType: "agent.tool.called", occurredAt: at(9_000),
+        payload: { tool: "bash", callId: "c_uv", input: { command: "uv sync --dev" }, title: "uv sync --dev" } },
+      { ...base, cursor: 10_001, eventId: "evt_refused", eventType: "agent.network.refused", occurredAt: at(8_500),
+        payload: { name: "files.pythonhosted.org", role: "implementer" } },
+      { ...base, cursor: 10_002, eventId: "evt_refused_done", eventType: "agent.tool.completed", occurredAt: at(8_000),
+        payload: { tool: "bash", callId: "c_uv", status: "completed", exitCode: 1, output: { head:
+          "error: Failed to download idna==3.19\n  cause: Failed to fetch: https://files.pythonhosted.org/packages/57/b0/idna-3.19-py3-none-any.whl\n  cause: dns error\n" } } },
+    ];
   }
 
   override async restart(runId: string, note: string): Promise<{ runId: string; replaced: string }> {
@@ -320,8 +340,60 @@ export class FixtureClient extends ApiClient {
   override me() {
     return Promise.resolve({ person: PEOPLE[0]!, organization: ORG });
   }
+  // -- settings: the network the pages change; the rest as data.ts has it --
+
+  #orgEgress = [...SETTINGS.network.organizationEgress!];
+  #projectEgress: string[] = [];
+  #mode: AgentEgressMode = "add";
+  #refused = [...REFUSED];
+
+  /** The settings, with the network as the API resolves it (routes/settings.ts network). */
+  #settings(project: boolean): SettingsResponse {
+    const runs = this.#mode === "only" ? this.#projectEgress : [...this.#orgEgress, ...this.#projectEgress];
+    const effective = [...new Set(runs)];
+    const own = project ? this.#projectEgress : this.#orgEgress;
+    const { project: _, ...org } = SETTINGS;
+    return {
+      ...(project ? SETTINGS : org),
+      network: {
+        egress: { value: own, source: project && own.length ? "project" : "organization" },
+        ...(project ? { mode: { value: this.#mode, source: this.#mode === "only" ? "project" : "organization" }, organizationEgress: this.#orgEgress } : {}),
+        operator: [], always: SETTINGS.network.always, effective: effective.includes("*") ? ["*"] : effective,
+      },
+    };
+  }
+  #patch(project: boolean, patch: SettingsPatch): SettingsResponse {
+    const refused = patch.network?.egress?.map(egressProblem).find((p) => p !== null);
+    if (refused) throw new ApiError(400, "invalid_request", `network.egress: ${refused}`);
+    if (patch.network?.egress) {
+      const list = [...new Set(patch.network.egress.map((e) => e.trim().toLowerCase()))];
+      if (project) this.#projectEgress = list;
+      else this.#orgEgress = list;
+    }
+    if (project && patch.network?.mode) this.#mode = patch.network.mode;
+    return this.#settings(project);
+  }
+  override organizationSettings(): Promise<SettingsResponse> {
+    return Promise.resolve(this.#settings(false));
+  }
+  override async updateOrganizationSettings(patch: SettingsPatch): Promise<SettingsResponse> {
+    await wait(80);
+    return this.#patch(false, patch);
+  }
   override projectSettings(): Promise<SettingsResponse> {
-    return Promise.resolve(SETTINGS);
+    return Promise.resolve(this.#settings(true));
+  }
+  override async updateProjectSettings(_projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
+    await wait(80);
+    return this.#patch(true, patch);
+  }
+  override refusedNames(): Promise<{ refused: RefusedName[] }> {
+    const reach = this.#settings(true).network.effective;
+    return Promise.resolve({ refused: this.#refused.filter((r) => !egressAllows(reach, r.name)) });
+  }
+  override async allowNames(_projectId: string, names: string[]): Promise<SettingsResponse> {
+    await wait(80);
+    return this.#patch(true, { network: { egress: [...this.#projectEgress, ...names] } });
   }
   override projectOverview() {
     return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });

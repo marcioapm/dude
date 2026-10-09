@@ -263,7 +263,7 @@ func run(log *slog.Logger) error {
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
 			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick,
-			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}}).Handler(),
+			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}, AgentEgress: agent.Egress}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it

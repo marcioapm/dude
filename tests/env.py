@@ -256,8 +256,9 @@ class TestEnvironment:
                 "DUDE_AGENT_IMAGE": "localhost/lux-fake:test" if self.real_lux else "dude-runtime:test",
                 "DUDE_LAYER_IMAGE": TEST_LAYER,
                 # No real agent credentials in the suite; fake models only,
-                # and memory searched by words.
-                "DUDE_LLM_URL": "",
+                # and memory searched by words. The URL is a host nothing
+                # answers: what a Run's network allows for its model.
+                "DUDE_LLM_URL": "https://llm.dude.test/v1",
                 "DUDE_LLM_KEY": "",
                 "DUDE_EMBEDDINGS_URL": "off",
                 # Only the contract gateway (or an explicit local topology smoke)

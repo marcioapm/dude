@@ -34,13 +34,14 @@ import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./Se
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
+import { NetworkPage } from "./NetworkSettings.tsx";
 import { useMachineSizes } from "./MachinesSettings.tsx";
 import { useModelTiers } from "./ModelsSettings.tsx";
 import { ImageField, imageWords, useImageChoices, type ImageChoices } from "../images.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
-const PAGES = ["repositories", "general", "servers", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["repositories", "general", "servers", "network", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
@@ -131,6 +132,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               { id: "general", label: "General", icon: "settings" },
               { id: "repositories", label: "Repositories", icon: "git-branch", note: project.repositories.length || undefined },
               { id: "servers", label: "Servers", icon: "globe", note: serverCount || undefined },
+              { id: "network", label: "Network", icon: "globe" },
               agentsNav(settings),
               deliveryNav(settings),
               memoryNav(index.status?.failed),
@@ -140,7 +142,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
       footer={
         <>
           Anything not changed here follows{" "}
-          <TextButton onClick={() => onOrganization(isRole(page) || page === "delivery" ? page : "implementer")}>{orgName}’s settings</TextButton>.
+          <TextButton onClick={() => onOrganization(isRole(page) || page === "delivery" || page === "network" ? page : "implementer")}>{orgName}’s settings</TextButton>.
         </>
       }
     >
@@ -168,6 +170,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               images={images} onManageImages={admin ? () => onOrganization("images") : undefined} />
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
+          ) : page === "network" ? (
+            <NetworkPage scope={scope} onOrganization={() => onOrganization("network")} />
           ) : isRole(page) ? (
             <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} tiers={tiers}
               tiersProblem={models.problem} onManageTiers={admin ? () => onOrganization("models") : undefined} images={images}

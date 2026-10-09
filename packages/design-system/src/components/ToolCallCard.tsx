@@ -57,6 +57,11 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   readonly slowAfterMs?: number | undefined;
   /** Scroll output blocks taller than this many lines. */
   readonly maxResultLines?: number | undefined;
+  /**
+   * Something about the call to act on (NetworkRefusedNote), under the
+   * card whether it is open or folded: it is never behind a click.
+   */
+  readonly note?: ReactNode;
 }
 
 const TOOL_ICON: ReadonlyArray<readonly [RegExp, IconName]> = [
@@ -194,6 +199,7 @@ export function ToolCallCard({
   onExpandedChange,
   slowAfterMs = TOOL_SLOW_AFTER_MS,
   maxResultLines = 40,
+  note,
   className,
   ...rest
 }: ToolCallCardProps) {
@@ -320,6 +326,7 @@ export function ToolCallCard({
           ) : null}
         </div>
       ) : null}
+      {note}
     </div>
   );
 }

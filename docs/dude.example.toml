@@ -107,7 +107,9 @@ image = "localhost/dude-runtime:dev"                     # DUDE_AGENT_IMAGE
 # The most running time lux gives a phase Run before it stops it and the
 # Run fails; the conductor has none.
 timeout = "4h"                                           # DUDE_AGENT_TIMEOUT
-# Hosts agents may reach besides llm.url's host; "*" turns filtering off.
+# The operator's floor: hosts every agent may reach, under each
+# organisation's and project's lists (the Network settings page), besides
+# llm.url's host; "*" turns filtering off for everyone.
 # egress = ["pypi.org", "registry.npmjs.org"]            # DUDE_AGENT_EGRESS
 # Let agents run containers (docker/podman in the Run). Needs lux hosts
 # started with nested containers and an image with the engine.
