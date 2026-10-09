@@ -129,6 +129,14 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
 }
+/* What its maker said the file is for: one line under the name. */
+.description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
 .version {
   color: var(--ds-color-accent-text);
 }

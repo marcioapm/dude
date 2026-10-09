@@ -25,14 +25,14 @@ func (w *receiptWorld) published(id, path string, version int) {
 }
 
 type recordedArtifact struct {
-	Name, StorageKey, ContentType, SHA256 string
-	Size                                  int64
-	Epoch                                 int
+	Name, StorageKey, ContentType, SHA256, Description string
+	Size                                               int64
+	Epoch                                              int
 }
 
 func (w *receiptWorld) artifacts() []recordedArtifact {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT name, storage_key, content_type, sha256, size_bytes, epoch
+	rows, err := w.owner.Query(context.Background(), `SELECT name, storage_key, content_type, sha256, description, size_bytes, epoch
 		FROM artifacts WHERE run_id = $1 ORDER BY storage_key`, w.tr.run.ID)
 	if err != nil {
 		w.t.Fatal(err)
@@ -58,7 +58,7 @@ func TestAPublishedArtifactIsRecordedOnceFromTheStream(t *testing.T) {
 
 	got := w.artifacts()
 	want := recordedArtifact{Name: "design/notes.md", StorageKey: "art_aaaaaaaaaaaaaaaa", ContentType: "text/markdown",
-		SHA256: "ab12", Size: 12, Epoch: 2}
+		SHA256: "ab12", Description: "Why the export streams rows", Size: 12, Epoch: 2}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("recorded %+v, want only %+v", got, want)
 	}

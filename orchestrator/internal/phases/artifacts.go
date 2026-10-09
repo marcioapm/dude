@@ -257,10 +257,10 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		ctype = "application/octet-stream"
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type,
-			size_bytes, storage_key, sha256, epoch)
-		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9)
+			size_bytes, storage_key, sha256, epoch, description)
+		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (organization_id, storage_key) DO NOTHING`,
-		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch)
+		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch, art.Description)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
@@ -268,7 +268,7 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
 		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID,
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype,
-			"sizeBytes": art.Size, "sha256": art.SHA256},
+			"sizeBytes": art.Size, "sha256": art.SHA256, "description": art.Description},
 	})
 	return err
 }

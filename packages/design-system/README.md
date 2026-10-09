@@ -501,7 +501,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   does, and listed for its members alone. The rail's **Files** block has
   their count beside its label and **`PublishedFiles`**: each file's kind
   glyph and its own name (the folder in the tooltip), "v3" when published
-  again, newest first, "N more" past eight; Download all (a zip) once
+  again, and under the name, muted, its `description` — the one line the
+  agent said it is for — when it gave one; newest first, "N more" past eight; Download all (a zip) once
   there are two. Picking one opens the **same viewer as a task's Files**
   (`FileViewer` over an `ArtifactPreview`), with its versions. Nothing
   published yet says so in the block. The agent says in Chat what it
@@ -1691,7 +1692,9 @@ MarkdownCheatsheet.
   rail is the same `SessionRail` and `SessionRailBlock`.
 - **SessionList / SessionItem** — a task's agent sessions, the open one
   `current`.
-- **FileGallery / FileViewer** — a task's files and their versions.
+- **FileGallery / FileViewer** — a task's files and their versions. A
+  `FileVersion`'s optional `description` (what its agent said the file is
+  for) is a secondary line under the name, in a card and a row alike.
 - **Cost** — a total, with the tokens / machine split as a hairline, and
   optionally where each part came from and whether lux has settled it.
 
@@ -1705,7 +1708,8 @@ sessions*):
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.
 - **PublishedFiles** — the rail's Files: what the session's agent
-  published, each opening in `FileViewer`.
+  published, each with its `description` under the name when it has one,
+  each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
 - **SidebarSessions** — your brainstorm sessions above the projects, in

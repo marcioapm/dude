@@ -267,7 +267,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                 ) : null}
               </span>}>
                 {files.length > 0 ? (
-                  <PublishedFiles files={files.map((f) => ({ name: f.name, contentType: f.versions[0]!.contentType, versions: f.versions.length }))}
+                  <PublishedFiles files={files.map((f) => ({ name: f.name, contentType: f.versions[0]!.contentType, versions: f.versions.length,
+                    description: f.versions[0]!.description }))}
                     onOpen={setViewing} />
                 ) : <span className="muted">Nothing published yet: documents it writes for you appear here.</span>}
               </SessionRailBlock>

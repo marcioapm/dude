@@ -63,6 +63,8 @@ interface ArtifactRow {
   contentType: string;
   sizeBytes: number;
   sha256: string;
+  /** What the agent said the file is for, one short line; "" when it said nothing. */
+  description: string;
   epoch: number;
   createdAt: Date;
   phase: string | null;
@@ -82,7 +84,7 @@ async function artifactsOf(organizationId: string, owner: Owner): Promise<Artifa
   const sessionId = "sessionId" in owner ? owner.sessionId : null;
   const rows = await withOrg(organizationId, async ({ sql }) => (await sql`
     SELECT a.id, r.task_id AS "taskId", r.session_id AS "sessionId", a.run_id AS "runId", a.name,
-      a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.epoch,
+      a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.description, a.epoch,
       a.created_at AS "createdAt", r.phase::text AS phase, r.role::text AS role,
       row_number() OVER (PARTITION BY a.name ORDER BY a.created_at, a.epoch, a.id)::int AS version,
       count(*) OVER (PARTITION BY a.name)::int AS versions

@@ -93,8 +93,8 @@ beforeAll(async () => {
     VALUES ('evt_secret', ${ORG}, 'agent.message', ${RUN}, 'agent', ${RUN}, 'runner', '{"text":"the meter dedupes per key"}')`;
   await owner`INSERT INTO questions (id, organization_id, run_id, prompt) VALUES ('qst_secret', ${ORG}, ${RUN}, 'Grow the window?')`;
   await owner`INSERT INTO directives (id, organization_id, run_id, text) VALUES ('dir_secret', ${ORG}, ${RUN}, 'Márcio: hello')`;
-  await owner`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256)
-    VALUES (${ARTIFACT}, ${ORG}, ${RUN}, 'file', 'plan.md', 'text/markdown', ${BYTES.length}, 'k/plan.md', 'x')`;
+  await owner`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description)
+    VALUES (${ARTIFACT}, ${ORG}, ${RUN}, 'file', 'plan.md', 'text/markdown', ${BYTES.length}, 'k/plan.md', 'x', 'The rollout plan')`;
   await owner`INSERT INTO agent_sessions (id, organization_id, run_id, role, harness, model)
     VALUES (${AGENT_SESSION}, ${ORG}, ${RUN}, 'brainstorm', 'opencode', 'm')`;
 
@@ -220,8 +220,9 @@ test("a session's files are listed and zipped for its members alone; anyone else
   for (const member of [marcio, joao]) {
     const res = await call(member, "GET", `/v1/artifacts?sessionId=${SESSION}`);
     expect(res.status).toBe(200);
-    const { artifacts } = await res.json() as { artifacts: Array<{ id: string; name: string; sessionId: string; runId: string; role: string }> };
-    expect(artifacts.map((a) => [a.id, a.name, a.sessionId, a.runId, a.role])).toEqual([[ARTIFACT, "plan.md", SESSION, RUN, "brainstorm"]]);
+    const { artifacts } = await res.json() as { artifacts: Array<{ id: string; name: string; sessionId: string; runId: string; role: string; description: string }> };
+    expect(artifacts.map((a) => [a.id, a.name, a.sessionId, a.runId, a.role, a.description]))
+      .toEqual([[ARTIFACT, "plan.md", SESSION, RUN, "brainstorm", "The rollout plan"]]);
     forwarded.length = 0;
     const zip = await call(member, "GET", `/v1/brainstorms/${SESSION}/artifacts.zip`);
     expect(zip.status).toBe(200);

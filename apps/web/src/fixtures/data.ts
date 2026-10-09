@@ -201,12 +201,12 @@ export const RESTARTED_FINDINGS: Finding[] = [
 /** A finding whose Run is gone (deleted; `run_id` NULL): it shows with the current attempt. */
 export const ORPHAN_FINDING: Finding = finding("f_orphan", null, "medium", "Totals rounded before VAT", "apps/web/src/checkout/useTotals.ts", 30, 20);
 
-const artifact = (id: string, runId: string | null, name: string, phase: string, min: number) => ({
-  id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, epoch: 1, createdAt: iso(min * MIN),
+const artifact = (id: string, runId: string | null, name: string, phase: string, min: number, description = "") => ({
+  id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, description, epoch: 1, createdAt: iso(min * MIN),
   phase, role: "implementer" as const, version: 1, versions: 1,
 });
 export const RESTARTED_ARTIFACTS = [
-  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170),
+  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170, "Why requests route by tenant first"),
   artifact("art_a2_notes", "run_attempt2", "notes/form-split.md", "implement", 60),
 ];
 
