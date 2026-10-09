@@ -13,6 +13,7 @@ import { SQL } from "bun";
 import { personPrincipal } from "../src/api/auth.ts";
 import { Router } from "../src/api/router.ts";
 import { registerProjectRoutes } from "../src/api/routes/projects.ts";
+import { registerSettingsRoutes } from "../src/api/routes/settings.ts";
 import { registerWorkRoutes } from "../src/api/routes/work.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 
@@ -32,6 +33,7 @@ beforeAll(async () => {
   const principal = await personPrincipal(org, person);
   router = new Router(async () => principal);
   registerProjectRoutes(router);
+  registerSettingsRoutes(router);
   registerWorkRoutes(router);
 });
 afterAll(async () => {
@@ -165,3 +167,49 @@ test("two creates at once deriving one key: both are made, under distinct keys",
   // Whichever lands first is ORDE; the other derives again and takes its next.
   expect([["ORDE", "OWOR"], ["OAPI", "ORDE"]]).toContainEqual([bySlug["orders-api"]!, bySlug["orders-worker"]!]);
 }, 20_000);
+
+test("legacy project GET normalizes harness before an editor roundtrip and accepts a valid correction", async () => {
+  const made = await create("Legacy", "legacy");
+  const { id } = (await made.json()) as { id: string };
+  await owner`UPDATE projects SET agent_models = '{"reviewer": {"harness": "aider", "context": "old"}}' WHERE id = ${id}`;
+  const legacyBefore = [...await owner`SELECT * FROM projects WHERE id = ${id}`];
+  const echoed = await call("PATCH", `/v1/projects/${id}`, { agentModels: { reviewer: { harness: "aider", context: "old" } } });
+  expect(echoed.status).toBe(400);
+  expect([...await owner`SELECT * FROM projects WHERE id = ${id}`]).toEqual(legacyBefore);
+  const get = await router.handle(new Request(`http://dude.test/v1/projects/${id}`));
+  expect(get.status).toBe(200);
+  const body = await get.json() as { agentModels: Record<string, unknown> };
+  expect(body.agentModels).toEqual({ reviewer: { context: "old" } });
+  const res = await call("PATCH", `/v1/projects/${id}`, { description: "edited", agentModels: body.agentModels });
+  expect(res.status).toBe(200);
+  const corrected = await call("PATCH", `/v1/projects/${id}`, { agentModels: { reviewer: { harness: "codex", context: "old" } } });
+  expect(corrected.status).toBe(200);
+  const [row] = await owner`SELECT description, agent_models FROM projects WHERE id = ${id}`;
+  expect(row.description).toBe("edited");
+  expect(row.agent_models).toEqual({ reviewer: { harness: "codex", context: "old" } });
+});
+
+for (const harness of ["aider", 42]) {
+  test(`project POST refuses new harness ${JSON.stringify(harness)} without inserting`, async () => {
+    const slug = `bad-harness-${typeof harness}`;
+    const res = await call("POST", "/v1/projects", { name: "Bad harness", slug, agentModels: { reviewer: { harness } } });
+    expect(res.status).toBe(400);
+    expect((await owner`SELECT id FROM projects WHERE organization_id = ${org} AND slug = ${slug}`).length).toBe(0);
+  });
+  test(`project PATCH refuses harness ${JSON.stringify(harness)} and preserves the whole row`, async () => {
+    const made = await call("POST", "/v1/projects", { name: "Strict", slug: `strict-${typeof harness}`, agentModels: { reviewer: { harness: "claude-code" } } });
+    expect(made.status).toBe(201);
+    const { id } = await made.json() as { id: string };
+    const before = [...await owner`SELECT * FROM projects WHERE id = ${id}`];
+    const res = await call("PATCH", `/v1/projects/${id}`, { name: "Changed", agentModels: { reviewer: { harness } } });
+    expect(res.status).toBe(400);
+    expect([...await owner`SELECT * FROM projects WHERE id = ${id}`]).toEqual(before);
+    const orgBefore = [...await owner`SELECT * FROM organizations WHERE id = ${org}`];
+    for (const path of ["/v1/settings/organization", `/v1/projects/${id}/settings`]) {
+      const settings = await call("PATCH", path, { roles: { reviewer: { harness } } });
+      expect(settings.status).toBe(400);
+    }
+    expect([...await owner`SELECT * FROM projects WHERE id = ${id}`]).toEqual(before);
+    expect([...await owner`SELECT * FROM organizations WHERE id = ${org}`]).toEqual(orgBefore);
+  });
+}

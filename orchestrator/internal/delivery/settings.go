@@ -24,7 +24,21 @@ type RoleSettings struct {
 	TimeLimitMinutes int
 	// Per-role notes, appended to the role's prompt.
 	Context string
+	// The coding agent its Runs run on (HarnessOpenCode when no layer
+	// names one). Whether it can run the tier's model is checked when a Run
+	// is built (HarnessFits), not when it is saved.
+	Harness string
 }
+
+// The harnesses a role can run on, as settings and runs.harness name them.
+const (
+	HarnessOpenCode   = "opencode"
+	HarnessClaudeCode = "claude-code"
+	HarnessCodex      = "codex"
+)
+
+// harnessLabel is a harness as a person reads it.
+var harnessLabel = map[string]string{HarnessOpenCode: "OpenCode", HarnessClaudeCode: "Claude Code", HarnessCodex: "Codex"}
 
 // roleLayer is one layer's config for a role, as stored: agent_models on a
 // project, default_agent_models on an organization ({role -> config}).
@@ -32,6 +46,7 @@ type roleLayer struct {
 	Tier             *string `json:"tier"`
 	TimeLimitMinutes *int    `json:"timeLimitMinutes"`
 	Context          *string `json:"context"`
+	Harness          *string `json:"harness"`
 	// Resolved by Sizes.ForRole, which passes over ids that are gone.
 	MachineSize *string `json:"machineSize"`
 }
@@ -69,9 +84,38 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 			if rs.Context == "" && l.Context != nil {
 				rs.Context = *l.Context
 			}
+			if rs.Harness == "" && l.Harness != nil && harnessLabel[*l.Harness] != "" {
+				rs.Harness = *l.Harness
+			}
 		}
 	}
 	return rs
+}
+
+// HarnessName is the harness the role runs on: its own, else OpenCode.
+func (rs RoleSettings) HarnessName() string {
+	if rs.Harness == "" {
+		return HarnessOpenCode
+	}
+	return rs.Harness
+}
+
+// HarnessFits says why harness cannot run model, in words a Run fails
+// with; "" when it can. Claude Code speaks only Anthropic's API and Codex
+// only OpenAI's; OpenCode speaks both (llm.Provider decides which a model
+// goes through). who names the role, as RoleName does.
+func HarnessFits(harness, model, tier, who string, anthropic bool) string {
+	var wants string
+	switch {
+	case harness == HarnessClaudeCode && !anthropic:
+		wants = "an Anthropic model (claude-…)"
+	case harness == HarnessCodex && anthropic:
+		wants = "an OpenAI model"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("The %s runs on %s, which takes %s, but its tier %s requests %s. An admin picks another harness or tier in Agents.",
+		who, harnessLabel[harness], wants, tier, model)
 }
 
 // The no-progress limit: a role's default, and the least a stored one is

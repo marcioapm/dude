@@ -961,7 +961,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
-	var briefing, conductorNote, restartNote, tierOverride string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -995,12 +995,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, '') FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
+			settings.Harness = submittedHarness(ranOn, settings.Harness)
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, settings); err != nil || noTier != "" {
 			return err
+		} else if noTier = harnessMisfit(settings, tier, settingsRole); noTier != "" {
+			return nil
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
@@ -1071,6 +1074,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
+	in.Harness = settings.HarnessName()
+	s.logIgnoredOptions(r, in)
 	in.Egress = RunEgress(orgEgress, projectEgress, egressMode)
 	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m

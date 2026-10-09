@@ -64,8 +64,10 @@ export const TIER_JSON_TOO_BIG = `At most ${TIER_JSON_MAX} bytes as JSON`;
 export const TIER_NUL_MESSAGE = "No NUL characters (\\u0000)";
 const HEADER_NAME_MESSAGE = "Header names are letters, digits and !#$%&'*+.^_`|~-";
 const HEADER_VALUE_MESSAGE = "A header's value is one line";
+// DEL is not allowed in an HTTP field value (RFC 9110), nor raw in Codex's TOML config.
+const HEADER_DEL_MESSAGE = "A header's value holds no DEL character";
 /** What the options and headers fields are refused with, said back as they are. */
-export const TIER_JSON_MESSAGES = [TIER_JSON_TOO_BIG, TIER_NUL_MESSAGE, HEADER_NAME_MESSAGE, HEADER_VALUE_MESSAGE] as const;
+export const TIER_JSON_MESSAGES = [TIER_JSON_TOO_BIG, TIER_NUL_MESSAGE, HEADER_NAME_MESSAGE, HEADER_VALUE_MESSAGE, HEADER_DEL_MESSAGE] as const;
 
 /** Extra OpenCode model options: a JSON object, at most TIER_JSON_MAX bytes. */
 export const tierOptionsSchema = z
@@ -79,6 +81,7 @@ export const tierHeadersSchema = z
   .refine(noNul, TIER_NUL_MESSAGE)
   .refine((h) => Object.keys(h).every((k) => HEADER_NAME.test(k)), HEADER_NAME_MESSAGE)
   .refine((h) => Object.values(h).every((v) => !/[\r\n]/u.test(v)), HEADER_VALUE_MESSAGE)
+  .refine((h) => Object.values(h).every((v) => !v.includes("\u007f")), HEADER_DEL_MESSAGE)
   .refine((h) => jsonBytes(h) <= TIER_JSON_MAX, TIER_JSON_TOO_BIG);
 
 /** A tier as an admin writes it (`POST /v1/models/tiers`, `PUT /v1/models/tiers/:id`). */
