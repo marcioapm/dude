@@ -11,12 +11,14 @@ package orchestrator_test
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 func nested(s *lux.Spec) bool { return s != nil && s.Sandbox != nil && s.Sandbox.NestedContainers }
@@ -307,6 +309,10 @@ func TestASessionAndAConductorAskForContainersAsTheirImageSays(t *testing.T) {
 				t.Errorf("nested = %v, want %v", got, c.want)
 			}
 			keepsEngines(t, spec, false)
+			conductor, _, _ := w.conductor(task)
+			if got := w.recordedContainers(conductor); got != fmt.Sprint(c.want) {
+				t.Errorf("runs.can_run_containers = %s, want %v", got, c.want)
+			}
 		})
 	}
 }
@@ -369,8 +375,8 @@ func TestAnAgentRunsWaitForAHostReachesItsPage(t *testing.T) {
 
 // What a Run recorded at submit is the operator's setting then: turning
 // agent.nested_containers off later changes neither the Run nor its resume
-// (lux keeps the sandbox it was submitted with); the next Run submitted
-// records the new setting.
+// (lux resumes the same Run, with the sandbox it was submitted with); the
+// next Run submitted records the new setting.
 func TestARunKeepsWhatItWasSubmittedWithWhenTheOperatorChangesTheSetting(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.Agent.NestedContainers = true
@@ -379,19 +385,29 @@ func TestARunKeepsWhatItWasSubmittedWithWhenTheOperatorChangesTheSetting(t *test
 	if got := w.recordedContainers(runID); got != "true" {
 		t.Fatalf("at submit: runs.can_run_containers = %s", got)
 	}
-	w.syncer.Agent.NestedContainers = false
+	luxID := w.luxRunOf(runID)
 	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
 	w.until("the pause", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
+	// The operator turns the setting off: an orchestrator started with it
+	// off, as a restart with a new config makes one.
+	w.syncer.Stop()
+	agent := w.syncer.Agent
+	agent.NestedContainers = false
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: agent, KeepFor: w.syncer.KeepFor}
+	t.Cleanup(w.syncer.Stop)
 	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
 	w.until("the resume", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 	})
+	if runs := w.luxRuns(); len(runs) != 1 || runs[0].ID != luxID || !slices.Contains(w.lux.CallsOf(luxID), "resume") {
+		t.Fatalf("lux Runs %d, calls of %s %v; want the one Run, resumed", len(runs), luxID, w.lux.CallsOf(luxID))
+	}
 	if got := w.recordedContainers(runID); got != "true" {
 		t.Errorf("after the setting changed and a resume: runs.can_run_containers = %s, want true", got)
 	}
