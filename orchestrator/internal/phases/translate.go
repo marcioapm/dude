@@ -92,10 +92,11 @@ type translator struct {
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
 // process, the last of it recorded, and its plan as TaskCreate and
-// TaskUpdate built it, with the number the next task gets; the half of a Claude turn's end that has arrived
-// (claudeTurnEnd), and the idle held until the other half; the tokens of
-// the Codex turn in progress; and why the turn in progress failed, from a
-// harness line that said so, which its end fails the Run with.
+// TaskUpdate built it, with the number the next task gets; the half of a
+// Claude turn's end that has arrived (claudeTurnEnd), and the idle held
+// until the other half; the tokens of the Codex turn in progress; and why
+// the turn in progress failed, from a harness line that said so, which its
+// end fails the Run with.
 type harnessState struct {
 	claudeCost     float64
 	claudeCostSeen float64
