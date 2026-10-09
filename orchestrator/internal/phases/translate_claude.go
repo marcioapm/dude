@@ -359,7 +359,7 @@ func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer) er
 	if err := t.flush(ctx, tx, s); err != nil {
 		return err
 	}
-	usage, idle := t.claudeUsage, t.claudeIdle
+	u, idle := t.claudeUsage, t.claudeIdle
 	t.claudeHalf, t.claudeUsage, t.claudeIdle = "", nil, false
 	cost := t.claudeCost - t.claudeCostSeen
 	if t.claudeCost < t.claudeCostSeen {
@@ -367,7 +367,7 @@ func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer) er
 	}
 	t.claudeCostSeen = t.claudeCost
 	payload := map[string]any{"turn": true, "contextTokens": t.usage.context}
-	if u := usage; u != nil {
+	if u != nil {
 		t.usage.input += u.InputTokens
 		t.usage.output += u.OutputTokens
 		t.usage.cacheRead += u.CacheRead
