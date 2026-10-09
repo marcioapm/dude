@@ -33,17 +33,14 @@ func TierFor(ctx context.Context, tx pgx.Tx, role string, settings RoleSettings)
 		return Tier{}, fmt.Sprintf("The %s runs on no model tier. An admin picks one in Agents.", who), nil
 	}
 	t := Tier{ID: settings.Tier}
-	var model, effort *string
-	err := tx.QueryRow(ctx, `SELECT name, model, effort, options, headers FROM model_tiers WHERE id = $1`, settings.Tier).
-		Scan(&t.Name, &model, &effort, &t.Options, &t.Headers)
+	var model *string
+	err := tx.QueryRow(ctx, `SELECT name, model, COALESCE(effort, ''), options, headers FROM model_tiers WHERE id = $1`, settings.Tier).
+		Scan(&t.Name, &model, &t.Effort, &t.Options, &t.Headers)
 	if db.IsNotFound(err) {
 		return Tier{}, fmt.Sprintf("The %s's model tier no longer exists. An admin picks another in Agents.", who), nil
 	}
 	if err != nil {
 		return Tier{}, "", fmt.Errorf("load model tier: %w", err)
-	}
-	if effort != nil {
-		t.Effort = *effort
 	}
 	if model == nil {
 		return t, fmt.Sprintf("The %s runs on %s, which names no model yet. An admin sets it in Models.", who, t.Name), nil
