@@ -4,7 +4,8 @@ package orchestrator_test
 // image's version says it (recorded in runs.image), an image typed by hand
 // never can, and DUDE_AGENT_IMAGE can when agent.nested_containers says so.
 // Every kind of Run asks lux for sandbox.nestedContainers from that; lux
-// keeps it in the Run's stored spec for every resume.
+// keeps it in the Run's stored spec for every resume. What it asked is
+// recorded at submit as runs.can_run_containers, which the Run page reads.
 
 import (
 	"encoding/json"
@@ -17,6 +18,12 @@ import (
 )
 
 func nested(s *lux.Spec) bool { return s != nil && s.Sandbox != nil && s.Sandbox.NestedContainers }
+
+// recordedContainers is runs.can_run_containers of a Run: "true", "false",
+// or "null" when nothing was recorded.
+func (w *world) recordedContainers(runID string) string {
+	return w.str(`SELECT coalesce(can_run_containers::text, 'null') FROM runs WHERE id = $1`, runID)
+}
 
 // canRunContainers marks the published version of a library image.
 func (w *world) canRunContainers(version string, can bool) {
@@ -53,6 +60,12 @@ func TestAnAgentRunAsksForContainersWhenItsLibraryImageCan(t *testing.T) {
 	if got := w.runImage(wi, "review"); got.CanRunContainers {
 		t.Errorf("runs.image = %+v, want no canRunContainers", got)
 	}
+	for phase, want := range map[string]string{"implement": "true", "review": "false"} {
+		run := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase::text = $2`, wi, phase)
+		if got := w.recordedContainers(run); got != want {
+			t.Errorf("%s: runs.can_run_containers = %s, want %s", phase, got, want)
+		}
+	}
 }
 
 // An image typed by hand never runs containers, whatever the operator's
@@ -77,6 +90,10 @@ func TestATypedImageNeverRunsContainersAndTheFallbackDoesWhenTheOperatorSays(t *
 			w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
 			if got := nested(w.specOf("implement")); got != c.want {
 				t.Errorf("nested = %v, want %v", got, c.want)
+			}
+			run := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
+			if got := w.recordedContainers(run); got != fmt.Sprint(c.want) {
+				t.Errorf("runs.can_run_containers = %s, want %v", got, c.want)
 			}
 		})
 	}
@@ -104,6 +121,9 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 		if got := w.str(`SELECT image->>'canRunContainers' FROM runs WHERE id = $1`, runID); got != "true" {
 			t.Errorf("runs.image canRunContainers = %s", got)
 		}
+		if got := w.recordedContainers(runID); got != "true" {
+			t.Errorf("runs.can_run_containers = %s", got)
+		}
 	})
 	t.Run("woken", func(t *testing.T) {
 		w := newWorld(t)
@@ -122,19 +142,39 @@ func TestAPreviewAsksForContainersWhenItsImageCan(t *testing.T) {
 			t.Errorf("the woken preview did not ask for nested containers")
 		}
 		keepsEngines(t, spec, true)
+		w.until("the woken preview's Run recorded", func() bool { return w.recordedContainers(runID) != "null" })
+		if got := w.recordedContainers(runID); got != "true" {
+			t.Errorf("runs.can_run_containers = %s", got)
+		}
 	})
 	t.Run("on the fallback, as the operator says", func(t *testing.T) {
 		for _, flag := range []bool{false, true} {
 			w := newWorld(t)
 			w.previews.DefaultImageContainers = flag
 			mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
-			w.startPreview()
+			_, runID := w.startPreview()
 			w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
 			spec := submitted(t, w.luxRuns()[0])
 			if got := nested(&spec); got != flag {
 				t.Errorf("flag %v: nested = %v", flag, got)
 			}
 			keepsEngines(t, spec, flag)
+			if got := w.recordedContainers(runID); got != fmt.Sprint(flag) {
+				t.Errorf("flag %v: runs.can_run_containers = %s", flag, got)
+			}
+		}
+	})
+	t.Run("typed by hand, never, whatever the operator says", func(t *testing.T) {
+		w := newWorld(t)
+		w.previews.DefaultImageContainers = true
+		mustExec(t, w.owner, `UPDATE projects SET runtime_image = 'agent:test' WHERE id = $1`, w.project)
+		_, runID := w.startPreview()
+		w.until("the preview to reach lux", func() bool { return len(w.luxRuns()) == 1 })
+		if spec := submitted(t, w.luxRuns()[0]); nested(&spec) {
+			t.Errorf("a typed image asked for nested containers")
+		}
+		if got := w.recordedContainers(runID); got != "false" {
+			t.Errorf("runs.can_run_containers = %s", got)
 		}
 	})
 }
@@ -245,6 +285,9 @@ func TestASessionAndAConductorAskForContainersAsTheirImageSays(t *testing.T) {
 			if got := s.str(`SELECT coalesce(image->>'canRunContainers', 'false') FROM runs WHERE id = $1`, run); got != fmt.Sprint(c.image != "" && c.can) {
 				t.Errorf("runs.image canRunContainers = %s", got)
 			}
+			if got := s.str(`SELECT coalesce(can_run_containers::text, 'null') FROM runs WHERE id = $1`, run); got != fmt.Sprint(c.want) {
+				t.Errorf("runs.can_run_containers = %s, want %v", got, c.want)
+			}
 		})
 		t.Run("conductor, "+c.name, func(t *testing.T) {
 			w := newWorld(t)
@@ -319,5 +362,48 @@ func TestAnAgentRunsWaitForAHostReachesItsPage(t *testing.T) {
 		if (step.want == "" && got != nil) || (step.want != "" && (got == nil || *got != step.want)) {
 			t.Errorf("%s: waitingReason = %v, want %q", step.name, got, step.want)
 		}
+	}
+}
+
+// What a Run recorded at submit is the operator's setting then: turning
+// agent.nested_containers off later changes neither the Run nor its resume
+// (lux keeps the sandbox it was submitted with); the next Run submitted
+// records the new setting.
+func TestARunKeepsWhatItWasSubmittedWithWhenTheOperatorChangesTheSetting(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.Agent.NestedContainers = true
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
+	_, runID := w.hangingRun()
+	if got := w.recordedContainers(runID); got != "true" {
+		t.Fatalf("at submit: runs.can_run_containers = %s", got)
+	}
+	w.syncer.Agent.NestedContainers = false
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the resume", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+	})
+	if got := w.recordedContainers(runID); got != "true" {
+		t.Errorf("after the setting changed and a resume: runs.can_run_containers = %s, want true", got)
+	}
+	// A Run submitted after the change records the setting as it is now.
+	next := w.task()
+	w.deliver(next)
+	w.until("the next implementer to reach lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL`, next) == 1
+	})
+	nextRun := w.str(`SELECT id FROM runs WHERE task_id = $1`, next)
+	if got := w.recordedContainers(nextRun); got != "false" {
+		t.Errorf("a Run submitted after the change: runs.can_run_containers = %s, want false", got)
+	}
+	if got := w.recordedContainers(runID); got != "true" {
+		t.Errorf("the first Run after the next was submitted: runs.can_run_containers = %s, want true", got)
 	}
 }

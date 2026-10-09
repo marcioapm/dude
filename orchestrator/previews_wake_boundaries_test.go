@@ -140,6 +140,9 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				if can, ref := image(); can != fmt.Sprint(!before) || ref != nextFinal {
 					t.Errorf("runs.image canRunContainers %s ref %s, want %v %s", can, ref, !before, nextFinal)
 				}
+				if got := w.recordedContainers(runID); got != fmt.Sprint(!before) {
+					t.Errorf("the replacement's runs.can_run_containers = %s, want %v", got, !before)
+				}
 				return
 			}
 			if r.Resumed != 1 {
@@ -158,6 +161,9 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 			keepsEngines(t, kept, before)
 			if can, ref := image(); can != fmt.Sprint(before) || ref != finalRef {
 				t.Errorf("runs.image canRunContainers %s ref %s, want %v %s", can, ref, before, finalRef)
+			}
+			if got := w.recordedContainers(runID); got != fmt.Sprint(before) {
+				t.Errorf("the resumed Run's runs.can_run_containers = %s, want %v", got, before)
 			}
 		})
 	}
