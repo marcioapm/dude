@@ -115,7 +115,7 @@ export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAl
                   <span className={styles["caption"]}>
                     <span className={styles["name"]}>
                       <b>{f.name}</b>
-                      {latest.description ? <span className={styles["description"]} title={latest.description} data-testid="file-description">{latest.description}</span> : null}
+                      <Description of={latest} />
                       <small>
                         {ARTIFACT_KIND_SPECS[kind].label} · {formatBytes(latest.sizeBytes)}
                         {f.versions.length > 1 ? <> · <span className={styles["version"]}>v{latest.version}</span></> : null}
@@ -159,7 +159,7 @@ function FileRow({ file, kind, onOpen, onDownload }: { file: GalleryFile; kind: 
         </span>
         <span className={styles["name"]}>
           <b>{file.name}</b>
-          {latest.description ? <span className={styles["description"]} title={latest.description} data-testid="file-description">{latest.description}</span> : null}
+          <Description of={latest} />
           <small>
             {ARTIFACT_KIND_SPECS[kind].label} · {formatBytes(latest.sizeBytes)}
             {file.versions.length > 1 ? <> · <span className={styles["version"]}>v{latest.version}</span></> : null}
@@ -174,6 +174,11 @@ function FileRow({ file, kind, onOpen, onDownload }: { file: GalleryFile; kind: 
       <IconButton icon="download" size="sm" label={`Download ${file.name}`} onClick={onDownload} />
     </li>
   );
+}
+
+/** A version's description under its name, in full on hover; nothing without one. */
+function Description({ of }: { of: FileVersion }) {
+  return of.description ? <span className={styles["description"]} title={of.description} data-testid="file-description">{of.description}</span> : null;
 }
 
 // ---------------------------------------------------------------------------
