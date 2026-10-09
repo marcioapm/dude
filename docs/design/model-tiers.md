@@ -103,6 +103,12 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   tier's `options` are then deep-merged over that, the tier's keys
   winning, and its `headers` become the model's `headers`. gpt-6-sol
   refuses `none` and `minimal` (an error event inside a 200 stream).
+- **Trying a tier on a real OpenCode.** `scripts/real_thinking.py` (needs
+  the proxy's key in `DUDE_LLM_KEY`; not CI) takes the config
+  `TestPrintATiersOpenCodeConfig` prints from `buildSpec` when
+  `DUDE_PRINT_TIER_CONFIG="<model> <effort>"`, layers it over the image's
+  `opencode.json`, runs `opencode run --thinking` on a read-only question,
+  and fails unless a reasoning part has text.
 - Why the declaration: OpenCode (1.18.34 in the image) refuses a model its
   provider does not declare (`ProviderModelNotFoundError`), and deep-merges
   the inline config over the image's file (remeda `mergeDeep`, inline

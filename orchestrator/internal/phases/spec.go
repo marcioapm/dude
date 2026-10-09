@@ -410,15 +410,6 @@ func openCodeConfig(model, effort string, options map[string]any, headers map[st
 	return string(b)
 }
 
-// OpenCodeConfigFor is the OPENCODE_CONFIG_CONTENT buildSpec gives a phase
-// Run on tier, for trying a tier against a real OpenCode outside a Run
-// (scripts/real-thinking.sh).
-func OpenCodeConfigFor(tier delivery.Tier) string {
-	spec := buildSpec(AgentConfig{}, specInput{Phase: delivery.PhaseImplement, Model: tier.Model, ModelTier: tier.Name,
-		Effort: tier.Effort, Options: tier.Options, Headers: tier.Headers})
-	return spec.Env["OPENCODE_CONFIG_CONTENT"]
-}
-
 // colourEnv makes the tools an agent runs colour their output, though it
 // goes to a pipe rather than a terminal: pytest's failures in red, git's
 // diffs, ls. The chat renders the colour; the agent reads past it.

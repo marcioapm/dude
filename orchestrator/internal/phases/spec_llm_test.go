@@ -2,11 +2,14 @@ package phases
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -140,6 +143,21 @@ func TestATiersEffortReachesTheSpec(t *testing.T) {
 		"options": map[string]any{"effort": "high", "thinking": map[string]any{"type": "adaptive", "display": "summarized"}}}) {
 		t.Errorf("model entry = %v", entry)
 	}
+}
+
+// Prints the OPENCODE_CONFIG_CONTENT buildSpec gives a phase Run on a tier,
+// for trying it against a real OpenCode (scripts/real_thinking.py). Only
+// when DUDE_PRINT_TIER_CONFIG is "MODEL [EFFORT]".
+func TestPrintATiersOpenCodeConfig(t *testing.T) {
+	args := strings.Fields(os.Getenv("DUDE_PRINT_TIER_CONFIG"))
+	if len(args) == 0 {
+		t.Skip("DUDE_PRINT_TIER_CONFIG not set")
+	}
+	in := specInput{Phase: delivery.PhaseImplement, Model: args[0], ModelTier: "Probe"}
+	if len(args) > 1 {
+		in.Effort = args[1]
+	}
+	fmt.Println("OPENCODE_CONFIG_CONTENT=" + buildSpec(AgentConfig{}, in).Env["OPENCODE_CONFIG_CONTENT"])
 }
 
 func TestATiersRunIsLabelledWithTheTier(t *testing.T) {
