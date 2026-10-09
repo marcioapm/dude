@@ -310,6 +310,8 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		if allowed, _ := d["allowed"].(bool); !allowed {
 			return t.refused(ctx, tx, s, strings.TrimSuffix(strings.ToLower(str("name")), "."))
 		}
+	case "artifact.published":
+		return t.artifactPublished(ctx, tx, f)
 	}
 	if strings.HasPrefix(f.EventType, "server.") {
 		// A server of the agent's Run changed (a person started it, it became
@@ -318,6 +320,27 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		return ServerEvent(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, f.EventType, f.EventData)
 	}
 	return nil
+}
+
+// artifactPublished records a file the agent published as soon as lux can
+// serve it, so the Files rail and the ledger show it while the Run goes on.
+// The final diff is left to the stop-time sweep, which records it as the
+// Run's diff: the hook publishes it only as the Run stops, and the sweep
+// runs then. Anything not under PublishedPrefix (artifacts.paths) is not
+// for people.
+func (t *translator) artifactPublished(ctx context.Context, tx pgx.Tx, f lux.Frame) error {
+	var ev struct {
+		ID string `json:"artifactId"`
+		lux.Artifact
+	}
+	if json.Unmarshal(f.EventData, &ev) != nil || ev.ID == "" ||
+		!strings.HasPrefix(ev.Path, lux.PublishedPrefix) || strings.HasPrefix(ev.Path, FinalDiffPrefix) {
+		return nil
+	}
+	art := ev.Artifact
+	art.ID, art.Epoch, art.Available = ev.ID, cmp.Or(f.Epoch, 1), true
+	r := t.run
+	return recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art)
 }
 
 // refused records a name lux would not resolve for the Run's agent: kept

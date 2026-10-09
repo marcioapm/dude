@@ -579,6 +579,8 @@ type Client interface {
 	// without its output.
 	Events(ctx context.Context, runID string, after int64) ([]Frame, error)
 	Get(ctx context.Context, runID string) (Run, error)
+	// Artifacts lists every version of each of a Run's artifacts
+	// (?versions=all; an older lux, which has none, ignores it).
 	Artifacts(ctx context.Context, runID string) ([]Artifact, error)
 	// Download streams an artifact as the Run wrote it. The caller closes it.
 	Download(ctx context.Context, artifactID string) (io.ReadCloser, error)
@@ -777,7 +779,7 @@ func (c *HTTPClient) Artifacts(ctx context.Context, runID string) ([]Artifact, e
 	var out struct {
 		Artifacts []Artifact `json:"artifacts"`
 	}
-	err := c.do(ctx, "GET", "/v1/runs/"+runID+"/artifacts", nil, nil, &out)
+	err := c.do(ctx, "GET", "/v1/runs/"+runID+"/artifacts?versions=all", nil, nil, &out)
 	return out.Artifacts, err
 }
 

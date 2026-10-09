@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,11 +19,14 @@ import (
 
 // Artifacts records what agents published, once lux has it.
 //
-// An agent publishes a file by writing it into $LUX_ARTIFACTS. lux collects
-// that directory whenever the container exits — finished, paused, aborted,
-// failed — uploads the files, and lists them on the Run. dude only records
-// them: the bytes stay in lux and are streamed from there when someone
-// opens one.
+// An agent publishes a file with `dude publish` (lux-shim publish). lux
+// reports each one on the Run's stream as artifact.published once it can
+// be downloaded, and the translator records it then, while the Run goes
+// on. This sweep is the backstop: for an older lux, which collects
+// $LUX_ARTIFACTS only when the container exits, and for anything the
+// stream's follower missed. dude only records them: the bytes stay in lux
+// and are streamed from there when someone opens one. Both record through
+// recordArtifact, idempotent on lux's artifact id.
 //
 // A Run is due for collection when it stops (a trigger sets
 // artifacts_due_at on every stopping status). lux reports an exit's
@@ -152,7 +156,9 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		ready = append(ready, art)
 	}
 	// The final diff the beforeStop hook left is dude's own: recorded as
-	// the Run's diff, never listed as a file for people. The latest exit's.
+	// the Run's diff, never listed as a file for people. The latest exit's,
+	// and of each repository's patch its latest version (every version is
+	// listed).
 	var final []lux.Artifact
 	files := ready[:0]
 	for _, art := range ready {
@@ -163,11 +169,14 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		if _, ok := finalDiffRepo(art.Path); !ok {
 			continue // not one of its patches: a file it had not finished
 		}
-		switch {
+		switch i := slices.IndexFunc(final, func(f lux.Artifact) bool { return f.Path == art.Path }); {
 		case len(final) == 0 || art.Epoch > final[0].Epoch:
 			final = []lux.Artifact{art}
-		case art.Epoch == final[0].Epoch:
+		case art.Epoch < final[0].Epoch:
+		case i < 0:
 			final = append(final, art)
+		case art.Version > final[i].Version:
+			final[i] = art
 		}
 	}
 	// Never at the expense of the files: a diff lux refuses for good (gone,
@@ -182,7 +191,7 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		for _, art := range files {
-			if err := a.record(ctx, tx, r, art); err != nil {
+			if err := recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art); err != nil {
 				return err
 			}
 		}
@@ -234,7 +243,13 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 	return true, nil
 }
 
-func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Artifact) error {
+// artifactRun is the dude Run an artifact is recorded on.
+type artifactRun struct{ Org, ProjectID, TaskID, ID string }
+
+// recordArtifact records one artifact lux can serve, with artifact.created,
+// once per lux artifact id however often it is seen (the stream's
+// artifact.published, a replay of it, the stop-time sweep).
+func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
 	id := ids.New(ids.Artifact)
 	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
 	ctype := art.ContentType
