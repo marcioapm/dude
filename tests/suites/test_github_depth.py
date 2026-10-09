@@ -239,7 +239,13 @@ def test_a_conflict_stops_for_a_person_and_waits_again_once_resolved(
 
     fake_github.set_conflicting(pr["number"], False)
     assert client.post(f"/v1/tasks/{task['id']}/decide", {"action": "wait"}).status_code == 200
-    wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=30, message="waiting again did not return to review")
+    # Waiting again puts the task back in review, and this one is approved
+    # with nothing left to block it, so the next read of the pull request
+    # moves it on to ready to merge. The review status is passed through,
+    # sometimes between two polls: the end state is what holds.
+    wait_until(lambda: _task(client, task["id"])["status"] == "ready_to_merge", timeout=30,
+               message="waiting again did not return to review and on to ready to merge")
+    assert [e["payload"]["status"] for e in _events(client, task["id"], "task.status_changed")][-2:] == ["review", "ready_to_merge"]
 
 
 def test_update_branch_brings_it_up_to_date(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):
