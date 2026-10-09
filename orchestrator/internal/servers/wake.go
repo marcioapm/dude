@@ -439,13 +439,12 @@ func (p *Previews) wake(ctx context.Context, r wakeRun) (bool, error) {
 	return true, nil
 }
 
+// wakeClaimed brings the preview up. Every path that attaches, resumes or
+// submits reconciles the preview's servers first (reconcileServers): lux
+// starts them as they are when the Run comes up, so the project's recipes
+// as they are now reach this very start. A wake released to wait (an idle
+// stop under way, an image not ready) reconciles nothing.
 func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
-	// Before any path below attaches, resumes or submits: lux starts the
-	// servers as they are when the Run comes up, so the project's recipes
-	// as they are now reach this very start.
-	if done, err := p.reconcileServers(ctx, r); err != nil || done {
-		return err
-	}
 	if r.LuxRunID != "" {
 		cancel := false
 		lr, err := p.Lux.Get(ctx, r.LuxRunID)
@@ -496,6 +495,9 @@ func (p *Previews) wakeClaimed(ctx context.Context, r wakeRun) error {
 				// Never runs again: a new one below.
 			default:
 				// On its way up or running already: its servers come with it.
+				if done, err := p.reconcileServers(ctx, r); err != nil || done {
+					return err
+				}
 				if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
 					return p.attachFailed(ctx, r, r.LuxRunID, err)
 				}
@@ -587,6 +589,9 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	sync, err := p.syncRefs(ctx, r)
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
+	}
+	if done, err := p.reconcileServers(ctx, r); err != nil || done {
 		return err
 	}
 	// Attached before the resume, so lux starts them on its placement. A
@@ -790,6 +795,9 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	}
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
+	}
+	if done, err := p.reconcileServers(ctx, r); err != nil || done {
 		return err
 	}
 	spec.Workload.Servers = nil
@@ -1146,8 +1154,9 @@ func (p *Previews) complete(ctx context.Context, r wakeRun, reason, actorType, a
 	return p.endInLux(ctx, r)
 }
 
-// endInLux deletes an ended preview's lux servers — their hostnames then
-// say "This preview is gone" — and then cancels its Run.
+// endInLux deletes an ended preview's lux servers, recorded or only
+// labelled dude.preview=<id> — their hostnames then say "This preview is
+// gone" — and then cancels its Run.
 func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 	list, err := p.previewServers(ctx, r.Org, r.ID)
 	if err != nil {
@@ -1162,6 +1171,17 @@ func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 				r.ID, sv.LuxID)
 			return err
 		}); err != nil {
+			return err
+		}
+	}
+	// What lux still has under the preview's label with no row: a server
+	// whose recipe was dropped (dropServer) and whose delete failed.
+	left, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
+	if err != nil {
+		return err
+	}
+	for _, ts := range left {
+		if err := p.Lux.DeleteServer(ctx, ts.ID); err != nil && !lux.IsNotFound(err) {
 			return err
 		}
 	}
