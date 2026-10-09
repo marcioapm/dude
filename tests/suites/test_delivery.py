@@ -193,20 +193,23 @@ def test_a_file_an_agent_publishes_is_listed_while_its_run_keeps_running(client:
     client.post(f"/v1/tasks/{task['id']}/deliver")
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),
                      timeout=30, message="the implementer never started")
+    try:
+        def listed_while_running():
+            found = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
+            # Read after the list: running now means running when they were recorded,
+            # since nothing records a Run's files at its stop before it stops.
+            if len(found) < 3 or client.get_run(run["id"])["status"] != "running":
+                return None
+            return found
 
-    def listed_while_running():
-        found = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
-        # Read after the list: running now means running when they were recorded,
-        # since nothing records a Run's files at its stop before it stops.
-        if len(found) < 3 or client.get_run(run["id"])["status"] != "running":
-            return None
-        return found
-
-    found = wait_until(listed_while_running, timeout=30, message="the files were not listed while the Run ran")
-    assert sorted((a["name"], a["description"], a["version"]) for a in found) == [
-        ("NOTES.md", "What NOTES.md is for", 1), ("coverage.html", "What coverage.html is for", 1),
-        ("screenshot.png", "What screenshot.png is for", 1)], found
-    assert client.get_run(run["id"])["status"] == "running"
+        found = wait_until(listed_while_running, timeout=30, message="the files were not listed while the Run ran")
+        assert sorted((a["name"], a["description"], a["version"]) for a in found) == [
+            ("NOTES.md", "What NOTES.md is for", 1), ("coverage.html", "What coverage.html is for", 1),
+            ("screenshot.png", "What screenshot.png is for", 1)], found
+        assert client.get_run(run["id"])["status"] == "running"
+    finally:
+        # fake/live never ends its turn.
+        client.post(f"/v1/runs/{run['id']}/abort", {})
 
 
 def test_a_project_names_the_reviewers_every_delivery_runs(client: ApiClient, forge_project: dict):
