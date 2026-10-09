@@ -60,11 +60,10 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 	}); err != nil {
 		return false, err
 	}
-	live := slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.Live })
 	// What lux has of them, by id: what each recipe is compared with. A
 	// first declare has nothing to compare (createServer looks for its own).
 	var inLux []lux.TenantServer
-	if live || r.Status != "pending" {
+	if r.Status != "pending" || slices.ContainsFunc(recorded, func(s recordedServer) bool { return s.Live }) {
 		var err error
 		if inLux, err = p.Lux.ListServers(ctx, "", "dude.preview="+r.ID); err != nil {
 			return false, err
@@ -155,36 +154,11 @@ type recordedServer struct {
 }
 
 // updateServer PATCHes the fields in which a preview server's recipe
-// differs from what lux has (cur); nothing when none does.
+// differs from what lux has (cur); nothing when none does. A server lux no
+// longer has is left to the feed; a 409 (attached or detached meanwhile) is
+// returned as an error that is not lux's refusal, so the wake is tried
+// again.
 func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantServer, in lux.ServerInput) error {
-	patch, changed := serverPatch(cur, in)
-	if len(changed) == 0 {
-		return nil
-	}
-	// Names only: env values may be credentials.
-	p.Log.Info("a preview server's recipe changed; updating it in lux", "run", r.ID, "server", in.Name, "fields", changed)
-	return patchServer(ctx, p.Lux, cur.ID, patch)
-}
-
-// patchServer sends a PATCH. A server lux no longer has is left to the
-// feed; a 409 (attached or detached meanwhile) is returned as an error
-// that is not lux's refusal, so the wake is tried again.
-func patchServer(ctx context.Context, c lux.Servers, id string, patch lux.PatchServer) error {
-	_, err := c.PatchServer(ctx, id, patch)
-	if le, ok := lux.AsError(err); ok {
-		switch le.Status {
-		case http.StatusNotFound:
-			return nil
-		case http.StatusConflict:
-			return fmt.Errorf("patching lux server %s: %v", id, le)
-		}
-	}
-	return err
-}
-
-// serverPatch is what lux needs to be sent to make cur serve in: only the
-// fields that differ, and their names.
-func serverPatch(cur lux.TenantServer, in lux.ServerInput) (lux.PatchServer, []string) {
 	var patch lux.PatchServer
 	var changed []string
 	if cur.Port != in.Port {
@@ -212,7 +186,21 @@ func serverPatch(cur lux.TenantServer, in lux.ServerInput) (lux.PatchServer, []s
 		patch.Env = &env
 		changed = append(changed, "env")
 	}
-	return patch, changed
+	if len(changed) == 0 {
+		return nil
+	}
+	// Names only: env values may be credentials.
+	p.Log.Info("a preview server's recipe changed; updating it in lux", "run", r.ID, "server", in.Name, "fields", changed)
+	_, err := p.Lux.PatchServer(ctx, cur.ID, patch)
+	if le, ok := lux.AsError(err); ok {
+		switch le.Status {
+		case http.StatusNotFound:
+			return nil
+		case http.StatusConflict:
+			return fmt.Errorf("patching lux server %s: %v", cur.ID, le)
+		}
+	}
+	return err
 }
 
 // dropServer deletes a preview server whose recipe is gone. Its row goes
@@ -263,9 +251,5 @@ func (p *Previews) addServer(ctx context.Context, r wakeRun, of PreviewOf, in lu
 	}
 	// An adopted server (a create whose answer was lost, or a leftover a
 	// recipe wants again) may be of an older recipe.
-	if patch, changed := serverPatch(sv, in); len(changed) > 0 {
-		p.Log.Info("an adopted preview server is of an older recipe; updating it in lux", "run", r.ID, "server", in.Name, "fields", changed)
-		return patchServer(ctx, p.Lux, sv.ID, patch)
-	}
-	return nil
+	return p.updateServer(ctx, r, sv, in)
 }
