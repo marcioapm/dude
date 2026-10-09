@@ -213,23 +213,15 @@ func (t *translator) codexItemDone(ctx context.Context, tx pgx.Tx, s *Syncer, it
 	case "agentMessage":
 		t.active = true
 		t.resumeOutput(ctx, tx, s, epoch)
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
-		}
-		t.message.WriteString(it.Text)
-		return t.flushText(ctx, tx, s, &t.message, evAgentMessage)
+		return t.flushWhole(ctx, tx, s, &t.message, evAgentMessage, it.Text)
 	case "reasoning":
 		t.active = true
 		t.resumeOutput(ctx, tx, s, epoch)
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
-		}
 		text := strings.Join(it.Summary, "\n\n")
 		if strings.TrimSpace(text) == "" {
 			text = strings.Join(it.Content, "\n\n")
 		}
-		t.thought.WriteString(text)
-		return t.flushText(ctx, tx, s, &t.thought, evAgentThought)
+		return t.flushWhole(ctx, tx, s, &t.thought, evAgentThought, text)
 	}
 	name := codexToolName(it)
 	if name == "" {
