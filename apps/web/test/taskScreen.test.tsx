@@ -138,7 +138,7 @@ describe("a branch preview on the Servers tab", () => {
         override taskServers() {
           return super.taskServers().then((d) => ({ ...d, run: d.run ? {
             ...d.run, startedAt: new Date(Date.now() - 34 * 60000).toISOString(),
-            previewStage: "volumes" as const, previewStageSince: timestamp,
+            previewStage: "volumes" as const, ...(timestamp === undefined ? {} : { previewStageSince: timestamp }),
           } : null }));
         }
       }
@@ -149,8 +149,28 @@ describe("a branch preview on the Servers tab", () => {
       const active = progress.querySelector('[aria-current="step"]')!;
       expect(active.textContent).not.toContain("34m");
       expect(active.textContent?.includes("·")).toBe(Boolean(timestamp));
+      // The timer counts from previewStageSince (24s ago), not from now or startedAt.
+      if (timestamp) expect(active.textContent).toMatch(/\b2[4-6]s\b/);
     });
   }
+  test("a stopping preview says Stopping, not starting, on its run and its tab", async () => {
+    class StoppingPreview extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({ ...d, run: d.run ? {
+          ...d.run, previewStage: "stopping" as const, previewStageSince: new Date().toISOString(), luxState: "stopping",
+        } : null }));
+      }
+    }
+    const page = await taskPage(new StoppingPreview("e"), { tab: "servers" });
+    const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
+    expect(progress.getAttribute("data-stage")).toBe("stopping");
+    const panel = page.querySelector<HTMLElement>("[data-testid=servers-panel]")!;
+    const mark = await until(() => panel.querySelector<HTMLElement>("[data-status]"), "the run's mark");
+    expect(mark.getAttribute("data-status")).not.toBe("starting");
+    expect(mark.textContent).toBe("Stopping");
+    const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((x) => x.textContent?.startsWith("Servers"))!;
+    expect(tab.querySelector("[data-server-state=starting]")).toBeNull();
+  });
   /** Scenario e's preview, past its stages: ready, lux running it. */
   class ReadyPreview extends FixtureClient {
     override taskServers() {

@@ -408,11 +408,14 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	if p == nil {
 		p = s.newPlacement(run)
 	}
+	// lux's image since is the runner's accept; the fake's nearest is the
+	// assignment (its AcceptedAt is the Run's submit or resume).
 	s.setStage(run, "image", p.AssignedAt, "")
 	s.mu.Unlock()
 	if s.OnStage != nil {
 		s.OnStage(epoch, "image")
 	}
+	stages := [...]string{"volumes", "repositories", "container", "running"}
 	for i, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ReposReadyAt, &p.ContainerStartedAt} {
 		time.Sleep(step)
 		s.mu.Lock()
@@ -422,10 +425,10 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 		}
 		now := time.Now()
 		*stamp, p.State = &now, "starting"
-		s.setStage(run, []string{"volumes", "repositories", "container", "running"}[i], &now, "")
+		s.setStage(run, stages[i], &now, "")
 		s.mu.Unlock()
 		if s.OnStage != nil {
-			s.OnStage(epoch, []string{"volumes", "repositories", "container", "running"}[i])
+			s.OnStage(epoch, stages[i])
 		}
 	}
 	time.Sleep(step)
@@ -589,8 +592,13 @@ type Server struct {
 	// onStart, set by a test before any Run, is called by each start at
 	// its hold points (hold), and may block to order it against others.
 	onStart func(epoch int, point string)
-	// OnStage can hold a lifecycle boundary without the fake's lock.
-	OnStage      func(epoch int, stage string)
+	// OnStage, set by a test before any Run, is called at each stage
+	// boundary after the stage is set, without the fake's lock, and may
+	// block to hold the Run there. Exported, unlike onStart, because
+	// dude's tests outside this package hold stages.
+	OnStage func(epoch int, stage string)
+	// LegacyStages is a lux from before stages: its GET and events carry
+	// no stage fields.
 	LegacyStages bool
 
 	// Pools is what GET /v1/pools lists; nil is DefaultPools. POST
@@ -1559,17 +1567,32 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		data["reason"] = reason
 	}
 	s.luxEvent(run, "state", data)
-	switch state {
-	case "submitted", "resuming":
+	// Each stage's since, as lux's deriveStage takes it (the fake's own
+	// marks stand in for lux's columns):
+	//	waiting  run.acceptedAt: the submit or resume, or a move's placement
+	//	         end (lux: waiting_since, needs_host_since, last end, created)
+	//	image    the placement's AssignedAt (placing; lux: its acceptedAt,
+	//	         which the fake's run-level AcceptedAt does not model)
+	//	volumes, repositories, container  imageReadyAt, volumesRestoredAt, reposReadyAt
+	//	running  containerStartedAt
+	//	stopping stopRequestedAt, with the stop's reason
+	//	resting  now: the state change (lux: state_changed_at)
+	switch {
+	case state == "submitted" || state == "resuming":
 		s.setStage(run, "waiting", run.acceptedAt, "")
-	case "stopping":
-		s.setStage(run, "stopping", run.currentPlacement().StopRequestedAt, reason)
-	case "running":
-		s.setStage(run, "running", run.currentPlacement().ContainerStartedAt, "")
-	default:
-		if lux.Terminal(state) {
-			s.setStage(run, state, nil, "")
+	case state == "stopping":
+		var since *time.Time
+		if p := run.currentPlacement(); p != nil {
+			since = p.StopRequestedAt
 		}
+		s.setStage(run, "stopping", since, reason)
+	case state == "running":
+		s.setStage(run, "running", run.currentPlacement().ContainerStartedAt, "")
+	case state == "stopped" && lux.Moved(reason):
+		// A move's stopped and its resume are one change in lux: it goes
+		// from stopping to waiting, never stopped.
+	case lux.Terminal(state):
+		s.setStage(run, state, nil, "")
 	}
 }
 
@@ -1665,7 +1688,7 @@ func (s *Server) view(run *Run) map[string]any {
 	for _, p := range run.placements {
 		view := map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
 			"acceptedAt": p.AcceptedAt, "assignedAt": p.AssignedAt, "imageReadyAt": p.ImageReadyAt,
-			"volumesRestoredAt": p.VolumesRestoredAt, "containerStartedAt": p.ContainerStartedAt,
+			"volumesRestoredAt": p.VolumesRestoredAt, "reposReadyAt": p.ReposReadyAt, "containerStartedAt": p.ContainerStartedAt,
 			"workloadStartedAt": p.WorkloadStartedAt, "stopRequestedAt": p.StopRequestedAt,
 			"exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt, "uploadedAt": p.UploadedAt}
 		// Absent until reached, as lux leaves them out.

@@ -6,7 +6,7 @@ import { Button } from "../primitives/Button.tsx";
 import { Callout } from "../primitives/Layout.tsx";
 import styles from "./PreviewStages.module.css";
 
-/** A preview's stages, in order. */
+/** A preview's five coming-up steps, in order; the Cloning slot shows an infrastructure stage while it is current. */
 export const PREVIEW_STAGES = ["scheduling", "cloning", "setup", "starting", "ready"] as const satisfies readonly PreviewStage[];
 
 export interface PreviewStagesProps extends HTMLAttributes<HTMLDivElement> {
@@ -31,14 +31,20 @@ const STAGE_WORDS: Record<PreviewStage, string> = {
   ready: "Ready",
 };
 
+/** lux's infrastructure stages: the current one takes the Cloning step's slot. */
+const INFRA_STAGES: ReadonlySet<PreviewStage> = new Set(["image", "volumes", "container"]);
+
 /**
  * A branch preview coming up, as a small step strip: Scheduling › Cloning
- * › Setup › Starting servers › Ready. Done steps are checked, the current
- * one spins with how long it has taken, the rest are hollow.
+ * › Setup › Starting servers › Ready. While the preview is at Preparing
+ * image, Restoring volumes or Starting container, that step takes the
+ * Cloning slot. Stopping is a single step alone, not a completed startup.
+ * Done steps are checked, the current one spins with how long it has
+ * taken, the rest are hollow.
  */
 export function PreviewStages({ stage, branch, setup, elapsed, className, ...rest }: PreviewStagesProps) {
   const steps: readonly PreviewStage[] = stage === "stopping" ? ["stopping"] :
-    PREVIEW_STAGES.map((s) => s === "cloning" && ["image", "volumes", "container"].includes(stage) ? stage : s);
+    PREVIEW_STAGES.map((s) => s === "cloning" && INFRA_STAGES.has(stage) ? stage : s);
   const at = steps.indexOf(stage);
   return (
     <div className={cx(styles["root"], className)} aria-label="Preview progress" data-stage={stage} {...rest}>

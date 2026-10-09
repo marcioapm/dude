@@ -144,6 +144,12 @@ describe("summaries", () => {
     expect([asleep.starting, asleep.booting]).toEqual([false, false]);
   });
 
+  test("a branch preview stopping is not coming up", () => {
+    const stopping = summarizeTaskServers(task([server({ state: "stopped", fromSpec: true })],
+      { run: { ...agent, kind: "preview" as const, previewStage: "stopping" as const } }))!;
+    expect([stopping.starting, stopping.booting]).toEqual([false, false]);
+  });
+
   test("with no run, the recipes are all off; with no run and no recipes there is nothing to say", () => {
     const recipes = [{ name: "web" }, { name: "api" }] as TaskServers["recipes"];
     const none = summarizeTaskServers(task([], { run: null, recipes }))!;
