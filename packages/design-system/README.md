@@ -757,11 +757,13 @@ here.
 - A turn's text spans its column: chat turns have no measure (`Markdown
   unmeasured`: messages, thoughts, questions), so a long line wraps at the
   column's edge, not beside empty space.
-- What an agent does between its messages — a run of tool calls and
-  thoughts — is one `ChatAside`: on the message text column (past the
-  avatar gutter, so its left edge lines up with the words above), 4px
-  between its items, and a turn's air above and below the run. Never a
-  tool call on its own at the transcript's edge.
+- What an agent does between its messages — a run of tool calls,
+  thoughts, and the events and progress it records — is one `ChatAside`:
+  on the message text column (past the avatar gutter, so its left edge
+  lines up with the words above), 4px between its items, and a turn's air
+  above and below the run. Never one of them on its own at the
+  transcript's edge. Inside it every row starts on the column and insets
+  its glyph 8px, so a thought, an event and a tool call line up.
 - The list of agent sessions is 260px (200px below 1280px).
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads

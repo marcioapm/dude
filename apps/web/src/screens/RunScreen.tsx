@@ -755,10 +755,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 });
 
 /**
- * The turns, with each run of tool calls and thoughts gathered into one
- * group: a `ChatAside` puts them on the message column, stacked close,
- * with a turn's air above and below the run — as the design system draws
- * what an agent does between its messages.
+ * The turns, with each run of what an agent does between its messages —
+ * tool calls, thoughts, the events and progress it records — gathered
+ * into one group: a `ChatAside` puts them on the message column, stacked
+ * close, with a turn's air above and below the run, as the design system
+ * draws it. Never one of them alone at the transcript's edge.
  */
 /**
  * The conductor's turns (grouped into asides) and the Chat's other lines,
@@ -784,7 +785,7 @@ export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: Readonl
 export function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
   const out: Array<Turn | Turn[]> = [];
   for (const turn of turns) {
-    if (turn.kind !== "tool" && turn.kind !== "thought") {
+    if (turn.kind !== "tool" && turn.kind !== "thought" && turn.kind !== "event" && turn.kind !== "progress") {
       out.push(turn);
       continue;
     }

@@ -80,9 +80,6 @@ export function ChatEvent({ type, data, at, role, expanded, defaultExpanded, onE
   const when = new Date(at);
   const line = (
     <>
-      <span className={styles["chevron"]} aria-hidden>
-        {detail ? <Icon name="chevron-right" size={12} className={styles["chevronIcon"]} /> : null}
-      </span>
       <span className={styles["glyph"]} aria-hidden>
         <Icon name="zap" size={12} />
       </span>
@@ -111,6 +108,9 @@ export function ChatEvent({ type, data, at, role, expanded, defaultExpanded, onE
           <time className={styles["time"]} dateTime={Number.isNaN(when.getTime()) ? undefined : when.toISOString()} title={when.toLocaleString()}>
             {formatTimestamp(at, "time")}
           </time>
+          <span className={styles["chevron"]} aria-hidden>
+            {detail ? <Icon name="chevron-right" size={14} className={styles["chevronIcon"]} /> : null}
+          </span>
         </span>
       </div>
       {open ? (
