@@ -3,11 +3,14 @@ package orchestrator_test
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // setHarness names the harness a role of the world's project runs on.
@@ -208,5 +211,75 @@ func TestARealModelOnClaudeCodeGoesToLuxAsClaudeCode(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND harness = 'claude-code'`, wi); n != 1 {
 		t.Errorf("the Run does not record Claude Code")
+	}
+}
+
+// secretNames are the names among a resume's secrets.
+func secretNames(secrets []lux.Secret) []string {
+	var out []string
+	for _, s := range secrets {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// A phase Run whose role moved to another harness while it was paused
+// resumes on the one it was submitted on: lux resumes Claude Code's
+// command, so the resume carries Claude Code's key, not OpenCode's.
+func TestAResumedRunKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("implementer", "claude-sonnet-5")
+	w.setHarness("implementer", "claude-code")
+	w.lux.Decide = hang
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	w.setHarness("implementer", "opencode")
+	w.pauseAndResume(wi)
+	r := w.lux.Runs()[0]
+	if len(r.ResumeSecrets) != 1 {
+		t.Fatalf("resumes = %d, want 1", len(r.ResumeSecrets))
+	}
+	if names := secretNames(r.ResumeSecrets[0]); !slices.Contains(names, "ANTHROPIC_API_KEY") || slices.Contains(names, "DUDE_LLM_KEY") {
+		t.Errorf("resume secrets = %v, want Claude Code's key and not OpenCode's", names)
+	}
+}
+
+// So does a session's agent, parked and resumed by a message.
+func TestAResumedSessionKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
+	s := newSessionWorld(t)
+	s.syncer.ConductorWarm = time.Hour
+	s.lux.Decide = hang
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	brainstormOn := func(harness string) {
+		mustExec(t, s.owner, `UPDATE organizations SET default_agent_models = jsonb_set(default_agent_models, '{brainstorm}',
+			COALESCE(default_agent_models->'brainstorm', '{}'::jsonb) || jsonb_build_object('harness', $2::text)) WHERE id = $1`, s.org, harness)
+	}
+	brainstormOn("claude-code")
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	var run string
+	s.until("the brainstorm running", func() bool {
+		run, _ = s.brainstorm(id)
+		return run != "" && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running' AND harness = 'claude-code'`, run) == 1
+	})
+	brainstormOn("opencode")
+	// Its turn long done: the sweep parks it.
+	mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours', agent_busy_at = now() - interval '3 hours',
+		agent_active_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours',
+		stall_reported_at = now() - interval '3 hours' WHERE id = $1`, run)
+	s.until("the session parked", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
+	})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+	s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
+	var secrets []lux.Secret
+	for _, r := range s.lux.Runs() {
+		if r.Resumed == 1 {
+			secrets = r.ResumeSecrets[0]
+		}
+	}
+	if names := secretNames(secrets); !slices.Contains(names, "ANTHROPIC_API_KEY") || slices.Contains(names, "DUDE_LLM_KEY") {
+		t.Errorf("resume secrets = %v, want Claude Code's key and not OpenCode's", names)
 	}
 }
