@@ -65,7 +65,7 @@ func TestPublishingRunsLuxShimPublish(t *testing.T) {
 	}
 	b, _ := os.ReadFile(args)
 	if got := strings.Split(strings.TrimSpace(string(b)), "\n"); strings.Join(got, "|") !=
-		"publish|/workspace/notes.md|--name|design/notes.md|--description|Why the export streams" {
+		"publish|--name|design/notes.md|--description|Why the export streams|--|/workspace/notes.md" {
 		t.Fatalf("lux-shim was run with %q", got)
 	}
 }
@@ -78,8 +78,57 @@ func TestPublishingWithoutANamePassesNoFlags(t *testing.T) {
 	if _, err := publish("notes.md", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(args); string(b) != "publish\nnotes.md\n" {
+	if b, _ := os.ReadFile(args); string(b) != "publish\n--\nnotes.md\n" {
 		t.Fatalf("lux-shim was run with %q", b)
+	}
+}
+
+// The CLI's flags reach lux-shim, the file last after `--`; a description
+// with no FILE is a mistake, not a conductor's publish.
+func TestDudePublishPassesItsFlagsToLuxShim(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	args := fakeShim(t, `{"id":"art_aaaaaaaaaaaaaaaa","name":"n.md","size":1,"sha256":"ab"}`, 0)
+	var out strings.Builder
+	if err := run([]string{"publish", "notes.md", "--name", "n.md", "--description", "Why"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(args); string(b) != "publish\n--name\nn.md\n--description\nWhy\n--\nnotes.md\n" {
+		t.Fatalf("lux-shim was run with %q", b)
+	}
+	if err := run([]string{"publish", "--description", "Why"}, &out); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("no FILE: %v", err)
+	}
+}
+
+// A file whose name starts with - is published, not read as a flag.
+func TestAFileNamedLikeAFlagIsPublished(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	args := fakeShim(t, `{"id":"art_aaaaaaaaaaaaaaaa","name":"-notes.md","size":1,"sha256":"ab"}`, 0)
+	var out strings.Builder
+	if err := run([]string{"publish", "--description", "Why", "--", "-notes.md"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(args); string(b) != "publish\n--description\nWhy\n--\n-notes.md\n" {
+		t.Fatalf("lux-shim was run with %q", b)
+	}
+}
+
+// lux-shim killed by a signal has no status to pass on: dude's own error,
+// which main prints and exits 1 with.
+func TestALuxShimKilledByASignalIsDudesError(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "lux-shim")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nkill -KILL $$\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := luxShim
+	luxShim = shim
+	t.Cleanup(func() { luxShim = old })
+	err := run([]string{"publish", "notes.md"}, &strings.Builder{})
+	var passed shimFailed
+	if err == nil || errors.As(err, &passed) || !strings.Contains(err.Error(), "lux-shim publish: signal: killed") {
+		t.Fatalf("publish answered %v; want dude's own error naming the signal", err)
 	}
 }
 
