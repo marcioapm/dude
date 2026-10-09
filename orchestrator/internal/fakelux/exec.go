@@ -100,8 +100,9 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 
 // beforeStop runs the spec's workload.beforeStop hook, as lux does on every
 // stop it makes — dude's stop, cancel and pause, and its own timeout — in
-// the Run's checkout, with $LUX_ARTIFACTS a directory whose files are then
-// published as the agent's would be. Reported in the record stream between
+// the Run's checkout, where it publishes with lux-shim publish (with
+// LegacyArtifacts, into $LUX_ARTIFACTS, collected after). Reported in the
+// record stream between
 // lux.beforeStop start and done, as lux's shim reports it. A Run whose
 // checkout was never looked at or written to has nothing to diff, and the
 // fake skips the hook for it rather than clone for nothing. Callers hold
@@ -117,9 +118,6 @@ func (s *Server) beforeStop(run *Run) {
 	if hook == nil || len(hook.Command) == 0 || run.workspace == "" || run.State != "running" {
 		return
 	}
-	out := filepath.Join(run.workspace, ".lux-artifacts")
-	_ = os.MkdirAll(out, 0o755)
-	defer os.RemoveAll(out)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "start"})
 	timeout := 10 * time.Second
 	if d, err := time.ParseDuration(hook.Timeout); err == nil && d > 0 {
@@ -127,11 +125,22 @@ func (s *Server) beforeStop(run *Run) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, hook.Command[0], s.inWorkspace(run, hook.Command[1:])...)
+	args, env, collect := s.publishing(append([]string{hook.Command[0]}, s.inWorkspace(run, hook.Command[1:])...))
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = run.workspace
-	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS="+out)
+	out := filepath.Join(run.workspace, ".lux-artifacts")
+	if s.LegacyArtifacts {
+		_ = os.MkdirAll(out, 0o755)
+		defer os.RemoveAll(out)
+		env = append(env, "LUX_ARTIFACTS="+out)
+	}
+	cmd.Env = env
 	code := exitCode(cmd.Run(), -1)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
+	collect(run)
+	if !s.LegacyArtifacts {
+		return
+	}
 	_ = filepath.WalkDir(out, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
 			return nil
@@ -239,11 +248,15 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close(websocket.StatusNormalClosure, "")
 		return
 	}
+	args, env, collect := s.publishing(args)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Dir = dir
+	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 127)
+	s.mu.Lock()
+	collect(run)
+	s.mu.Unlock()
 	send := func(ch, text string) {
 		for len(text) > 0 {
 			n := min(len(text), 64<<10)

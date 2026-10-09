@@ -20,12 +20,29 @@ package fakeagent
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
-// PublishedDir is $LUX_ARTIFACTS in a lux container. (lux.PublishedDir; not
-// imported, to keep this package free of the client.)
-const PublishedDir = "/.lux/run/artifacts"
+// ShimBinary is lux.ShimBinary, not imported, to keep this package free of
+// the client.
+const ShimBinary = "/.lux/bin/lux-shim"
+
+// Description is what the scripted agent says a file it publishes is for.
+func Description(name string) string { return "What " + name + " is for" }
+
+// publishScript is a lux-fake script that publishes a file through
+// lux-shim, as dude publish does: lux-fake publishes nothing itself, so it
+// writes the file to /tmp first, on one line.
+func publishScript(name, content, description string) string {
+	tmp := "/tmp/dude-publish/" + strings.ReplaceAll(name, "/", "_")
+	return fmt.Sprintf("write %s %s\nsh %s publish %s --name %s --description %s\n", tmp,
+		strings.ReplaceAll(content, "\n", " "), ShimBinary, shellQuote(tmp), shellQuote(name), shellQuote(description))
+}
+
+// shellQuote quotes s for sh, as one word.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // ModelPrefix selects the scripted agent in a project's model settings.
 const ModelPrefix = "fake/"
@@ -149,15 +166,16 @@ type Step struct {
 	Hang bool
 	// Its first turn asks a person this (ask_person's arguments) and ends.
 	Ask string
-	// Files it publishes for people (into $LUX_ARTIFACTS), name → one line.
+	// Files it publishes for people (lux-shim publish), name → one line,
+	// each with Description(name).
 	Publish map[string]string
 	// dude tools it calls before replying, [tool, JSON arguments].
 	Tools [][2]string
 	// Files it writes into its checkout and does not commit, path →
 	// content.
 	Edits map[string]string
-	// Files it saves for people while it works (into $LUX_ARTIFACTS),
-	// before its first turn hangs: collected when its container stops.
+	// Files it publishes for people while it works, before its first turn
+	// hangs: listed while it goes on.
 	PublishNow map[string]string
 	// Files it writes into its checkout in the turn it finishes, after
 	// a Hang is woken: a change a person watching can see arrive.
@@ -271,7 +289,7 @@ func sessionTitle(briefing string) (string, bool) {
 // commit; git has no lux-fake equivalent and is left out.
 func localScript(name, args string) string {
 	var in struct {
-		Path, Content, Message string
+		Path, Content, Message, Description string
 	}
 	_ = json.Unmarshal([]byte(args), &in)
 	switch name {
@@ -280,7 +298,7 @@ func localScript(name, args string) string {
 	case LocalCommit:
 		return "commit " + in.Message + "\n"
 	case LocalArtifact:
-		return fmt.Sprintf("write %s/%s %s\n", PublishedDir, in.Path, strings.ReplaceAll(in.Content, "\n", " "))
+		return publishScript(in.Path, in.Content, in.Description)
 	}
 	return ""
 }
@@ -296,7 +314,8 @@ const ConductorCallPrefix = "tool: "
 // on dude: write {"path","content"} writes a file in its first
 // repository, commit {"message"} commits everything there, git
 // {"args"} runs git there (the fake lux only), and artifact
-// {"path","content"} publishes a file for people into $LUX_ARTIFACTS.
+// {"path","content","description"} publishes a file for people with
+// lux-shim publish.
 const (
 	LocalWrite    = "write"
 	LocalCommit   = "commit"
@@ -431,6 +450,8 @@ func Script(phase, model, runID string) string {
 			// lux-fake writes one line; the file's line breaks stay escaped.
 			fmt.Fprintf(&b, "write %s %s\n", path, strings.ReplaceAll(LiveEdits[path], "\n", " "))
 		}
+		// Its notes as it works (lux-fake writes text, so not the screenshot).
+		b.WriteString(publishScript(Notes, LiveNotes[0], Description(Notes)))
 		b.WriteString("sleep 3600")
 		return b.String()
 	}
@@ -468,9 +489,8 @@ func Script(phase, model, runID string) string {
 		path = strings.TrimPrefix(path, "*:")
 		fmt.Fprintf(&b, "append %s %s\n", path, line)
 	}
-	for name, text := range step.Publish {
-		// lux-fake writes one line; the Markdown's line breaks stay escaped.
-		fmt.Fprintf(&b, "write %s/%s %s\n", PublishedDir, name, strings.ReplaceAll(text, "\n", " "))
+	for _, name := range slices.Sorted(maps.Keys(step.Publish)) {
+		b.WriteString(publishScript(name, step.Publish[name], Description(name)))
 	}
 	if len(step.Commit) > 0 {
 		b.WriteString("commit " + step.Message + "\n")

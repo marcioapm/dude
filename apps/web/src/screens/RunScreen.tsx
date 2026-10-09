@@ -40,6 +40,7 @@ import {
   TierChip,
   TierTip,
   AttachDropZone,
+  CanRunContainersBadge,
   ImageViewer,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
@@ -398,6 +399,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {run.model ? <RunTierChip tier={run.modelTier} model={run.model} effort={run.effort} harness={run.harness} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {run.image ? <RunImageChip image={run.image} /> : null}
+        {run.canRunContainers ? <CanRunContainersBadge tooltip={CAN_RUN_CONTAINERS_TIP} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
@@ -1270,6 +1272,8 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
       } />
   );
 }
+
+const CAN_RUN_CONTAINERS_TIP = "This Run can start containers inside it. Set when the session started; resuming keeps it.";
 
 /**
  * The library image the Run got, as it was when it started: its name and

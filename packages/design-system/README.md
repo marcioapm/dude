@@ -497,11 +497,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and `Capabilities` (what it can and cannot do, each line a check or a
   cross as well as words).
 - **A session's files are what its agent published** — a design note, a
-  diagram, a table, a CSV — written into `$LUX_ARTIFACTS` as any agent
+  diagram, a table, a CSV — with `dude publish` as any agent
   does, and listed for its members alone. The rail's **Files** block has
   their count beside its label and **`PublishedFiles`**: each file's kind
   glyph and its own name (the folder in the tooltip), "v3" when published
-  again, newest first, "N more" past eight; Download all (a zip) once
+  again, and under the name, muted, its `description` — the one line the
+  agent said it is for — when it gave one; newest first, "N more" past eight; Download all (a zip) once
   there are two. Picking one opens the **same viewer as a task's Files**
   (`FileViewer` over an `ArtifactPreview`), with its versions. Nothing
   published yet says so in the block. The agent says in Chat what it
@@ -1343,6 +1344,16 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   in the image's header at `size="md"`, in a list row at `sm`, and in the
   picker's trail `lower` ("can run containers", as the picker writes
   "default"). `ImageChoiceView.canRunContainers` puts it there.
+- **A Run that can start containers says so in its header**: the same
+  `CanRunContainersBadge` at `sm`, after the image chip (or where it would
+  be, for an image typed by hand or dude's fallback), given `tooltip`: then
+  it is a focusable trigger, as `MachineChip` is, in `Tooltip side="bottom"
+  keepOnPress`, brighter on hover and while its tip is open, with the
+  `aria-label` "Can run containers" and the tip "This Run can start
+  containers inside it. Set when the session started; resuming keeps it."
+  Never a native `title`. It shows what the Run recorded when it was
+  submitted; nothing when it cannot, or for a Run from before that was
+  recorded — never a guess from today's settings.
 - **What the box needs said beside it is a muted line, not a `Callout`**:
   the `warning` glyph at 12px in attention ink, 22px in under the
   description, xs secondary text. Two of them: the hint (box on, nothing
@@ -1647,7 +1658,9 @@ MarkdownCheatsheet.
 - **ImagePicker / ImageMark / ImageStatusBadge / CanRunContainersBadge** —
   the image combobox, an image's cube mark, a newer version's state as a
   badge, and "Can run containers" (`size` `sm` | `md`, `lower` for the
-  picker's lowercase) for an image whose published version can.
+  picker's lowercase) for an image whose published version can, and
+  `tooltip` (a focusable trigger with its tip) for a Run's header, where it
+  is the Run's.
 - **BuildQueueStrip / BuildStages / ImageState** — the builder's queue in a
   line, a build's stages, an image's state in a row.
 - **ImageHistory** — versions and their Containerfile diffs, with Publish
@@ -1679,7 +1692,9 @@ MarkdownCheatsheet.
   rail is the same `SessionRail` and `SessionRailBlock`.
 - **SessionList / SessionItem** — a task's agent sessions, the open one
   `current`.
-- **FileGallery / FileViewer** — a task's files and their versions.
+- **FileGallery / FileViewer** — a task's files and their versions. A
+  `FileVersion`'s optional `description` (what its agent said the file is
+  for) is a secondary line under the name, in a card and a row alike.
 - **Cost** — a total, with the tokens / machine split as a hairline, and
   optionally where each part came from and whether lux has settled it.
 
@@ -1693,7 +1708,8 @@ sessions*):
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.
 - **PublishedFiles** — the rail's Files: what the session's agent
-  published, each opening in `FileViewer`.
+  published, each with its `description` under the name when it has one,
+  each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
 - **SidebarSessions** — your brainstorm sessions above the projects, in

@@ -73,7 +73,8 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
       'text', COALESCE(e.payload->>'text', ''), 'owner', NOT COALESCE((e.payload->>'conducted')::boolean, false),
       'left', runs.stall_left_at IS NOT NULL)
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
-  replaced_by AS "replacedBy"`;
+  replaced_by AS "replacedBy",
+  can_run_containers AS "canRunContainers"`;
 
 const SESSION_SELECT = `
   id, organization_id AS "organizationId", run_id AS "runId",

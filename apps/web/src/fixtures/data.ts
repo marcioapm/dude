@@ -59,7 +59,7 @@ export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; rol
     branch: BRANCH, harness: "opencode", model: "claude-opus-5-5", modelTier: "Coder", effort: "medium", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
-    image: null, preparingImage: null,
+    image: null, preparingImage: null, canRunContainers: null,
     createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null, stalled: null, replacedBy: null,
     ...patch,
   };
@@ -201,12 +201,12 @@ export const RESTARTED_FINDINGS: Finding[] = [
 /** A finding whose Run is gone (deleted; `run_id` NULL): it shows with the current attempt. */
 export const ORPHAN_FINDING: Finding = finding("f_orphan", null, "medium", "Totals rounded before VAT", "apps/web/src/checkout/useTotals.ts", 30, 20);
 
-const artifact = (id: string, runId: string | null, name: string, phase: string, min: number) => ({
-  id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, epoch: 1, createdAt: iso(min * MIN),
+const artifact = (id: string, runId: string | null, name: string, phase: string, min: number, description = "") => ({
+  id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, description, epoch: 1, createdAt: iso(min * MIN),
   phase, role: "implementer" as const, version: 1, versions: 1,
 });
 export const RESTARTED_ARTIFACTS = [
-  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170),
+  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170, "Why requests route by tenant first"),
   artifact("art_a2_notes", "run_attempt2", "notes/form-split.md", "implement", 60),
 ];
 

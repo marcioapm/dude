@@ -93,8 +93,8 @@ beforeAll(async () => {
     VALUES ('evt_secret', ${ORG}, 'agent.message', ${RUN}, 'agent', ${RUN}, 'runner', '{"text":"the meter dedupes per key"}')`;
   await owner`INSERT INTO questions (id, organization_id, run_id, prompt) VALUES ('qst_secret', ${ORG}, ${RUN}, 'Grow the window?')`;
   await owner`INSERT INTO directives (id, organization_id, run_id, text) VALUES ('dir_secret', ${ORG}, ${RUN}, 'Márcio: hello')`;
-  await owner`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256)
-    VALUES (${ARTIFACT}, ${ORG}, ${RUN}, 'file', 'plan.md', 'text/markdown', ${BYTES.length}, 'k/plan.md', 'x')`;
+  await owner`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description)
+    VALUES (${ARTIFACT}, ${ORG}, ${RUN}, 'file', 'plan.md', 'text/markdown', ${BYTES.length}, 'k/plan.md', 'x', 'The rollout plan')`;
   await owner`INSERT INTO agent_sessions (id, organization_id, run_id, role, harness, model)
     VALUES (${AGENT_SESSION}, ${ORG}, ${RUN}, 'brainstorm', 'opencode', 'm')`;
 
@@ -220,8 +220,9 @@ test("a session's files are listed and zipped for its members alone; anyone else
   for (const member of [marcio, joao]) {
     const res = await call(member, "GET", `/v1/artifacts?sessionId=${SESSION}`);
     expect(res.status).toBe(200);
-    const { artifacts } = await res.json() as { artifacts: Array<{ id: string; name: string; sessionId: string; runId: string; role: string }> };
-    expect(artifacts.map((a) => [a.id, a.name, a.sessionId, a.runId, a.role])).toEqual([[ARTIFACT, "plan.md", SESSION, RUN, "brainstorm"]]);
+    const { artifacts } = await res.json() as { artifacts: Array<{ id: string; name: string; sessionId: string; runId: string; role: string; description: string }> };
+    expect(artifacts.map((a) => [a.id, a.name, a.sessionId, a.runId, a.role, a.description]))
+      .toEqual([[ARTIFACT, "plan.md", SESSION, RUN, "brainstorm", "The rollout plan"]]);
     forwarded.length = 0;
     const zip = await call(member, "GET", `/v1/brainstorms/${SESSION}/artifacts.zip`);
     expect(zip.status).toBe(200);
@@ -244,6 +245,32 @@ test("a session's files are listed and zipped for its members alone; anyone else
   // Both, or neither, is a mistake rather than a way around the check.
   expect((await call(outsider, "GET", `/v1/artifacts?sessionId=${SESSION}&taskId=wi_x`)).status).toBe(400);
   expect((await call(marcio, "GET", "/v1/artifacts")).status).toBe(400);
+});
+
+test("a name published hundreds of times leaves every other name listed, and its own count whole", async () => {
+  const session = "ssn_republished";
+  const run = "run_republished";
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO sessions (id, organization_id, title) VALUES (${session}, ${ORG}, 'Republished')`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES (${session}, ${marcio.personId}, ${ORG}, 'owner', now())`;
+    await tx`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind) VALUES (${run}, ${ORG}, ${session}, 1, 'brainstorm', 'agent')`;
+    await tx`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description, created_at)
+      VALUES ('art_early', ${ORG}, ${run}, 'published', 'early.md', 'text/markdown', 1, 'k/early', 'x', 'Published first', now() - interval '1 day')`;
+    await tx`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description, created_at)
+      SELECT 'art_notes_' || lpad(i::text, 4, '0'), ${ORG}, ${run}, 'published', 'notes.md', 'text/markdown', 1, 'k/notes/' || i, 'x',
+        'draft ' || i, now() - interval '1 hour' + i * interval '1 second'
+      FROM generate_series(1, 600) i`;
+  });
+  const res = await call(marcio, "GET", `/v1/artifacts?sessionId=${session}`);
+  expect(res.status).toBe(200);
+  const { artifacts } = await res.json() as { artifacts: Array<{ name: string; description: string; version: number; versions: number }> };
+  expect(artifacts.filter((a) => a.name === "early.md").map((a) => [a.version, a.versions, a.description]))
+    .toEqual([[1, 1, "Published first"]]);
+  const notes = artifacts.filter((a) => a.name === "notes.md");
+  expect(notes.length).toBe(50);
+  expect([notes[0]!.version, notes[0]!.versions, notes[0]!.description]).toEqual([600, 600, "draft 600"]);
+  expect(notes.at(-1)!.version).toBe(551);
 });
 
 test("a session Run's controls, answers and servers go only to the orchestrator, which refuses them as not a task's Run", async () => {

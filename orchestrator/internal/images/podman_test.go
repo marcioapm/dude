@@ -323,6 +323,40 @@ func TestPodmanTheLayerGivesAgentSubordinateIdsARunCanMap(t *testing.T) {
 	}
 }
 
+// images/runtime's agent-user stage gives agent the subordinate ids the
+// dude layer gives it on the same base, and the check's range rule takes
+// them. Only that stage is built: no bin/, toolchain or network past the base;
+// a later stage rewriting the files would go unseen here.
+func TestPodmanTheRuntimeImagesAgentHasTheLayersSubordinateIds(t *testing.T) {
+	localPodman(t)
+	tag := fmt.Sprintf("localhost/dude-test-runtime-agent:%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "--ignore", tag).Run() })
+	if out, err := exec.Command("podman", "build", "--pull=missing", "-q", "--target", "agent-user", "-t", tag, "../../../images/runtime").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	layered := localFinish(t, "FROM docker.io/library/debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git\n")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"/etc/passwd", "/etc/subuid", "/etc/subgid"} {
+		got := runIn(t, tag, "cat", f)
+		if f != "/etc/passwd" {
+			if want := runIn(t, layered, "cat", f); got != want {
+				t.Errorf("runtime image's %s = %q, the layer's = %q", f, got, want)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, f), []byte(got+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := ContainersCheck(root)
+	if !found.ids() {
+		t.Errorf("the check rejects the runtime image's ids: subuid %v (outside %v), subgid %v (outside %v)",
+			found.Subuid, outside(found.Subuid), found.Subgid, outside(found.Subgid))
+	}
+}
+
 // On an image whose uid 1000 is node's, agent's lines by name are not the
 // workload's: podman looks the caller up as node or 1000 and, finding
 // neither, runs with a single id. The layer adds 1000's lines all the same,

@@ -15,15 +15,35 @@ func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
 		got := BrainstormPrompt("briefing", in)
 		for _, want := range []string{"name_session once its subject is clear", "at most 60 characters",
 			"Name it again only if the subject clearly changes", "Once a member has named it, leave the name alone",
-			"`$LUX_ARTIFACTS/design.md`", "a design note, a diagram, a table, a CSV", "Say in your reply what you published"} {
+			"`dude publish FILE --name NAME --description \"…\"`", "one short line saying what the file is for",
+			"a design note, a diagram, a table, a CSV", "Say in your reply what you published"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("the brainstorm's prompt lacks %q", want)
 			}
 		}
 	}
 	bare := BrainstormPrompt("briefing", PromptInput{})
-	if strings.Contains(bare, "name_session") || !strings.Contains(bare, "LUX_ARTIFACTS") {
+	if strings.Contains(bare, "name_session") || !strings.Contains(bare, "dude publish FILE") {
 		t.Errorf("without tools it is told of a tool it lacks, or not how to publish:\n%s", bare)
+	}
+}
+
+// Every agent publishes with dude publish alone: no prompt names lux's
+// directory or lux-shim, which dude publish hides.
+func TestPromptsNameOnlyDudePublish(t *testing.T) {
+	prompts := map[string]string{"brainstorm": BrainstormPrompt("briefing", PromptInput{Tools: true, CLI: true})}
+	for _, phase := range []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest} {
+		prompts[phase] = Prompt(phase, PromptInput{Title: "T", Tools: true, CLI: true})
+	}
+	for name, p := range prompts {
+		if !strings.Contains(p, "dude publish FILE --name NAME --description") {
+			t.Errorf("the %s prompt does not say how to publish:\n%s", name, p)
+		}
+		for _, banned := range []string{"LUX_ARTIFACTS", "lux-shim", "/.lux/"} {
+			if strings.Contains(p, banned) {
+				t.Errorf("the %s prompt names %q", name, banned)
+			}
+		}
 	}
 }
 

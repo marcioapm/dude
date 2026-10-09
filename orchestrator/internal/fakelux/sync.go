@@ -192,8 +192,8 @@ func pushWorkspace(work, bare, branch, base string) (string, error) {
 // went wrong is said in its reply. Callers hold s.mu.
 func (s *Server) localCall(run *Run, tool, args string) {
 	var in struct {
-		Path, Content, Message string
-		Args                   []string
+		Path, Content, Message, Description string
+		Args                                []string
 	}
 	_ = json.Unmarshal([]byte(args), &in)
 	var problem string
@@ -208,11 +208,7 @@ func (s *Server) localCall(run *Run, tool, args string) {
 	case fakeagent.LocalGit:
 		s.workspaceGit(run, in.Args)
 	case fakeagent.LocalArtifact:
-		// Collected when its container next stops, as lux does.
-		if run.published == nil {
-			run.published = map[string]string{}
-		}
-		run.published[in.Path] = in.Content
+		s.save(run, map[string]string{in.Path: in.Content}, map[string]string{in.Path: in.Description})
 	}
 	run.edits++
 	id := fmt.Sprintf("local_%d", run.edits)

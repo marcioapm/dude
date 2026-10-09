@@ -93,16 +93,23 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     usage = client.get(f"/v1/runs/{implement['id']}").json()["tokens"]
     assert usage["output"] > 0, usage
 
-    # What the agent wrote into $LUX_ARTIFACTS, collected by lux when its
-    # container stopped, recorded by dude, and read back through lux.
+    # What the agent published with lux-shim publish (lux#77), reported on
+    # the Run's stream as artifact.published, recorded by dude with its
+    # description and version, and read back through lux.
     def notes():
         found = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
         return [a for a in found if a["name"] == "NOTES.md"]
 
     art = wait_until(notes, timeout=60, interval=1, message="lux's artifacts never reached dude")[0]
     assert art["runId"] == implement["id"] and art["sizeBytes"] > 0, art
+    assert (art["description"], art["version"]) == ("What NOTES.md is for", 1), art
     content = client.get(f"/v1/artifacts/{art['id']}/content")
     assert content.status_code == 200 and content.text.startswith("# What changed"), (content.status_code, content.text)
+    # The beforeStop hook published the final diff with lux-shim too: the
+    # Run's diff, never one of its files.
+    assert client.get(f"/v1/runs/{implement['id']}/diff").json()["final"]
+    listed = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
+    assert not [a for a in listed if a["name"].startswith(".dude")], listed
 
 
 def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
@@ -533,6 +540,33 @@ def test_a_person_pause_and_resume_on_real_lux_is_timed(client: ApiClient, env, 
         _resume_timed_on_lux(client, env, run["id"], "person", stopped_epoch)
     finally:
         print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+        client.post(f"/v1/runs/{run['id']}/abort", {})
+
+
+def test_a_file_published_on_real_lux_is_listed_while_the_run_keeps_running(client: ApiClient, env, lux_project):
+    """The fake/live implementer publishes its notes with lux-shim publish
+    and keeps working: lux reports artifact.published once the file can be
+    downloaded, and dude lists it, with its description, while the Run is
+    still running (lux#77)."""
+    project, _ = lux_project
+    resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    assert resp.status_code == 200, resp.text
+    task = client.create_task(project["id"], "Publish on lux as you go")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
+                     timeout=120, interval=1, message="the agent never started on lux")
+    try:
+        def notes_while_running():
+            found = [a for a in client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
+                     if a["name"] == "NOTES.md"]
+            return found if found and client.get_run(run["id"])["status"] == "running" else None
+
+        notes = wait_until(notes_while_running, timeout=120, interval=1, message="the notes were not listed while it ran")
+        assert [(a["description"], a["version"]) for a in notes] == [("What NOTES.md is for", 1)], notes
+        content = client.get(f"/v1/artifacts/{notes[0]['id']}/content")
+        assert content.status_code == 200 and "Still working." in content.text, (content.status_code, content.text)
+    finally:
         client.post(f"/v1/runs/{run['id']}/abort", {})
 
 

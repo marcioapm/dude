@@ -144,6 +144,38 @@ describe("the session's model", () => {
   });
 });
 
+describe("whether the session can start containers", () => {
+  const badge = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=can-run-containers]");
+  const IMAGE: NonNullable<RunDetail["image"]> = { imageId: "img_1", name: "agents-podman", versionId: "imv_1", version: 3,
+    ref: "registry.test/dude/custom@sha256:" + "1".repeat(64), layer: "registry.test/dude/layer@sha256:" + "2".repeat(64) };
+
+  test("the header says so, after the image, when the Run recorded it can", async () => {
+    const page = await session({ client: new RunClient({ image: IMAGE, canRunContainers: true }) });
+    const shown = await until(() => badge(page), "the badge");
+    expect(shown.textContent).toBe("Can run containers");
+    const image = page.querySelector("[data-testid=run-image]")!;
+    expect(image.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A keyboard user reaches it, and a screen reader hears it, as the chips before it.
+    expect(shown.getAttribute("aria-label")).toBe("Can run containers");
+    expect(shown.hasAttribute("title")).toBe(false);
+    expect(await tipOf(shown)).toBe("This Run can start containers inside it. Set when the session started; resuming keeps it.");
+    expect(document.activeElement).toBe(shown);
+  });
+
+  test("on a typed image or dude's fallback (no image chip), the header still says so", async () => {
+    const page = await session({ client: new RunClient({ image: null, canRunContainers: true }) });
+    expect((await until(() => badge(page), "the badge")).textContent).toBe("Can run containers");
+  });
+
+  for (const [what, patch] of [["it recorded it cannot", { canRunContainers: false }], ["it recorded nothing", { canRunContainers: null }]] as const) {
+    test(`nothing when ${what}`, async () => {
+      const page = await session({ client: new RunClient({ image: IMAGE, ...patch }) });
+      await until(() => page.querySelector("[data-testid=run-image]"), "the image chip");
+      expect(badge(page)).toBeNull();
+    });
+  }
+});
+
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
 async function machineTip(page: HTMLElement): Promise<string> {
   const chip = await until(() => machineChip(page), "the machine chip");

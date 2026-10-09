@@ -222,12 +222,14 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Recorded whatever the preview's status: one stopped while this
 		// submit was in flight is then cancelled in lux by the next sweep.
-		// machine is what it runs on, recorded once, with the lux Run.
+		// machine is what it runs on, recorded once, with the lux Run; so
+		// is whether it may start containers (the returned Run's sandbox).
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb, image_waiting_since = NULL,
-			preview_secrets = $8, carried_servers = '[]',
+			preview_secrets = $8, carried_servers = '[]', can_run_containers = $9,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got, acceptedSecrets(lr))
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got, acceptedSecrets(lr),
+			lr.NestedContainers(spec))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

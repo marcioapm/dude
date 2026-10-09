@@ -43,6 +43,12 @@ any registry lux's runners can pull from, pinned by digest
 overrides it for that project. [`images/runtime/Dockerfile`](../images/runtime/Dockerfile)
 is a starting point; it needs the release's `dude` CLI, which
 `scripts/runtime-image.sh` builds before a local `docker build`.
+If the image runs containers (`agent.nested_containers`), its workload
+user's subordinate ids (`/etc/subuid`, `/etc/subgid`) must lie within
+0–65535, the ids a lux Run maps; `useradd`'s default `100000:65536` does
+not. The runtime image gives `agent` `agent:1:999` and `agent:1001:64535`.
+dude checks this for library images when they build, never for
+`DUDE_AGENT_IMAGE`.
 
 ### Private agent images
 
@@ -301,6 +307,21 @@ added keep their old labels until they are replaced.
   is gone" — and then its Run cancelled. lux's own 30-day expiry is the
   safety net; a server lux expires or someone deletes ends its preview.
 
+**When a recipe change reaches a preview.** A preview's servers are made
+what the project's recipes say at each wake, before lux starts them, and
+when it is declared: a request to an asleep preview's URL starts it with
+the recipe as it is now, whether its Run is resumed, replaced or submitted.
+A server whose port, command, setup, working directory or env changed is
+updated in lux (`PATCH /v1/servers/{id}`, only the fields that differ;
+nothing when none do); a recipe newly marked to start in previews gets a
+server; one removed, or no longer started in previews, has its server
+deleted, and a preview left with none ends. A preview running when the
+recipe is saved keeps what it started with until it next sleeps and wakes.
+Preview secrets are not part of a recipe: a new value reaches previews when
+they next wake, as before. On a lux without `preview.domain`, previews start
+at once and keep the servers they were declared with; a recipe change
+reaches the next preview.
+
 Every orchestrator follows the feed; each event is applied once, keyed in
 the database, and a wake is acted on by one orchestrator. The feed's
 position is kept in `lux_feed`: the highest event id whose lux time is
@@ -515,7 +536,7 @@ does not refuse to start.
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `agent.timeout` | `DUDE_AGENT_TIMEOUT` | `4h` | orchestrator | The most running time lux gives a phase Run (its `timeout`, running time only: parked time does not count); past it lux stops it and it fails. The conductor gets none. |
 | `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | The operator's floor: hosts (addresses, CIDR ranges, lux wildcards `*.example.com`) every agent Run may reach, under each organisation's and project's own list, which people set on the Network settings page (see [Agent network](#agent-network)). `*` turns egress filtering off for every organisation. `llm.url`'s host and dude's tools are always added. With nothing listed here, by the organisation or by the project, and no `llm.url`, egress is unrestricted. |
-| `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | The fallback image, `agent.image`, can run containers (rootless Podman or Docker inside the Run). Every Run on it, agents and branch previews alike, asks lux for `sandbox.nestedContainers`, so lux places it only on hosts whose runner offers nested containers: with none, it waits for one, and the Run page says why. The image must carry the engine. A library image says this per version ("Can run containers", checked when it builds); an image typed by hand never can. |
+| `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | The fallback image, `agent.image`, can run containers (rootless Podman or Docker inside the Run). Every Run on it, agents and branch previews alike, asks lux for `sandbox.nestedContainers`, so lux places it only on hosts whose runner offers nested containers: with none, it waits for one, and the Run page says why. The image must carry the engine, and its workload user's subordinate ids must lie within 0–65535 (see [Release archive](#release-archive)). A library image says this per version ("Can run containers", checked when it builds); an image typed by hand never can. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
 | `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |
 | `registry.credential` | `DUDE_REGISTRY_CREDENTIAL` | none | orchestrator | `static` only: `user:password` for `registry.host`. **Secret.** |
