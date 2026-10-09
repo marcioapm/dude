@@ -292,9 +292,6 @@ added keep their old labels until they are replaced.
   park, at the cost of a larger snapshot. It runs only on a host whose
   runner offers nested containers; until one does, its Servers tab says it
   waits for one. See [the image library](design/images.md#can-run-containers).
-  Every Run records at submit whether it asked for nested containers
-  (`runs.can_run_containers`), and its page's header then says "Can run
-  containers"; a Run from before that was recorded shows nothing.
 - **A new commit** on the task's branch (an agent's, or a push the forge
   reports on its pull request) is synced into a running preview at once; a
   sleeping one gets it on its next wake.
