@@ -88,37 +88,37 @@ export function tierDraftOf(tier: ModelTier | null): TierDraft {
     : { name: "", description: "", model: "", effort: null, options: "", headers: "" };
 }
 
-/** A JSON field's text as a value: empty is null; anything that is not a JSON object is `invalid`. */
-function parseObject(text: string): { value: Record<string, unknown> | null } | { invalid: true } {
-  if (!text.trim()) return { value: null };
+/** A JSON field's text as an object; null when it is empty or not a JSON object. */
+function parseObject(text: string): Record<string, unknown> | null {
+  if (!text.trim()) return null;
   try {
     const v: unknown = JSON.parse(text);
-    return typeof v === "object" && v !== null && !Array.isArray(v) ? { value: v as Record<string, unknown> } : { invalid: true };
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
   } catch {
-    return { invalid: true };
+    return null;
   }
 }
 
 const NOT_AN_OBJECT = "A JSON object, like {\"key\": \"value\"}";
 
-/** The draft as the API takes it: an empty model is "not set", an empty JSON field none. Unparsable JSON is sent as it would be refused. */
+/** The draft as the API takes it: an empty model is "not set"; an empty JSON field, or one that is not an object, none. */
 export function tierInput(d: TierDraft): ModelTierInput {
   const model = d.model.trim();
-  const options = parseObject(d.options);
-  const headers = parseObject(d.headers);
   return {
     name: d.name.trim(), description: d.description.trim(), model: model === "" ? null : model, effort: d.effort,
-    options: "invalid" in options ? null : options.value,
-    headers: "invalid" in headers ? null : (headers.value as Record<string, string> | null),
+    options: parseObject(d.options),
+    headers: parseObject(d.headers) as Record<string, string> | null,
   };
 }
 
 /** Each field's problem, in the schema's words; none when the draft is a tier. */
 export function tierDraftProblems(d: TierDraft): Partial<Record<keyof TierDraft, string>> {
   const out: Partial<Record<keyof TierDraft, string>> = {};
-  if ("invalid" in parseObject(d.options)) out.options = NOT_AN_OBJECT;
-  if ("invalid" in parseObject(d.headers)) out.headers = NOT_AN_OBJECT;
-  const parsed = modelTierInputSchema.safeParse(tierInput(d));
+  const input = tierInput(d);
+  // A field with text that came out as none is not a JSON object.
+  if (d.options.trim() && input.options === null) out.options = NOT_AN_OBJECT;
+  if (d.headers.trim() && input.headers === null) out.headers = NOT_AN_OBJECT;
+  const parsed = modelTierInputSchema.safeParse(input);
   if (parsed.success) return out;
   for (const issue of parsed.error.issues) out[issue.path[0] as keyof TierDraft] ??= issue.message;
   return out;
