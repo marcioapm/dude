@@ -1165,8 +1165,8 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
   const tray = open && turn.items.length > 1 ? ask.tray : undefined;
   return (
     <QuestionCard
-      // Keyed on the draft: once the person is known the form starts from their own.
-      key={key}
+      // The open form is keyed on the draft, so once the person is known it starts from their own; a settled card keeps its node.
+      key={open ? key : turn.questionId}
       data-testid="question-turn"
       data-question={turn.questionId}
       role={role}
