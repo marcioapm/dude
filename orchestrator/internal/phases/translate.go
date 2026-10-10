@@ -1056,12 +1056,12 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
-	t.lastFailed = true
 	if t.run.talker() {
-		t.failedTurns++
-		if t.failedTurns <= maxFailedTurnResumes {
+		t.lastFailed = true
+		if t.failedTurns < maxFailedTurnResumes {
 			return t.parkFailed(ctx, tx, s, reason)
 		}
+		t.failedTurns++
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
@@ -1079,6 +1079,9 @@ const maxFailedTurnResumes = 2
 // parkFailed keeps a talker whose turn failed: the failure is said as any
 // Run's (run.failed, kept), and the Run is paused as its warm period's end
 // parks it, its lux Run stopped and kept, so the next message resumes it.
+// Under a control already pending (a person's pause, a repository's) the
+// failure is still said, and that control stops the Run: not parked for
+// the failure, it is not counted towards maxFailedTurnResumes.
 func (t *translator) parkFailed(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
 	kind := "conductor"
 	if t.run.brainstorm() {
@@ -1088,9 +1091,19 @@ func (t *translator) parkFailed(ctx context.Context, tx pgx.Tx, s *Syncer, reaso
 			dude_pause = $3, turn_done_at = NULL
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL AND control = 'none'`,
 		t.run.ID, "parked after its turn failed", kind)
-	if err != nil || tag.RowsAffected() == 0 {
+	if err != nil {
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1
+			AND status IN ('scheduled', 'starting', 'running') AND control <> 'none')`, t.run.ID).Scan(&pending); err != nil || !pending {
+			return err
+		}
+		return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem,
+			map[string]any{"status": "failed", "error": reason, "kept": true})
+	}
+	t.failedTurns++
 	if err := s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem,
 		map[string]any{"status": "failed", "error": reason, "kept": true, "failedTurns": t.failedTurns}); err != nil {
 		return err
