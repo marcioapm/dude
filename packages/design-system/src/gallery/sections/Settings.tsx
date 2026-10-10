@@ -153,7 +153,7 @@ function MachinesDemo() {
         legend={<><ReservedSwatch />Linux and the host · 2 GiB</>} total="c7a.4xlarge · 32 GiB" />
       <Label>MachineChip, with its tooltip</Label>
       <MachineChip name="XL" spec="16 CPUs · 48 GiB · 200 GiB"
-        tooltip={<MachineTip name="XL">From Checkout’s settings for the Implementer. Fixed when the session started. It asked for 48 GiB and got 45.6.</MachineTip>} />
+        tooltip={<MachineTip name="XL">From Checkout’s settings for the Implementer. Set when the session started or last resumed. It asked for 48 GiB and got 45.6.</MachineTip>} />
     </Col>
   );
 }

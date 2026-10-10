@@ -606,14 +606,14 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	}
 	// After what drain applied of the Run's earlier starts: their ends are
 	// older than this resume's answer, whenever they reached dude.
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&r.StartBefore)
-	}); err != nil {
+	startBefore, plan, err := p.planResize(ctx, r.previewRun, lr)
+	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
-	res, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
-		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())})
+	r.StartBefore = startBefore
+	res, err := phases.ResumeSized(ctx, p.Lux, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
+		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())}, plan)
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// lux answers a resume of a Run resuming already with 2xx; a 409
 		// (no_snapshot, not_resumable) is a resume not done. What the Run
@@ -639,6 +639,7 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
+	p.recordResize(ctx, r.previewRun, plan, res)
 	if attachAfter {
 		if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
 			return p.attachFailed(ctx, r, r.LuxRunID, err)

@@ -141,7 +141,7 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
       <SettingsHeader title="Machines"
         description="The sizes an agent’s machine can be. Each agent runs on the size its settings name — in Agents, here or in a project — and on the default when it names none." />
       <SettingsNote icon="info">
-        Only admins change these. A change applies to sessions that start after it; sessions already running keep the machine they started on.
+        Only admins change these. A change applies to sessions that start after it, and to a stopped one when it resumes; a running session keeps its machine until then.
       </SettingsNote>
       {saveProblem ? <Callout tone="danger">{saveProblem}</Callout> : null}
 
