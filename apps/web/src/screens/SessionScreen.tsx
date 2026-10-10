@@ -17,7 +17,7 @@ import {
   Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
 } from "@dude/design-system/components";
-import { Button, Callout, Spinner } from "@dude/design-system/primitives";
+import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
@@ -58,13 +58,15 @@ export function withOpen(detail: SessionDetail, personId: string, open: boolean)
   return { ...detail, session: { ...detail.session, people: people.map((m) => (m.person.id === personId ? { ...m, open } : m)) } };
 }
 
-export function SessionScreen({ client, sessionId, projects, onBack, onChanged }: {
+export function SessionScreen({ client, sessionId, projects, onBack, onChanged, onArchived }: {
   client: ApiClient;
   sessionId: string;
   projects: readonly NavProject[];
   onBack: () => void;
   /** Its people or title changed for you (handed over, left): the sidebar's list re-reads. */
   onChanged: () => void;
+  /** You archived it (it leaves your list and sidebar) or unarchived it (it comes back). */
+  onArchived: (id: string, archived: boolean) => void;
 }) {
   const people = usePeople();
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -163,6 +165,22 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
       throw err;
     }
   }, [client, sessionId, onChanged]);
+
+  // Yours alone: nobody else's list, and nothing of the session, changes.
+  const [archiving, setArchiving] = useState(false);
+  const archive = useCallback(async (archived: boolean) => {
+    setProblem(null);
+    setArchiving(true);
+    try {
+      await client.archiveSession(sessionId, archived);
+      setDetail((d) => (d ? { ...d, you: { ...d.you, archived } } : d));
+      onArchived(sessionId, archived);
+    } catch (err) {
+      setProblem(`Could not ${archived ? "archive" : "unarchive"} it: ${errorText(err)}`);
+    } finally {
+      setArchiving(false);
+    }
+  }, [client, sessionId, onArchived]);
 
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
   // The owner's picker lists the organisation's tiers, read when its menu opens (again on each
@@ -263,8 +281,15 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
+          {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
-        actions={isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : undefined}
+        actions={<>
+          <Button size="sm" variant="quiet" disabled={archiving} onClick={() => void archive(!you.archived)}
+            data-testid={you.archived ? "session-unarchive" : "session-archive"}>
+            {you.archived ? "Unarchive" : "Archive"}
+          </Button>
+          {isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : null}
+        </>}
       />
       <div className="runScreen" data-view={view}>
         {/* The Run screen's switch, without Changes: a session changes no code. */}

@@ -1053,9 +1053,9 @@ export class ApiClient {
 
   // -- brainstorm sessions --------------------------------------------------
 
-  /** Your sessions, the invitations waiting on you, and questions put to you. */
-  sessions(): Promise<SessionsList> {
-    return this.#request("GET", "/v1/brainstorms");
+  /** Your sessions, the invitations waiting on you, and questions put to you. With `archived`, the sessions you archived too. */
+  sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
+    return this.#request("GET", opts.archived ? "/v1/brainstorms?archived=1" : "/v1/brainstorms");
   }
 
   getSession(id: string): Promise<SessionDetail> {
@@ -1129,6 +1129,11 @@ export class ApiClient {
   /** Say you have the session open (or no longer): its members see it, no one else. */
   sessionOpen(id: string, open: boolean): Promise<{ open: boolean }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/open`, { open });
+  }
+
+  /** Take the session out of your own list and sidebar (or put it back): nobody else's, and nothing else changes. */
+  archiveSession(id: string, archived: boolean): Promise<{ id: string; archived: boolean }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/${archived ? "archive" : "unarchive"}`);
   }
 
   /**

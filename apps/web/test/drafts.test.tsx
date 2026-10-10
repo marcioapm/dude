@@ -46,7 +46,7 @@ function detail(): SessionDetail {
         { person: ref(ANA), role: "chat", accepted: true, becomesOwner: false, open: false }],
       projects: [], run: null, runs: [], costUsd: 0, messages: 1,
     },
-    you: { id: YOU, role: "owner" },
+    you: { id: YOU, role: "owner", archived: false },
     proposals: [],
     question: null,
   };
@@ -89,7 +89,7 @@ async function open(client: DraftClient) {
   const { container, unmount } = await mount(
     <PeopleProvider client={client}>
       <ToastProvider>
-        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
       </ToastProvider>
     </PeopleProvider>,
   );
