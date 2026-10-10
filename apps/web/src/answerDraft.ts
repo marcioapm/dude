@@ -66,8 +66,16 @@ export function useAnswerDraft(person: string | null | undefined, question: Pick
   useEffect(() => {
     if (settled) forget();
   }, [settled, forget]);
-  // Picks made before the person was known carry over to their own key.
-  const draft = useMemo(() => (settled ? undefined : readDraft(key) ?? readDraft(anyone)), [key, anyone, settled]);
+  // Picks made before the person was known move to their key once, unless they kept their own; either way
+  // the `anyone` draft goes, so a later person on this browser never starts from it.
+  const draft = useMemo(() => (settled ? undefined : readDraft(key) ?? (key === anyone ? undefined : readDraft(anyone))), [key, anyone, settled]);
+  useEffect(() => {
+    if (settled || key === anyone) return;
+    const carried = readDraft(anyone);
+    if (!carried) return;
+    if (!readDraft(key)) writeDraft(key, carried);
+    dropDraft(anyone);
+  }, [key, anyone, settled]);
   const keep = useCallback((d: QuestionDraft) => writeDraft(key, d), [key]);
   return { key, draft, keep, forget };
 }
