@@ -96,6 +96,55 @@ func (w *resumeWorld) stopReason() string {
 	return reason
 }
 
+// A phase Run whose turn is done with an answer still queued waits for lux
+// to report it running, so the answer reaches the agent; a lux state that
+// is over ends that wait, failing the Run and the answer with it.
+func TestADoneTurnWithAQueuedDirectiveWaitsForRunningUnlessLuxEndedIt(t *testing.T) {
+	for _, c := range []struct {
+		luxState string
+		waits    bool
+	}{
+		{"submitted", true}, {"scheduled", true}, {"resuming", true},
+		{"stopped", false}, {"failed", false}, {"lost", false}, {"terminated", false},
+	} {
+		t.Run(c.luxState, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`UPDATE runs SET status = 'scheduled', lux_state = $2, dude_pause = NULL, lux_stop_reason = NULL,
+				turn_done_at = now() WHERE id = $1`, w.run.ID, c.luxState)
+			w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_a', $1, 'wi_'||$1, 'run_'||$1, 'yes')`, w.run.Org)
+			r := w.run
+			r.Status, r.LuxState, r.DudePause, r.PushBranch, r.HoldsPushable = statusScheduled, c.luxState, "", "dude/wi_1/run-1", true
+			r.TurnDone, r.HasDirectives = true, true
+			// Already followed: lux is not streamed from here.
+			w.s.following = map[string]*follower{r.ID: {cancel: func() {}}}
+			fake := w.onCallLux(nil)
+			if _, err := w.s.advance(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if got := fake.Calls(); len(got) != 0 {
+				t.Errorf("asked lux %v", got)
+			}
+			if c.waits {
+				if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'scheduled' AND push_request_id IS NULL`); n != 1 {
+					t.Errorf("the Run did not wait for lux to say running")
+				}
+				if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL`); n != 1 {
+					t.Errorf("the answer is no longer queued")
+				}
+				return
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'
+				AND error = 'the agent''s container stopped before its work was pushed'`); n != 1 {
+				t.Errorf("the Run lux reports %s did not fail", c.luxState)
+			}
+			if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL
+				AND error = 'the run failed before the agent read it'`); n != 1 {
+				t.Errorf("the answer was not failed with the Run")
+			}
+		})
+	}
+}
+
 // A kept Run whose lux Run succeeded is kept as a stopped one is: lux
 // resumes a succeeded Run. Only a Run lux has ended for good, under either
 // name, is let go without a call; one whose kept_until has passed is
