@@ -270,6 +270,18 @@ describe("a brainstorm session's page", () => {
     expect(waiting).not.toContain("Take over");
   });
 
+  test("your question waiting: Write to the agent instead sends an aside, never the answer", async () => {
+    const asked = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
+    const mine = new SessionClient(detail("chat", { question: { ...asked, to: ref(ME), yours: true } }), [
+      ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
+    ]);
+    const page = await sessionPage(mine);
+    const instead = await until(() => page.querySelector<HTMLElement>("[data-testid=session-screen] [data-testid=write-instead]"), "write instead");
+    await click(instead);
+    await write(page, "Experiment runs only");
+    expect(mine.sent).toEqual(["aside:Experiment runs only"]);
+  });
+
   test("the card files what you tick, as you, and says what was refused", async () => {
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
