@@ -135,3 +135,6 @@
 .description.mono {
   font-size: var(--ds-text-xs);
 }
+.description.wraps {
+  white-space: normal;
+}

@@ -520,8 +520,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   are, the chip says "default" in muted ink. Its menu has two groups,
   **Model tier** and **Harness**, each led by "Organisation default
   (…)", which sets that half back. **An invalid pair is never offered**:
-  an item whose harness cannot run the tier's model is disabled and says
-  why ("Claude Code takes an Anthropic model; Sol requests gpt-6-sol"),
+  an item whose harness cannot run the tier's model is disabled, its
+  reason in place of its model, wrapping, read with the item
+  ("Claude Code takes an Anthropic model; Sol requests gpt-6-sol"),
   with `harnessMisfit` from `@dude/domain`, against the other half as it
   stands. After the first send the rail's **Model** block carries the
   same picker: its owner changes it, everyone else reads it
@@ -1551,7 +1552,8 @@ a `tooltip`), Dialog (`size=
 "document"` with `aside`, `context`, `headerActions` and `reading`), DiscardConfirm, Toast, Tooltip,
 RowMenu (+ `rowMenuOpeners`; a `kind: "radio"` item is one choice of
 several under a small caps heading, `keepOpen` to pick in several groups at
-once), Skeleton/SkeletonLines/Spinner, EmptyState,
+once; an item's `descriptionMono` and `descriptionWraps` set its second
+line in mono or let a sentence wrap), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 

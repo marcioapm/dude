@@ -10,7 +10,7 @@
   gap: var(--ds-space-4);
   height: var(--ds-size-chip);
   max-width: 100%;
-  min-width: 0;
+  flex-shrink: 0;
   padding: 0 var(--ds-space-8);
   border: 0;
   border-radius: var(--ds-radius-full);
@@ -58,7 +58,9 @@
   color: var(--ds-color-text-muted);
 }
 
+/* A refused item's reason wraps (RowMenu descriptionWraps) within this width. */
 .menu.menu {
   min-width: 240px;
+  max-width: 320px;
   box-shadow: var(--ds-shadow-3);
 }
