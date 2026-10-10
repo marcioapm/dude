@@ -497,6 +497,11 @@ def test_a_project_linked_in_the_welcomes_composer_is_what_the_session_it_makes_
     expect(linked).not_to_contain_text("web-console")
 
 
+def _menu_item(page: Page, name: str):
+    """The open menu's radio item named name; a tier's name may hold a "/", which a selector's regex cannot."""
+    return page.get_by_role("menuitemradio").filter(has=page.get_by_text(name, exact=True))
+
+
 def _brainstorm_run(client: ApiClient, owner_dsn: str, session: str, after: str | None = None) -> dict:
     """The session's latest Run once lux has it (other than `after`), as the API shows it: what it
     was submitted with. The database is read only to wait for the submit."""
@@ -522,7 +527,7 @@ def test_a_tier_and_harness_chosen_in_the_welcomes_composer_are_what_its_agent_r
     picker = page.get_by_test_id("welcome").get_by_test_id("model-picker")
     expect(picker).to_have_attribute("aria-label", re.compile(r"on OpenCode \(organisation default\)$"))
     picker.click()
-    page.get_by_role("menuitemradio", name=re.compile("^" + re.escape(name))).click()
+    _menu_item(page, name).click()
     page.get_by_role("menuitemradio", name="Claude Code", exact=True).click()
     page.keyboard.press("Escape")
     expect(page.get_by_role("menu")).to_have_count(0)
@@ -563,7 +568,7 @@ def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
     rail = page.get_by_test_id("session-model")
     # The owner's chip is a button at once; its menu reads the organisation's tiers as it opens.
     rail.get_by_role("button", name=re.compile(r"^Model: ")).click()
-    page.get_by_role("menuitemradio", name=re.compile("^" + re.escape(name))).click()
+    _menu_item(page, name).click()
     page.get_by_role("menuitemradio", name="Codex", exact=True).click()
     page.keyboard.press("Escape")
     expect(rail.get_by_role("button", name=f"Model: {name} on Codex")).to_be_visible()
