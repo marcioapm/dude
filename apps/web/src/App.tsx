@@ -145,12 +145,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   }, []);
   // `[` from anywhere outside a field folds or unfolds it; `/` on the rail
   // unfolds it with the search focused, as the rail's search item does.
+  // `e.key` is the character typed, so Shift or Option producing it on
+  // another layout is still that key; only ⌘ and Ctrl (not AltGr, which is
+  // Ctrl+Alt) make a command.
   const railedNow = useRef(railed);
   railedNow.current = railed;
   const searchOnExpand = useRef(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== "[" && e.key !== "/") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented || typingIn(e.target)) return;
+      if ((e.key !== "[" && e.key !== "/") || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented || typingIn(e.target)) return;
       // Under the drawer breakpoint there is no rail to fold to.
       if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
       if (e.key === "/") {

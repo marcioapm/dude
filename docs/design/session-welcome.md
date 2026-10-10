@@ -189,7 +189,9 @@ What the build decided where this page left it open:
   tree has loaded and is empty, so nothing flashes while it loads.
 - **The tab reads "dude"** on the welcome, as with nothing selected before.
 - **`[`** is ignored in an input, textarea, select or contenteditable,
-  with any modifier, and under 1000px, where there is no rail. Nothing
+  with ⌘ or Ctrl held (AltGr, Ctrl+Alt, still types it; Shift and Option
+  are how some layouts type `[` and `/`, so they do not refuse it), and
+  under 1000px, where there is no rail. Nothing
   else bound it. **`/`** on the rail, under the same guards, unfolds the
   sidebar with its search focused, as the rail's search item does.
 - **The brand's accessible name is "El Duderino, home"**: its visible

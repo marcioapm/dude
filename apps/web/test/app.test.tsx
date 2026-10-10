@@ -268,7 +268,7 @@ describe("the sidebar's rail", () => {
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
   });
 
-  test("[ in a field is a character, and with a modifier held it is not the shortcut", async () => {
+  test("[ in a field is a character, and with ⌘ or Ctrl held it is not the shortcut", async () => {
     const page = await app("", new FixtureClient("a"));
     const field = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
     await key(field);
@@ -276,10 +276,29 @@ describe("the sidebar's rail", () => {
     await key(search);
     await key(document.body, { metaKey: true });
     await key(document.body, { ctrlKey: true });
-    await key(document.body, { altKey: true });
-    await key(document.body, { shiftKey: true });
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("[ typed with Option (a Mac's pt/de layout) or AltGr (Ctrl+Alt) is the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=welcome] textarea"), "the composer");
+    await key(document.body, { altKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    await key(document.body, { ctrlKey: true, altKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("/ typed with Shift (Shift+7 on a pt/de layout) on the rail unfolds it with the search focused", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/", shiftKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(true);
   });
 
   test("[ in a contenteditable or on a select is not the shortcut", async () => {
