@@ -650,21 +650,48 @@ describe("tokens", () => {
 });
 
 describe("an agent that asks", () => {
-  test("the question waits for an answer, and the answer is queued until the agent takes it", () => {
+  test("the question waits for an answer, and once answered its turn is the record: no second turn", () => {
     const events = [
       ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_1", prompt: "Sort the table?", options: ["yes", "no"] }),
     ];
     let conversation = project(events);
-    expect(conversation.openQuestion).toMatchObject({ questionId: "qst_1", text: "Sort the table?", options: ["yes", "no"] });
+    expect(conversation.openQuestion).toMatchObject({ questionId: "qst_1", text: "Sort the table?", options: ["yes", "no"],
+      items: [{ header: "", question: "Sort the table?", multiple: false,
+        choices: [{ label: "yes", description: "", recommended: false }, { label: "no", description: "", recommended: false }] }] });
     expect(conversation.activity).toBeNull();
 
-    events.push(ev(EventTypes.QuestionAnswered, { questionId: "qst_1", answer: "yes", directiveId: "dir_1" }));
+    // An answer from before answers were kept per question: the choice its text names.
+    events.push(ev(EventTypes.QuestionAnswered, { questionId: "qst_1", answer: "Yes ", directiveId: "dir_1" }));
     conversation = project(events);
     expect(conversation.openQuestion).toBeNull();
-    expect(conversation.turns.map((t) => t.kind)).toEqual(["question", "human"]);
-    expect(conversation.turns[1]).toMatchObject({ intent: "answer", text: "yes", deliveredAt: null });
+    expect(conversation.turns.map((t) => t.kind)).toEqual(["question"]);
+    expect(conversation.turns[0]).toMatchObject({ answers: [{ choices: [0], text: "" }] });
+  });
 
-    events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }));
+  test("several questions answered through the form: each answer on its question, the note as the person's own turn", () => {
+    const items = [
+      { header: "Retry scope", question: "Which failures?", multiple: false,
+        choices: [{ label: "5xx only", description: "A 4xx is our bug.", recommended: true }, { label: "Everything" }] },
+      { header: "Button", question: "What should it say?", multiple: false, choices: [] },
+    ];
+    const events = [
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_m", prompt: "2 questions: Retry scope, Button", options: [], items }),
+      { ...ev(EventTypes.QuestionAnswered, { questionId: "qst_m", answer: "1. Retry scope …", directiveId: "dir_m",
+        answers: [{ choices: [0], text: "" }, { choices: [], text: "Pay with two cards" }], note: "Keep it under 10s.",
+        attachments: [{ id: "att_1", name: "a.png", width: 10, height: 10, original: {} }] }), actor: { type: "person", id: "per_ana" } } as PersistedEvent,
+    ];
+    const conversation = project(events);
+    expect(conversation.turns.map((t) => t.kind)).toEqual(["question", "human"]);
+    expect(conversation.turns[0]).toMatchObject({
+      items: [{ header: "Retry scope", choices: [{ label: "5xx only", recommended: true }, { label: "Everything", description: "", recommended: false }] },
+        { header: "Button" }],
+      answers: [{ choices: [0], text: "" }, { choices: [], text: "Pay with two cards" }],
+      answeredBy: { id: "per_ana" },
+    });
+    expect(conversation.turns[1]).toMatchObject({ kind: "human", intent: "message", text: "Keep it under 10s.", deliveredAt: null });
+    expect((conversation.turns[1] as { attachments: unknown[] }).attachments).toHaveLength(1);
+    // Read when the agent takes the directive, as any message is.
+    events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_m" }));
     expect(project(events).turns[1]).toMatchObject({ deliveredAt: events[2]!.occurredAt });
   });
 

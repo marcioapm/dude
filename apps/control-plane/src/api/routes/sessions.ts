@@ -17,7 +17,14 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-const text = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+const text = z.object({ text: z.string().trim().min(1).max(16_384), aside: z.boolean().optional() }).strict();
+// The question's form: one answer per question (picks and/or own words), a
+// note; the orchestrator checks them against what was asked.
+const answers = z.object({
+  answers: z.array(z.object({ choices: z.array(z.number().int().min(0)).max(6).default([]), text: z.string().max(16_384).optional() }).strict())
+    .min(1).max(4),
+  note: z.string().max(16_384).optional(),
+}).strict();
 const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
@@ -73,6 +80,8 @@ export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms/:id", forward("GET", at()));
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
+  router.post("/v1/brainstorms/:id/questions/:question/answer",
+    forward("POST", (ctx) => `${at()(ctx)}/questions/${encodeURIComponent(ctx.params.question!)}/answer`, answers));
   router.post("/v1/brainstorms/:id/link", forward("POST", at("/link"), links));
   router.post("/v1/brainstorms/:id/people", forward("POST", at("/people"), invite));
   router.post("/v1/brainstorms/:id/people/:person/role",
