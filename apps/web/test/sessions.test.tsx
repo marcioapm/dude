@@ -229,6 +229,9 @@ describe("a brainstorm session's page", () => {
     expect(composer.placeholder).toContain("You can read this session");
     await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
     expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+    // A member may file what a reader cannot, so the card folds to one line.
+    const line = await until(() => page.querySelector("[data-testid=proposal-fold]"), "the folded line");
+    expect(line.textContent).toBe("Proposed work · 1 task · 1 for others to file");
     await write(page, "let me in");
     expect(client.sent).toEqual([]);
   });
