@@ -408,23 +408,39 @@ func (c diskOnly) Resume(ctx context.Context, id string, in lux.ResumeInput) (lu
 
 // A lux that applied only part of the size leaves the Run on neither size:
 // runs.machine has the numbers lux's spec has, under the size it had, with
-// a note naming the size its settings name.
+// a note naming the size its settings name. The next wake asks again and
+// lux leaves those numbers as they are: the note stays, and nothing new is
+// recorded.
 func TestAPartlyAppliedSizeKeepsItsNameWithLuxsNumbers(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.tiny()
 	w.lux.NoResize = true
 	runID, web := w.asleepPreview()
+	luxRun := w.previewLux(runID)
 	sizeID := w.machineOf(runID)["sizeId"]
 	w.previews.Lux = diskOnly{w.previews.Lux}
 
 	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_tiny"}' WHERE id = $1`, w.project)
 	w.wakeAgain(runID, web)
 
+	partial := "Its settings name Tiny; lux applied only part of it, as shown."
 	m := w.machineOf(runID)
 	if m["name"] != "Standard" || m["sizeId"] != sizeID || m["from"] != "default" || m["cpus"] != 2.0 || m["memoryMiB"] != 8192.0 ||
-		m["diskGiB"] != 5.0 || m["note"] != "Its settings name Tiny; lux applied only part of it, as shown." || m["sinceEpoch"] != 2.0 {
+		m["diskGiB"] != 5.0 || m["note"] != partial || m["sinceEpoch"] != 2.0 {
 		t.Errorf("runs.machine = %v, want Standard's name with lux's 2 CPUs, 8 GiB and 5 GiB disk", m)
+	}
+
+	w.sleepAgain(runID, web)
+	w.wakeAgain(runID, web)
+	if got := w.resumeResources(luxRun); len(got) != 2 || got[1] == nil || got[1].Disk != 5*gibB {
+		t.Fatalf("the second wake sent %v, want Tiny's disk again", got)
+	}
+	if m := w.machineOf(runID); m["note"] != partial || m["sinceEpoch"] != 2.0 || m["diskGiB"] != 5.0 {
+		t.Errorf("after the second wake runs.machine = %v, want the partial note kept", m)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
+		t.Errorf("%d run.resized after the same partial apply twice, want 1", n)
 	}
 }
 

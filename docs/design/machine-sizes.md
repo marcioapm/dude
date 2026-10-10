@@ -105,7 +105,8 @@ preview's resume, an agent Run's (`phases.Syncer.resume`, which
   with no pool is lux's default pool: the comparison uses the `poolId` lux
   reports for the Run and its pool list. The list is read only when one
   side names no pool and the other does, and not again once the record
-  says that size is in another pool (`otherPool`). If the list cannot be
+  says that size is in another pool (`otherPool`); a default-pool change
+  in lux is seen when the size's settings change. If the list cannot be
   read, the Run resumes on its size and its record is left as it is. A new
   Run (a preview replaced, the next phase) gets the new size.
 - **The size the settings name was deleted:** the settings fall back to the
@@ -125,19 +126,21 @@ shown as the new size's; and `note` when the Run is not on its settings'
 size (another pool, a deleted size, or a resume lux took without the
 resources). When lux applied only part of the size (its spec is neither
 size), the record keeps the old size's `sizeId`, `name` and `from` with
-lux's numbers, and the note names the size the settings name.
+lux's numbers, and the note names the size the settings name; a later
+resume that lux again leaves on those numbers keeps that note.
 `sinceEpoch` moves only when the numbers or the size id do: lux keeping a
 disk again at a later resume changes nothing, so nothing is written and
 the memory limit stays. A resume that changes the record writes
 `run.resized {machine}`, which has the Run page read the Run again.
 
 lux refusing the resources — 409 `not_resumable` because the Run is already
-resuming with other (or no) resources, or a 400/422 from a lux before
-lux#51 — is answered by the same resume without them (for the 409, lux
-treats it as a retry of the resume under way, 202), and logged as a
-warning. The wake does not fail. The note says the size was not applied:
-for the 409 it quotes lux and says the next resume tries again; for a 400
-it says this lux cannot change a stopped Run's CPUs or memory.
+resuming with other (or no) resources, a 400 from a lux before lux#51, or
+a 422 refusing these resources — is answered by the same resume without
+them (for the 409, lux treats it as a retry of the resume under way, 202),
+and logged as a warning. The wake does not fail. The note says the size
+was not applied: for the 409 it quotes lux and says the next resume tries
+again; for a 400 it says this lux cannot change a stopped Run's CPUs or
+memory.
 
 ## Pools, from lux
 
