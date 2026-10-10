@@ -21,7 +21,7 @@ import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
-import { AGENT_CHATTER, useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
@@ -234,6 +234,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       }
       return QUIET_EVENTS.has(e.eventType);
     });
+  // A settings change missed while the stream was down is never replayed: the model pickers read again.
+  const wasStream = useRef(stream);
+  useEffect(() => {
+    if (cameBack(wasStream.current, stream)) forgetModelOptions(client);
+    wasStream.current = stream;
+  }, [stream, client]);
 
   const selected = treeSelection(place);
 
