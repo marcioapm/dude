@@ -355,7 +355,7 @@ func TestARunningSeenBeforeTheWakeCommitsIsNotAFailedStart(t *testing.T) {
 	}
 	w.lux.RequestServer(web, "/")
 	w.until("woken", func() bool {
-		return r.Resumed == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL AND status <> 'paused'`, runID) == 1
+		return w.luxCalls(r.ID, "resume") == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL AND status <> 'paused'`, runID) == 1
 	})
 	w.open(web) // it serves: lux's wake is answered
 	w.lux.Crash(r.ID)

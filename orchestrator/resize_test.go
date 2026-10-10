@@ -29,11 +29,11 @@ func (w *world) tiny() {
 // (POST /internal/runs/{id}/resume), and sweeps until lux has the resume.
 func (w *world) resumeAgent(runID string, r *fakelux.Run) {
 	w.t.Helper()
-	before := len(w.lux.ResumeResourcesOf(r.ID))
+	before := w.luxCalls(r.ID, "resume")
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("lux to have the resume", func() bool { return len(w.lux.ResumeResourcesOf(r.ID)) > before })
+	w.until("lux to have the resume", func() bool { return w.luxCalls(r.ID, "resume") > before })
 }
 
 // resumeResources is the resources each resume lux accepted carried; nil
@@ -671,7 +671,7 @@ func TestAParkedSessionResumesOnTheSizeItsRoleNamesNow(t *testing.T) {
 			s.lux.NoSyncModes = noModes
 			luxRun := s.previewLux(run)
 			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
-			s.until("lux to have the resume", func() bool { return len(s.lux.ResumeResourcesOf(luxRun)) > 0 })
+			s.until("lux to have the resume", func() bool { return s.luxCalls(luxRun, "resume") > 0 })
 			s.until("the resize recorded", func() bool {
 				return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, run) > 0
 			})

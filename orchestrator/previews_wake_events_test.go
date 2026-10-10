@@ -313,7 +313,7 @@ func (w *world) failedStartUnapplied() (runID string, r *fakelux.Run) {
 	w.lux.FailStarts("dude.preview="+runID, 1)
 	w.lux.RequestServer(web, "/")
 	w.untilPreview(runID, "the follower held before the failure", func() bool {
-		return r.Resumed == 1 && isClosed(held)
+		return w.luxCalls(r.ID, "resume") == 1 && isClosed(held)
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'resuming' AND start_failures = 0`, runID); n != 1 {
 		w.t.Fatalf("not resuming in dude:\n%s", w.preview(runID))

@@ -231,11 +231,11 @@ func (w *world) pauseAndResume(wi string) {
 	w.t.Helper()
 	runID := w.parked(wi)
 	luxID := w.lux.Runs()[0].ID
-	resumed := len(w.lux.ResumeResourcesOf(luxID))
+	resumed := w.luxCalls(luxID, "resume")
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the resume", func() bool { return len(w.lux.ResumeResourcesOf(luxID)) == resumed+1 })
+	w.until("the resume", func() bool { return w.luxCalls(luxID, "resume") == resumed+1 })
 }
 
 // Every way a Run is resumed carries a login minted for it: the one it
@@ -306,7 +306,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			// Parked past the cached token's refresh point.
 			api.advance(11 * time.Hour)
 			resume()
-			w.until("the resume", func() bool { return r.Resumed == 1 })
+			w.until("the resume", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 
 			fresh, ok := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); !ok || len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
@@ -331,7 +331,7 @@ func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w.restart(registry.NewECR(ecrRegistry, api, api.now))
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 	r := w.lux.Runs()[0]
-	w.until("the resume", func() bool { return r.Resumed == 1 })
+	w.until("the resume", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 	if _, ok := loginIn(r.ResumeSecrets[0]); ok || len(api.tokens()) != 0 {
 		t.Errorf("a login was sent to resume a Run started without one (ECR minted %d)", len(api.tokens()))
 	}
@@ -376,7 +376,7 @@ func TestAResumeAfterARestartIsMintedByTheNewIdentity(t *testing.T) {
 		runID := w.parked(wi)
 		w.restart(next.provider)
 		w.call("/internal/runs/"+runID+"/resume", map[string]any{})
-		w.until("the resume", func() bool { return r()[0].Resumed == i+1 })
+		w.until("the resume", func() bool { return w.luxCalls(r()[0].ID, "resume") == i+1 })
 		sent, _ := loginIn(r()[0].ResumeSecrets[i])
 		tokens, signers := api.tokens(), api.signedBy()
 		if len(tokens) != i+2 || sent != "AWS:"+tokens[i+1] {
@@ -487,7 +487,7 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 
 			api.advance(11 * time.Hour)
 			w.restart(registry.NewECR(ecrRegistry, api, api.now))
-			w.retried(runID, time.Minute, func() bool { return r.Resumed == 1 })
+			w.retried(runID, time.Minute, func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 			fresh, _ := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
@@ -611,7 +611,7 @@ func TestRunsWaitingOnAFailingLoginShareOneBackOff(t *testing.T) {
 	api.advance(registry.MaxRetry)
 	w.until("every Run to go ahead", func() bool {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE organization_id = $1`, w.org)
-		return len(w.lux.Runs()) == 5 && w.lux.Runs()[0].Resumed == 1
+		return len(w.lux.Runs()) == 5 && w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1
 	})
 	tokens := api.tokens()
 	if len(tokens) != 2 {
@@ -726,7 +726,7 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 
 	roles.setFail(nil)
 	api.advance(registry.FirstRetry) // past the provider's back-off
-	w.retried(runID, 5*time.Second, func() bool { return r.Resumed == 1 })
+	w.retried(runID, 5*time.Second, func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 	fresh, _ := loginIn(r.ResumeSecrets[0])
 	tokens := api.tokens()
 	if len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
@@ -771,7 +771,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 	})
 	api.setFail(nil)
 	api.advance(registry.FirstRetry) // past the provider's back-off
-	w.retried(runID, 5*time.Second, func() bool { return w.lux.Runs()[0].Resumed == 1 })
+	w.retried(runID, 5*time.Second, func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 })
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})

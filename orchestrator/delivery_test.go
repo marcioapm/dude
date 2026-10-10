@@ -1352,7 +1352,7 @@ func TestAnAgentWaitingOnAPersonIsParkedAndTheAnswerResumesIt(t *testing.T) {
 	w.until("the run to be parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
 	})
-	w.until("lux to stop it: parked holds no capacity", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	w.until("lux to stop it: parked holds no capacity", func() bool { return w.lux.State(w.lux.Runs()[0].ID) == "stopped" })
 	if w.taskStatus(wi) != "awaiting_input" {
 		t.Errorf("task is %s while its question is open", w.taskStatus(wi))
 	}
@@ -1701,7 +1701,7 @@ func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
 		t.Fatalf("an idle-parked run resumed on its own")
 	}
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
-	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == 1 })
+	w.until("the resume", func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 })
 	if w.taskStatus(wi) != "running" {
 		t.Errorf("task is %s after a person resumed it", w.taskStatus(wi))
 	}
@@ -2382,7 +2382,10 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
 	// lux stops it, reporting "stopped" a moment later.
-	w.until("lux to report the run stopped", func() bool { r := w.lux.Runs()[0]; return r.Stopped == 1 && r.State == "stopped" })
+	w.until("lux to report the run stopped", func() bool {
+		id := w.lux.Runs()[0].ID
+		return w.luxCalls(id, "stop") == 1 && w.lux.State(id) == "stopped"
+	})
 
 	// A directive given while paused, then the request to resume.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
