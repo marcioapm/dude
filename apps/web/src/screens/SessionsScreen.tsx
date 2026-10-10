@@ -57,12 +57,18 @@ export function SessionsScreen({ client, sessions, onOpen, onNew }: {
   );
   let body;
   if (shown === "archived") {
-    body = problem ? <Callout tone="danger" data-testid="sessions-problem">{problem}</Callout>
-      : !archived ? <div className="centered"><Spinner label="Reading your archived sessions…" /></div>
-      : archived.length === 0 ? (
+    if (problem) {
+      body = <Callout tone="danger" data-testid="sessions-problem">{problem}</Callout>;
+    } else if (!archived) {
+      body = <div className="centered"><Spinner label="Reading your archived sessions…" /></div>;
+    } else if (archived.length === 0) {
+      body = (
         <EmptyState icon="archive" title="Nothing archived"
           description="A session you archive leaves your list and sidebar, and nobody else's. Open one and Unarchive brings it back." />
-      ) : <ul className="sessionList">{archived.map(row)}</ul>;
+      );
+    } else {
+      body = <ul className="sessionList">{archived.map(row)}</ul>;
+    }
   } else if (sessions && sessions.length === 0) {
     body = (
       <EmptyState icon="brainstorm" title="No sessions yet"
