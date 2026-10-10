@@ -596,18 +596,23 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // betweenTurns is a conductor whose turn has ended. It is never finished:
 // a person's next message is its next turn. It stays running for its warm
 // period, then is parked (dude_pause 'conductor') until someone writes.
-// One whose container stopped on its own ended there, and a new message
-// gets a new conductor.
+// One whose container stopped on its own is parked the same way while lux
+// can resume it (delivery.Parkable), and ended otherwise, when a new
+// message gets a new conductor.
 func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
+	park := "conductor"
+	if r.brainstorm() {
+		park = "session"
+	}
 	if lux.Terminal(r.LuxState) && r.LuxStopReason == "" && r.Control == "none" {
+		parked, err := s.parkStopped(ctx, r, park)
+		if parked || err != nil {
+			return true, err
+		}
 		return true, s.endConductor(ctx, r, "its container stopped")
 	}
 	if r.Status != statusRunning || r.LuxState != "running" {
 		return false, nil
-	}
-	park := "conductor"
-	if r.brainstorm() {
-		park = "session"
 	}
 	switch {
 	case r.brainstorm() && r.RepoApproved && r.Control == "none" && !r.HasDirectives:
@@ -622,6 +627,40 @@ func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.requestPause(ctx, r, park, "parked after its warm period")
 	}
 	return false, nil
+}
+
+// parkStopped parks a talker whose container stopped without dude asking,
+// when lux keeps it to resume (delivery.Parkable): paused as its warm
+// period's end parks it (kind), so the next message resumes the same lux
+// Run, under the lock its Chat takes. Says whether it parked it.
+func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool, error) {
+	parked := false
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := s.lockChatOf(ctx, tx, r); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
+			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, kind, stopPause)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		parked = true
+		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
+			map[string]any{"reason": kind, "message": "its container stopped (lux: " + r.LuxState + ")", "stopped": r.LuxState})
+	})
+	if parked {
+		s.unfollow(r.ID)
+	}
+	return parked, err
+}
+
+// lockChatOf takes the lock a talker's Chat takes: its session's, or its
+// task's.
+func (s *Syncer) lockChatOf(ctx context.Context, tx pgx.Tx, r phaseRun) error {
+	if r.brainstorm() {
+		return delivery.LockSession(ctx, tx, r.SessionID)
+	}
+	return delivery.LockChat(ctx, tx, r.TaskID)
 }
 
 // endConductor completes a conductor that can no longer be resumed, under

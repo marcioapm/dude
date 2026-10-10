@@ -472,6 +472,11 @@ const maxRefusedNames = 100
 // has failed. One lux stopped at its time limit is not kept: its running
 // time is spent, so a resume would be stopped again at once.
 func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
+	// A conductor or session agent lux can resume, with a session to
+	// reload, is parked by the sweep (betweenTurns), not failed.
+	if t.run.talker() && !lux.Terminated(state) && t.sessionEpoch > 0 {
+		return nil
+	}
 	if reason == "" {
 		reason = state
 	}
