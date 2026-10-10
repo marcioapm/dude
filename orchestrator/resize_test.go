@@ -634,6 +634,62 @@ func TestALuxThatIgnoresResourcesIsRecordedAsItsSpecSays(t *testing.T) {
 	}
 }
 
+// A session's agent parked by the sweep and resumed by a chat message
+// resumes on the size the organisation's brainstorm role names now. On a
+// lux without sync modes, the session resume's retry without its sync
+// carries that size too.
+func TestAParkedSessionResumesOnTheSizeItsRoleNamesNow(t *testing.T) {
+	for name, noModes := range map[string]bool{"with sync modes": false, "without sync modes": true} {
+		t.Run(name, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.tiny()
+			s.syncer.ConductorWarm = time.Hour
+			brainstormOn := func(size string) {
+				mustExec(t, s.owner, `UPDATE organizations SET default_agent_models = jsonb_set(default_agent_models, '{brainstorm}',
+					COALESCE(default_agent_models->'brainstorm', '{}'::jsonb) || jsonb_build_object('machineSize', $2::text)) WHERE id = $1`, s.org, size)
+			}
+			// Migration 086 seeds brainstorm on Small; it starts on Standard here.
+			brainstormOn(s.str(`SELECT id FROM machine_sizes WHERE organization_id = $1 AND name = 'Standard'`, s.org))
+			id := s.session()
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+			run := s.started(id)
+			s.until("the brainstorm running", func() bool {
+				return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, run) == 1
+			})
+			if m := s.machineOf(run); m["name"] != "Standard" {
+				t.Fatalf("the brainstorm started on %v, want Standard", m)
+			}
+			mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours',
+				agent_active_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours',
+				stall_reported_at = now() - interval '3 hours' WHERE id = $1`, run)
+			s.until("the session parked", func() bool {
+				return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'session'
+					AND lux_state = 'stopped'`, run) == 1
+			})
+
+			brainstormOn("msz_tiny")
+			s.lux.NoSyncModes = noModes
+			luxRun := s.previewLux(run)
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+			s.until("lux to have the resume", func() bool { return len(s.lux.ResumeResourcesOf(luxRun)) > 0 })
+			s.until("the resize recorded", func() bool {
+				return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, run) > 0
+			})
+
+			tiny := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 5 * gibB}
+			if got := s.resumeResources(luxRun); len(got) != 1 || got[0] == nil || *got[0] != tiny {
+				t.Errorf("the resumes lux took carried %v, want one with Tiny's", got)
+			}
+			if m := s.machineOf(run); m["name"] != "Tiny" || m["sizeId"] != "msz_tiny" || m["cpus"] != 0.5 || m["sinceEpoch"] != 2.0 {
+				t.Errorf("runs.machine = %v, want Tiny since epoch 2", m)
+			}
+			if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, run); n != 1 {
+				t.Errorf("%d run.resized, want 1", n)
+			}
+		})
+	}
+}
+
 // A conductor resumed on a lux without sync modes is resumed again without
 // its sync (Syncer.resume's fallback): that retry still carries the size
 // its role names now.

@@ -195,8 +195,8 @@ func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
 	switch {
 	case answer.Resize == nil && delivery.SameSize(got, rec):
 		// lux left the Run as it was; numbers a partial apply recorded
-		// keep that note.
-		if rec.Note = p.keptNote(); p.Recorded.Note == partial {
+		// keep that note unless lux refused the resources this time.
+		if rec.Note = p.keptNote(); p.refused == nil && p.Recorded.Note == partial {
 			rec.Note = partial
 		}
 		return &rec
