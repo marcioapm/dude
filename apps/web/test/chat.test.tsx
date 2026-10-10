@@ -453,6 +453,66 @@ describe("the Chat tab", () => {
     expect(tabs()[0]!.dataset.done).toBe("true");
   });
 
+  /** A two-question q_7 on a page whose person is known only once `known()` is called. */
+  async function personLater() {
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }, { label: "All", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_7", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    let known!: () => void;
+    const people = new Promise<void>((resolve) => { known = resolve; });
+    const listPeople = client.listPeople.bind(client);
+    client.listPeople = async () => {
+      await people;
+      return listPeople();
+    };
+    const page = await chatPage(client);
+    const tabs = () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
+    await until(() => tabs().length > 0 ? page : null, "the tabs");
+    return { client, page, tabs, known };
+  }
+  const kept = (person: string) => localStorage.getItem(`dude.answer.${person}.q_7`);
+
+  test("picks kept before the page knew the person move to the person once; sent, nothing is kept", async () => {
+    localStorage.clear();
+    const before = JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" });
+    localStorage.setItem("dude.answer.anyone.q_7", before);
+    const { client, page, tabs, known } = await personLater();
+    await act(async () => known());
+    await until(() => kept("anyone") === null ? page : null, "the anyone draft moved");
+    expect(kept(YOU)).toBe(before);
+    expect(tabs()[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(tabs()[0]!.dataset.done).toBe("true");
+    const own = page.querySelector<HTMLInputElement>("[data-testid=question-turn] [data-own-field]")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(own, "Pay in parts");
+      own.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-send]")!.click());
+    await settle();
+    expect(client.sent.at(-1)).toBe(`${TASK_ID}:q_7:[{"choices":[1],"text":""},{"choices":[],"text":"Pay in parts"}]`);
+    expect(drafts()).toEqual([]);
+  });
+
+  test("the person's own kept picks win over ones kept before the page knew them, which are dropped", async () => {
+    localStorage.clear();
+    const mine = JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" });
+    localStorage.setItem(`dude.answer.${YOU}.q_7`, mine);
+    localStorage.setItem("dude.answer.anyone.q_7", JSON.stringify({ tab: 0, answers: [{ choices: [0], own: null }, { choices: [], own: null }], note: "someone's" }));
+    const { page, tabs, known } = await personLater();
+    await act(async () => known());
+    await until(() => kept("anyone") === null ? page : null, "the anyone draft dropped");
+    expect(kept(YOU)).toBe(mine);
+    await until(() => tabs()[1]?.getAttribute("aria-selected") === "true" ? page : null, "the person's picks");
+    await act(async () => tabs()[0]!.click());
+    const radios = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")];
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+  });
+
   test("answered through the form, the question's turn is the record, and the note is the person's own turn", async () => {
     const items = [
       { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }] },
