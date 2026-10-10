@@ -94,7 +94,7 @@ func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if r.Resumed != 1 {
+	if w.luxCalls(r.ID, "resume") != 1 {
 		t.Fatalf("the Run was not resumed\n%s", w.describeRuns())
 	}
 	// Large's 23040 MiB, of which the container gets 95%, to a MiB.

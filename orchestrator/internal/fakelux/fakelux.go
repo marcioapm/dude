@@ -157,7 +157,7 @@ type Run struct {
 	ResumeInputs []string
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
-	// What was asked of it, in order: "exec", "stop", "cancel".
+	// What was asked of it, in order: "exec", "stop", "cancel", "resume".
 	Calls []string
 	// Each resume's sync and each POST /sync's, as received.
 	ResumeSyncs [][]lux.SyncRef

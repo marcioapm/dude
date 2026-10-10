@@ -149,10 +149,7 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				t.Fatalf("the ended Run was not resumed: resumed %d, calls %v\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
 			}
 			w.open(web)
-			// dude's row follows lux's state event on the follower's goroutine.
-			w.untilPreview(runID, "the resumed Run running", func() bool {
-				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
-			})
+			w.untilRunning(runID, "the resumed Run running")
 			if n := len(w.luxRuns()); n != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
 				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
 				t.Fatalf("%d lux runs, calls %v; want the Run that ran resumed\n%s", n, w.lux.CallsOf(r.ID), w.preview(runID))
@@ -275,10 +272,7 @@ func TestACrashedPreviewWakesWhileItsOutputIsSlowToReplay(t *testing.T) {
 			r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
 	}
 	w.open(web)
-	// dude's row follows lux's state event on the follower's goroutine.
-	w.untilPreview(runID, "the resumed Run running", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
-	})
+	w.untilRunning(runID, "the resumed Run running")
 	if n := len(w.luxRuns()); n != 1 || r.Resumed != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
 		w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
 		t.Fatalf("%d lux runs, resumed %d, calls %v; want the Run resumed once\n%s", n, r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
