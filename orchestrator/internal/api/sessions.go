@@ -121,7 +121,8 @@ type linkInput struct {
 }
 
 // createSession starts a session owned by the caller: private until they
-// share it.
+// share it. Given a first message, the same transaction starts its agent
+// with it, so a session made from the welcome is never left empty.
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -130,6 +131,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 	var body struct {
 		Title    string      `json:"title"`
 		Projects []linkInput `json:"projects"`
+		Message  *string     `json:"message"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -138,7 +140,13 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 	if len([]rune(title)) > sessionTitleMax {
 		return fail(http.StatusBadRequest, "bad_request", "a title of at most %d characters", sessionTitleMax)
 	}
+	if body.Message != nil {
+		if err := checkChatText("message", *body.Message); err != nil {
+			return err
+		}
+	}
 	id := ids.New(ids.Session)
+	var runID string
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// Untitled until its agent or a member names it.
 		if _, err := tx.Exec(r.Context(), `INSERT INTO sessions (id, organization_id, title, titled_by, created_by)
@@ -153,13 +161,29 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 		if err := setLinks(r.Context(), tx, org, id, body.Projects); err != nil {
 			return err
 		}
-		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionCreated, p.ActorType, p.Actor,
-			map[string]any{"title": db.Nullable(title)})
+		if err := delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionCreated, p.ActorType, p.Actor,
+			map[string]any{"title": db.Nullable(title)}); err != nil {
+			return err
+		}
+		if body.Message == nil {
+			return nil
+		}
+		name, err := delivery.PersonName(r.Context(), tx, p.Person)
+		if err != nil {
+			return err
+		}
+		runID, err = startSessionAgent(r.Context(), tx, org, id, p.writer(), name, *body.Message)
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusCreated, map[string]any{"id": id, "title": db.Nullable(title)})
+	out := map[string]any{"id": id, "title": db.Nullable(title)}
+	if runID != "" {
+		out["runId"] = runID
+		s.kick()
+	}
+	write(w, http.StatusCreated, out)
 	return nil
 }
 
@@ -789,11 +813,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" {
-		return fail(http.StatusBadRequest, "bad_request", "text is required")
-	}
-	if len(body.Text) > delivery.ChatMessageMax {
-		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
+	if err := checkChatText("text", body.Text); err != nil {
+		return err
 	}
 	id := r.PathValue("id")
 	wr := p.writer()
@@ -807,7 +828,6 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if err != nil {
 			return err
 		}
-		told := delivery.Attributed(name, body.Text)
 		var runID string
 		var ending bool
 		find := func() error {
@@ -824,7 +844,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if db.IsNotFound(err) {
 			created = true
-			runID, err = delivery.StartBrainstorm(r.Context(), tx, org, id, wr, told, body.Text)
+			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text)
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -846,7 +866,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			out = map[string]any{"runId": runID, "created": false, "questionId": questionID, "directiveId": directiveID}
 			return nil
 		}
-		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: told, Scope: "run"})
+		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
 		if err != nil {
 			return err
 		}
@@ -878,6 +898,25 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	}
 	write(w, status, out)
 	return nil
+}
+
+// checkChatText refuses a message the session's agent would not be given:
+// blank, or over delivery.ChatMessageMax bytes. field names it in the error.
+func checkChatText(field, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fail(http.StatusBadRequest, "bad_request", "%s is required", field)
+	}
+	if len(text) > delivery.ChatMessageMax {
+		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
+	}
+	return nil
+}
+
+// startSessionAgent starts the brainstorm of a session with no live agent,
+// briefed with the writer's message attributed to them and shown in Chat as
+// written. The caller kicks the syncer once the transaction commits.
+func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string) (string, error) {
+	return delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, delivery.Attributed(name, text), text)
 }
 
 // answerSessionQuestion settles the agent's open question with a member's

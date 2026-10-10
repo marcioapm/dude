@@ -147,6 +147,8 @@ test("every session route goes to the orchestrator as the person, and a bad body
     ["POST", `/v1/brainstorms/${SESSION}/accept`, undefined, `/internal/sessions/${SESSION}/accept`],
     ["POST", `/v1/brainstorms/${SESSION}/decline`, undefined, `/internal/sessions/${SESSION}/decline`],
     ["POST", `/v1/brainstorms/${SESSION}/file`, { proposalId: "prp_1", items: [0, 2] }, `/internal/sessions/${SESSION}/file`],
+    // Made by its first message, with what it reads.
+    ["POST", "/v1/brainstorms", { message: " where does metering go? ", projects: [{ projectId: "prj_1" }] }, "/internal/sessions"],
   ] as const;
   for (const [method, path, body] of ok) expect((await call(marcio, method, path, body)).status).toBe(200);
   expect(forwarded.map((f) => [f.method, f.path])).toEqual(ok.map(([m, , , to]) => [m, to]));
@@ -154,10 +156,13 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded[1]!.body).toEqual({ title: "Ideas", projects: [{ projectId: "prj_1", repositoryIds: ["repo_1"] }] });
   expect(forwarded[2]!.body).toEqual({ projects: [] });
   expect(forwarded[4]!.body).toEqual({ title: "Billing v2" });
+  expect(forwarded.at(-1)!.body).toEqual({ message: "where does metering go?", projects: [{ projectId: "prj_1", repositoryIds: [] }] });
 
   forwarded.length = 0;
   for (const [path, body] of [
     ["/v1/brainstorms", { title: "x".repeat(201) }],
+    ["/v1/brainstorms", { message: "  " }],
+    ["/v1/brainstorms", { message: "x".repeat(16_385) }],
     [`/v1/brainstorms/${SESSION}/title`, { title: "  " }],
     [`/v1/brainstorms/${SESSION}/title`, {}],
     [`/v1/brainstorms/${SESSION}/chat`, { text: "" }],
