@@ -486,21 +486,13 @@ describe("a session's name", () => {
 
   test("New session goes to the welcome and makes nothing", async () => {
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
-    class Creating extends SessionClient {
-      made = 0;
-      override createSession() {
-        this.made++;
-        return Promise.resolve({ id: "ssn_new", title: null });
-      }
-    }
-    const client = new Creating(detail("owner"));
     let welcomed = 0;
     const { container, unmount } = await mount(<ToastProvider><SessionsScreen sessions={[]} onOpen={() => {}} onNew={() => welcomed++} /></ToastProvider>);
     mounted.push(unmount);
     await click(container.querySelector("[data-testid=new-session]")!);
     await settle();
     expect(welcomed).toBe(1);
-    expect(client.made).toBe(0);
+    // The screen holds no client; "makes nothing" is that it opens no dialog of its own.
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 });
