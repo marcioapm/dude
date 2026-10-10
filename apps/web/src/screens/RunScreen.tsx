@@ -1155,7 +1155,7 @@ export interface AskActions {
 function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
   turn: QuestionTurn; role: AgentRole; ended: boolean; people: People; waitingOn: string | undefined; ask: AskActions | undefined;
 }) {
-  const { draft, keep, forget } = useAnswerDraft(people.you, ask && !ended ? turn : null);
+  const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, ended);
   const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
   const by = actorName(turn.answeredBy, people.names);
   const open = !ended && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
@@ -1163,6 +1163,8 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
   const tray = open && turn.items.length > 1 ? ask.tray : undefined;
   return (
     <QuestionCard
+      // Keyed on the draft: once the person is known the form starts from their own.
+      key={key}
       data-testid="question-turn"
       data-question={turn.questionId}
       role={role}

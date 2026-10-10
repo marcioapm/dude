@@ -11,7 +11,7 @@ import type { PersistedEvent, Run } from "@dude/domain";
 import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
 import type { SentAnswer } from "../src/api/client.ts";
-import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
+import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { project } from "../src/api/conversation.ts";
@@ -241,6 +241,8 @@ async function chatPage(client: ChatClient, props: Partial<Parameters<typeof Tas
 }
 
 const tabs = (page: HTMLElement) => [...page.querySelectorAll("[role=tab]")].map((t) => t.textContent?.replace(/\d+$/, ""));
+/** The answer drafts this browser keeps. */
+const drafts = () => Object.keys(localStorage).filter((k) => k.startsWith("dude.answer."));
 const selected = (page: HTMLElement) => page.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
 const pickTab = async (page: HTMLElement, name: string) => {
@@ -382,11 +384,73 @@ describe("the Chat tab", () => {
     await act(async () => radios()[0]!.click());
     expect(client.sent).toEqual([]);
     // The page goes and comes back: the picks are where they were.
-    page = await chatPage(new ChatClient({ status: "running" }, asking));
+    const again = new ChatClient({ status: "running" }, asking);
+    page = await chatPage(again);
     await until(() => page.querySelector("[data-testid=question-tabs]"), "the tabs again");
     const tabs = [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
     expect(tabs.map((t) => t.dataset.done ?? "")).toEqual(["true", "true", "", "", ""]);
     expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(drafts()).toHaveLength(1);
+    // Answered and sent: nothing is kept.
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=checkbox]")][0]!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    const own = await until(() => page.querySelector<HTMLInputElement>("[data-testid=question-turn] [data-own-field]"), "the words field");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(own, "Pay in parts");
+      own.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-send]")!.click());
+    await settle();
+    expect(again.sent.at(-1)).toStartWith(`${TASK_ID}:q_4:`);
+    expect(drafts()).toEqual([]);
+  });
+
+  test("a question whose Run ends unanswered drops its kept picks", async () => {
+    localStorage.clear();
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_6", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    let page = await chatPage(new ChatClient({ status: "running" }, asking));
+    const radio = await until(() => page.querySelector<HTMLElement>("[data-testid=question-turn] [role=radio]"), "the form");
+    await act(async () => radio.click());
+    expect(drafts()).toHaveLength(1);
+    // Back later, its Run aborted: the question is dismissed and its draft gone.
+    page = await chatPage(new ChatClient({ status: "aborted", endedAt: new Date().toISOString() }, asking));
+    await until(() => page.querySelector("[data-testid=question-turn][data-state=dismissed], [data-testid=question-turn] [data-state=dismissed]")
+      ?? page.querySelector("article[data-state=dismissed]"), "the dismissed question");
+    await settle();
+    expect(drafts()).toEqual([]);
+  });
+
+  test("picks kept for the person come back once the page knows who they are", async () => {
+    localStorage.clear();
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }, { label: "All", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    localStorage.setItem(`dude.answer.${YOU}.q_7`, JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" }));
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_7", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    let known!: () => void;
+    const people = new Promise<void>((resolve) => { known = resolve; });
+    const listPeople = client.listPeople.bind(client);
+    client.listPeople = async () => {
+      await people;
+      return listPeople();
+    };
+    const page = await chatPage(client);
+    const tabs = () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
+    await until(() => tabs().length > 0 ? page : null, "the tabs");
+    expect(tabs()[0]!.getAttribute("aria-selected")).toBe("true");
+    await act(async () => known());
+    await until(() => tabs()[1]?.getAttribute("aria-selected") === "true" ? page : null, "the person's picks");
+    expect(tabs()[0]!.dataset.done).toBe("true");
   });
 
   test("answered through the form, the question's turn is the record, and the note is the person's own turn", async () => {

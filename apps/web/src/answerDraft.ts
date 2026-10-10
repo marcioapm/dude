@@ -5,8 +5,8 @@
  *
  * The draft is per person and per question (localStorage, `dude.answer.<person>.<question>`):
  * a reload, or another task opened and back, finds the picks where they
- * were. Nothing reaches the agent before Send; a sent or settled question's
- * draft is dropped.
+ * were. Nothing reaches the agent before Send; a draft is dropped once its
+ * question is sent, settled, or ended unanswered.
  */
 
 import { useCallback, useEffect, useMemo } from "react";
@@ -48,22 +48,26 @@ export function dropDraft(key: string): void {
 }
 
 /**
- * The draft of one question for one person: what to start the form from,
- * how to keep changes, and how to forget it once sent. A question settled
- * (answered here or elsewhere, or ended) drops it.
+ * The draft of one question for one person: its key (the form is keyed on
+ * it, so it starts again from the person's own draft once they are known),
+ * what to start the form from, how to keep changes, and how to forget it
+ * once sent. A question settled (answered here or elsewhere, closed, or
+ * `ended` with its Run) drops it — the person's and any kept before they
+ * were known.
  */
-export function useAnswerDraft(person: string | null | undefined, question: Pick<QuestionTurn, "questionId" | "answeredAt" | "closedAt"> | null) {
-  const key = question ? draftKey(person, question.questionId) : null;
-  const settled = question !== null && (question.answeredAt !== null || question.closedAt !== null);
-  useEffect(() => {
-    if (key && settled) dropDraft(key);
-  }, [key, settled]);
-  const draft = useMemo(() => (key && !settled ? readDraft(key) : undefined), [key, settled]);
-  const keep = useCallback((d: QuestionDraft) => {
-    if (key) writeDraft(key, d);
-  }, [key]);
+export function useAnswerDraft(person: string | null | undefined, question: Pick<QuestionTurn, "questionId" | "answeredAt" | "closedAt">, ended: boolean) {
+  const key = draftKey(person, question.questionId);
+  const settled = ended || question.answeredAt !== null || question.closedAt !== null;
+  const anyone = draftKey(null, question.questionId);
   const forget = useCallback(() => {
-    if (key) dropDraft(key);
-  }, [key]);
-  return { draft, keep, forget };
+    dropDraft(key);
+    dropDraft(anyone);
+  }, [key, anyone]);
+  useEffect(() => {
+    if (settled) forget();
+  }, [settled, forget]);
+  // Picks made before the person was known carry over to their own key.
+  const draft = useMemo(() => (settled ? undefined : readDraft(key) ?? readDraft(anyone)), [key, anyone, settled]);
+  const keep = useCallback((d: QuestionDraft) => writeDraft(key, d), [key]);
+  return { key, draft, keep, forget };
 }
