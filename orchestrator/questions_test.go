@@ -5,6 +5,7 @@ package orchestrator_test
 // to the agent as one message.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,6 +67,8 @@ func TestFourQuestionsAreAnsweredTogetherAndToldAsOneMessage(t *testing.T) {
 		{map[string]any{"answers": []map[string]any{{"choices": []int{0, 1}}, full[1], full[2], full[3]}}, "does not take several"},
 		{map[string]any{"answers": []map[string]any{full[0], full[1], full[2], {"choices": []int{0}, "text": "both"}}}, "not both"},
 		{map[string]any{"answers": full, "note": strings.Repeat("n", 4001)}, "a note of at most 4000"},
+		{map[string]any{"text": "yes", "answers": full}, "with text or with answers, not both"},
+		{map[string]any{"text": "yes", "note": "only a note"}, "a note goes with answers"},
 	} {
 		status, body := w.call(path, c.body)
 		if status != 422 || !strings.Contains(fmt.Sprint(body["error"]), c.want) {
@@ -113,6 +116,44 @@ Also from `
 	if got := w.taskStatus(wi); got == "awaiting_input" {
 		t.Errorf("task still %s after the answers", got)
 	}
+}
+
+// Four answers with a note and a screenshot: the image goes with the one
+// message that tells them, and the record of the answer names it.
+func TestFourAnswersCarryTheNotesImageToTheAgent(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi, runID, qid := w.askingFour()
+	w.upload(b, "att_checkout", wi, "checkout.png", screenshot)
+	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"answers": full, "note": "It looks like this now.",
+		"attachmentIds": []string{"att_checkout"}})
+	if status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	if atts, _ := body["attachments"].([]any); len(atts) != 1 {
+		t.Errorf("the answer returned %v", body["attachments"])
+	}
+	var directive, text string
+	_ = w.owner.QueryRow(context.Background(), `SELECT a.directive_id, d.text FROM attachments a JOIN directives d ON d.id = a.directive_id
+		WHERE a.id = 'att_checkout'`).Scan(&directive, &text)
+	if !strings.HasPrefix(text, "Answers to your 4 questions:") || !strings.HasSuffix(text, ":\nIt looks like this now.") {
+		t.Fatalf("the image went with %q (%s)", text, directive)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 1 {
+		t.Errorf("%d directives for one answer", n)
+	}
+	var payload map[string]any
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload FROM events WHERE task_id = $1 AND event_type = 'question.answered'`, wi).Scan(&payload)
+	atts, _ := payload["attachments"].([]any)
+	if len(atts) != 1 || atts[0].(map[string]any)["id"] != "att_checkout" || atts[0].(map[string]any)["name"] != "checkout.png" ||
+		payload["directiveId"] != directive || payload["note"] != "It looks like this now." {
+		t.Errorf("question.answered %v", payload)
+	}
+	w.until("the image to reach lux with the answers", func() bool {
+		got := w.lux.Attachments(w.lux.Runs()[0].ID)[directive]
+		return len(got) == 1 && got[0].Name == "checkout.png" && bytes.Equal(got[0].Data, screenshot)
+	})
 }
 
 // One question answered through the form is the same answer, told the same
@@ -296,6 +337,19 @@ func TestAConductorsFourQuestionsAreAnsweredThroughChat(t *testing.T) {
 		t.Fatalf("an aside settled the questions")
 	}
 	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	// Shapes Chat refuses before anything is read.
+	for _, c := range []struct {
+		body map[string]any
+		want string
+	}{
+		{map[string]any{"answers": full}, "answers name the question they answer (questionId)"},
+		{map[string]any{"questionId": qid, "answers": full, "text": "and this"}, "answers go alone: no text, not aside"},
+		{map[string]any{"questionId": qid, "answers": full, "aside": true}, "answers go alone: no text, not aside"},
+	} {
+		if status, body := w.call("/internal/tasks/"+task+"/chat", c.body); status != 400 || errorMessage(body) != c.want {
+			t.Errorf("%v: %d %v, want 400 %q", c.body, status, body, c.want)
+		}
+	}
 	if status, body := w.call("/internal/tasks/"+task+"/chat", map[string]any{"questionId": "qst_other", "answers": full}); status != 409 {
 		t.Errorf("answers to another question: %d %v", status, body)
 	}
@@ -307,6 +361,20 @@ func TestAConductorsFourQuestionsAreAnsweredThroughChat(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, runID).Scan(&told)
 	if !strings.HasPrefix(told, "Answers to your 4 questions:\n\n1. Retry scope") || !strings.HasSuffix(told, ":\nSmall, please.") {
 		t.Errorf("the conductor is told %q", told)
+	}
+}
+
+// Answers through Chat on a task with no conductor answer nothing, and
+// start nothing.
+func TestAnswersThroughChatWithNoConductorAreRefused(t *testing.T) {
+	w := conductorWorld(t)
+	task := w.task()
+	status, body := w.call("/internal/tasks/"+task+"/chat", map[string]any{"questionId": "qst_gone", "answers": []map[string]any{{"choices": []int{0}}}})
+	if status != 409 {
+		t.Errorf("answers with no conductor: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, task); n != 0 {
+		t.Errorf("answers with no conductor started %d Runs", n)
 	}
 }
 
