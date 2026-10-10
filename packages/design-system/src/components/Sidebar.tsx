@@ -353,7 +353,7 @@ export function Sidebar({
               <SidebarRailItem key={p.id} label={words ? `${p.name}: ${words}` : p.name}
                 tip={<span className={styles["railTip"]}><b>{p.name}</b>{words ? <span className={styles["railTipMuted"]}>{words}</span> : null}</span>}
                 current={selected?.kind === "project" && selected.id === p.id} onClick={() => onSelect?.({ kind: "project", id: p.id }, p)}
-                data-testid="rail-project" data-project={p.id}>
+                data-testid="rail-project" data-project={p.id} data-needs-you={waits || undefined}>
                 <ProjectAvatar project={{ id: p.id, name: p.name, imageUrl: p.imageUrl, colorSlot: p.colorSlot }} size={24} />
                 {waits ? <span className={styles["railMark"]} aria-hidden /> : null}
               </SidebarRailItem>
