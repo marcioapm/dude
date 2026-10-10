@@ -82,7 +82,7 @@ describe("ComposerLinks", () => {
     await act(async () => (items[0] as HTMLElement).click());
     expect([...el.querySelectorAll("[data-project]")].map((c) => c.getAttribute("data-project"))).toEqual(["p_web", "p_api"]);
     // All linked: nothing left to offer.
-    expect(el.querySelector("[data-testid=composer-link]")).toBeNull();
+    expect(el.querySelector("[data-testid=composer-link]") === null).toBe(true);
     await act(async () => byRole(el, "button", "Stop reading web").click());
     expect([...el.querySelectorAll("[data-project]")].map((c) => c.getAttribute("data-project"))).toEqual(["p_api"]);
   });
@@ -93,7 +93,7 @@ describe("ComposerLinks", () => {
     const menu = document.querySelector("[role=menu]")!;
     expect(menu).toBeTruthy();
     await act(async () => void menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(document.querySelector("[role=menu]")).toBeNull();
+    expect(document.querySelector("[role=menu]") === null).toBe(true);
     expect(el.querySelectorAll("[data-project]").length).toBe(0);
   });
 
@@ -135,7 +135,7 @@ describe("RecentSessions", () => {
     const rows = [...el.querySelectorAll<HTMLButtonElement>("[data-session]")];
     expect(rows.map((r) => r.getAttribute("data-session"))).toEqual(["s1", "s2"]);
     expect(rows[1]!.querySelector('[aria-label="Shared, Ana Ribeiro\'s"]')).toBeTruthy();
-    expect(rows[0]!.querySelector('[aria-label^="Shared"]')).toBeNull();
+    expect(rows[0]!.querySelector('[aria-label^="Shared"]') === null).toBe(true);
     await act(async () => rows[1]!.click());
     await act(async () => byRole(el, "button", "All sessions").click());
     expect(opened).toEqual(["s2"]);
@@ -170,7 +170,7 @@ describe("Sidebar collapsed", () => {
       "Home", "Expand sidebar", "Find work", "Waiting on you: 1", "New session", "Sessions",
       "control-plane: 1 needs you · 2 running · 1 failed", "docs: 1 running", "Organisation settings",
     ]);
-    expect(el.querySelector("[role=tree]")).toBeNull();
+    expect(el.querySelector("[role=tree]") === null).toBe(true);
     expect(el.textContent).not.toContain("full band");
   });
 
@@ -201,12 +201,12 @@ describe("Sidebar collapsed", () => {
   test("expand gives the full sidebar back; its chevron collapses it again; search expands with the field focused", async () => {
     const el = await mount(<Rail />);
     await act(async () => byRole(el, "button", "Expand sidebar").click());
-    expect(el.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(el.textContent).toContain("full band");
     await act(async () => byRole(el, "button", "Collapse sidebar").click());
     expect(el.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
     await act(async () => byRole(el, "button", "Find work").click());
-    expect(el.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(document.activeElement?.getAttribute("type")).toBe("search");
   });
 
@@ -231,8 +231,8 @@ describe("Sidebar collapsed", () => {
 
   test("without onCollapsedChange there is no collapse chevron, and collapsed draws the full sidebar", async () => {
     const el = await mount(<Sidebar projects={PROJECTS} title="dude" collapsed />);
-    expect(el.querySelector("[data-testid=sidebar-collapse]")).toBeNull();
-    expect(el.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(el.querySelector("[data-testid=sidebar-collapse]") === null).toBe(true);
+    expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
   });
 
   test("under 1000px collapsed is ignored: the drawer's sidebar is drawn", async () => {
@@ -240,7 +240,7 @@ describe("Sidebar collapsed", () => {
     (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM.setInnerWidth(800);
     try {
       const el = await mount(<Rail />);
-      expect(el.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+      expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
       expect(el.textContent).toContain("full band");
     } finally {
       (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM.setInnerWidth(width);

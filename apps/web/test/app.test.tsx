@@ -109,10 +109,10 @@ describe("the first load with no place", () => {
     client.arrive();
     await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
     await settle(100);
-    expect(page.querySelector("[aria-label$=' board']")).toBeNull();
+    expect(page.querySelector("[aria-label$=' board']") === null).toBe(true);
     expect(window.location.hash).toBe("");
     expect(document.title).toBe("dude");
-    expect(document.activeElement).toBe(page.querySelector("[data-testid=welcome] textarea"));
+    expect(document.activeElement === page.querySelector("[data-testid=welcome] textarea")).toBe(true);
   });
 
   test("keeps a place the URL named after the app read it, before the tree arrived", async () => {
@@ -177,7 +177,7 @@ describe("home", () => {
     }
     const page = await app("#/", new Empty("a"));
     const offer = await until(() => page.querySelector("[data-testid=welcome] [data-testid=new-project-empty]"), "New project in the welcome");
-    expect(page.querySelector("[data-testid=welcome] textarea")).not.toBeNull();
+    expect(page.querySelector("[data-testid=welcome] textarea") !== null).toBe(true);
     expect(page.querySelector("main")!.textContent).not.toContain("No projects yet");
     await click(offer);
     await until(() => page.ownerDocument.querySelector("[data-testid=project-name]"), "the new-project dialog");
@@ -198,7 +198,7 @@ describe("home", () => {
     await until(() => (page.querySelector("aside")?.textContent?.includes("No projects yet") ? true : null), "the empty tree");
     await until(() => page.querySelector("[data-testid=my-settings-button]")?.textContent?.includes("Márcio") ? true : null, "who you are");
     await settle(50);
-    expect(page.querySelector("[data-testid=new-project-empty]")).toBeNull();
+    expect(page.querySelector("[data-testid=new-project-empty]") === null).toBe(true);
   });
 
   test("while the projects load, the welcome offers no New project", async () => {
@@ -210,7 +210,7 @@ describe("home", () => {
     const page = await app("#/", new Never("a"));
     await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
     await settle(50);
-    expect(page.querySelector("[data-testid=new-project-empty]")).toBeNull();
+    expect(page.querySelector("[data-testid=new-project-empty]") === null).toBe(true);
   });
 
   test("a send from the welcome opens the new session and reads the sessions list again", async () => {
@@ -247,12 +247,12 @@ describe("the sidebar's rail", () => {
   test("[ folds the sidebar to its rail and back, and the choice is kept", async () => {
     const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
     await until(() => page.querySelector("[aria-label$=' board']"), "the board");
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     await key(document.body);
-    expect(page.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("rail");
     await key(document.body);
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
   });
 
@@ -264,7 +264,7 @@ describe("the sidebar's rail", () => {
     expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
     expect(face.getAttribute("aria-current")).toBe("page");
     await click(page.querySelector("[data-testid=rail-expand]")!);
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
   });
 
@@ -311,7 +311,7 @@ describe("the sidebar's rail", () => {
     try {
       await key(editable);
       await key(select);
-      expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+      expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
       expect(localStorage.getItem("dude.sidebar")).toBeNull();
     } finally {
       editable.remove();
