@@ -19,7 +19,7 @@ const PREFIX = "dude.draft.";
 const DRAFT_IDLE_MS = 2_000;
 export const DRAFT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-export interface DraftEntry {
+interface DraftEntry {
   readonly text: string;
   readonly savedAt: number;
 }
@@ -90,7 +90,7 @@ export function clearDraftIfSent(key: string, text: string): void {
   if (readDraft(key)?.text.trim() === text.trim()) writeDraft(key, "");
 }
 
-export interface Draft {
+interface Draft {
   readonly value: string;
   readonly onValueChange: (value: string) => void;
 }
