@@ -2,6 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { formatPlace, inTree, parsePlace } from "../src/place.ts";
 
 describe("places", () => {
+  test("nothing in the URL is the welcome, and the welcome's URL is #/", () => {
+    for (const hash of ["", "#", "#/", "# "]) expect(parsePlace(hash)).toEqual({ view: "welcome" });
+    expect(formatPlace({ view: "welcome" })).toBe("#/");
+    expect(parsePlace(formatPlace({ view: "welcome" }))).toEqual({ view: "welcome" });
+    // Something that is not a place is still none, not the welcome.
+    expect(parsePlace("#/nonsense")).toBeNull();
+  });
+
   test("a task's link reads back as the task", () => {
     const place = parsePlace("#/task/wi_1");
     expect(place).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" } });

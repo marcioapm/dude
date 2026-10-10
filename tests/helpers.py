@@ -8,6 +8,7 @@ organizations, which is an operator action rather than an API one).
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -254,7 +255,7 @@ def lux_stamp(value: str | None):
 # ---------------------------------------------------------------------------
 
 
-def sign_in(page, web_url: str, api_key: str, at: str = "") -> None:
+def sign_in(page, web_url: str, api_key: str, at: str | None = None, board: bool = True) -> None:
     """Sign the web app in with a key, from a clean slate.
 
     The key is stored before the app's first script runs, once per tab: the
@@ -262,10 +263,14 @@ def sign_in(page, web_url: str, api_key: str, at: str = "") -> None:
     that expected 401 would count as a console error in every test. The key
     prompt's own path is covered by the sign-in tests.
 
-    `at` (a "#/..." place) opens the first document there. With nothing
-    named, the app opens the first project's board once the tree loads,
-    and that replaces any place a test navigates to before it has: a test
-    that starts on a given page names it here.
+    `at` (a "#/..." place) opens the first document there; "#/" is the
+    welcome, which is what the app opens with nothing in the URL. With
+    nothing named and `board`, it then opens the first project's board from
+    the tree, as an operator would, since most tests start from a board; the
+    organisation must have a project, or this fails here rather than steps
+    later. `board=False` (an organisation with no project) stays on the
+    welcome. Setting the hash adds a history entry, so Back from the board
+    returns to the welcome.
     """
     import json
     import uuid
@@ -282,8 +287,17 @@ def sign_in(page, web_url: str, api_key: str, at: str = "") -> None:
           localStorage.setItem("dude.apiKey", key);
         })(%s, %s)""" % (json.dumps(api_key), json.dumps(uuid.uuid4().hex)),
     )
-    page.goto(web_url + at)
+    page.goto(web_url + (at or ""))
     expect(page.get_by_test_id("shell")).to_be_visible()
+    if at is None and board:
+        # The tree has loaded once its skeleton is gone. Its first project is
+        # opened by its URL: on a phone the tree is in the closed drawer.
+        expect(page.get_by_label("Loading projects")).to_have_count(0)
+        first = page.locator("[role=treeitem][data-nav-key^='project:']").first
+        assert first.count(), "sign_in expected a board, but the organisation has no project (pass board=False)"
+        project = first.get_attribute("data-nav-key").removeprefix("project:")
+        page.evaluate("id => { window.location.hash = '#/project/' + encodeURIComponent(id) }", project)
+        expect(page).to_have_url(re.compile(r"#/project/"))
 
 
 def toast(page, text: str):

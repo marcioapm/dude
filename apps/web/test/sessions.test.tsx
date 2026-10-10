@@ -12,6 +12,7 @@ import { PEOPLE, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { SessionScreen, sessionNotice } from "../src/screens/SessionScreen.tsx";
 import { InboxScreen } from "../src/screens/InboxScreen.tsx";
+import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
@@ -503,7 +504,7 @@ describe("a session's name", () => {
       runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0) };
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
     const client = new SessionClient(detail("owner"));
-    const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} /></ToastProvider>);
+    const list = await mount(<ToastProvider><SessionsScreen sessions={[summary]} onOpen={() => {}} onNew={() => {}} /></ToastProvider>);
     mounted.push(list.unmount);
     expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
 
@@ -524,24 +525,77 @@ describe("a session's name", () => {
     expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in New session");
   });
 
-  test("New session starts one at once, untitled and linked to nothing, and opens it", async () => {
+  test("New session goes to the welcome and makes nothing", async () => {
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
-    class Creating extends SessionClient {
-      made = 0;
-      override createSession() {
-        this.made++;
-        return Promise.resolve({ id: "ssn_new", title: null });
-      }
-    }
-    const client = new Creating(detail("owner"));
-    const opened: string[] = [];
-    const { container, unmount } = await mount(<ToastProvider><SessionsScreen client={client} sessions={[]} onOpen={(id) => opened.push(id)} /></ToastProvider>);
+    let welcomed = 0;
+    const { container, unmount } = await mount(<ToastProvider><SessionsScreen sessions={[]} onOpen={() => {}} onNew={() => welcomed++} /></ToastProvider>);
     mounted.push(unmount);
     await click(container.querySelector("[data-testid=new-session]")!);
     await settle();
-    expect(client.made).toBe(1);
+    expect(welcomed).toBe(1);
+    // The screen holds no client; "makes nothing" is that it opens no dialog of its own.
+    expect(document.querySelector("[role=dialog]") === null).toBe(true);
+  });
+});
+
+describe("a session made from the welcome", () => {
+  const PROJECTS = [{ id: "prj_bl", name: "billing" }, { id: "prj_wc", name: "web-console" }];
+
+  class Making extends SessionClient {
+    made: Array<{ message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> }> = [];
+    fail: Error | null = null;
+    override createSession(input: { message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> } = {}) {
+      if (this.fail) return Promise.reject(this.fail);
+      this.made.push(input);
+      return Promise.resolve({ id: "ssn_new", title: null, runId: "run_new" });
+    }
+    override getProject(id: string) {
+      return Promise.resolve({ id, repositories: [{ id: `repo_${id}` }] } as unknown as Awaited<ReturnType<FixtureClient["getProject"]>>);
+    }
+  }
+
+  async function welcome(client: Making, opened: string[]) {
+    const { container, unmount } = await mount(
+      <ToastProvider><WelcomeScreen client={client} projects={PROJECTS} sessions={[]} name="Márcio Martins"
+        onOpenSession={() => {}} onAllSessions={() => {}} onCreated={(id) => opened.push(id)} /></ToastProvider>,
+    );
+    mounted.push(unmount);
+    return container;
+  }
+
+  async function send(page: HTMLElement, text: string) {
+    const composer = page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, text);
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+  }
+
+  test("sending makes the session with the message and each linked project's repositories, and opens it", async () => {
+    const client = new Making(detail("owner"));
+    const opened: string[] = [];
+    const page = await welcome(client, opened);
+    await act(async () => void page.querySelector("[data-testid=composer-link]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click([...document.querySelectorAll("[role=menuitem]")].find((i) => i.textContent?.includes("web-console"))!);
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([{ message: "where does metering go?", projects: [{ projectId: "prj_wc", repositoryIds: ["repo_prj_wc"] }] }]);
     expect(opened).toEqual(["ssn_new"]);
-    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  test("a failed send keeps the words in the composer, says why, and makes nothing", async () => {
+    const client = new Making(detail("owner"));
+    client.fail = new Error("the orchestrator is down");
+    const opened: string[] = [];
+    const page = await welcome(client, opened);
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([]);
+    expect(opened).toEqual([]);
+    expect(page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea")!.value).toBe("where does metering go?");
+    expect(page.querySelector("[data-testid=welcome-problem]")!.textContent).toContain("Could not start the session");
   });
 });
 
