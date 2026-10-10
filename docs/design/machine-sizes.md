@@ -103,8 +103,11 @@ preview's resume, an agent Run's (`phases.Syncer.resume`, which
 - **Another pool:** lux binds a Run to its pool at submit and a resume
   cannot move it, so nothing is sent and the Run keeps its size. A size
   with no pool is lux's default pool: the comparison uses the `poolId` lux
-  reports for the Run and its pool list. A new Run (a preview replaced, the
-  next phase) gets the new size.
+  reports for the Run and its pool list. The list is read only when one
+  side names no pool and the other does, and not again once the record
+  says that size is in another pool (`otherPool`). If the list cannot be
+  read, the Run resumes on its size and its record is left as it is. A new
+  Run (a preview replaced, the next phase) gets the new size.
 - **The size the settings name was deleted:** the settings fall back to the
   default, which nobody chose for this Run; it keeps its size. (Deleting a
   size through the API moves its users first, so this is a size removed
@@ -112,20 +115,29 @@ preview's resume, an agent Run's (`phases.Syncer.resume`, which
 
 What is recorded is lux's word, never the request: `resize.applied` from
 the answer, or, from a lux that answers no `resize`, the stored spec's
-`resources` (read with a GET when the answer has none). The record takes
-the new size's `sizeId`, `name` and `from`, and lux's cpus, memory and disk;
-`diskKept: {requestedGiB, reason}` when lux kept the disk (`diskGiB` is the
-disk it kept); `sinceEpoch`, the resumed placement's epoch, so the memory
-limit of an earlier placement is never shown as the new size's; and `note`
-when the Run is not on its settings' size (another pool, a deleted size, or
-a resume lux took without the resources). A resume that changes the record
-writes `run.resized {machine}`, which has the Run page read the Run again.
+`resources` (read with a GET when the answer has neither; current lux
+always answers `spec.resources`, so only a lux that omits it is read
+again). The record takes the new size's `sizeId`, `name` and `from`, and
+lux's cpus, memory and disk; `diskKept: {requestedGiB, reason}` when lux
+kept the disk (`diskGiB` is the disk it kept); `sinceEpoch`, the resumed
+placement's epoch, so the memory limit of an earlier placement is never
+shown as the new size's; and `note` when the Run is not on its settings'
+size (another pool, a deleted size, or a resume lux took without the
+resources). When lux applied only part of the size (its spec is neither
+size), the record keeps the old size's `sizeId`, `name` and `from` with
+lux's numbers, and the note names the size the settings name.
+`sinceEpoch` moves only when the numbers or the size id do: lux keeping a
+disk again at a later resume changes nothing, so nothing is written and
+the memory limit stays. A resume that changes the record writes
+`run.resized {machine}`, which has the Run page read the Run again.
 
 lux refusing the resources — 409 `not_resumable` because the Run is already
 resuming with other (or no) resources, or a 400/422 from a lux before
-lux#51 — is answered by the same resume without them, which lux treats as a
-retry of the resume under way (202). The wake does not fail; the note says
-the size was not applied and quotes lux, and the next resume tries again.
+lux#51 — is answered by the same resume without them (for the 409, lux
+treats it as a retry of the resume under way, 202), and logged as a
+warning. The wake does not fail. The note says the size was not applied:
+for the 409 it quotes lux and says the next resume tries again; for a 400
+it says this lux cannot change a stopped Run's CPUs or memory.
 
 ## Pools, from lux
 

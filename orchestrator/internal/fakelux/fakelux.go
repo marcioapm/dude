@@ -2429,7 +2429,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		// smaller, with nothing said in the answer.
 		if d := int64(in.Resources.Disk); d < 0 {
 			s.mu.Unlock()
-			writeErr(w, 422, "invalid_request", "resources.disk must not be negative")
+			writeErr(w, 422, "invalid_spec", "resources.disk must not be negative")
 			return
 		} else if d > 0 {
 			cur := specResources(run.Spec)
