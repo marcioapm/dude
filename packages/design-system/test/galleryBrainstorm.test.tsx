@@ -5,7 +5,7 @@
  */
 
 import { afterEach, expect, test } from "bun:test";
-import { act } from "react";
+import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
 import { BrainstormSection } from "../src/gallery/sections/Brainstorm.tsx";
@@ -73,6 +73,28 @@ test("SessionTitle: untitled reads New session, muted; one who can chat renames 
   const notices = [...pane.querySelectorAll("[data-kind='renamed']")].map((n) => n.textContent);
   expect(notices[0]).toContain("Brainstorm: Named it “Usage-based billing”");
   expect(notices[1]).toContain("Ana renamed it “Billing v2”");
+});
+
+test("ProposalCard, in every frame and under StrictMode: blocked for everyone stays open with its why; opened from folded is open", async () => {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  // The gallery mounts under StrictMode, which runs effects twice: the opened state must not hang on one.
+  await act(async () => root!.render(
+    <StrictMode><PaneDensityContext.Provider value="both"><BrainstormSection mode="both" /></PaneDensityContext.Provider></StrictMode>,
+  ));
+  const panes = [...host.querySelectorAll("#bs-proposal [data-theme][data-density]")];
+  expect(panes.length).toBe(4);
+  for (const pane of panes) {
+    const frame = `${pane.getAttribute("data-density")} ${pane.getAttribute("data-theme")}`;
+    const labels = [...pane.querySelectorAll("*")].filter((n) => n.children.length === 0 && n.textContent?.startsWith("blocked for everyone"));
+    expect(labels.length, frame).toBe(1);
+    const cards = [...pane.querySelectorAll("[data-testid='proposal-card']")];
+    const blocked = cards.find((c) => c.textContent?.includes("BL-55 has started"));
+    expect(blocked?.getAttribute("data-folded"), frame).toBeNull();
+    expect(blocked!.textContent, frame).not.toContain("for others to file");
+    expect(pane.querySelectorAll("[data-testid='proposal-fold'][aria-expanded='true']").length, frame).toBe(1);
+  }
 });
 
 test("PublishedFiles: each file by its own name and kind, a version mark when published again, its description under it, the rest as N more", async () => {

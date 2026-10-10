@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Harness, PersistedEvent, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
+import type { Harness, PersistedEvent, ProposalItemStatus, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -26,6 +26,7 @@ let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const unmount of mounted) await unmount();
   mounted = [];
+  localStorage.clear();
 });
 
 const SESSION = "ssn_billing";
@@ -238,7 +239,7 @@ describe("a brainstorm session's page", () => {
   test("a reader's composer is closed, with why, and the card files nothing", async () => {
     const client = new SessionClient(detail("read", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }],
-        status: [{ canFile: false, why: "You can read this session" }] }],
+        status: [{ canFile: false, why: "readers can't file", blockedBy: "reader" }] }],
     }));
     const page = await sessionPage(client);
     const composer = page.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!;
@@ -246,6 +247,9 @@ describe("a brainstorm session's page", () => {
     expect(composer.placeholder).toContain("You can read this session");
     await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
     expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+    // A member may file what a reader cannot, so the card folds to one line.
+    const line = await until(() => page.querySelector("[data-testid=proposal-fold]"), "the folded line");
+    expect(line.textContent).toBe("Proposed work · 1 task · 1 for others to file");
     await write(page, "let me in");
     expect(client.sent).toEqual([]);
   });
@@ -353,6 +357,76 @@ describe("a brainstorm session's page", () => {
     await click(page.querySelector("[data-testid=file-proposal]")!);
     await settle();
     expect(client.filed).toEqual([[1]]);
+  });
+
+  test("a card stamped in a local offset sits at its instant, before a later message stamped in UTC", async () => {
+    // 11:20:20Z as the orchestrator encodes it on a host in Europe/Lisbon (WEST).
+    const lisbon = (s: number) => new Date(Date.parse(at(s)) + 3_600_000).toISOString().replace("Z", "+01:00");
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: lisbon(20), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }],
+        status: [{ canFile: true }] }],
+    }), [
+      { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
+      { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
+      // A notice is a line beside the card, so this pair is ordered by the page's own sort, not by the turn merge.
+      { ...ev("session.renamed", { title: "Billing v2", by: ANA.id }, { type: "human", id: ANA.id }), occurredAt: at(30) },
+    ]);
+    const page = await sessionPage(client);
+    await until(() => page.querySelectorAll("[data-testid=human-turn]").length === 2 || null, "both messages");
+    const card = await until(() => page.querySelector("[data-testid=proposal]"), "the card");
+    const notice = await until(() => page.querySelector("[data-testid=session-notice]"), "the notice");
+    const [before, after] = [...page.querySelectorAll("[data-testid=human-turn]")];
+    expect(before!.textContent).toContain("before the card");
+    expect(after!.textContent).toContain("after the card");
+    expect(notice.textContent).toContain("Billing v2");
+    expect(Boolean(before!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(Boolean(card.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(Boolean(card.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  test("a card filed here folds to its line at once, in its place, and opens read only", async () => {
+    const proposal = (filed: boolean) => ({ id: "prp_1", runId: RUN, createdAt: at(20), items: [
+      { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },
+      { kind: "comment" as const, task: "WC-214", text: "keep it there" },
+    ], status: filed
+      ? [{ filed: true, filedBy: ME.name, key: "BL-61" }, { canFile: false, why: "Only Ana can file this", blockedBy: "owner" as const, owner: ref(ANA) }]
+      : [{ canFile: true }, { canFile: false, why: "Only Ana can file this", blockedBy: "owner" as const, owner: ref(ANA) }] });
+    const client = new SessionClient(detail("chat", { proposals: [proposal(false)] }), [
+      { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
+      { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
+    ]);
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.getAttribute("data-folded")).toBeNull();
+    client.detail = detail("chat", { proposals: [proposal(true)] });
+    await click(card.querySelector("[data-testid=file-proposal]")!);
+    const line = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=proposal-fold]"), "the folded line");
+    expect(line.textContent).toBe("Proposed work · 1 task, 1 comment · 1 filed · 1 for others to file");
+    const [, after] = [...page.querySelectorAll("[data-testid=human-turn]")];
+    expect(Boolean(line.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    await click(line);
+    expect(line.getAttribute("aria-expanded")).toBe("true");
+    expect(page.querySelector("[data-testid=proposal-unfolded]")!.textContent).toContain(`${ME.name} filed BL-61`);
+    expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+  });
+
+  test("a card whose last item nobody can file stays open, saying why; one only you could file is not someone else's", async () => {
+    const proposal = (status: ProposalItemStatus) => ({ id: "prp_1", runId: RUN, createdAt: at(20), items: [
+      { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },
+      { kind: "edit" as const, task: "BL-58", after: { goal: "new" } },
+    ], status: [{ filed: true, filedBy: ME.name, key: "BL-61" }, status] });
+    const started = { canFile: false, why: "BL-58 has started (running): its text can no longer change", blockedBy: "started" as const };
+    const page = await sessionPage(new SessionClient(detail("chat", { proposals: [proposal(started)] })));
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.getAttribute("data-folded")).toBeNull();
+    expect(card.querySelector("[data-testid=cannot-file]")!.textContent).toBe(started.why);
+    expect(page.textContent).not.toContain("for others to file");
+
+    // An owner named as you is never "others": the card stays open too.
+    const yours = { canFile: false, why: "only Me can file this", blockedBy: "owner" as const, owner: ref(ME) };
+    const mine = await sessionPage(new SessionClient(detail("chat", { proposals: [proposal(yours)] })));
+    const open = await until(() => mine.querySelector("[data-testid=proposal-card]:not([data-folded])"), "the open card");
+    expect(open.querySelector("[data-testid=cannot-file]")!.textContent).toBe(yours.why);
   });
 
   test("a question withdrawn when its one recipient left says so, and asks for nothing", async () => {

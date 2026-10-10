@@ -29,9 +29,18 @@ export function getPool(databaseUrl?: string): SQL {
   if (!pool) {
     databaseUrl ??= config().databaseUrl;
     if (!databaseUrl) throw new Error("database.url (DATABASE_URL) is not set");
-    pool = new SQL(databaseUrl);
+    pool = openPool(databaseUrl);
   }
   return pool;
+}
+
+/**
+ * A pool whose sessions are in UTC, whatever the server's default: a time
+ * Postgres renders itself (json_build_object, ::text) then says "+00:00",
+ * like every other time the browser merges it with.
+ */
+export function openPool(databaseUrl: string): SQL {
+  return new SQL(databaseUrl, { connection: { TimeZone: "UTC" } });
 }
 
 /** Replace the pool — used by tests to point at a per-run database. */

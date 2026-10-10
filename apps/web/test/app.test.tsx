@@ -9,16 +9,19 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, emitForTest, mount, settle, until } from "./dom.ts";
 import { EventTypes } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
+import { PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
+import { draftKey } from "../src/hooks/useDraft.ts";
+import { WELCOME_DRAFT } from "../src/screens/WelcomeScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const unmount of mounted) await unmount();
   mounted = [];
   window.history.replaceState(null, "", " ");
+  localStorage.clear();
 });
 
 async function app(hash: string, client: FixtureClient) {
@@ -240,6 +243,49 @@ describe("home", () => {
     // The fixture's stream sends no session event here, so every read after the send is the app's own.
     await settle(300);
     expect(client.reads).toBe(before + 1);
+  });
+
+  class Held extends FixtureClient {
+    hold = Promise.withResolvers<void>();
+    override async createSession() {
+      await this.hold.promise;
+      return { id: "ssn_late", title: null, runId: "run_late" };
+    }
+  }
+
+  async function sendFromWelcome(page: HTMLElement, text: string) {
+    const composer = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the welcome's composer");
+    await settle();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, text);
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  }
+
+  test("a session made from the welcome opens", async () => {
+    const client = new Held("a");
+    const page = await app("#/", client);
+    client.hold.resolve();
+    await sendFromWelcome(page, "plan the meter");
+    await until(() => (window.location.hash === "#/sessions/ssn_late" ? true : null), "the session opened");
+  });
+
+  test("a create that lands after the welcome was left does not move the person, and its draft is removed", async () => {
+    const client = new Held("a");
+    const page = await app("#/", client);
+    await sendFromWelcome(page, "plan the meter");
+    const away = `#/project/${PROJECT.id}`;
+    await act(async () => {
+      window.location.hash = away;
+    });
+    await until(() => (page.querySelector("[data-testid=welcome]") ? null : true), "the welcome left");
+    // The unmount flush stored the sent words; the late create must remove them.
+    expect(JSON.parse(localStorage.getItem(draftKey(YOU, WELCOME_DRAFT))!).text).toBe("plan the meter");
+    await act(async () => client.hold.resolve());
+    await settle(50);
+    expect(window.location.hash).toBe(away);
+    expect(localStorage.getItem(draftKey(YOU, WELCOME_DRAFT))).toBeNull();
   });
 });
 

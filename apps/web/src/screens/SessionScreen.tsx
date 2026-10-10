@@ -14,7 +14,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
+  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
@@ -25,10 +25,12 @@ import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
+import { DraftedComposer } from "./DraftedComposer.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
+import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
@@ -211,7 +213,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     for (const proposal of detail.proposals ?? []) {
       out.push({ id: proposal.id, at: proposal.createdAt, node: (
         <ProposalBlock key={proposal.id} client={client} sessionId={sessionId} proposal={proposal} linked={linkedKeys}
-          readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} onFiled={() => void load()} />
+          readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} you={detail.you.id}
+          onFiled={() => void load()} />
       ) });
     }
     for (const e of events) {
@@ -224,7 +227,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
         kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : renamed ? "renamed" : "notice"}
         by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
-    return out.sort((a, b) => a.at.localeCompare(b.at));
+    return out.sort(byInstant((l) => l.at));
   }, [detail, events, people, client, sessionId, linkedKeys, load]);
 
   if (missing) return <NotFound what="session" onBack={onBack} />;
@@ -279,7 +282,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               turns={conversation.turns.length}
               emptyMessage={reader ? "Nobody has written here yet." : "Write to start: the agent reads the linked projects, asks what it needs, and proposes work you file yourself. It changes nothing."}
               footer={
-                <ChatComposer
+                <DraftedComposer
+                  place={`session:${sessionId}`}
                   mode="chat"
                   waitingFor={yours ? "The brainstorm" : undefined}
                   waitingKey={yours?.id}
@@ -457,13 +461,14 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
-function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs, onFiled }: {
+function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs, you, onFiled }: {
   client: ApiClient;
   sessionId: string;
   proposal: Proposal;
   linked: ReadonlyMap<string, { key: string; name: string }>;
   readOnly: boolean;
   filingAs: string;
+  you: string;
   onFiled: () => void;
 }) {
   const fileable = proposal.items.flatMap((_, i) => (proposal.status[i]?.canFile && !proposal.status[i]?.filed ? [i] : []));
@@ -471,7 +476,7 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const epics = new Set(proposal.items.filter((i) => i.kind === "epic").map((i) => i.title));
-  const items = proposal.items.map((item, i) => cardItem(item, proposal.status[i] ?? {}, linked, epics));
+  const items = proposal.items.map((item, i) => cardItem(item, proposal.status[i] ?? {}, linked, epics, you));
   const file = async () => {
     setBusy(true);
     setProblem(null);
@@ -503,10 +508,14 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
 }
 
 function cardItem(item: ProposalItem, status: Proposal["status"][number], linked: ReadonlyMap<string, { key: string; name: string }>,
-  epics: ReadonlySet<string | undefined>): ProposalCardItem {
+  epics: ReadonlySet<string | undefined>, you: string): ProposalCardItem {
   const project = item.project ? linked.get(item.project.toUpperCase()) : undefined;
+  // Someone else may file it: its task's owner (never you), or a member when you only read.
+  const theirs = (status.blockedBy === "owner" && status.owner?.id !== you) || status.blockedBy === "reader";
+  const blockedFor: ProposalCardItem["blockedFor"] = theirs ? "you" : "everyone";
   const common = {
     canFile: Boolean(status.canFile),
+    ...(status.canFile ? {} : { blockedFor }),
     ...(status.why ? { why: status.why } : {}),
     ...(status.filed ? { filed: { by: status.filedBy ?? "Someone", key: status.key ?? "" } } : {}),
   };

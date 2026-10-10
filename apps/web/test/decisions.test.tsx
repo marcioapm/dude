@@ -475,4 +475,17 @@ describe("what the Chat is made of", () => {
     const out = interleaved([turn("t1", 1), turn("t2", 5)], [{ id: "l1", at: at(3), node: null }, { id: "l2", at: at(9), node: null }]);
     expect(out.map((o) => "group" in o ? (o.group as { id: string }).id : o.id)).toEqual(["t1", "l1", "t2", "l2"]);
   });
+
+  test("a line and a turn in different zones are merged by instant, not by their text", () => {
+    const turn = (id: string, at: string) => ({ kind: "message" as const, id, text: id, at, role: "conductor" }) as never;
+    // 10:00:03Z written as Lisbon summer time: after "10:00:05Z" as text, before it in time.
+    const out = interleaved([turn("t1", at(1)), turn("t2", at(5))], [{ id: "l1", at: "2026-10-03T11:00:03+01:00", node: null }]);
+    expect(out.map((o) => "group" in o ? (o.group as { id: string }).id : o.id)).toEqual(["t1", "l1", "t2"]);
+  });
+
+  test("a Run's line and an event's are ordered by instant across zones", () => {
+    const started = run({ id: "run_lisbon", conductorRunId: CONDUCTOR, createdAt: "2026-10-03T11:00:02+01:00" });
+    const lines = conductedLines({ decider: "conductor", runs: [started] }, [ev("chat.notice", { text: "later" }, 4)]);
+    expect(lines.map((l) => l.id)).toEqual(["run_lisbon", expect.stringMatching(/^evt_d/)]);
+  });
 });

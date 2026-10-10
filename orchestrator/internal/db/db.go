@@ -16,15 +16,31 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type DB struct{ Pool *pgxpool.Pool }
 
+// Open connects a pool whose times are UTC at both ends. A timestamptz is
+// scanned into a time.Time in UTC, not the process's zone, so it encodes to
+// JSON as "…Z" like every other time the browser merges it with; and the
+// session's TimeZone is UTC, so a time Postgres renders itself (json_build_object,
+// ::text) says the same instant in the same zone, whatever the server's default.
 func Open(ctx context.Context, url string) (*DB, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	cfg.AfterConnect = func(_ context.Context, conn *pgx.Conn) error {
+		scanUTC(conn.TypeMap())
+		return nil
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -33,6 +49,14 @@ func Open(ctx context.Context, url string) (*DB, error) {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 	return &DB{Pool: pool}, nil
+}
+
+// scanUTC replaces timestamptz, and the array type built on it, with
+// codecs that scan into UTC.
+func scanUTC(m *pgtype.Map) {
+	tz := &pgtype.Type{Name: "timestamptz", OID: pgtype.TimestamptzOID, Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC}}
+	m.RegisterType(tz)
+	m.RegisterType(&pgtype.Type{Name: "_timestamptz", OID: pgtype.TimestamptzArrayOID, Codec: &pgtype.ArrayCodec{ElementType: tz}})
 }
 
 func (d *DB) Close() { d.Pool.Close() }

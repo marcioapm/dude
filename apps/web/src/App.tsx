@@ -359,7 +359,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       offer={projects?.length === 0 && isAdmin ? (
         <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">New project</Button>
       ) : null}
-      onCreated={openListedSession} />;
+      // A create that lands after the welcome was left re-reads the list but leaves the person where they went.
+      onCreated={(id, stillHere) => (stillHere ? openListedSession(id) : void loadSessions())} />;
   } else if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
       projects={projects ?? []} page={place.page} sub={place.sub} onOpenRun={openRun}
