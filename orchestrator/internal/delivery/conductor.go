@@ -58,7 +58,11 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if person == "" {
 		person = w.Name
 	}
-	briefing, err := briefing(ctx, tx, taskID, id, person, message, woken)
+	why := byPerson
+	if woken {
+		why = byWake
+	}
+	briefing, err := briefing(ctx, tx, taskID, id, person, message, why)
 	if err != nil {
 		return "", err
 	}

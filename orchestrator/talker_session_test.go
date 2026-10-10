@@ -104,9 +104,12 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 					!strings.Contains(text, "The dude tools read what dude knows about this task") {
 					t.Errorf("not the conductor's instructions and tools:\n%s", text)
 				}
-				if !strings.Contains(text, "dude woke you") || !strings.Contains(text, "## dude's message") ||
+				if !strings.Contains(text, "Conductor, dude is briefing you again") || !strings.Contains(text, "## dude's message") ||
 					strings.Contains(text, "wrote in the Chat") {
 					t.Errorf("dude's note framed as a person's message:\n%s", text)
+				}
+				if strings.Contains(text, "dude woke you") || strings.Contains(text, "a decision is yours") {
+					t.Errorf("briefed again as if woken for a decision:\n%s", text)
 				}
 			}
 			if lost < 0 {
