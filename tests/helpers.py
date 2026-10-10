@@ -255,7 +255,7 @@ def lux_stamp(value: str | None):
 # ---------------------------------------------------------------------------
 
 
-def sign_in(page, web_url: str, api_key: str, at: str | None = None) -> None:
+def sign_in(page, web_url: str, api_key: str, at: str | None = None, board: bool = True) -> None:
     """Sign the web app in with a key, from a clean slate.
 
     The key is stored before the app's first script runs, once per tab: the
@@ -265,9 +265,12 @@ def sign_in(page, web_url: str, api_key: str, at: str | None = None) -> None:
 
     `at` (a "#/..." place) opens the first document there; "#/" is the
     welcome, which is what the app opens with nothing in the URL. With
-    nothing named, it then opens the first project's board from the tree, as
-    an operator would, since most tests start from a board; an organisation
-    with no projects stays on the welcome.
+    nothing named and `board`, it then opens the first project's board from
+    the tree, as an operator would, since most tests start from a board; the
+    organisation must have a project, or this fails here rather than steps
+    later. `board=False` (an organisation with no project) stays on the
+    welcome. Setting the hash adds a history entry, so Back from the board
+    returns to the welcome.
     """
     import json
     import uuid
@@ -286,15 +289,15 @@ def sign_in(page, web_url: str, api_key: str, at: str | None = None) -> None:
     )
     page.goto(web_url + (at or ""))
     expect(page.get_by_test_id("shell")).to_be_visible()
-    if at is None:
+    if at is None and board:
         # The tree has loaded once its skeleton is gone. Its first project is
         # opened by its URL: on a phone the tree is in the closed drawer.
         expect(page.get_by_label("Loading projects")).to_have_count(0)
         first = page.locator("[role=treeitem][data-nav-key^='project:']").first
-        if first.count():
-            project = first.get_attribute("data-nav-key").removeprefix("project:")
-            page.evaluate("id => { window.location.hash = '#/project/' + encodeURIComponent(id) }", project)
-            expect(page).to_have_url(re.compile(r"#/project/"))
+        assert first.count(), "sign_in expected a board, but the organisation has no project (pass board=False)"
+        project = first.get_attribute("data-nav-key").removeprefix("project:")
+        page.evaluate("id => { window.location.hash = '#/project/' + encodeURIComponent(id) }", project)
+        expect(page).to_have_url(re.compile(r"#/project/"))
 
 
 def toast(page, text: str):
