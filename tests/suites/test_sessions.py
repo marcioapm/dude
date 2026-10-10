@@ -82,7 +82,7 @@ def test_a_stuck_brainstorm_turn_stops_once_and_every_member_sees_the_notice(
                timeout=30, message="the interrupted turn never ended")
     assert [e["eventId"] for e in reader_client.events(sessionId=session, limit=1000)
             if e["eventType"] == "session.turn_stopped"] == [stopped[0]["eventId"]]
-    sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"], board=False)
     page.goto(f"{web_url}#/sessions/{session}")
     notice = page.locator('[data-kind="stopped"]')
     expect(notice).to_have_count(1, timeout=30_000)

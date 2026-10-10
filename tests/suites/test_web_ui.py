@@ -54,7 +54,7 @@ def test_the_first_load_is_the_welcome_with_its_composer_focused_and_the_brand_g
     assert "#/project/" not in page.url
     page.get_by_role("treeitem").filter(has_text="Greeter").first.click()
     expect(page).to_have_url(re.compile(r"#/project/"))
-    page.get_by_role("button", name="Home").click()
+    page.get_by_role("button", name="El Duderino, home").click()
     expect(page).to_have_url(re.compile(r"#/$"))
     expect(welcome).to_be_visible()
     assert console_errors == []
@@ -1032,9 +1032,13 @@ def test_project_settings_manage_repositories_and_delivery(
 
 
 def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
-    """An organization with nothing yet is offered a project, not told to use the API."""
-    sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("new-project-empty").click()
+    """An organization with nothing yet is offered a project in the welcome, not told to use the API."""
+    sign_in(page, web_url, org["api_key"], at="#/")
+    welcome = page.get_by_test_id("welcome")
+    expect(welcome).to_be_visible()
+    # A session needs no project: the composer is there as ever.
+    expect(welcome.locator("textarea")).to_be_visible()
+    welcome.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")
     # Prefilled as dude would derive it from the slug.
     expect(page.get_by_test_id("project-key")).to_have_value("PAYM")
@@ -1401,7 +1405,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
 def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
     """You choose how dude looks; it stays so after a reload."""
-    sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"], board=False)
     page.get_by_test_id("my-settings-button").click()
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     html = page.locator("html")
@@ -1439,7 +1443,7 @@ def test_a_browser_turns_notifications_on_and_off(
       PushManager.prototype.getSubscription = async function () { return sub; };
       PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
-    sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"], board=False)
     page.get_by_test_id("my-settings-button").click()
     state = page.get_by_test_id("push-state")
     expect(state).to_have_attribute("data-state", "off")
