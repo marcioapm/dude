@@ -1,0 +1,351 @@
+/*
+ * What the design system does not lay out yet: the greeting, the starters
+ * (pills and tiles), the leads, the link chips in the composer, and the
+ * stage that centres the composer until the first message. No borders but
+ * the composer's own field; regions by shade, things you press by a wash.
+ */
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-surface);
+}
+.stage[data-layout="centred"],
+.stage[data-layout="context"] {
+  align-items: center;
+  overflow: auto;
+  padding: var(--ds-space-24) var(--ds-space-24) var(--ds-space-48);
+}
+/* Centred: the column sits a little above the middle, where the eye lands. */
+.stage[data-layout="centred"] {
+  justify-content: center;
+  padding-bottom: 12vh;
+}
+.stage[data-layout="context"] {
+  padding-top: 8vh;
+}
+
+.column {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  margin: 0 auto;
+}
+.column[data-wide] {
+  max-width: 780px;
+}
+
+.greeting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+  text-align: center;
+  margin-bottom: var(--ds-space-8);
+}
+.greeting[data-align="start"] {
+  align-items: flex-start;
+  text-align: left;
+}
+.hello {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-4xl);
+  line-height: var(--ds-leading-tight);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  color: var(--ds-color-text-strong);
+}
+.sub {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--ds-text-lg);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-secondary);
+}
+.sub b {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-semibold);
+}
+
+/* The composer, raised off the page while it is the page's one thing. */
+.composer > * {
+  padding: 0;
+}
+.stage[data-layout="centred"] .composer :global(textarea),
+.stage[data-layout="context"] .composer :global(textarea) {
+  min-height: 72px;
+  font-size: var(--ds-text-lg);
+}
+.stage[data-layout="centred"] .composer > * > div:has(textarea),
+.stage[data-layout="context"] .composer > * > div:has(textarea) {
+  box-shadow: var(--ds-shadow-2);
+}
+
+.promise {
+  margin: var(--ds-space-8) 0 0;
+  text-align: center;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- Link chips: what the session reads, said where you write -- */
+.links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.linksLabel,
+.linksNone {
+  margin-right: var(--ds-space-2);
+}
+.linkChip,
+.linkAdd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+}
+.linkChip {
+  padding-left: var(--ds-space-4);
+  padding-right: var(--ds-space-2);
+}
+.linkX {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}
+.linkX:hover {
+  background: var(--ds-color-row-hover);
+  color: var(--ds-color-text-primary);
+}
+.linkAdd {
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}
+.linkAdd:hover,
+.linkChip:hover {
+  background: var(--ds-color-secondary-hover);
+  color: var(--ds-color-text-primary);
+}
+
+/* -- Starters as pills: one line under the composer -- */
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--ds-space-8);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  transition: background var(--ds-duration-fast) var(--ds-ease-standard), color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.pill:hover {
+  background: var(--ds-color-secondary-hover);
+  color: var(--ds-color-text-strong);
+}
+.pill :global(svg) {
+  color: var(--ds-role-brainstorm-fg);
+}
+
+/* -- Starters as tiles: two by two, a sentence each -- */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ds-space-12);
+}
+@media (max-width: 640px) {
+  .tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--ds-space-12);
+  row-gap: var(--ds-space-2);
+  align-items: start;
+  padding: var(--ds-space-16);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.tile:hover {
+  background: var(--ds-color-secondary-hover);
+}
+.tileIcon {
+  grid-row: span 2;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ds-radius-face-agent);
+  background: var(--ds-role-brainstorm-bg);
+  color: var(--ds-role-brainstorm-fg);
+}
+.tileTitle {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.tileDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10vh var(--ds-space-24) var(--ds-space-24);
+}
+.dock {
+  flex: none;
+  padding: 0 var(--ds-space-24) var(--ds-space-12);
+}
+.recent {
+  margin-top: var(--ds-space-12);
+}
+.recentHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--ds-space-4);
+}
+.recentHead h2 {
+  margin: 0;
+}
+
+/* -- Leads: what dude already knows is worth talking through -- */
+.leads {
+  margin-top: var(--ds-space-24);
+}
+.leadsHead {
+  margin: 0 0 var(--ds-space-8);
+}
+.leadGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ds-space-8);
+}
+@media (max-width: 640px) {
+  .leadGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.lead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.lead:hover {
+  background: var(--ds-color-secondary-hover);
+}
+/* The one emphasis pattern: needs-you takes its tint and bar, square on the bar side. */
+.lead[data-kind="waiting"] {
+  background: var(--ds-tint-needs-you);
+  box-shadow: inset 2px 0 0 var(--ds-tone-attention-mark);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.leadTop {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.leadHeading {
+  flex: 1;
+  min-width: 0;
+}
+.leadProject {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.leadGlyph {
+  display: inline-flex;
+  color: var(--ds-color-text-muted);
+}
+.leadTitle {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.leadDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+/* A phone: the greeting takes a size down, the stage less air. */
+@media (max-width: 640px) {
+  .hello {
+    font-size: var(--ds-text-3xl);
+  }
+  .sub {
+    font-size: var(--ds-text-md);
+  }
+  .stage[data-layout="centred"],
+  .stage[data-layout="context"] {
+    padding: var(--ds-space-16) var(--ds-space-12) var(--ds-space-32);
+  }
+  .stage[data-layout="context"] {
+    padding-top: var(--ds-space-24);
+  }
+  .scroll {
+    padding: var(--ds-space-24) var(--ds-space-12) var(--ds-space-16);
+  }
+  .dock {
+    padding: 0 var(--ds-space-12) var(--ds-space-8);
+  }
+}
+
+/* Light elevates with shadow, not shade: raised is the surface's white. */
+:global([data-theme="light"]) .pill,
+:global([data-theme="light"]) .tile,
+:global([data-theme="light"]) .lead:not([data-kind="waiting"]) {
+  box-shadow: var(--ds-shadow-1);
+}
