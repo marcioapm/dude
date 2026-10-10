@@ -279,6 +279,15 @@ export const EventTypes = {
   SessionReplaced: "agent.session.replaced",
   /** What lux warned about the Run's agent, in its words. Payload: `{ message }`. */
   AgentWarning: "agent.warning",
+  /**
+   * The agent's harness compacted its conversation. Payload: `{ trigger?,
+   * preTokens?, postTokens?, summary?, summaryTruncated? }`, each only when
+   * known: lux's `lux.compacted` carries the summary the harness kept
+   * (whole, up to lux's 64 KiB cap; `summaryTruncated` when cut); a lux
+   * from before it only the harness's own announcement (Claude Code's
+   * trigger and token counts, Codex's nothing).
+   */
+  ContextCompacted: "agent.context.compacted",
   SessionStopped: "agent.session.stopped",
   SubagentStarted: "agent.subagent.started",
   SubagentStopped: "agent.subagent.stopped",
