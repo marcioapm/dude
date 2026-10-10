@@ -42,8 +42,13 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress); err != nil {
 			return fmt.Errorf("load the session's run: %w", err)
 		}
-		settings = delivery.ResolveRole(role, orgModels)
-		var err error
+		// The session's own tier and harness, each in place of the
+		// organisation's; a resume below keeps what it was submitted with.
+		chosen, err := delivery.LoadSessionModel(ctx, tx, r.SessionID)
+		if err != nil {
+			return fmt.Errorf("load the session's model: %w", err)
+		}
+		settings = chosen.Over(delivery.ResolveRole(role, orgModels))
 		if stored != nil {
 			var ranOn string
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
