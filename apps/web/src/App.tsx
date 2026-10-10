@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
@@ -107,12 +107,6 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 const MINE = "dude.tree.mine";
 const SIDEBAR = "dude.sidebar";
 
-/** Typing goes to a field: a bare key there is a character, never a shortcut. */
-function typingIn(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  return Boolean(el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)));
-}
-
 /**
  * An agent at work, and its plan and heartbeat: none of it is in the tree.
  * What it spends is (a card's, a lane's, an epic's cost), so a finished
@@ -143,13 +137,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     localStorage.setItem(SIDEBAR, rail ? "rail" : "full");
     setRailed(rail);
   }, []);
-  // `[` from anywhere outside a field folds or unfolds it (the rail's own `/`
-  // is the Sidebar's). `e.key` is the character typed, so Shift or Option
-  // producing it on another layout is still `[`; only ⌘ and Ctrl (not AltGr,
-  // which is Ctrl+Alt) make a command.
+  // `[` outside a field folds or unfolds it (the rail's own `/` is the Sidebar's).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "[" || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented || typingIn(e.target)) return;
+      if (!isBareKey(e, "[")) return;
       // Under the drawer breakpoint there is no rail to fold to.
       if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
       e.preventDefault();
