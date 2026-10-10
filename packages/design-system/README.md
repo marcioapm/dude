@@ -1866,10 +1866,11 @@ sessions*):
   open as both halves are picked; `onChange({ tier, harness })`, null for
   "Organisation default". A tier naming no model is disabled ("names no
   model yet"). `misfit`: the pair it is on stopped fitting after it was
-  chosen; the chip takes the `warning` glyph in danger ink and the sentence
-  sits under it, as the chip's description. `menuNote`: a muted line atop
-  the menu ("Could not load the tiers"); `onOpenChange` lets the app read
-  the tiers on the first opening. `readOnly`: the chip alone.
+  chosen; the chip takes the `warning` glyph in attention ink and the
+  sentence sits under it in xs secondary text, as the chip's description.
+  `menuNote`: a muted line atop the menu ("Could not load the tiers");
+  `onOpenChange` lets the app read the tiers on the first opening.
+  `readOnly`: the chip alone.
 - **RecentSessions** — the welcome's short list: one line each at
   `row-default` height, the bulb (the role glyph, in the brainstorm's role
   colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,

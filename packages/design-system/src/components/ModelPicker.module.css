@@ -53,10 +53,10 @@
 .harness {
   flex-shrink: 0;
 }
-/* A pair that no longer fits: the mark in danger ink, the sentence under the chip. */
-.danger {
+/* A pair that no longer fits needs the owner, nothing failed yet: the mark in attention ink, the sentence under the chip. */
+.attention {
   flex-shrink: 0;
-  color: var(--ds-tone-danger-fg);
+  color: var(--ds-tone-attention-fg);
 }
 .withMisfit {
   display: inline-flex;
@@ -67,7 +67,7 @@
 }
 .misfit {
   padding: 0 var(--ds-space-8);
-  color: var(--ds-tone-danger-fg);
+  color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-xs);
   white-space: normal;
 }
