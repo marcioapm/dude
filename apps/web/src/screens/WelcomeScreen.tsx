@@ -46,11 +46,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
   offer?: ReactNode;
   onOpenSession: (id: string) => void;
   onAllSessions: () => void;
-  /**
-   * A session was made from here: the app re-reads its list, and opens it
-   * only when `stillHere` (a create that lands after the welcome was left
-   * never moves the person from where they went).
-   */
+  /** A session was made from here: the app re-reads its list, and opens it only when `stillHere` (a late create never moves someone who left). */
   onCreated: (id: string, stillHere: boolean) => void;
 }) {
   const density = useDensity();
