@@ -18,7 +18,7 @@ import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
-import { useDraft } from "../hooks/useDraft.ts";
+import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
@@ -224,6 +224,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
                 setProblem(null);
                 try {
                   await send(text);
+                  // The conductor may have appeared during the send, dropping this composer's key: its words were flushed there.
+                  if (people.you) clearDraftIfSent(draftKey(people.you, `task:${task.id}`), text);
                   return true;
                 } catch (err) {
                   setProblem(err instanceof ApiError ? `Could not send the message: ${err.message}` : "Could not send the message.");

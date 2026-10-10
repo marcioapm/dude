@@ -13,6 +13,7 @@ import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
+import type { ChatSent } from "../src/api/client.ts";
 import { SessionScreen } from "../src/screens/SessionScreen.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import { ChatSection } from "../src/screens/ChatSection.tsx";
@@ -375,6 +376,66 @@ describe("a task's Chat", () => {
     const after = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
     await until(() => (after.value === "plan the invoice option" ? true : null), "the words carried over");
     expect(JSON.parse(stored(draftKey(YOU, `task:${TASK_ID}`))!).text).toBe("plan the invoice option");
+  });
+
+  // The conductor appears while the first message's POST is held: the Chat's composer flushed its words to the task's entry first.
+  const TASK_KEY = draftKey(YOU, `task:${TASK_ID}`);
+  async function sentAsConductorAppears() {
+    class HeldChat extends FixtureClient {
+      hold = Promise.withResolvers<void>();
+      chats: string[] = [];
+      override async chat(taskId: string, text: string): Promise<ChatSent> {
+        this.chats.push(text);
+        await this.hold.promise;
+        return { runId: RUN_ID, taskId, created: true };
+      }
+    }
+    const client = new HeldChat("a");
+    const task = await client.getTask(TASK_ID);
+    let conduct: (id: string | null) => void = () => {};
+    function Harness() {
+      const [conductorId, setConductorId] = useState<string | null>(null);
+      conduct = setConductorId;
+      return (
+        <ChatSection client={client} task={task} conductorId={conductorId} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
+          events={[]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}} />
+      );
+    }
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <Harness />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(unmount);
+    const before = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea"), "the Chat's composer");
+    await settle();
+    await typeInto(before, "plan the invoice option");
+    await enter(before);
+    expect(client.chats).toEqual(["plan the invoice option"]);
+    await act(async () => conduct(RUN_ID));
+    const after = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
+    expect(JSON.parse(stored(TASK_KEY)!).text).toBe("plan the invoice option");
+    return { client, after };
+  }
+
+  test("a message sent as the conductor appears is not left as the conductor's draft", async () => {
+    const { client } = await sentAsConductorAppears();
+    await act(async () => client.hold.resolve());
+    await until(() => (stored(TASK_KEY) === null ? true : null), "the sent words removed");
+  });
+
+  test("newer words in the conductor's composer are kept when that send is confirmed", async () => {
+    const { client, after } = await sentAsConductorAppears();
+    await until(() => (after.value === "plan the invoice option" ? true : null), "the words carried over");
+    await typeInto(after, "and the refund path");
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await act(async () => client.hold.resolve());
+    await settle(50);
+    expect(JSON.parse(stored(TASK_KEY)!).text).toBe("and the refund path");
   });
 });
 
