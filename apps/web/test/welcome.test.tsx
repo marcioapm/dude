@@ -109,6 +109,8 @@ describe("the greeting", () => {
     expect(document.activeElement).toBe(textarea(page));
     expect(textarea(page).placeholder).toBe("Start a session: an idea, a question, a plan…");
     expect(page.querySelector("[data-testid=composer-to]")!.textContent).toBe("To Brainstorm");
+    // The welcome's composer is the raised stage one.
+    expect(page.querySelector("form[data-variant=stage] textarea") === textarea(page)).toBe(true);
   });
 });
 
