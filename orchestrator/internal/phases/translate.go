@@ -116,10 +116,6 @@ type harnessState struct {
 	// What lux last warned about the agent (lux.warning), until a session
 	// it may explain is reported (session).
 	warning string
-	// Compaction (compaction.go): a harness's own announcement held for
-	// the record after it, and whether this lux sends lux.compacted.
-	compactHeld map[string]any
-	luxCompacts bool
 }
 
 type codexTokens struct {
@@ -139,18 +135,12 @@ type harnessStateJSON struct {
 	FailedTurns    int              `json:"failedTurns,omitempty"`
 	LastFailed     bool             `json:"lastFailed,omitempty"`
 	Warning        string           `json:"warning,omitempty"`
-	CompactHeld    *map[string]any  `json:"compactHeld,omitempty"`
-	LuxCompacts    bool             `json:"luxCompacts,omitempty"`
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning, LuxCompacts: h.luxCompacts}
-	// Held with no fields (Codex's) is still held.
-	if h.compactHeld != nil {
-		j.CompactHeld = &h.compactHeld
-	}
+		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -164,13 +154,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning, luxCompacts: j.LuxCompacts}
-	if j.CompactHeld != nil {
-		h.compactHeld = *j.CompactHeld
-		if h.compactHeld == nil {
-			h.compactHeld = map[string]any{}
-		}
-	}
+		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -930,13 +914,6 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 // translate_codex.go). An unknown event type is ignored rather than
 // guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
-	// A harness's compaction held for lux's own record: any other record
-	// says this lux sent none (holdCompaction).
-	if f.Event.Type != recordCompacted {
-		if err := t.settleCompaction(ctx, tx, s); err != nil {
-			return err
-		}
-	}
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
 		_ = json.Unmarshal(f.Event.Data, &d)
