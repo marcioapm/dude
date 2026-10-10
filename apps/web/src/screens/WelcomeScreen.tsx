@@ -50,7 +50,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
   const [linked, setLinked] = useState<LinkableProject[]>([]);
   // The session's own tier and harness; null follows the organisation's Brainstorm setting.
   const [model, setModel] = useState<ModelChoice>({ tier: null, harness: null });
-  const options = useModelOptions(client, true, true);
+  const options = useModelOptions(client);
   const [problem, setProblem] = useState<string | null>(null);
   const sending = useRef(false);
   const wrap = useRef<HTMLDivElement>(null);
