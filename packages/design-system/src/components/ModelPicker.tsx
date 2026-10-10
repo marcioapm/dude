@@ -116,16 +116,14 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, mi
   }
 
   // Each item is checked against the other half as it would be after the pick.
-  const harnessNow = eff.harness;
-  const tierNow = eff.tier;
   const orgTierWords = organization.tier?.name ?? "no tier";
   const tierItems: RowMenuAction[] = [
-    item(TIER_DEFAULT, `Organisation default (${orgTierWords})`, organization.tier?.model ?? undefined, misfit(harnessNow, organization.tier)),
-    ...tiers.map((t) => item(t.id, t.name, t.model ?? undefined, t.model ? misfit(harnessNow, t) : NO_MODEL)),
+    item(TIER_DEFAULT, `Organisation default (${orgTierWords})`, organization.tier?.model ?? undefined, misfit(eff.harness, organization.tier)),
+    ...tiers.map((t) => item(t.id, t.name, t.model ?? undefined, t.model ? misfit(eff.harness, t) : NO_MODEL)),
   ];
   const harnessItems: RowMenuAction[] = [
-    item(HARNESS_DEFAULT, `Organisation default (${HARNESS_LABEL[organization.harness]})`, undefined, misfit(organization.harness, tierNow)),
-    ...HARNESSES.map((h) => item(h, HARNESS_LABEL[h], undefined, misfit(h, tierNow))),
+    item(HARNESS_DEFAULT, `Organisation default (${HARNESS_LABEL[organization.harness]})`, undefined, misfit(organization.harness, eff.tier)),
+    ...HARNESSES.map((h) => item(h, HARNESS_LABEL[h], undefined, misfit(h, eff.tier))),
   ];
   return described(
     <RowMenu
