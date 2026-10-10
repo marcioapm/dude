@@ -19,7 +19,7 @@ export function timeLimitLabel(minutes: number | null): string {
 /** Whether a project changes anything about a role: a setting, or its prompt. */
 export function roleChanged(role: RoleSettings): boolean {
   return (
-    [role.tier, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
+    [role.tier, role.harness, role.timeLimitMinutes, role.machineSize, role.image, role.enabled].some((s) => s?.source === "project") ||
     (role.prompt.project !== undefined && role.prompt.project.mode !== "inherit")
   );
 }

@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { SQL } from "bun";
 import {
-  agentModelsSchema, deliveryPolicySchema, deriveProjectKey, newId, EventTypes, PROJECT_KEY, PROJECT_KEY_MESSAGE, projectKeyTakenMessage,
+  agentModelsSchema, harnessSchema, deliveryPolicySchema, deriveProjectKey, newId, EventTypes, PROJECT_KEY, PROJECT_KEY_MESSAGE, projectKeyTakenMessage,
 } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
@@ -74,6 +74,16 @@ interface ProjectRow {
   deliveryPolicy: Record<string, unknown>;
   createdAt: string;
   imageUrl: string | null;
+}
+
+function normalizeProject<T extends ProjectRow>(project: T) {
+  const agentModels = Object.fromEntries(Object.entries(project.agentModels).map(([role, value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [role, value];
+    const config = { ...value } as Record<string, unknown>;
+    if (!harnessSchema.safeParse(config.harness).success) delete config.harness;
+    return [role, config];
+  }));
+  return { ...project, agentModels };
 }
 
 /** A project's image as its URL (served under its token), for the `projects` row in scope. */
@@ -187,7 +197,7 @@ async function listProjects(ctx: RequestContext): Promise<Response> {
     return (await scope.sql`
       SELECT ${scope.sql.unsafe(PROJECT_SELECT)} FROM projects ORDER BY created_at DESC`) as ProjectRow[];
   });
-  return json({ projects });
+  return json({ projects: projects.map(normalizeProject) });
 }
 
 async function getProject(ctx: RequestContext): Promise<Response> {
@@ -204,7 +214,7 @@ async function getProject(ctx: RequestContext): Promise<Response> {
   });
 
   if (!project) throw notFound(`project ${projectId} not found`);
-  return json(project);
+  return json(normalizeProject(project));
 }
 
 /**
@@ -238,7 +248,7 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
   });
 
   if (!project) throw notFound(`project ${projectId} not found`);
-  return json(project);
+  return json(normalizeProject(project));
 }
 
 /** The factory's delivery defaults, from the orchestrator that applies them. */

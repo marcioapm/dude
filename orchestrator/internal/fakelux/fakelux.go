@@ -208,6 +208,9 @@ type Run struct {
 
 	busy  bool
 	woken bool
+	// How its agent speaks (dialect.go), and what it is saying meanwhile.
+	speaks  string
+	harness *harnessSay
 	// Turns the agent finished (went idle after), for TurnsEnded.
 	turnsEnded int
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
@@ -342,8 +345,7 @@ func (s *Server) EndTurn(id string) {
 		return
 	}
 	s.completeOpenTools(run)
-	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
-	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	s.turnEnd(run, map[string]any{"stopReason": "end_turn"}, true)
 	run.busy = false
 	run.turnsEnded++
 	s.deliverQueued(run)
@@ -1340,8 +1342,7 @@ func (s *Server) turn(run *Run) {
 	run.openTools = nil
 	b := run.behavior
 	if b.TurnError != "" {
-		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "", "error": b.TurnError})
-		s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError}, true)
 		run.busy = false
 		return
 	}
@@ -1437,9 +1438,8 @@ func (s *Server) turn(run *Run) {
 	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})
 	// The prompt's response, as the ACP adapter relays it: with the turn's
 	// token usage.
-	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn", "usage": map[string]any{
-		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
-	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	s.turnEnd(run, map[string]any{"stopReason": "end_turn", "usage": map[string]any{
+		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}}, true)
 	run.busy = false
 	run.turnsEnded++
 	if b.ExitAfterTurn {
@@ -1703,10 +1703,6 @@ func (s *Server) luxEvent(run *Run, typ string, data map[string]any) {
 	s.emit(run, "", typ, data)
 }
 
-func (s *Server) agent(run *Run, update map[string]any) {
-	s.recordEvent(run, "acp."+update["sessionUpdate"].(string), update)
-}
-
 func (s *Server) recordEvent(run *Run, typ string, data map[string]any) {
 	run.records = append(run.records, record{Seq: int64(len(run.records) + 1), Epoch: run.Epoch, Event: map[string]any{"type": typ, "data": data}})
 	run.cond.Broadcast()
@@ -1915,7 +1911,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		// harness took and the agent had not read starts the next turn,
 		// under the same request ids; FailUnreadOnInterrupt fails it instead.
 		run.Interrupted++
-		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
+		s.turnEnd(run, map[string]any{"stopReason": "cancelled"}, false)
 		run.busy = false
 		if s.FailUnreadOnInterrupt {
 			// A legacy lux holds input it never acknowledges; it fails it

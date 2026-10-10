@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { harnessSchema } from "./harnesses.ts";
 
 /**
  * Product hierarchy — plan §39.
@@ -53,9 +54,8 @@ export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the
 export const ROLE_EFFORT_REMOVED = "reasoning effort is the model tier's (set it in Models), not the role's";
 
 /**
- * Model binding for one role. `harness` is optional so a project can
- * express "any harness that satisfies the capabilities" and let policy
- * pick — plan §45 capability negotiation.
+ * Model binding for one role: the tier it asks for and, apart from it,
+ * the harness that runs it (OpenCode when no layer names one).
  */
 export const agentModelConfigSchema = z.object({
   /**
@@ -65,7 +65,8 @@ export const agentModelConfigSchema = z.object({
    */
   tier: z.string().min(1).max(100).optional(),
   model: z.undefined({ invalid_type_error: ROLE_MODEL_REMOVED }),
-  harness: z.string().min(1).optional(),
+  /** The coding agent its Runs run on; layered like machineSize (resolveHarness). */
+  harness: harnessSchema.optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
@@ -100,6 +101,12 @@ export const agentModelsSchema = z
   .default({});
 export type AgentModels = z.infer<typeof agentModelsSchema>;
 
+// Stored harness names can outlive an adapter; public inputs remain strict.
+export const storedAgentModelsSchema = z.record(
+  z.union([agentRoleSchema, z.literal("fixer")]),
+  agentModelConfigSchema.extend({ harness: harnessSchema.optional().catch(undefined) }),
+).default({});
+
 // ---------------------------------------------------------------------------
 // Organization
 // ---------------------------------------------------------------------------
@@ -109,7 +116,7 @@ export const organizationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1),
   /** Org-wide fallback for roles a project does not configure. */
-  defaultAgentModels: agentModelsSchema,
+  defaultAgentModels: storedAgentModelsSchema,
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Organization = z.infer<typeof organizationSchema>;
@@ -195,7 +202,7 @@ export const projectSchema = z.object({
   description: z.string().default(""),
   repositories: z.array(repositorySchema).default([]),
   /** Per-role model selection for this project. */
-  agentModels: agentModelsSchema,
+  agentModels: storedAgentModelsSchema,
   /**
    * A container image typed by hand, from before the image library: used
    * only when runtimeImageId is null. The API takes it only as null (clear).

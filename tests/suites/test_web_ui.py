@@ -1147,6 +1147,41 @@ def test_an_agents_progress_shows_in_its_chat(
     assert console_errors == []
 
 
+@pytest.mark.parametrize("harness,label", [("claude-code", "Claude Code"), ("codex", "Codex")])
+def test_a_role_on_claude_code_or_codex_delivers_and_its_chat_shows_its_work(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list, harness: str, label: str
+):
+    """Every role on Claude Code, then on Codex: the scripted agent speaks
+    that harness's protocol (as lux relays it), and the delivery goes through
+    its phases as on OpenCode. The implementer's chat has its thought, its
+    message and its tool calls; its header names the harness."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/tools", "harness": harness},
+        "reviewer": {"model": "fake/scripted", "harness": harness},
+        "simplifier": {"model": "fake/scripted", "harness": harness}})})
+    item = client.create_task(forge_project["id"], f"Deliver on {label}")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(item["id"])),
+               timeout=90, message=f"the delivery on {label} never reached simplify")
+    runs = client.task_runs(item["id"])
+    assert [r["phase"] for r in runs] == ["implement", "review", "fix", "review", "simplify"], runs
+    assert {r["harness"] for r in runs} == {harness}, runs
+    implement = runs[0]
+    types = [e["eventType"] for e in client.events(runId=implement["id"])]
+    for expected in ("agent.thought", "agent.message", "agent.tool.called", "agent.tool.completed", "agent.plan.updated",
+                     "agent.custom.progress"):
+        assert expected in types, f"{expected} missing on {label}: {types}"
+
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{implement['id']}")
+    expect(page.get_by_test_id("run-model-harness")).to_have_text(f"{label} ·")
+    expect(page.get_by_text("Implemented it.", exact=True)).to_be_visible()
+    expect(page.get_by_role("button").filter(has_text=re.compile(r"^Thought")).filter(has_text="Progress first, then the commit")).to_have_count(1)
+    # Its tool calls, under the names the cards know.
+    expect(page.locator("[data-tool='read']").first).to_be_visible()
+    assert console_errors == []
+
+
 def test_a_person_approves_a_repository_an_agent_asked_for(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, console_errors: list
 ):
