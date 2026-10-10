@@ -179,4 +179,12 @@ func TestOneQuestionIsToldAndKeptAsItAlwaysWas(t *testing.T) {
 	badWith(t, err, "a note goes with several")
 	_, err = AnswerFromText(fourItems(), "Open")
 	badWith(t, err, "answer each")
+	// Own words by text are kept and told exactly as typed.
+	d, err := AnswerFromText(items, " Not yet\n")
+	if err != nil || d.Text != " Not yet\n" {
+		t.Fatalf("own words by text: %+v %v", d, err)
+	}
+	if got := AnswerDirective("Open the pull request?", items, d, "marcio", false); got != "Answer to your question \"Open the pull request?\":\n\n Not yet\n" {
+		t.Errorf("directive %q", got)
+	}
 }
