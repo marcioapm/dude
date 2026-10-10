@@ -226,6 +226,16 @@ def _setup_org(client: ApiClient, harness: str = "opencode") -> None:
     assert res.status_code == 200, res.text
 
 
+@pytest.fixture(autouse=True)
+def _terminated_after(env, org: dict):
+    """Every lux Run the test's organization made is terminated after it: a
+    talker stays running when its test ends, and lux's hosts have a Run
+    limit the next tests would wait on."""
+    yield
+    for row in query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE organization_id = %s AND lux_run_id IS NOT NULL", (org["id"],)):
+        _lux(env, "POST", f"/v1/runs/{row['lux_run_id']}/terminate")
+
+
 @pytest.fixture
 def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     """A project lux's hosts can reach (they see this machine at their
@@ -596,3 +606,111 @@ def test_restart_the_restarted_without_its_conversation_notice_shows_in_chat(
     page.screenshot(path=str(SHOTS / f"6-{kind}-session-replaced.png"))
 
 
+# ---------------------------------------------------------------------------
+# Real models: memory across a restart and a compaction
+# ---------------------------------------------------------------------------
+
+# The cheapest model the proxy serves for each harness.
+HARNESSES = {"claude-code": "claude-haiku-4.5", "codex": "gpt-5.6-luna", "opencode": "claude-haiku-4.5"}
+
+
+def _runtime_image(client: ApiClient, owner_dsn: str) -> str:
+    """dude's runtime image as a library image whose dude layer is done:
+    what dude-image-builder would record, written as test_images.py writes
+    it, its final the image lux's hosts were preloaded with. (The
+    orchestrator's DUDE_AGENT_IMAGE is lux-fake's in the contract suite, and
+    a library image is what a role can name instead.)"""
+    made = client.post("/v1/images", {"name": f"bkeep-{os.urandom(3).hex()}", "containerfile": f"FROM {RUNTIME_IMAGE}\n", "note": "e2e"})
+    assert made.status_code == 201, made.text
+    image = made.json()["image"]["id"]
+    queued = client.post(f"/v1/images/{image}/build")
+    assert queued.status_code == 201, queued.text
+    version = queued.json()["versionId"]
+    execute(owner_dsn, "UPDATE image_versions SET user_ref = %s, built_at = now() WHERE id = %s", (RUNTIME_IMAGE, version))
+    execute(owner_dsn, """UPDATE image_builds SET state = 'succeeded', finished_at = now(), started_at = now(), layer_ref = %s
+        WHERE image_version_id = %s AND kind = 'build'""", (TEST_LAYER, version))
+    execute(owner_dsn, """INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref)
+        SELECT organization_id, id, %s, %s FROM image_versions WHERE id = %s""", (TEST_LAYER, RUNTIME_IMAGE, version))
+    query(owner_dsn, "SELECT * FROM image_publish(%s)", (version,))
+    return image
+
+
+def _real_tier(client: ApiClient, harness: str, options: dict | None = None) -> str:
+    """A tier of its own requesting the harness's model, with options."""
+    name = f"R {harness[:6]} {os.urandom(2).hex()}"
+    res = client.post("/v1/models/tiers", {"name": name, "model": HARNESSES[harness], **({"options": options} if options else {})})
+    assert res.status_code == 201, res.text
+    return next(x["id"] for x in res.json()["tiers"] if x["name"] == name)
+
+
+def _real_brainstorm(client: ApiClient, env, harness: str) -> Talker:
+    """The brainstorm role on harness and its model, in dude's runtime image."""
+    tier, image = _real_tier(client, harness), _runtime_image(client, env.owner_dsn)
+    res = client.patch("/v1/settings/organization", {"roles": {"brainstorm": {"tier": tier, "harness": harness, "image": image}},
+                                                     "delivery": {"conductorWarmMinutes": 60}})
+    assert res.status_code == 200, res.text
+    return Talker(client, env, "brainstorm", None)
+
+
+def _real_conductor(client: ApiClient, env, lux_project, harness: str, options: dict | None = None) -> Talker:
+    """A task's conductor on harness and its model, in dude's runtime image.
+    A conductor, not a brainstorm, where a message must reach the harness
+    as written (a slash command): a member's message to a brainstorm is
+    "Name: text"."""
+    project, _ = lux_project
+    tier, image = _real_tier(client, harness, options), _runtime_image(client, env.owner_dsn)
+    res = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"conductor": {"tier": tier, "harness": harness, "image": image}},
+                                                                  "delivery": {"conductorWarmMinutes": 60}})
+    assert res.status_code == 200, res.text
+    return Talker(client, env, "conductor", project)
+
+
+def _turn_over(t: Talker, run: str, timeout: float = 900) -> None:
+    """The agent's turn is over (idle), with no message of the person's unread."""
+    wait_until(lambda: query(t.env.owner_dsn, """SELECT 1 FROM runs r WHERE r.id = %s AND r.turn_done_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.failed_at IS NULL)""", (run,)),
+               timeout=timeout, interval=3, message=f"the turn never ended: {t.row(run)}; said {t.said(run)[-2:]}")
+
+
+def _answers_word(t: Talker, run: str, after: int, word: str, timeout: float = 600) -> str:
+    def said():
+        texts = t.said(run)[after:]
+        return next((x for x in texts if word.lower() in x.lower()), None)
+    return wait_until(said, timeout=timeout, interval=3,
+                      message=f"the agent never said {word!r}; said {t.said(run)[after:]}; row {t.row(run)}")
+
+
+WORD = "TANGERINE"
+ASK_WORD = "What is the code word I asked you to remember? Answer with the word only."
+
+
+@needs_model
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("harness", list(HARNESSES))
+def test_restart_a_real_model_remembers_the_word_across_a_container_kill(client: ApiClient, env, harness: str):
+    started = time.time()
+    t = _real_brainstorm(client, env, harness)
+    first = t.say(f"Remember the code word {WORD}. Reply with just: noted.")
+    run = first["runId"]
+    t.lux_running(run)
+    _turn_over(t, run)
+    lux_id = t.lux_id(run)
+    before = _lux_run(env, lux_id)
+    sessions = t.session_ids(run)
+    died_in = kill_container(env, lux_id)
+    wait_until(lambda: t.row(run)["status"] == "paused", timeout=120, interval=1, message=f"never parked: {t.row(run)}")
+    n = len(t.said(run))
+    reply = t.say(ASK_WORD)
+    assert reply["status"] == 200 and reply["runId"] == run, reply
+    said = _answers_word(t, run, n, WORD)
+    after = _lux_run(env, lux_id)
+    _log(f"7/{harness}", {"run": run, "luxRunId": lux_id, "epochBefore": before["epoch"], "diedIn": died_in, "epochAfter": after["epoch"],
+                          "luxStateAtKill": "failed", "luxSession": [before.get("sessionId"), after.get("sessionId")],
+                          "dudeSessions": t.session_ids(run), "firstAnswer": t.said(run)[:n], "answer": said,
+                          "seconds": round(time.time() - started),
+                          "order": _order(t.run_events(run), ("run.parked", "run.unparked", "agent.session.started",
+                                                               "agent.session.replaced", "agent.warning"))})
+    assert after["epoch"] > died_in and after.get("sessionId") == before.get("sessionId"), (before, after)
+    assert t.session_ids(run) == sessions, (sessions, t.session_ids(run))
+    assert "agent.session.replaced" not in [e["eventType"] for e in t.run_events(run)]
+    assert t.runs_created() == [run]
