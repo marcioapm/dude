@@ -58,7 +58,7 @@ function detail(role: "owner" | "chat" | "read", over: Partial<SessionDetail> = 
       run: { id: RUN, status: "running", dudePause: null, model: "claude-opus-5-5", modelTier: "small", machine: null, waiting: false },
       runs: [RUN], costUsd: 0.71, messages: 2,
     },
-    you: { id: YOU, role },
+    you: { id: YOU, role, archived: false },
     proposals: [],
     question: null,
     ...over,
@@ -102,12 +102,31 @@ async function sessionPage(client: SessionClient) {
   const { container, unmount } = await mount(
     <PeopleProvider client={client}>
       <ToastProvider>
-        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+        <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
       </ToastProvider>
     </PeopleProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=session-screen]"), "the session page");
+  return container;
+}
+
+/** The whole shell at `hash`, as a browser opens it. */
+async function shell(hash: string, client: FixtureClient) {
+  window.history.replaceState(null, "", hash);
+  const { container, unmount } = await mount(
+    <TooltipProvider>
+      <ToastProvider>
+        <PeopleProvider client={client}>
+          <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+        </PeopleProvider>
+      </ToastProvider>
+    </TooltipProvider>,
+  );
+  mounted.push(async () => {
+    await unmount();
+    window.history.replaceState(null, "", " ");
+  });
   return container;
 }
 
@@ -511,7 +530,7 @@ describe("a brainstorm session's page", () => {
     const { container, unmount } = await mount(
       <PeopleProvider client={client}>
         <ToastProvider>
-          <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} />
+          <SessionScreen client={client} sessionId={SESSION} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
         </ToastProvider>
       </PeopleProvider>,
     );
@@ -587,10 +606,10 @@ describe("a session's name", () => {
 
   test("untitled in the list, the sidebar's list and the inbox: New session", async () => {
     const summary = { id: SESSION, title: null, role: "owner" as const, createdAt: at(0), owner: ref(ME), shared: false, projects: [],
-      runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0) };
+      runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0), archived: false };
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
     const client = new SessionClient(detail("owner"));
-    const list = await mount(<ToastProvider><SessionsScreen sessions={[summary]} onOpen={() => {}} onNew={() => {}} /></ToastProvider>);
+    const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} onNew={() => {}} /></ToastProvider>);
     mounted.push(list.unmount);
     expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
 
@@ -613,13 +632,22 @@ describe("a session's name", () => {
 
   test("New session goes to the welcome and makes nothing", async () => {
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
+    // The screen reads archived sessions through its client; New session makes nothing through it.
+    class Creating extends SessionClient {
+      made = 0;
+      override createSession() {
+        this.made++;
+        return Promise.resolve({ id: "ssn_new", title: null, runId: "run_new" });
+      }
+    }
+    const client = new Creating(detail("owner"));
     let welcomed = 0;
-    const { container, unmount } = await mount(<ToastProvider><SessionsScreen sessions={[]} onOpen={() => {}} onNew={() => welcomed++} /></ToastProvider>);
+    const { container, unmount } = await mount(<ToastProvider><SessionsScreen client={client} sessions={[]} onOpen={() => {}} onNew={() => welcomed++} /></ToastProvider>);
     mounted.push(unmount);
     await click(container.querySelector("[data-testid=new-session]")!);
     await settle();
     expect(welcomed).toBe(1);
-    // The screen holds no client; "makes nothing" is that it opens no dialog of its own.
+    expect(client.made).toBe(0);
     expect(document.querySelector("[role=dialog]") === null).toBe(true);
   });
 });
@@ -1384,6 +1412,176 @@ describe("Waiting on you", () => {
     const question = await until(() => container.querySelector("[data-testid=session-question]"), "the question");
     expect(question.textContent).toContain("The brainstorm in Meter v2 asks 3 questions · Retry scope, Old route, Tests");
     expect(question.textContent).not.toContain("3 questions: Retry scope");
+  });
+});
+
+describe("archiving a session, for yourself", () => {
+  const OTHER = "ssn_pricing";
+  const summary = (id: string, title: string, archived: boolean) => ({ id, title, role: "owner" as const, createdAt: at(0), owner: ref(ME),
+    shared: false, projects: [], runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0), archived });
+
+  // Answers as the API does: the list leaves out what you archived unless asked, and the page says whether it is.
+  class Archiving extends SessionClient {
+    archivedIds = new Set<string>();
+    calls: Array<[string, boolean]> = [];
+    refuse = false;
+    refuseArchived = false;
+    // Whether each list read asked for archived sessions too.
+    reads: boolean[] = [];
+    // While set, a list read answers only once it settles, with what was true when it was asked.
+    hold: Promise<void> | null = null;
+    // Holds the list reads asked from now on; the returned function answers them.
+    holdReads(): () => void {
+      let release!: () => void;
+      this.hold = new Promise((r) => { release = r; });
+      return release;
+    }
+    override async sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
+      this.reads.push(opts.archived === true);
+      if (opts.archived && this.refuseArchived) throw new Error("the orchestrator is down");
+      const hold = this.hold;
+      const all = [summary(SESSION, "Usage-based billing", this.archivedIds.has(SESSION)), summary(OTHER, "Pricing", this.archivedIds.has(OTHER))];
+      if (hold) await hold;
+      return { sessions: all.filter((s) => opts.archived || !s.archived), invitations: [], questions: [] };
+    }
+    override getSession(): Promise<SessionDetail> {
+      return Promise.resolve({ ...this.detail, you: { ...this.detail.you, archived: this.archivedIds.has(SESSION) } });
+    }
+    override archiveSession(id: string, archived: boolean) {
+      this.calls.push([id, archived]);
+      if (this.refuse) return Promise.reject(new Error("the orchestrator is down"));
+      if (archived) this.archivedIds.add(id);
+      else this.archivedIds.delete(id);
+      return Promise.resolve({ id, archived });
+    }
+  }
+
+  const listed = (page: HTMLElement) => [...page.querySelectorAll("[data-testid=sessions] [data-testid=session-row]")]
+    .map((r) => r.getAttribute("data-session"));
+  const inSidebar = (page: HTMLElement) => [...page.querySelectorAll("[data-testid=sidebar-sessions] [data-session]")]
+    .map((r) => r.getAttribute("data-session"));
+  // The shell on the session's page, once the sidebar lists it.
+  const onSessionPage = async (client: Archiving) => {
+    const page = await shell(`#/sessions/${SESSION}`, client);
+    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
+    return page;
+  };
+  const shownOption = (page: HTMLElement, label: string) =>
+    [...page.querySelectorAll("[data-testid=sessions-shown] button")].find((b) => b.textContent === label) ?? null;
+
+  test("Archive on its page calls the API and returns you to the list, its row gone there and from the sidebar at once", async () => {
+    const client = new Archiving(detail("read"));
+    const page = await onSessionPage(client);
+    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    const release = client.holdReads();
+    // A reader archives it too: it is their own list.
+    await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
+    await until(() => page.querySelector("[data-testid=sessions]"), "the list");
+    expect(client.calls).toEqual([[SESSION, true]]);
+    expect(window.location.hash).toBe("#/sessions");
+    // The list read that follows the archive has not answered yet.
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+    await act(async () => release());
+    await settle();
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+  });
+
+  test("a list read asked before the archive and answered after the one that follows it does not bring the row back", async () => {
+    const client = new Archiving(detail("owner"));
+    const page = await onSessionPage(client);
+    const release = client.holdReads();
+    // A renamed session re-reads the list; that read is asked now and answers last.
+    await act(async () => {
+      emit({ eventType: "session.renamed", occurredAt: at(50), organizationId: "org_1", projectId: null as unknown as string,
+        taskId: null as unknown as string, runId: null, sessionId: OTHER, workflowRunId: null, actor: { type: "human", id: ANA.id },
+        source: "orchestrator", correlationId: null, causationId: null, payload: { title: "Pricing" } });
+    });
+    client.hold = null;
+    await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
+    await until(() => page.querySelector("[data-testid=sessions]"), "the list");
+    await settle();
+    expect(inSidebar(page)).toEqual([OTHER]);
+    await act(async () => release());
+    await settle();
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+  });
+
+  test("Archived shows what you archived; opened, it is marked, and Unarchive brings it back to the list and the sidebar", async () => {
+    const client = new Archiving(detail("chat"));
+    client.archivedIds.add(SESSION);
+    const page = await shell("#/sessions", client);
+    await until(() => (listed(page).includes(OTHER) ? true : null), "your sessions");
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+    await settle();
+    expect(client.reads.filter((archived) => archived)).toEqual([]);
+
+    await click(await until(() => shownOption(page, "Archived"), "the Archived filter"));
+    await until(() => (listed(page).includes(SESSION) ? true : null), "the archived session");
+    expect(listed(page)).toEqual([SESSION]);
+    await settle();
+    expect(client.reads.filter((archived) => archived)).toEqual([true]);
+    // The sidebar never shows it.
+    expect(inSidebar(page)).toEqual([OTHER]);
+
+    await click(page.querySelector(`[data-testid=session-row][data-session=${SESSION}] button`)!);
+    const mark = await until(() => page.querySelector("[data-testid=session-screen] [data-testid=session-archived]"), "the Archived mark");
+    expect(mark.textContent).toBe("Archived");
+    await click(page.querySelector("[data-testid=session-unarchive]")!);
+    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session back in the sidebar");
+    expect(client.calls).toEqual([[SESSION, false]]);
+    // Unarchiving keeps you on its page, unmarked.
+    expect(window.location.hash).toBe(`#/sessions/${SESSION}`);
+    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
+
+    await click(page.querySelector("[data-testid=sidebar-sessions] button")!);
+    await until(() => (listed(page).length === 2 ? true : null), "both sessions in the list");
+    expect(listed(page).sort()).toEqual([OTHER, SESSION].sort());
+  });
+
+  test("a failed archive says why on the page and changes nothing", async () => {
+    const client = new Archiving(detail("owner"));
+    client.refuse = true;
+    const page = await onSessionPage(client);
+    await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
+    const problem = await until(() => page.querySelector("[data-testid=session-problem]"), "the problem");
+    expect(problem.textContent).toContain("Could not archive it: the orchestrator is down");
+    expect(client.calls).toEqual([[SESSION, true]]);
+    expect(window.location.hash).toBe(`#/sessions/${SESSION}`);
+    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
+    await settle(100);
+    expect(inSidebar(page).sort()).toEqual([OTHER, SESSION].sort());
+  });
+
+  const archivedBody = async (client: Archiving) => {
+    const page = await shell("#/sessions", client);
+    await until(() => (listed(page).length > 0 ? true : null), "your sessions");
+    await click(await until(() => shownOption(page, "Archived"), "the Archived filter"));
+    await until(() => (page.querySelector("[data-testid=sessions] .centered") ? null : true), "the archived read");
+    return page.querySelector<HTMLElement>("[data-testid=sessions] .screenBody")!;
+  };
+
+  test("Archived with nothing archived says so", async () => {
+    const body = await archivedBody(new Archiving(detail("owner")));
+    expect([...body.querySelectorAll("div")].filter((d) => d.children.length === 0).map((d) => d.textContent)).toEqual([
+      "Nothing archived",
+      "A session you archive leaves your list and sidebar, and nobody else's. Open one and Unarchive brings it back.",
+    ]);
+    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
+  });
+
+  test("Archived that cannot be read says why", async () => {
+    const client = new Archiving(detail("owner"));
+    client.archivedIds.add(SESSION);
+    client.refuseArchived = true;
+    const body = await archivedBody(client);
+    expect(body.querySelector("[data-testid=sessions-problem]")!.textContent).toBe("Could not read your archived sessions: the orchestrator is down");
+    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
   });
 });
 
