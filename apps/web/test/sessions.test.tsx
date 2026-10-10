@@ -15,7 +15,7 @@ import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
-import type { Artifact } from "../src/api/client.ts";
+import type { Artifact, SentAnswer } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -78,9 +78,13 @@ class SessionClient extends FixtureClient {
     if (q.sessionId !== SESSION) return super.ledgerFor(q);
     return this.ledger.filter((e) => e.cursor > (q.after ?? 0));
   }
-  override sessionChat(_id: string, text: string) {
-    this.sent.push(text);
+  override sessionChat(_id: string, text: string, opts: { aside?: boolean } = {}) {
+    this.sent.push(`${opts.aside ? "aside:" : ""}${text}`);
     return Promise.resolve({ runId: RUN, created: false });
+  }
+  override sessionAnswer(_id: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = "") {
+    this.sent.push(`${questionId}:${JSON.stringify(answers)}${note ? `:${note}` : ""}`);
+    return Promise.resolve({ id: questionId, status: "answered" as const });
   }
   override fileProposal(_id: string, _proposal: string, items: number[]): Promise<FileResult> {
     this.filed.push(items);
@@ -233,18 +237,19 @@ describe("a brainstorm session's page", () => {
     expect(client.sent).toEqual([]);
   });
 
-  test("a question put to you: its chips answer it; one put to someone else is theirs, and your message waits", async () => {
+  test("a question put to you: its turn is the form and answers it; one put to someone else is theirs, and your message waits", async () => {
     const asked = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
     const mine = new SessionClient(detail("chat", { question: { ...asked, to: ref(ME), yours: true } }), [
       ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
     ]);
     const page = await sessionPage(mine);
-    const form = await until(() => page.querySelector("[data-testid=session-screen] form[data-mode=answer]"), "the answer composer");
-    expect(form.querySelector("textarea")!.placeholder).toBe("Type your answer…");
-    const chip = [...form.querySelectorAll("button")].find((b) => b.textContent === "Experiment runs only")!;
-    await click(chip);
+    const waitingLine = await until(() => page.querySelector("[data-testid=session-screen] [data-testid=composer-waiting]"), "the waiting line");
+    expect(waitingLine.textContent).toContain("The brainstorm is waiting for your answer above.");
+    const choice = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")]
+      .find((b) => b.textContent?.startsWith("Experiment runs only")) ?? null, "the choice");
+    await click(choice);
     await settle();
-    expect(mine.sent).toEqual(["Experiment runs only"]);
+    expect(mine.sent).toEqual([`q_1:[{"choices":[1],"text":""}]`]);
 
     const theirs = new SessionClient(detail("owner", { question: { ...asked, to: ref(ANA), yours: false } }), [
       ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: ANA.id, toName: ANA.name }, { type: "agent", id: RUN }),
@@ -252,8 +257,9 @@ describe("a brainstorm session's page", () => {
     ]);
     const other = await sessionPage(theirs);
     await until(() => other.querySelector("[data-testid=human-turn]"), "the held message");
-    // No chips for you; the composer still writes, after their answer.
-    expect(other.querySelector("[data-testid=session-screen] form[data-mode=answer]")).toBeNull();
+    // No form for you; the composer still writes, after their answer.
+    expect(other.querySelector("[data-testid=question-form]")).toBeNull();
+    expect(other.querySelector("[data-testid=composer-waiting]")).toBeNull();
     const composer = other.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!;
     expect(composer.disabled).toBe(false);
     expect(composer.placeholder).toContain(`Waiting for ${ANA.name.split(" ")[0]}`);

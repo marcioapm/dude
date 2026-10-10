@@ -21,7 +21,8 @@ import { Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, snapshot, steerWait, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
@@ -124,13 +125,25 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   }, [events, sessionId, status]);
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, aside = false) => {
     setProblem(null);
     try {
-      await client.sessionChat(sessionId, text);
+      await client.sessionChat(sessionId, text, { aside });
       return true;
     } catch (err) {
       setProblem(`Could not send the message: ${errorText(err)}`);
+      return false;
+    }
+  }, [client, sessionId]);
+
+  // The agent's question answered through its form: the whole ask at once.
+  const answer = useCallback(async (turn: QuestionTurn, s: QuestionSubmission) => {
+    setProblem(null);
+    try {
+      await client.sessionAnswer(sessionId, turn.questionId, s.answers, s.note);
+      return true;
+    } catch (err) {
+      setProblem(`Could not answer: ${errorText(err)}`);
       return false;
     }
   }, [client, sessionId]);
@@ -182,9 +195,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands),
     resend: () => undefined,
   } : undefined;
-  const render = (turn: Turn) => renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer);
-  // A question for you: its chips are yours. One for someone else: anyone may still write, after their answer.
-  const yours = question?.yours ? question : null;
+  const render = (turn: Turn) => renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
+    undefined, undefined, live && !reader ? { answer } : undefined);
+  // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
+  const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
   const shared = session.people.filter((m) => m.accepted).length > 1;
   const members = session.people.map((m) => ({
@@ -221,16 +235,17 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               emptyMessage={reader ? "Nobody has written here yet." : "Write to start: the agent reads the linked projects, asks what it needs, and proposes work you file yourself. It changes nothing."}
               footer={
                 <ChatComposer
-                  mode={yours ? "answer" : "chat"}
-                  question={yours ? { id: yours.id, text: yours.prompt, askedBy: "the brainstorm", askedAt: yours.askedAt, options: yours.options } : undefined}
+                  mode="chat"
+                  waitingFor={yours ? "The brainstorm" : undefined}
                   disabled={reader}
                   // A session nobody has written to yet (a new one, opened at once) is for writing in.
                   autoFocus={!reader && session.messages === 0}
                   disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
-                  // A session has no task: the chat composer's own words would say "this task". An answer keeps its own.
+                  // A session has no task: the chat composer's own words would say "this task".
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
-                    : yours ? undefined : "Message the brainstorm…"}
-                  onSubmit={({ text }) => send(text)}
+                    : "Message the brainstorm…"}
+                  // Written beside your own open question ("Write to the agent instead"): aside, never the answer.
+                  onSubmit={({ text }) => send(text, yours !== null)}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
                   data-testid="session-composer"
