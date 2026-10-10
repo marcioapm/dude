@@ -847,6 +847,12 @@ describe("archiving a session, for yourself", () => {
     reads: boolean[] = [];
     // While set, a list read answers only once it settles, with what was true when it was asked.
     hold: Promise<void> | null = null;
+    // Holds the list reads asked from now on; the returned function answers them.
+    holdReads(): () => void {
+      let release!: () => void;
+      this.hold = new Promise((r) => { release = r; });
+      return release;
+    }
     override async sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
       this.reads.push(opts.archived === true);
       if (opts.archived && this.refuseArchived) throw new Error("the orchestrator is down");
@@ -871,16 +877,20 @@ describe("archiving a session, for yourself", () => {
     .map((r) => r.getAttribute("data-session"));
   const inSidebar = (page: HTMLElement) => [...page.querySelectorAll("[data-testid=sidebar-sessions] [data-session]")]
     .map((r) => r.getAttribute("data-session"));
+  // The shell on the session's page, once the sidebar lists it.
+  const onSessionPage = async (client: Archiving) => {
+    const page = await shell(`#/sessions/${SESSION}`, client);
+    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
+    return page;
+  };
   const shownOption = (page: HTMLElement, label: string) =>
     [...page.querySelectorAll("[data-testid=sessions-shown] button")].find((b) => b.textContent === label) ?? null;
 
   test("Archive on its page calls the API and returns you to the list, its row gone there and from the sidebar at once", async () => {
     const client = new Archiving(detail("read"));
-    const page = await shell(`#/sessions/${SESSION}`, client);
-    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
+    const page = await onSessionPage(client);
     expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
-    let release!: () => void;
-    client.hold = new Promise((r) => { release = r; });
+    const release = client.holdReads();
     // A reader archives it too: it is their own list.
     await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
     await until(() => page.querySelector("[data-testid=sessions]"), "the list");
@@ -897,10 +907,8 @@ describe("archiving a session, for yourself", () => {
 
   test("a list read asked before the archive and answered after the one that follows it does not bring the row back", async () => {
     const client = new Archiving(detail("owner"));
-    const page = await shell(`#/sessions/${SESSION}`, client);
-    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
-    let release!: () => void;
-    client.hold = new Promise((r) => { release = r; });
+    const page = await onSessionPage(client);
+    const release = client.holdReads();
     // A renamed session re-reads the list; that read is asked now and answers last.
     await act(async () => {
       emit({ eventType: "session.renamed", occurredAt: at(50), organizationId: "org_1", projectId: null as unknown as string,
@@ -955,8 +963,7 @@ describe("archiving a session, for yourself", () => {
   test("a failed archive says why on the page and changes nothing", async () => {
     const client = new Archiving(detail("owner"));
     client.refuse = true;
-    const page = await shell(`#/sessions/${SESSION}`, client);
-    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
+    const page = await onSessionPage(client);
     await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
     const problem = await until(() => page.querySelector("[data-testid=session-problem]"), "the problem");
     expect(problem.textContent).toContain("Could not archive it: the orchestrator is down");
