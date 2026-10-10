@@ -88,7 +88,7 @@ def test_the_sidebar_folds_to_a_rail_with_its_key_and_its_chevron_and_stays_fold
     rail.locator(f"[data-testid=rail-project][data-project='{forge_project['id']}']").click()
     expect(page).to_have_url(re.compile(rf"#/project/{forge_project['id']}$"))
     expect(rail.locator(f"[data-project='{forge_project['id']}']")).to_have_attribute("aria-current", "page")
-    # Under 1000px the drawer works as it did: the rail is not drawn.
+    # Under 1000px it is the drawer, kept rail or not: the rail is not drawn.
     page.set_viewport_size({"width": 900, "height": 900})
     expect(rail).to_have_count(0)
     page.set_viewport_size({"width": 1440, "height": 900})
@@ -1036,7 +1036,7 @@ def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, cl
     sign_in(page, web_url, org["api_key"], at="#/")
     welcome = page.get_by_test_id("welcome")
     expect(welcome).to_be_visible()
-    # A session needs no project: the composer is there as ever.
+    # A session needs no project: the composer is there.
     expect(welcome.locator("textarea")).to_be_visible()
     welcome.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")

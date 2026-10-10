@@ -718,8 +718,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
   opens or steps in, ← closes or steps out, Home/End, Enter selects, `/`
   jumps to the search and ↓ from the search enters the tree.
-- **Collapsed** (`Sidebar collapsed`, 1000px and up; narrower, the drawer
-  as before), the sidebar is a 56px rail on the same chrome shade: its rows
+- **Collapsed** (`Sidebar collapsed`, 1000px and up; narrower, it is the
+  drawer either way), the sidebar is a 56px rail on the same chrome shade: its rows
   with their words folded into tooltips to the right, each a
   `row-comfortable` square with the nav row's washes, `aria-current` on the
   one open. **The rail keeps the one loud count** — Waiting on you is the

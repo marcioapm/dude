@@ -302,7 +302,7 @@ body {
   align-items: center;
   gap: var(--ds-space-12);
 }
-/* The brand is the way home: a button that looks like the words it was. */
+/* The brand is the way home: a button drawn as the brand's words. */
 .brandHome {
   display: inline-flex;
   max-width: 100%;
