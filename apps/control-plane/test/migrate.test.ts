@@ -629,3 +629,17 @@ test("105 validates nothing under its exclusive lock on sessions: its foreign ke
     await sql.end();
   }
 }, 120_000);
+
+test("106 leaves a valid index on the sessions that chose a tier, and only those", async () => {
+  const url = await createDatabase();
+  const migrated = run([binary], { DATABASE_URL: url });
+  expect(migrated.code, migrated.out).toBe(0);
+  const sql = new SQL(url);
+  try {
+    const index = await sql`SELECT i.indisvalid AS valid, pg_get_expr(i.indpred, i.indrelid) AS predicate,
+      pg_get_indexdef(i.indexrelid, 1, true) AS key FROM pg_index i WHERE i.indexrelid = 'sessions_tier_idx'::regclass AND i.indrelid = 'sessions'::regclass`;
+    expect([...index]).toEqual([{ valid: true, predicate: "(tier IS NOT NULL)", key: "tier" }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
