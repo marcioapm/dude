@@ -421,9 +421,10 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
   const project = item.project ? linked.get(item.project.toUpperCase()) : undefined;
   // Someone else may file it: its task's owner (never you), or a member when you only read.
   const theirs = (status.blockedBy === "owner" && status.owner?.id !== you) || status.blockedBy === "reader";
+  const blockedFor: ProposalCardItem["blockedFor"] = theirs ? "you" : "everyone";
   const common = {
     canFile: Boolean(status.canFile),
-    ...(status.canFile ? {} : { blockedFor: theirs ? "you" as const : "everyone" as const }),
+    ...(status.canFile ? {} : { blockedFor }),
     ...(status.why ? { why: status.why } : {}),
     ...(status.filed ? { filed: { by: status.filedBy ?? "Someone", key: status.key ?? "" } } : {}),
   };
