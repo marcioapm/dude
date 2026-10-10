@@ -589,6 +589,10 @@ func TestASessionMadeByItsFirstMessageStartsItsAgent(t *testing.T) {
 	if !strings.Contains(prompt, "## The first message\n\nMárcio Martins: where does metering go?") {
 		t.Errorf("the briefing does not carry the message:\n%s", prompt)
 	}
+	// Linked before the start, so the agent is briefed with what it reads.
+	if !strings.Contains(prompt, "## Linked projects\n\n- WC (web-console)\n  - `web`") {
+		t.Errorf("the briefing does not list the linked project:\n%s", prompt)
+	}
 	var shown, by string
 	_ = s.owner.QueryRow(context.Background(), `SELECT payload->>'text', actor_id FROM events WHERE run_id = $1 AND event_type = 'chat.message'
 		ORDER BY cursor LIMIT 1`, runID).Scan(&shown, &by)
@@ -633,6 +637,36 @@ func TestARefusedFirstMessageMakesNoSession(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'brainstorm'`, s.org); n != 0 {
 		t.Errorf("%d Runs left behind", n)
+	}
+}
+
+// A start that fails after the session row is written, inside the agent's
+// start, leaves nothing: the create and the start are one transaction.
+func TestAFirstMessageWhoseAgentFailsToStartMakesNoSession(t *testing.T) {
+	s := newSessionWorld(t)
+	// The trigger is database-wide; the org filter keeps it to this world.
+	mustExec(t, s.owner, `CREATE FUNCTION fail_brainstorm_run() RETURNS trigger AS $$
+		BEGIN RAISE EXCEPTION 'brainstorm runs refused by the test'; END $$ LANGUAGE plpgsql`)
+	mustExec(t, s.owner, fmt.Sprintf(`CREATE TRIGGER fail_brainstorm_run BEFORE INSERT ON runs FOR EACH ROW
+		WHEN (NEW.role = 'brainstorm' AND NEW.organization_id = '%s') EXECUTE FUNCTION fail_brainstorm_run()`, s.org))
+	t.Cleanup(func() {
+		mustExec(t, s.owner, `DROP TRIGGER IF EXISTS fail_brainstorm_run ON runs`)
+		mustExec(t, s.owner, `DROP FUNCTION IF EXISTS fail_brainstorm_run()`)
+	})
+	status, out := s.as(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello",
+		"projects": []map[string]any{{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	if status < 500 {
+		t.Errorf("create answered %d %v, want a server error", status, out)
+	}
+	for what, q := range map[string]string{
+		"sessions":        `SELECT count(*) FROM sessions WHERE organization_id = $1`,
+		"session_people":  `SELECT count(*) FROM session_people WHERE organization_id = $1`,
+		"brainstorm Runs": `SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'brainstorm'`,
+		"session.created": `SELECT count(*) FROM events WHERE organization_id = $1 AND event_type = 'session.created'`,
+	} {
+		if n := s.count(q, s.org); n != 0 {
+			t.Errorf("%d %s left behind", n, what)
+		}
 	}
 }
 
