@@ -50,6 +50,16 @@ export function askItems(items: unknown, prompt: unknown, options: unknown): Ask
   return [{ header: "", question: str(prompt), multiple: false, choices: labels.map((label) => ({ label, description: "", recommended: false })) }];
 }
 
+/**
+ * What a line about an ask says, as the board's does: several questions are
+ * "asks 4 questions · Retry scope, Old route, …"; one is null (its question
+ * is the line).
+ */
+export function severalLine(items: ReadonlyArray<Pick<AskItem, "header">> | undefined): string | null {
+  if (!items || items.length < 2) return null;
+  return `asks ${items.length} questions · ${items.map((i) => i.header).join(", ")}`;
+}
+
 /** An answer's per-item answers as `question.answered` carries them; null when it carries none (an answer before 104). */
 export function itemAnswers(answers: unknown): ItemAnswer[] | null {
   if (!Array.isArray(answers)) return null;
