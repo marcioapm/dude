@@ -18,10 +18,13 @@ import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 // The orchestrator's bound (delivery.ChatMessageMax) is UTF-8 bytes, not characters.
+// A UTF-16 code unit is 1 to 3 UTF-8 bytes, so the length alone settles most strings.
 const CHAT_MESSAGE_MAX_BYTES = 16_384;
 const encoder = new TextEncoder();
+const withinChatBytes = (s: string) =>
+  s.length <= CHAT_MESSAGE_MAX_BYTES && (s.length * 3 <= CHAT_MESSAGE_MAX_BYTES || encoder.encode(s).length <= CHAT_MESSAGE_MAX_BYTES);
 const chatText = () => z.string().trim().min(1)
-  .refine((s) => encoder.encode(s).length <= CHAT_MESSAGE_MAX_BYTES, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`);
+  .refine(withinChatBytes, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`);
 
 const text = z.object({ text: chatText() }).strict();
 const link = z.object({
