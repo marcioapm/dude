@@ -4,6 +4,7 @@ import styles from "../gallery.module.css";
 import { ChatComposer } from "../../components/ChatComposer.tsx";
 import { Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions } from "../../components/Sidebar.tsx";
 import { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote, type LinkableProject, type RecentSession } from "../../components/Welcome.tsx";
+import { ModelPicker, type ModelChoice, type PickerTier } from "../../components/ModelPicker.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { Icon } from "../../icons/index.tsx";
 import type { ThemeMode } from "../../tokens/themes.ts";
@@ -14,6 +15,21 @@ import { navProjects, people } from "../navFixtures.ts";
 const P = people;
 
 const PROJECTS: readonly LinkableProject[] = navProjects.map((p) => ({ id: p.id, name: p.name }));
+
+/** An organisation's tiers, for the ModelPicker: two Anthropic, one OpenAI. */
+export const GALLERY_TIERS: readonly PickerTier[] = [
+  { id: "mtr_claude", name: "Claude (High)", model: "claude-opus-5" },
+  { id: "mtr_coder", name: "Coder", model: "claude-sonnet-5" },
+  { id: "mtr_sol", name: "Sol", model: "gpt-6-sol" },
+];
+/** Its Brainstorm setting: what "Organisation default" stands for. */
+export const GALLERY_ORG_MODEL = { tier: GALLERY_TIERS[0]!, harness: "claude-code" as const };
+
+/** A picker that keeps its own choice, as the app's welcome does. */
+function Picking({ start = { tier: null, harness: null } }: { readonly start?: ModelChoice }) {
+  const [value, setValue] = useState<ModelChoice>(start);
+  return <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={value} onChange={setValue} />;
+}
 
 const RECENT: readonly RecentSession[] = [
   { id: "s1", title: "Usage-based billing", summary: "Filed 1 epic, 4 tasks", age: "yesterday" },
@@ -40,7 +56,7 @@ function WelcomeDemo({ density, firstTime }: { readonly density: Density; readon
       line="What are we working out today?"
       composer={
         <ChatComposer mode="chat" variant="stage" value={text} onValueChange={setText} placeholder="Start a session: an idea, a question, a plan…"
-          to={<>To <b>Brainstorm</b></>} onSubmit={() => false}
+          to={<>To <b>Brainstorm</b></>} toAside={<Picking />} onSubmit={() => false}
           leading={<ComposerLinks linked={linked} projects={PROJECTS} onLink={(p) => setLinked((l) => [...l, p])}
             onUnlink={(p) => setLinked((l) => l.filter((x) => x.id !== p.id))} />} />
       }
@@ -114,6 +130,18 @@ function OpenMenu() {
   );
 }
 
+/** The model menu drawn open inside its pane, on a pair whose harness refuses a tier. */
+function OpenModelMenu() {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  return (
+    <div ref={setHost} className={styles["composerFrame"]} style={{ minHeight: 420 }}>
+      <ChatComposer mode="chat" placeholder="Start a session…" to={<>To <b>Brainstorm</b></>} onSubmit={() => false}
+        toAside={<ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }}
+          onChange={() => undefined} previewMenu={host} />} />
+    </div>
+  );
+}
+
 export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="welcome" title="Welcome"
@@ -153,6 +181,21 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
           <ComposerLinks linked={PROJECTS.slice(0, 2)} projects={PROJECTS} />
           <Label>the menu open</Label>
           <OpenMenu />
+        </Panes>
+      </Block>
+      <Block id="wl-model" title="ModelPicker"
+        note={`The model and harness a session's agent runs on, in ChatComposer's toAside (right after "To Brainstorm") and in the session's rail. A quiet chip reading the effective pair, a muted "default" while both follow the organisation. Its menu is RowMenu's float with two radio groups, each led by "Organisation default (…)"; a pair the harness cannot run is disabled and says why. Read only for a member who is not the owner: the chip on the hover wash, nothing to open.`}>
+        <Panes mode={mode} surface>
+          <Label>default</Label>
+          <div data-testid="model-default"><Picking /></div>
+          <Label>chosen</Label>
+          <div data-testid="model-chosen"><Picking start={{ tier: "mtr_sol", harness: "opencode" }} /></div>
+          <Label>read only</Label>
+          <div data-testid="model-readonly">
+            <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: "mtr_coder", harness: null }} readOnly />
+          </div>
+          <Label>the menu open: on Claude Code, Sol and Codex are refused</Label>
+          <OpenModelMenu />
         </Panes>
       </Block>
       <Block id="wl-recent" title="RecentSessions"

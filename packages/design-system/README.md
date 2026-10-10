@@ -512,6 +512,22 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and name with a close, then "+ Link"; "Reads memory only" and "+ Link a
   project" when nothing is linked. After the first send, the rail's
   Linked block carries it, and its owner links from there.
+- **What a session's agent runs on is chosen in its composer before it
+  starts**: `ModelPicker` in the composer's `toAside`, right after "To
+  **Brainstorm**", a quiet chip reading the effective pair ("Claude (High)
+  · Claude Code"). **A session follows the organisation unless set**: each
+  half left alone is the organisation's Brainstorm setting, and while both
+  are, the chip says "default" in muted ink. Its menu has two groups,
+  **Model tier** and **Harness**, each led by "Organisation default
+  (…)", which sets that half back. **An invalid pair is never offered**:
+  an item whose harness cannot run the tier's model is disabled and says
+  why ("Claude Code takes an Anthropic model; Sol requests gpt-6-sol"),
+  with `harnessMisfit` from `@dude/domain`, against the other half as it
+  stands. After the first send the rail's **Model** block carries the
+  same picker: its owner changes it, everyone else reads it
+  (`readOnly`). **A change applies at the agent's next start**, never
+  mid-turn; the Chat says so (`ChatNotice`, "Ana set the model to … ; it
+  applies the next time the agent starts").
 - **A starter fills the composer; it never sends.** `StarterPills` write
   the start of a sentence ("I want to plan an epic for ") with the caret at
   its end, for the person to finish.
@@ -560,7 +576,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
   chat, Can read, Invited), `LinkedProjects` (each project and its
-  repositories, read only; "No project linked yet" when none), **Files**
+  repositories, read only; "No project linked yet" when none), **Model**
+  (`ModelPicker`; read only but for the owner), **Files**
   and `Capabilities` (what it can and cannot do, each line a check or a
   cross as well as words).
 - **A session's files are what its agent published** — a design note, a
@@ -1517,6 +1534,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
 | `<StarterPills onPick={(s) => setText(s.prompt)} />`, the caret at the end | a starter that sends its words, or opens a dialog |
 | `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
+| `<ModelPicker tiers organization value onChange />` in the composer's `toAside` and the rail's Model block, a refused pair disabled with its reason | a `Select` of every tier × harness, or a pair accepted and failed at start |
 
 ## Components
 
@@ -1531,7 +1549,9 @@ Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
 a `tooltip`), Dialog (`size=
 "document"` with `aside`, `context`, `headerActions` and `reading`), DiscardConfirm, Toast, Tooltip,
-RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState,
+RowMenu (+ `rowMenuOpeners`; a `kind: "radio"` item is one choice of
+several under a small caps heading, `keepOpen` to pick in several groups at
+once), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
@@ -1608,7 +1628,8 @@ MarkdownCheatsheet.
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
 - **ChatComposer** — steer (lands at the agent's next step; `landsHint`
   says where; interrupt now is a tick) vs prompt vs chat (a task's
-  conductor; `to`), visibly different; while the agent waits on the reader
+  conductor; `to`, and `toAside` right after it for a control about who it
+  goes to, shown only with `to`), visibly different; while the agent waits on the reader
   (`waitingFor`), one line pointing to the question above, with "Write to
   the agent instead". The words leave the field only once `onSubmit`
   confirms them: resolving `false`, or rejecting, keeps them to send again
@@ -1834,6 +1855,13 @@ sessions*):
 - **ComposerLinks** — what a new session will read, for `ChatComposer`'s
   `leading`: chips with a close, and "+ Link" opening `RowMenu` (whose
   items take a `leading` face); read only without `onLink` / `onUnlink`.
+- **ModelPicker** (+ `effectiveModel`, `modelWords`) — the model tier and
+  harness a session's agent runs on, for `ChatComposer`'s `toAside` and
+  the rail's Model block: a chip with the effective pair (named "Model:
+  Claude (High) on Claude Code"), "default" while it follows the
+  organisation, and a `RowMenu` of two `kind: "radio"` groups that stay
+  open as both halves are picked; `onChange({ tier, harness })`, null for
+  "Organisation default". `readOnly`: the chip alone.
 - **RecentSessions** — the welcome's short list: one line each at
   `row-default` height, the bulb (the role glyph, in the brainstorm's role
   colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,
