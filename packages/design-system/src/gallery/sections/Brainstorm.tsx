@@ -131,7 +131,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <div style={{ width: "100%" }}>
             <ScreenHeader title="Sessions" actions={<>
-              <Segmented size="sm" label="Which sessions" value={shown} onChange={setShown}
+              <Segmented size="toolbar" label="Which sessions" value={shown} onChange={setShown}
                 options={[{ value: "yours", label: "Yours" }, { value: "archived", label: "Archived" }]} />
               <Button size="sm" variant="primary">New session</Button>
             </>} />

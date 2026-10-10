@@ -589,7 +589,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **Archiving a session is yours alone**, from existing parts: a `quiet`
   **Archive** (or **Unarchive**) in the session header's actions, before
   Share; an archived session's header meta carries `Badge size="sm"
-  icon="archive"` "Archived". The list's header has a `Segmented size="sm"`
+  icon="archive"` "Archived". The list's header has a `Segmented size="toolbar"`
   of **Yours | Archived**; the sidebar never lists an archived session.
 - **`Sidebar waitingExtra`** adds what waits on you outside the tree —
   session invitations and brainstorm questions put to you — to the

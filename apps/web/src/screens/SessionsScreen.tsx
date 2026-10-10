@@ -75,7 +75,7 @@ export function SessionsScreen({ client, sessions, onOpen, onNew }: {
     <div className="screen" data-testid="sessions" data-shown={shown}>
       <ScreenHeader title="Sessions"
         actions={<>
-          <Segmented<Shown> size="sm" label="Which sessions" value={shown} onChange={setShown} data-testid="sessions-shown"
+          <Segmented<Shown> size="toolbar" label="Which sessions" value={shown} onChange={setShown} data-testid="sessions-shown"
             options={[{ value: "yours", label: "Yours" }, { value: "archived", label: "Archived" }]} />
           <Button size="sm" variant="primary" onClick={onNew} data-testid="new-session">New session</Button>
         </>} />
