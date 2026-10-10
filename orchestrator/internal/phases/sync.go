@@ -645,6 +645,9 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool
 			return err
 		}
 		parked = true
+		if err := unsendUnread(ctx, tx, r.ID); err != nil {
+			return err
+		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
 			map[string]any{"reason": kind, "message": "its container stopped (lux: " + r.LuxState + ")", "stopped": r.LuxState})
 	})
@@ -652,6 +655,16 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool
 		s.unfollow(r.ID)
 	}
 	return parked, err
+}
+
+// unsendUnread makes what lux took for a stopped Run and its agent never
+// read unsent again: a harness that stopped lost its queue, so the resume
+// sends it again, under the same request id (lux answers one it kept
+// once). An interrupt is left alone: the turn it stopped is over.
+func unsendUnread(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
+		WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL AND NOT interrupt`, runID)
+	return err
 }
 
 // lockChatOf takes the lock a talker's Chat takes: its session's, or its

@@ -972,8 +972,19 @@ func (s *Server) Lose(id string) {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.busy = false
+		s.dropQueued(run)
 		s.setStateWith(run, "lost", "host lost")
 	}
+}
+
+// dropQueued is a harness gone with its process: input it took and the
+// agent never read is lost, and a send of it again under the same request
+// id is new input to the harness that replaces it. Callers hold s.mu.
+func (s *Server) dropQueued(run *Run) {
+	for _, q := range run.queued {
+		delete(run.taken, q.requestID)
+	}
+	run.queued = nil
 }
 
 // Wait has a Run wait for a host with reason, as lux's scheduler does when
@@ -997,12 +1008,13 @@ func (s *Server) Place(id string) {
 }
 
 // Crash ends a Run's agent as a dead container would: a resume finds it
-// idle, as lux restarts the harness.
+// idle, as lux restarts the harness, and what it had not read is gone.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.busy = false
+		s.dropQueued(run)
 		s.setState(run, "failed")
 	}
 }
@@ -1039,12 +1051,14 @@ func (s *Server) FailTurns(id string, n int, err string) {
 }
 
 // StopOnItsOwn stops a Run nobody asked to stop, with no reason, as lux
-// reports a container stopped from outside it: resumable.
+// reports a container stopped from outside it: resumable, with what its
+// harness had not read gone.
 func (s *Server) StopOnItsOwn(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.busy = false
+		s.dropQueued(run)
 		s.setState(run, "stopped")
 	}
 }
