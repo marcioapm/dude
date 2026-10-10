@@ -333,18 +333,34 @@ describe("the sidebar's rail", () => {
     }
   });
 
+  test("[ and / under 1000px leave a kept rail choice as it was", async () => {
+    const happyDOM = (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM;
+    const width = window.innerWidth;
+    happyDOM.setInnerWidth(800);
+    localStorage.setItem("dude.sidebar", "rail");
+    try {
+      const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await key(document.body);
+      await key(document.body, { key: "/" });
+      expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    } finally {
+      happyDOM.setInnerWidth(width);
+    }
+  });
+
   test("/ on the rail unfolds it with the search focused; with the sidebar open it does nothing here", async () => {
     localStorage.setItem("dude.sidebar", "rail");
     const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
     await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
     await key(document.body, { key: "/" });
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
-    expect(document.activeElement).toBe(page.querySelector("input[type=search]"));
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(true);
     (document.activeElement as HTMLElement).blur();
     localStorage.removeItem("dude.sidebar");
     await key(document.body, { key: "/" });
-    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBeNull();
   });
 
@@ -355,8 +371,20 @@ describe("the sidebar's rail", () => {
     await key(field, { key: "/" });
     await key(document.body, { key: "/", metaKey: true });
     await key(document.body, { key: "/", ctrlKey: true });
-    expect(page.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+  });
+
+  test("after / unfolds the rail, [ twice folds and unfolds it without taking the focus to the search", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/" });
+    (document.activeElement as HTMLElement).blur();
+    await key(document.body);
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(false);
   });
 
   test("the rail's New session, Sessions and Waiting on you go where the sidebar's do", async () => {

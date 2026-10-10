@@ -284,6 +284,22 @@ export function Sidebar({
     searchOnExpand.current = false;
     searchRef.current?.focus();
   }, [rail]);
+  // `/` outside a field does what the rail's search item does. Only ⌘ and
+  // Ctrl (not AltGr, Ctrl+Alt) make it a command: Shift or Option is how
+  // some layouts type `/`, and `e.key` is already what was typed.
+  useEffect(() => {
+    if (!rail || !onCollapsedChange) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      e.preventDefault();
+      searchOnExpand.current = true;
+      onCollapsedChange(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [rail, onCollapsedChange]);
   const yoursWaiting = waiting.yours.length + waitingExtra;
   // Each project's counts walk its whole subtree: once per tree, not per render.
   const railCounts = useMemo(() => (rail ? new Map(projects.map((p) => [p.id, projectCounts(p, you)])) : null), [rail, projects, you]);
