@@ -129,6 +129,13 @@ const Question = `{"question":"Should FACTORY.md be in English?","choices":["yes
 // ConductorQuestion is what AskModel's conductor asks, in its first turn.
 const ConductorQuestion = `{"question":"Make it a follow-up task?","choices":["Yes","No"]}`
 
+// AskSeveralModel is AskModel asking Questions: several in one ask_person.
+const AskSeveralModel = "fake/ask-several"
+
+// Questions is what AskSeveralModel's implementer asks.
+const Questions = `{"questions":[{"header":"Layout","question":"Does it overflow on a phone?","choices":[{"label":"Yes"},{"label":"No"}]},` +
+	`{"header":"Copy","question":"What should the button say?","choices":[{"label":"Split payment"},{"label":"Pay in parts"}]}]}`
+
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
 
@@ -389,6 +396,9 @@ func For(phase, model, runID string, fixed bool) Step {
 			Publish: map[string]string{Notes: "# What changed\n\nAdded FACTORY.md for " + runID + "."}}
 		if model == AskModel {
 			step.Ask = Question
+		}
+		if model == AskSeveralModel {
+			step.Ask = Questions
 		}
 		if model == WaitModel {
 			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API","wait":true}`}}

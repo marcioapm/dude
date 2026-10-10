@@ -31,6 +31,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /internal/sessions/{id}", s.auth(s.getSession))
 	mux.Handle("POST /internal/sessions/{id}/title", s.auth(s.renameSession))
 	mux.Handle("POST /internal/sessions/{id}/chat", s.auth(s.sessionChat))
+	mux.Handle("POST /internal/sessions/{id}/questions/{question}/answer", s.auth(s.sessionAnswer))
 	mux.Handle("POST /internal/sessions/{id}/link", s.auth(s.linkSession))
 	mux.Handle("POST /internal/sessions/{id}/people", s.auth(s.inviteToSession))
 	mux.Handle("POST /internal/sessions/{id}/people/{person}/role", s.auth(s.changeSessionRole))
@@ -336,7 +337,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 			return err
 		}
 		return tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
-			SELECT q.id, q.prompt, q.options, q.asked_at AS "askedAt", s.id AS "sessionId", s.title
+			SELECT q.id, q.prompt, q.options, q.items, q.asked_at AS "askedAt", s.id AS "sessionId", s.title
 			FROM questions q JOIN runs r ON r.id = q.run_id JOIN sessions s ON s.id = r.session_id
 			WHERE q.status = 'open' AND session_role(s.id, $1) IN ('owner', 'chat')
 			  AND (q.to_person = $1 OR (q.to_person IS NULL AND session_role(s.id, $1) = 'owner'))) x`,
@@ -395,6 +396,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 		}
 		var question json.RawMessage
 		if err := tx.QueryRow(r.Context(), `SELECT json_build_object('id', q.id, 'prompt', q.prompt, 'options', q.options,
+				'items', q.items,
 				'askedAt', q.asked_at, 'to', (SELECT person_ref(t) FROM people t WHERE t.id = q.to_person),
 				'yours', $2 <> 'read' AND (q.to_person = $3 OR q.to_person IS NULL))
 			FROM questions q JOIN runs r ON r.id = q.run_id WHERE r.session_id = $1 AND q.status = 'open'
@@ -809,6 +811,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	}
 	var body struct {
 		Text string `json:"text"`
+		// Written to the agent, not as the answer to its open question.
+		Aside bool `json:"aside"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -853,13 +857,21 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}
 		var questionID, prompt, to string
-		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, COALESCE(q.to_person, '') FROM questions q
-			WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).Scan(&questionID, &prompt, &to)
+		var items []delivery.QuestionItem
+		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, COALESCE(q.to_person, ''), q.items FROM questions q
+			WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).Scan(&questionID, &prompt, &to, &items)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
-		if qerr == nil && (to == "" || to == p.Person) {
-			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, name, body.Text, p)
+		// The question's own: their message answers one question. Several
+		// are answered through the form (sessionAnswer); a message beside
+		// them is an aside, as in a task's Chat, and reaches the agent now.
+		if qerr == nil && !body.Aside && len(items) == 1 && (to == "" || to == p.Person) {
+			answered, err := answerBody{Text: body.Text}.check(items)
+			if err != nil {
+				return err
+			}
+			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
 			if err != nil {
 				return err
 			}
@@ -871,8 +883,10 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			return err
 		}
 		payload := map[string]any{"text": body.Text, "directiveId": directiveID}
-		if qerr == nil {
-			// Waiting on another member's answer: held until it comes.
+		if qerr == nil && to != "" && to != p.Person {
+			// Waiting on another member's answer: held until it comes. The
+			// question's own person, or anyone when it names nobody, is
+			// heard at once.
 			if _, err := tx.Exec(r.Context(), `UPDATE directives SET held_for = $2 WHERE id = $1`, directiveID, questionID); err != nil {
 				return err
 			}
@@ -921,21 +935,85 @@ func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr
 
 // answerSessionQuestion settles the agent's open question with a member's
 // answer, queued as its next input, naming who answered.
-func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, questionID, prompt, name, text string, p principal) (string, error) {
-	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
-		answered_by_person = $3 WHERE id = $1`, questionID, text, p.Person); err != nil {
+func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, questionID, prompt string,
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	answers, _ := json.Marshal(a.Answers)
+	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $4::jsonb, answered_at = now(),
+		answered_by_person = $3 WHERE id = $1`, questionID, a.Text, p.Person, answers); err != nil {
 		return "", err
 	}
 	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
-		Text: fmt.Sprintf("%s answered your question %q:\n\n%s", name, prompt, text), Scope: "run"})
+		Text: delivery.AnswerDirective(prompt, items, a, name, true), Scope: "run"})
 	if err != nil {
 		return "", err
 	}
-	ev := ref.Event("question.answered", p.writer().ActorType, map[string]any{"questionId": questionID, "answer": text,
-		"directiveId": directiveID})
+	ev := ref.Event("question.answered", p.writer().ActorType, answeredPayload(questionID, directiveID, a))
 	ev.ActorID = p.Actor
 	_, err = ledger.Append(ctx, tx, ev)
 	return directiveID, err
+}
+
+// sessionAnswer is a member answering the session agent's open question
+// through its form: one answer per question, and a note (answerBody; no
+// images, which a session does not take). Only the member it is put to,
+// or with none named, anyone who can chat.
+func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org string) error {
+	p, err := sessionPrincipal(r)
+	if err != nil {
+		return err
+	}
+	var body answerBody
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	if len(body.AttachmentIDs) > 0 {
+		return fail(http.StatusUnprocessableEntity, "invalid", "a session's answer takes no images")
+	}
+	id, questionID := r.PathValue("id"), r.PathValue("question")
+	var out map[string]any
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "answer the agent"); err != nil {
+			return err
+		}
+		var runID, status, prompt, to string
+		var items []delivery.QuestionItem
+		if err := tx.QueryRow(r.Context(), `SELECT q.run_id, q.status::text, q.prompt, COALESCE(q.to_person, ''), q.items
+			FROM questions q JOIN runs r ON r.id = q.run_id WHERE q.id = $1 AND r.session_id = $2 FOR UPDATE OF q`,
+			questionID, id).Scan(&runID, &status, &prompt, &to, &items); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "question %s not found in this session", questionID)
+			}
+			return err
+		}
+		if err := stillOpen("question", questionID, status, "open"); err != nil {
+			return err
+		}
+		if to != "" && to != p.Person {
+			return fail(http.StatusForbidden, "forbidden", "this question is put to another member: only they answer it")
+		}
+		answered, err := body.check(items)
+		if err != nil {
+			return err
+		}
+		name, err := delivery.PersonName(r.Context(), tx, p.Person)
+		if err != nil {
+			return err
+		}
+		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}
+		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
+		if err != nil {
+			return err
+		}
+		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": answered.Text,
+			"answers": answered.Answers, "directiveId": directiveID}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusOK, out)
+	return nil
 }
 
 // inviteToSession adds people as chat or read, owner only. They see the
