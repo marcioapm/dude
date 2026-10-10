@@ -228,7 +228,9 @@ func TestAnAnswerQueuedBeforeLuxReportsTheRunRunningReachesTheAgent(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID); err != nil {
+		t.Fatalf("run: %v", err)
+	}
 	if status, body := w.call("/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}); status != 200 {
 		t.Fatalf("answer: %d %v", status, body)
 	}
