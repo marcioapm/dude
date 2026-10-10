@@ -71,10 +71,6 @@ func (t *translator) claudeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ 
 		}
 		_ = json.Unmarshal(f.Event.Data, &end)
 		return t.claudeTurnHalf(ctx, tx, s, "turn_end", end.Usage)
-	case "system":
-		if line.Subtype == "compact_boundary" {
-			return t.holdCompaction(ctx, tx, s, claudeCompaction(f.Event.Data))
-		}
 	}
 	return nil
 }

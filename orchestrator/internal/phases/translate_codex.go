@@ -222,9 +222,6 @@ func (t *translator) codexItemDone(ctx context.Context, tx pgx.Tx, s *Syncer, it
 			text = strings.Join(it.Content, "\n\n")
 		}
 		return t.flushWhole(ctx, tx, s, &t.thought, evAgentThought, text)
-	case "contextCompaction":
-		// Codex says only that it compacted: no trigger, no tokens.
-		return t.holdCompaction(ctx, tx, s, map[string]any{})
 	}
 	name := codexToolName(it)
 	if name == "" {

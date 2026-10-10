@@ -46,56 +46,53 @@ func codexCompaction() map[string]any {
 
 var idle = rec("lux.activity", map[string]any{"activity": "idle"})
 
-// A lux from before lux.compacted: each harness's own announcement is the
-// one event, Claude's with its trigger and tokens, Codex's with none —
-// recorded once the next record shows no lux record follows, in this
-// batch or the next, and after a restart of the follower.
-func TestAHarnessesOwnCompactionIsRecordedOnAnOlderLux(t *testing.T) {
+// A harness's own announcement of a compaction, as lux relays it, records
+// nothing: only lux's record does (a lux from before lux.compacted records
+// no compaction).
+func TestAHarnessesOwnCompactionLineRecordsNothing(t *testing.T) {
 	w := newHarnessWorld(t)
 	w.feed(claudeBoundary(), idle)
-	got := compactions(w)
-	if len(got) != 1 || got[0].Payload["trigger"] != "auto" || got[0].Payload["preTokens"] != float64(167012) ||
-		got[0].Payload["postTokens"] != float64(9120) || got[0].Payload["summary"] != nil {
-		t.Errorf("Claude's: %v", got)
-	}
 	w.feed(codexCompaction())
-	if got := compactions(w); len(got) != 0 {
-		t.Errorf("recorded before the next record: %v", got)
-	}
 	w.restart()
-	w.feed(idle)
-	if got := compactions(w); len(got) != 1 || len(got[0].Payload) != 0 {
-		t.Errorf("Codex's: %v", got)
+	w.feed(idle, rec("lux.activity", map[string]any{"activity": "busy"}), idle)
+	if got := compactions(w); len(got) != 0 {
+		t.Errorf("compactions from the harnesses' lines alone: %v", got)
 	}
 }
 
-// A lux that sends lux.compacted right after the harness's own line: one
-// event, lux's, with its summary — whether the two come in one batch or
-// two, and for every compaction after.
-func TestOneCompactionIsOneEventWhenLuxRecordsItToo(t *testing.T) {
+// One compaction is one event, lux's with its summary, in the orders lux
+// produces: its warning (no summary) before its record, and Codex's
+// record written up to seconds later, after other records of the agent.
+func TestOneCompactionIsOneEventLuxs(t *testing.T) {
 	luxs := rec("lux.compacted", map[string]any{"sessionId": "ses_a", "trigger": "auto", "preTokens": 167012, "postTokens": 9120,
 		"summary": "Billing per run."})
-	for _, harness := range []struct {
-		name string
-		line map[string]any
-	}{{"claude", claudeBoundary()}, {"codex", codexCompaction()}} {
-		t.Run(harness.name, func(t *testing.T) {
+	warning := rec("lux.warning", map[string]any{"message": "compaction summary unavailable"})
+	busy := rec("lux.activity", map[string]any{"activity": "busy"})
+	others := rec("codex.item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "id": "item_8", "text": "Done."}})
+	for _, c := range []struct {
+		name    string
+		batches [][]map[string]any
+	}{
+		{"claude, lux's warning first", [][]map[string]any{{claudeBoundary(), warning, luxs, idle}}},
+		{"codex, lux's warning first", [][]map[string]any{{codexCompaction(), warning, luxs, idle}}},
+		{"claude, records between", [][]map[string]any{{claudeBoundary(), busy, idle}, {luxs}}},
+		{"codex, records between, follower restarted", [][]map[string]any{{codexCompaction(), others, busy}, nil, {idle, luxs}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
-			w.feed(harness.line, luxs, idle)
-			w.feed(harness.line)
-			w.restart()
-			w.feed(luxs, idle)
-			// A later compaction lux records again, its line alone a moment
-			// before: still one each.
-			w.feed(harness.line, idle, luxs)
-			got := compactions(w)
-			if len(got) != 3 {
-				t.Fatalf("%d events for three compactions: %v", len(got), got)
-			}
-			for _, e := range got {
-				if e.Payload["summary"] != "Billing per run." {
-					t.Errorf("not lux's record: %v", e.Payload)
+			for _, batch := range c.batches {
+				if batch == nil {
+					w.restart()
+					continue
 				}
+				w.feed(batch...)
+			}
+			got := compactions(w)
+			if len(got) != 1 {
+				t.Fatalf("%d events for one compaction: %v", len(got), got)
+			}
+			if got[0].Payload["summary"] != "Billing per run." {
+				t.Errorf("not lux's record: %v", got[0].Payload)
 			}
 		})
 	}
