@@ -18,6 +18,7 @@ import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
+import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
@@ -86,6 +87,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
   const [runCosts, setRunCosts] = useState<ReadonlyMap<string, RunCost>>(new Map());
   const [problem, setProblem] = useState<string | null>(null);
+  // Only before the task has a conductor: from then on RunScreen's chat composer keeps the same draft.
+  const draft = useDraft(conductorId ? null : `task:${task.id}`);
   useEffect(() => {
     let cancelled = false;
     void client.taskMetrics(task.id).then((m) => {
@@ -216,10 +219,13 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
           footer={
             <ChatComposer
               mode="chat"
+              value={draft.value} onValueChange={draft.onValueChange}
               onSubmit={async ({ text }) => {
                 setProblem(null);
                 try {
                   await send(text);
+                  // The conductor may have appeared during the send, dropping this composer's key: its words were flushed there.
+                  if (people.you) clearDraftIfSent(draftKey(people.you, `task:${task.id}`), text);
                   return true;
                 } catch (err) {
                   setProblem(err instanceof ApiError ? `Could not send the message: ${err.message}` : "Could not send the message.");

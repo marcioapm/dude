@@ -13,7 +13,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
-  ChatComposer,
   ChatEvent,
   ChatMessage,
   ChatNotice,
@@ -59,10 +58,12 @@ import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
 import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
+import { DraftedComposer } from "./DraftedComposer.tsx";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { instant } from "../instant.ts";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
@@ -188,6 +189,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
+  // A task's Chat keeps its draft by task, as ChatSection does before the
+  // conductor exists: the words survive a new conductor replacing this one.
+  const draftPlace = chat ? (run ? `task:${run.taskId}` : null) : `run:${runId}`;
 
   const { events, reconnects } = useEventStream({ client, runId });
   // A tool call whose output names a host lux refused this Run says so under it.
@@ -483,7 +487,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               footer={
                 <>
                 {chat.above}
-                <ChatComposer
+                <DraftedComposer
+                  place={draftPlace}
                   mode="chat"
                   waitingFor={waitingForYou}
                   waitingKey={asked?.questionId}
@@ -645,7 +650,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 // read is no place to send anyone: the way there is said in words.
                 <PreviewRunNote openServers={onOpenServers ?? (onOpenTask && read ? () => onOpenTask(run.taskId, "servers") : undefined)} />
               ) : (
-                <ChatComposer
+                <DraftedComposer
+                  place={draftPlace}
                   // The agent waiting on your answer: the composer steps back,
                   // the form is the question's turn; otherwise anything said steers it.
                   mode="steer"
@@ -805,7 +811,7 @@ export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: Readonl
     let at: string | null = null;
     if ("at" in turn) at = turn.at;
     else if ("startedAt" in turn) at = turn.startedAt;
-    while (i < lines.length && at !== null && lines[i]!.at < at) out.push(lines[i++]!);
+    while (i < lines.length && at !== null && instant(lines[i]!.at) < instant(at)) out.push(lines[i++]!);
     out.push({ group });
   }
   while (i < lines.length) out.push(lines[i++]!);

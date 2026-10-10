@@ -372,6 +372,72 @@ func TestFilingActsAsThePersonWhoPressesFile(t *testing.T) {
 	}
 }
 
+// The card says what blocks an item, beside its words: another member's
+// task is "owner", naming them, so a client may leave it to them; a task
+// that has started, or a project not linked, blocks everyone, its owner and
+// a reader too, so it is "started" or "unlinked" whoever looks; what a
+// member could file is "reader" to a reader.
+func TestTheCardSaysWhatBlocksAnItem(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.join(id, s.joao, "read")
+	marcios := s.taskIn(s.project, "Daily rollup", s.marcio)
+	started := s.taskIn(s.project, "Started one", s.marcio)
+	mustExec(t, s.owner, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, step, task_id)
+		VALUES ('wfr_started', $1, 'task.delivery', 'delivery:started', 'implement', $2)`, s.org, started)
+	after := "Count each run id once, whatever the meter's key window"
+	s.proposal(id, []delivery.ProposalItem{
+		{Kind: "edit", Task: s.keyOf(marcios), After: &delivery.TaskText{Goal: ptr(after)}},
+		{Kind: "edit", Task: s.keyOf(started), After: &delivery.TaskText{Goal: ptr(after)}},
+		{Kind: "task", Project: "BL", Title: "Meter runs", Goal: "Count experiment runs per org per day"},
+		{Kind: "task", Project: "ZZ", Title: "Elsewhere", Goal: "A project this session does not link"},
+	})
+	status := func(person string) []map[string]any {
+		t.Helper()
+		var got struct {
+			Proposals []struct {
+				Status []map[string]any `json:"status"`
+			} `json:"proposals"`
+		}
+		b, _ := json.Marshal(s.ok(person, "GET", "/internal/sessions/"+id, nil))
+		if err := json.Unmarshal(b, &got); err != nil || len(got.Proposals) != 1 {
+			t.Fatalf("the card as %s: %v %s", person, err, b)
+		}
+		return got.Proposals[0].Status
+	}
+
+	ana := status(s.ana)
+	if ana[0]["canFile"] != false || ana[0]["blockedBy"] != "owner" || !strings.Contains(fmt.Sprint(ana[0]["why"]), "Márcio") {
+		t.Errorf("Márcio's task, as Ana: %v", ana[0])
+	}
+	if owner, _ := ana[0]["owner"].(map[string]any); owner["id"] != s.marcio || owner["name"] != "Márcio Martins" {
+		t.Errorf("Márcio's task names its owner as %v", ana[0]["owner"])
+	}
+	if ana[1]["canFile"] != false || ana[1]["blockedBy"] != "started" || ana[1]["owner"] != nil {
+		t.Errorf("a started task, as Ana: %v", ana[1])
+	}
+
+	marcio := status(s.marcio)
+	if marcio[0]["canFile"] != true || marcio[0]["blockedBy"] != nil {
+		t.Errorf("Márcio's own task, as Márcio: %v", marcio[0])
+	}
+	if marcio[1]["canFile"] != false || marcio[1]["blockedBy"] != "started" || !strings.Contains(fmt.Sprint(marcio[1]["why"]), "started") {
+		t.Errorf("his started task, as Márcio: %v", marcio[1])
+	}
+	if marcio[2]["canFile"] != true || marcio[3]["canFile"] != false || marcio[3]["blockedBy"] != "unlinked" {
+		t.Errorf("a linked and an unlinked project's task, as Márcio: %v %v", marcio[2], marcio[3])
+	}
+
+	joao := status(s.joao)
+	if joao[2]["canFile"] != false || joao[2]["blockedBy"] != "reader" {
+		t.Errorf("a task a member could file, as a reader: %v", joao[2])
+	}
+	if joao[1]["blockedBy"] != "started" || joao[3]["blockedBy"] != "unlinked" {
+		t.Errorf("a started task and an unlinked project's, as a reader: %v %v", joao[1], joao[3])
+	}
+}
+
 // Work filed from a session looks exactly like work a person typed: the
 // task row, its people, its events — nothing names the session, its title,
 // its Run or its agent.

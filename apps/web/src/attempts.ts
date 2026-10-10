@@ -11,6 +11,7 @@ import { firstName } from "@dude/design-system";
 import { isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
+import { instant } from "./instant.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
 
@@ -103,7 +104,7 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
       const pr = prOfEvent(e, prs);
       if (pr) return attemptOfPr(pr, byId, current);
     }
-    return begun.find(([, at]) => at <= e.occurredAt)?.[0] ?? 1;
+    return begun.find(([, at]) => instant(at) <= instant(e.occurredAt))?.[0] ?? 1;
   };
 }
 
