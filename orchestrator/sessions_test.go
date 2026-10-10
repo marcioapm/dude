@@ -671,8 +671,8 @@ func TestAFirstMessageWhoseAgentFailsToStartMakesNoSession(t *testing.T) {
 	}
 }
 
-// Without a message, create is what it was: a session with its links and
-// no agent until someone writes, answered with no runId.
+// Without a message, create makes a session with its links and no agent
+// until someone writes, answered with no runId.
 func TestASessionMadeWithoutAMessageStartsNothing(t *testing.T) {
 	s := newSessionWorld(t)
 	out := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Usage-based billing",
