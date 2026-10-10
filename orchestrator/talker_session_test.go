@@ -18,9 +18,7 @@ func TestATalkerResumedWithoutItsSessionIsBriefedAgain(t *testing.T) {
 			first := tk.sessionIDs(run)
 			tk.lux.LoseSession(tk.luxRunOf(run))
 			tk.stopOnItsOwn(run, "stopped")
-			tk.until("the Run parked", func() bool {
-				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, run) == 1
-			})
+			tk.parked(run)
 			if status, reached := tk.write("still with me?"); status != 200 || reached != run {
 				t.Fatalf("the message: %d reached %q", status, reached)
 			}
@@ -73,9 +71,7 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 			tk.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
 			tk.lux.LoseSession(tk.luxRunOf(run))
 			tk.stopOnItsOwn(run, "stopped")
-			tk.until("the Run parked", func() bool {
-				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, run) == 1
-			})
+			tk.parked(run)
 			tk.write("still with me?")
 			tk.until("the briefing again queued", func() bool {
 				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'restarted without') > 0`, run) == 1
@@ -125,9 +121,7 @@ func TestATalkerResumedInItsSessionIsNotBriefedAgain(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			tk, run := start(t)
 			tk.stopOnItsOwn(run, "stopped")
-			tk.until("the Run parked", func() bool {
-				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, run) == 1
-			})
+			tk.parked(run)
 			tk.write("still with me?")
 			tk.resumedAnswering(run, "still with me?")
 			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type IN ('agent.session.replaced', 'agent.warning')`, run); n != 0 {
