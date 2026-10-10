@@ -31,8 +31,8 @@ export interface ModelPickerProps {
   readonly readOnly?: boolean | undefined;
   /**
    * Why the pair it is on now cannot run (a tier removed, or the
-   * organisation's half changed since it was chosen): the chip takes a
-   * danger mark and the sentence is its description, shown under it.
+   * organisation's half changed since it was chosen): the chip takes an
+   * attention mark and the sentence is its description, shown under it.
    */
   readonly misfit?: string | null | undefined;
   /** The menu opened or closed: the rail reads the organisation's tiers on its first opening. */
@@ -80,7 +80,7 @@ function misfit(harness: Harness, tier: PickerTier | null): string | null {
  * float with two groups, Model tier and Harness, each led by
  * "Organisation default (…)". A pair the harness cannot run, or a tier
  * naming no model, is never offered: such an item is disabled and says
- * why. A pair that stopped fitting after it was chosen takes a danger mark
+ * why. A pair that stopped fitting after it was chosen takes an attention mark
  * and says why under the chip. A change applies at the agent's next start;
  * the app says so.
  */
@@ -92,7 +92,7 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, mi
   const name = `Model: ${words}${eff.isDefault ? " (organisation default)" : ""}`;
   const face = (
     <>
-      {wrong ? <Icon name="warning" size={12} className={styles["danger"]} data-testid={`${testId}-misfit`} />
+      {wrong ? <Icon name="warning" size={12} className={styles["attention"]} data-testid={`${testId}-misfit`} />
         : <Icon name="sparkle" size={12} className={styles["icon"]} />}
       <span className={cx(styles["tier"], "ds-cap")}>{eff.tier?.name ?? "No tier"}</span>
       <span className={cx(styles["harness"], "ds-cap")}>· {HARNESS_LABEL[eff.harness]}</span>

@@ -242,7 +242,7 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   its members are told (`ON DELETE SET NULL` stays as the net).
 - **A pair that stops fitting later** (its tier removed, or the
   organisation's half changed) is said where it is seen: the detail's
-  `model.misfit`, under the chip with a danger mark, and the Run's failure,
+  `model.misfit`, under the chip with an attention mark, and the Run's failure,
   both in the session's words ("…Choose another harness or tier in the
   session's Model.").
 - **The header** says "Brainstorm · <tier> · <harness>": a live agent's as

@@ -146,7 +146,7 @@ describe("ModelPicker", () => {
     expect(picked).toEqual([]);
   });
 
-  test("a pair that no longer fits: a danger mark on the chip, and why under it, read with it", async () => {
+  test("a pair that no longer fits: an attention mark on the chip, and why under it, read with it", async () => {
     const why = "Codex takes an OpenAI model, but the tier Claude (High) requests claude-opus-5. Choose another harness or tier in the session's Model.";
     for (const readOnly of [false, true]) {
       const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={{ tier: null, harness: "codex" }} misfit={why} readOnly={readOnly}

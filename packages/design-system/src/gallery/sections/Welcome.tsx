@@ -188,7 +188,7 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="wl-model" title="ModelPicker"
-        note={`The model and harness a session's agent runs on, in ChatComposer's toAside (right after "To Brainstorm") and in the session's rail. A quiet chip reading the effective pair, a muted "default" while both follow the organisation. Its menu is RowMenu's float with two radio groups, each led by "Organisation default (…)"; a pair the harness cannot run, or a tier naming no model, is disabled and says why. A value that stopped fitting after it was chosen takes the danger mark and says why under the chip. Read only for a member who is not the owner: the chip on the hover wash, nothing to open.`}>
+        note={`The model and harness a session's agent runs on, in ChatComposer's toAside (right after "To Brainstorm") and in the session's rail. A quiet chip reading the effective pair, a muted "default" while both follow the organisation. Its menu is RowMenu's float with two radio groups, each led by "Organisation default (…)"; a pair the harness cannot run, or a tier naming no model, is disabled and says why. A value that stopped fitting after it was chosen takes the attention mark and says why under the chip. Read only for a member who is not the owner: the chip on the hover wash, nothing to open.`}>
         <Panes mode={mode} surface>
           <Label>default</Label>
           <div data-testid="model-default"><Picking /></div>

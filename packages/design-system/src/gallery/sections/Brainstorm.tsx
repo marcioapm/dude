@@ -180,7 +180,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-rail-model" title="The rail's Model"
-        note="The owner's chip on a chosen pair (no default mark), a member's read-only chip on the hover wash with nothing to open, and a pair that stopped fitting: the danger mark, and why under the chip. Under each, muted: when a change applies.">
+        note="The owner's chip on a chosen pair (no default mark), a member's read-only chip on the hover wash with nothing to open, and a pair that stopped fitting: the attention mark, and why under the chip. Under each, muted: when a change applies.">
         <Panes mode={mode}>
           <div style={{ width: 300 }}>
             <SessionRail>
