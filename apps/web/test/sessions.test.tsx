@@ -842,9 +842,14 @@ describe("archiving a session, for yourself", () => {
     archivedIds = new Set<string>();
     calls: Array<[string, boolean]> = [];
     refuse = false;
+    refuseArchived = false;
+    // Whether each list read asked for archived sessions too.
+    reads: boolean[] = [];
     // While set, a list read answers only once it settles, with what was true when it was asked.
     hold: Promise<void> | null = null;
     override async sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
+      this.reads.push(opts.archived === true);
+      if (opts.archived && this.refuseArchived) throw new Error("the orchestrator is down");
       const hold = this.hold;
       const all = [summary(SESSION, "Usage-based billing", this.archivedIds.has(SESSION)), summary(OTHER, "Pricing", this.archivedIds.has(OTHER))];
       if (hold) await hold;
@@ -920,10 +925,14 @@ describe("archiving a session, for yourself", () => {
     await until(() => (listed(page).includes(OTHER) ? true : null), "your sessions");
     expect(listed(page)).toEqual([OTHER]);
     expect(inSidebar(page)).toEqual([OTHER]);
+    await settle();
+    expect(client.reads.filter((archived) => archived)).toEqual([]);
 
     await click(await until(() => shownOption(page, "Archived"), "the Archived filter"));
     await until(() => (listed(page).includes(SESSION) ? true : null), "the archived session");
     expect(listed(page)).toEqual([SESSION]);
+    await settle();
+    expect(client.reads.filter((archived) => archived)).toEqual([true]);
     // The sidebar never shows it.
     expect(inSidebar(page)).toEqual([OTHER]);
 
@@ -957,6 +966,32 @@ describe("archiving a session, for yourself", () => {
     expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
     await settle(100);
     expect(inSidebar(page).sort()).toEqual([OTHER, SESSION].sort());
+  });
+
+  const archivedBody = async (client: Archiving) => {
+    const page = await shell("#/sessions", client);
+    await until(() => (listed(page).length > 0 ? true : null), "your sessions");
+    await click(await until(() => shownOption(page, "Archived"), "the Archived filter"));
+    await until(() => (page.querySelector("[data-testid=sessions] .centered") ? null : true), "the archived read");
+    return page.querySelector<HTMLElement>("[data-testid=sessions] .screenBody")!;
+  };
+
+  test("Archived with nothing archived says so", async () => {
+    const body = await archivedBody(new Archiving(detail("owner")));
+    expect([...body.querySelectorAll("div")].filter((d) => d.children.length === 0).map((d) => d.textContent)).toEqual([
+      "Nothing archived",
+      "A session you archive leaves your list and sidebar, and nobody else's. Open one and Unarchive brings it back.",
+    ]);
+    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
+  });
+
+  test("Archived that cannot be read says why", async () => {
+    const client = new Archiving(detail("owner"));
+    client.archivedIds.add(SESSION);
+    client.refuseArchived = true;
+    const body = await archivedBody(client);
+    expect(body.querySelector("[data-testid=sessions-problem]")!.textContent).toBe("Could not read your archived sessions: the orchestrator is down");
+    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
   });
 });
 
