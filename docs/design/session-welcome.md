@@ -182,13 +182,19 @@ What the build decided where this page left it open:
   `ChatComposer variant="stage"` (raised `shadow-2`, a 72px field, 52
   compact, `text-prose`, no inset), which the app passes; `Welcome` does not
   reach into its child.
-- **An organisation with no projects** still sees "No projects yet" and
-  New project at `#/`: the welcome follows once there is a project.
+- **An organisation with no projects** gets the welcome too: a session
+  needs no project ("Reads memory only"), so New session always works. Its
+  footer also offers New project, under the recent sessions or the
+  first-time line, to an admin (who may make projects), and only once the
+  tree has loaded and is empty, so nothing flashes while it loads.
 - **The tab reads "dude"** on the welcome, as with nothing selected before.
 - **`[`** is ignored in an input, textarea, select or contenteditable,
   with any modifier, and under 1000px, where there is no rail. Nothing
-  else bound it.
-- **A session made before this change can still be empty**; its writers
-  keep the "Write to start…" line and a focused composer, its readers
-  "Nobody has written here yet."
+  else bound it. **`/`** on the rail, under the same guards, unfolds the
+  sidebar with its search focused, as the rail's search item does.
+- **The brand's accessible name is "El Duderino, home"**: its visible
+  words, then where it goes.
+- **A session made through the API without a message can be empty**; its
+  writers keep the "Write to start…" line and a focused composer, its
+  readers "Nobody has written here yet."
 - No token, tone, radius or border exception was added.

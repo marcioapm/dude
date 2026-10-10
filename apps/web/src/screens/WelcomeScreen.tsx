@@ -5,7 +5,7 @@
  * opened. A starter fills the composer and never sends.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { firstName, useDensity, type NavProject } from "@dude/design-system";
 import {
   ChatComposer, ComposerLinks, Duration, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote,
@@ -26,7 +26,7 @@ export function partOfDay(d: Date = new Date()): string {
   return "Evening";
 }
 
-export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSession, onAllSessions, onCreated }: {
+export function WelcomeScreen({ client, projects, sessions, name, now, offer, onOpenSession, onAllSessions, onCreated }: {
   client: ApiClient;
   /** The organisation's projects: what the composer can link. */
   projects: readonly NavProject[];
@@ -36,6 +36,8 @@ export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSes
   name: string | null;
   /** The clock the greeting reads; the browser's by default. */
   now?: () => Date;
+  /** Under the recent sessions (or the first-time line): New project, for an organisation with none. */
+  offer?: ReactNode;
   onOpenSession: (id: string) => void;
   onAllSessions: () => void;
   /** A session was made from here: the app re-reads its list and opens it. */
@@ -125,15 +127,18 @@ export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSes
           </div>
         }
         starters={<StarterPills starters={WELCOME_STARTERS} onPick={fill} />}
-        footer={sessions === null ? null : shown.length === 0 ? <WelcomeNote>{WELCOME_FIRST_TIME}</WelcomeNote> : (
-          <RecentSessions onOpen={onOpenSession} onAll={onAllSessions} sessions={shown.map((s) => ({
-            id: s.id,
-            title: sessionTitle(s),
-            summary: s.filed > 0 ? `Filed ${s.filed}` : "Nothing filed yet",
-            age: <Age at={s.lastActivityAt} />,
-            ...(s.shared ? { shared: { owner: s.role === "owner" ? null : s.owner } } : {}),
-          }))} />
-        )}
+        footer={<>
+          {sessions === null ? null : shown.length === 0 ? <WelcomeNote>{WELCOME_FIRST_TIME}</WelcomeNote> : (
+            <RecentSessions onOpen={onOpenSession} onAll={onAllSessions} sessions={shown.map((s) => ({
+              id: s.id,
+              title: sessionTitle(s),
+              summary: s.filed > 0 ? `Filed ${s.filed}` : "Nothing filed yet",
+              age: <Age at={s.lastActivityAt} />,
+              ...(s.shared ? { shared: { owner: s.role === "owner" ? null : s.owner } } : {}),
+            }))} />
+          )}
+          {offer ? <div className="welcomeOffer" data-testid="welcome-offer">{offer}</div> : null}
+        </>}
       />
     </div>
   );
