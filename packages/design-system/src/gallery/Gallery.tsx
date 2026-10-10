@@ -20,9 +20,21 @@ import { CalmerSection } from "./sections/Calmer.tsx";
 import { ServersSection } from "./sections/Servers.tsx";
 import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
+import { WelcomeSection } from "./sections/Welcome.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
+  [
+    "Welcome",
+    [
+      ["wl-shell", "Welcome + sidebar"],
+      ["wl-first", "The first time"],
+      ["wl-rail", "Sidebar collapsed"],
+      ["wl-starters", "StarterPills"],
+      ["wl-links", "ComposerLinks"],
+      ["wl-recent", "RecentSessions"],
+    ],
+  ],
   [
     "Tokens",
     [
@@ -278,6 +290,7 @@ function Shell() {
       <main className={styles["main"]}>
         <PaneDensityContext.Provider value={paneDensity}>
           <ShellSection mode={panes} />
+          <WelcomeSection mode={panes} />
           <TokensSection mode={panes} />
           <PrimitivesSection mode={panes} />
           <CalmerSection mode={panes} />

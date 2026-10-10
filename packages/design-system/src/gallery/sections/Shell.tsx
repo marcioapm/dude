@@ -141,8 +141,8 @@ function Transcript() {
       pinned={<AgentPlan items={PLAN} defaultCollapsed sticky />}
       footer={
         <ChatComposer
-          mode="answer"
-          question={{ id: "q_2401", askedBy: "Orchestrator", askedAt: ts(12 * MIN), text: "Should I leave the route's retry in place, or fold it into this change?", options: QUESTION_OPTIONS }}
+          mode="steer"
+          waitingFor="Orchestrator"
           onSubmit={() => undefined}
         />
       }
@@ -181,7 +181,7 @@ function Transcript() {
       </Aside>
       <ChatMessage role="conductor" continued content="All green: 65 pass, 0 fail. The diff is 118 lines." startedAt={ts(45_600)} />
       <ChatMessage data-shot-anchor="markdown" role="conductor" continued content={MD_SUMMARY} startedAt={ts(47 * SEC)} endedAt={ts(58 * SEC)} costUsd={0.021} contextTokens={63_900} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
-      <QuestionCard role="conductor" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={ts(12 * MIN)} />
+      <QuestionCard role="conductor" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={ts(12 * MIN)} onSubmit={() => undefined} />
     </ChatTranscript>
   );
 }

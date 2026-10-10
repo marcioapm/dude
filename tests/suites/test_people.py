@@ -314,8 +314,8 @@ import pytest  # noqa: E402
 from playwright.sync_api import Page, expect  # noqa: E402
 
 
-def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    sign_in(page, web_url, api_key)
+def _sign_in(page: Page, web_url: str, api_key: str, board: bool = True) -> None:
+    sign_in(page, web_url, api_key, board=board)
 
 
 @pytest.mark.ui
@@ -361,7 +361,7 @@ def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient
     _invite(client, env, "Ana")
     ana_client = ApiClient(env.control_plane_url, client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}).json()["key"])
     ana_client.get("/v1/me")  # Cy is here now.
-    _sign_in(page, web_url, client.api_key)
+    _sign_in(page, web_url, client.api_key, board=False)
     online = page.get_by_test_id("online")
     # You and Cy; Ana was never seen.
     expect(online).to_have_attribute("aria-label", "Online: e2e user, Cy")
@@ -374,7 +374,7 @@ def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient
 
 @pytest.mark.ui
 def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
-    _sign_in(page, web_url, client.api_key)
+    _sign_in(page, web_url, client.api_key, board=False)
     page.get_by_test_id("my-settings-button").click()
     page.get_by_test_id("profile-name").fill("Ana Ribeiro")
     page.get_by_test_id("profile-save").click()
@@ -406,7 +406,7 @@ def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client
 
 @pytest.mark.ui
 def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
-    _sign_in(page, web_url, client.api_key)
+    _sign_in(page, web_url, client.api_key, board=False)
     page.get_by_test_id("org-settings-button").click()
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
@@ -432,7 +432,7 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
 
     # A member sees the list, and nothing to manage it with.
     _, cy = _invite(client, env, "Cy")
-    _sign_in(page, web_url, cy.api_key)
+    _sign_in(page, web_url, cy.api_key, board=False)
     page.get_by_test_id("org-settings-button").click()
     expect(page.get_by_test_id("member")).to_have_count(2)
     expect(page.get_by_test_id("invite")).to_have_count(0)

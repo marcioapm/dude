@@ -151,8 +151,13 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- The question an agent is waiting on: the Run is live, but
              -- blocked on a person. Open questions die with their Run.
              -- Or a repository it asked for, pending a person's decision.
+             -- Several questions at once read as how many and their headers.
              COALESCE(
-               (SELECT q.prompt FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
+               (SELECT CASE WHEN jsonb_array_length(q.items) > 1
+                         THEN 'asks ' || jsonb_array_length(q.items) || ' questions · ' ||
+                              (SELECT string_agg(i->>'header', ', ' ORDER BY n) FROM jsonb_array_elements(q.items) WITH ORDINALITY AS t(i, n))
+                         ELSE q.prompt END
+                FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
                 ORDER BY q.asked_at DESC LIMIT 1),
                (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
                 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id

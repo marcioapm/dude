@@ -632,6 +632,129 @@ func TestEveryMessageReachesTheAgentAttributed(t *testing.T) {
 	}
 }
 
+// A session made with its first message starts its agent with that
+// message in the same call: one Run, briefed with the message attributed
+// to its writer, Chat showing it as written, and the links recorded.
+func TestASessionMadeByItsFirstMessageStartsItsAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	out := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "where does metering go?",
+		"projects": []map[string]any{{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	id, _ := out["id"].(string)
+	runID, _ := out["runId"].(string)
+	if id == "" || runID == "" {
+		t.Fatalf("create answered %v, want an id and a runId", out)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+		t.Fatalf("%d Runs, want 1", n)
+	}
+	if run := s.started(id); run != runID {
+		t.Errorf("the agent that answered is %s, want %s", run, runID)
+	}
+	var prompt string
+	_ = s.owner.QueryRow(context.Background(), `SELECT prompt FROM runs WHERE id = $1`, runID).Scan(&prompt)
+	if !strings.Contains(prompt, "## The first message\n\nMárcio Martins: where does metering go?") {
+		t.Errorf("the briefing does not carry the message:\n%s", prompt)
+	}
+	// Linked before the start, so the agent is briefed with what it reads.
+	if !strings.Contains(prompt, "## Linked projects\n\n- WC (web-console)\n  - `web`") {
+		t.Errorf("the briefing does not list the linked project:\n%s", prompt)
+	}
+	var shown, by string
+	_ = s.owner.QueryRow(context.Background(), `SELECT payload->>'text', actor_id FROM events WHERE run_id = $1 AND event_type = 'chat.message'
+		ORDER BY cursor LIMIT 1`, runID).Scan(&shown, &by)
+	if shown != "where does metering go?" || by != s.marcio {
+		t.Errorf("chat shows %q by %s", shown, by)
+	}
+	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, id, s.webProject); n != 1 {
+		t.Errorf("the project is not linked")
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 1 {
+		t.Errorf("the repository is not linked")
+	}
+	if v := s.luxRun(runID); v == nil || v.spec.Git == nil || len(v.spec.Git.Repositories) != 1 {
+		t.Errorf("the agent was not submitted with the linked repository: %+v", v)
+	}
+	if n := s.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND person_id = $2 AND role = 'owner'`, id, s.marcio); n != 1 {
+		t.Errorf("the writer does not own it")
+	}
+}
+
+// A first message the agent would not be given makes nothing: no session,
+// no Run, and the same refusal as a message in Chat. Neither does one whose
+// links are refused, since the start shares the create's transaction.
+func TestARefusedFirstMessageMakesNoSession(t *testing.T) {
+	s := newSessionWorld(t)
+	for _, c := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"empty", map[string]any{"message": ""}, 400},
+		{"blank", map[string]any{"message": "  \n "}, 400},
+		{"too long", map[string]any{"message": strings.Repeat("a", delivery.ChatMessageMax+1)}, 400},
+		{"an unknown project", map[string]any{"message": "hello", "projects": []map[string]any{{"projectId": "prj_nope", "repositoryIds": []string{}}}}, 404},
+	} {
+		if status, out := s.as(s.marcio, "POST", "/internal/sessions", c.body); status != c.want {
+			t.Errorf("%s: %d %v, want %d", c.name, status, out, c.want)
+		}
+	}
+	if n := s.count(`SELECT count(*) FROM sessions WHERE organization_id = $1`, s.org); n != 0 {
+		t.Errorf("%d sessions left behind", n)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'brainstorm'`, s.org); n != 0 {
+		t.Errorf("%d Runs left behind", n)
+	}
+}
+
+// A start that fails after the session row is written, inside the agent's
+// start, leaves nothing: the create and the start are one transaction.
+func TestAFirstMessageWhoseAgentFailsToStartMakesNoSession(t *testing.T) {
+	s := newSessionWorld(t)
+	// Each test has its own database (dbtest), so this trigger refuses only
+	// this world's brainstorm Runs.
+	mustExec(t, s.owner, `CREATE FUNCTION fail_brainstorm_run() RETURNS trigger AS $$
+		BEGIN RAISE EXCEPTION 'brainstorm runs refused by the test'; END $$ LANGUAGE plpgsql`)
+	mustExec(t, s.owner, `CREATE TRIGGER fail_brainstorm_run BEFORE INSERT ON runs FOR EACH ROW
+		WHEN (NEW.role = 'brainstorm') EXECUTE FUNCTION fail_brainstorm_run()`)
+	t.Cleanup(func() {
+		mustExec(t, s.owner, `DROP TRIGGER IF EXISTS fail_brainstorm_run ON runs`)
+		mustExec(t, s.owner, `DROP FUNCTION IF EXISTS fail_brainstorm_run()`)
+	})
+	status, out := s.as(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello",
+		"projects": []map[string]any{{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	if status < 500 {
+		t.Errorf("create answered %d %v, want a server error", status, out)
+	}
+	for what, q := range map[string]string{
+		"sessions":        `SELECT count(*) FROM sessions WHERE organization_id = $1`,
+		"session_people":  `SELECT count(*) FROM session_people WHERE organization_id = $1`,
+		"brainstorm Runs": `SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'brainstorm'`,
+		"session.created": `SELECT count(*) FROM events WHERE organization_id = $1 AND event_type = 'session.created'`,
+	} {
+		if n := s.count(q, s.org); n != 0 {
+			t.Errorf("%d %s left behind", n, what)
+		}
+	}
+}
+
+// Without a message, create makes a session with its links and no agent
+// until someone writes, answered with no runId.
+func TestASessionMadeWithoutAMessageStartsNothing(t *testing.T) {
+	s := newSessionWorld(t)
+	out := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Usage-based billing",
+		"projects": []map[string]any{{"projectId": s.project, "repositoryIds": []string{s.repoID}}}})
+	id := out["id"].(string)
+	if _, has := out["runId"]; has || out["title"] != "Usage-based billing" {
+		t.Errorf("create answered %v", out)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("%d Runs, want none", n)
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 1 {
+		t.Errorf("links not recorded")
+	}
+}
+
 // A question to one member waits for that member: another's message is
 // held, never taken as the answer, and goes to the agent after it.
 func TestAQuestionToOneMemberWaitsForThem(t *testing.T) {

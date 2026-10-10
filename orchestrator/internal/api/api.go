@@ -575,14 +575,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 // when the agent takes it — so it starts the agent's next turn.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) error {
 	questionID := r.PathValue("id")
-	var body struct {
-		Text          string   `json:"text"`
-		AttachmentIDs []string `json:"attachmentIds"`
-	}
+	var body answerBody
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
+	if body.Answers == nil && strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
 		return fail(http.StatusBadRequest, "bad_request", "text or an image is required")
 	}
 	var out map[string]any
@@ -608,14 +605,19 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			}
 		}
 		var runID, status, prompt string
-		if err := tx.QueryRow(r.Context(), `SELECT run_id, status::text, prompt FROM questions WHERE id = $1 FOR UPDATE`,
-			questionID).Scan(&runID, &status, &prompt); err != nil {
+		var items []delivery.QuestionItem
+		if err := tx.QueryRow(r.Context(), `SELECT run_id, status::text, prompt, items FROM questions WHERE id = $1 FOR UPDATE`,
+			questionID).Scan(&runID, &status, &prompt, &items); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "question %s not found", questionID)
 			}
 			return err
 		}
 		if err := stillOpen("question", questionID, status, "open"); err != nil {
+			return err
+		}
+		answered, err := body.check(items)
+		if err != nil {
 			return err
 		}
 		ri, err := loadRun(r.Context(), tx, runID)
@@ -629,7 +631,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, body.Text, principalOf(r))
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
 		if err != nil {
 			return err
 		}
@@ -641,9 +643,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err := tx.QueryRow(r.Context(), `SELECT answered_at FROM questions WHERE id = $1`, questionID).Scan(&answeredAt); err != nil {
 			return err
 		}
-		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt,
-			"attachments": db.NonNil(attached)}
-		payload := map[string]any{"questionId": questionID, "answer": body.Text, "directiveId": directiveID}
+		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": answered.Text, "answeredAt": answeredAt,
+			"answers": answered.Answers, "attachments": db.NonNil(attached)}
+		payload := answeredPayload(questionID, directiveID, answered)
 		if len(attached) > 0 {
 			payload["attachments"] = attached
 		}
@@ -657,6 +659,49 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 	return nil
 }
 
+// answerBody is an answer as the routes take it: one text, for a single
+// question (today's form, and a Chat message); or one answer per question,
+// with an optional note, as the question's form sends it. Images ride with
+// either.
+type answerBody struct {
+	Text          string                `json:"text"`
+	Answers       []delivery.ItemAnswer `json:"answers"`
+	Note          string                `json:"note"`
+	AttachmentIDs []string              `json:"attachmentIds"`
+}
+
+// check holds the body to what was asked (delivery.CheckAnswers): a 422
+// saying what is missing or wrong.
+func (b answerBody) check(items []delivery.QuestionItem) (delivery.Answered, error) {
+	var a delivery.Answered
+	var err error
+	switch {
+	case b.Answers != nil && b.Text != "":
+		return a, fail(http.StatusUnprocessableEntity, "invalid", "answer with text or with answers, not both")
+	case b.Answers != nil:
+		a, err = delivery.CheckAnswers(items, b.Answers, b.Note)
+	case b.Note != "":
+		return a, fail(http.StatusUnprocessableEntity, "invalid", "a note goes with answers")
+	default:
+		a, err = delivery.AnswerFromText(items, b.Text)
+	}
+	var bad delivery.AnswerRefusal
+	if errors.As(err, &bad) {
+		return a, fail(http.StatusUnprocessableEntity, "invalid", "%s", bad.Msg)
+	}
+	return a, err
+}
+
+// answeredPayload is question.answered's payload: the answer as kept, and
+// for the record each question's answer and the note.
+func answeredPayload(questionID, directiveID string, a delivery.Answered) map[string]any {
+	p := map[string]any{"questionId": questionID, "answer": a.Text, "directiveId": directiveID, "answers": a.Answers}
+	if a.Note != "" {
+		p["note"] = a.Note
+	}
+	return p
+}
+
 // answerQuestion settles an open question with a person's answer, queued
 // for its agent as a steer is — which starts its next turn — quoting the
 // question it settles; and takes the task off waiting on a person: back to
@@ -664,14 +709,20 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 // the wait; for that wait, back to the status before it, once nothing else
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
-func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt, text string, p principal) (string, error) {
-	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
+func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt string,
+	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, error) {
+	name, err := delivery.PersonName(ctx, tx, p.Person)
+	if err != nil {
+		return "", err
+	}
+	answers, _ := json.Marshal(a.Answers)
+	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $5::jsonb, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3), answered_by_person = NULLIF($4, '') WHERE id = $1`,
-		questionID, text, p.Actor, p.Person); err != nil {
+		questionID, a.Text, p.Actor, p.Person, answers); err != nil {
 		return "", err
 	}
 	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
-		Text: fmt.Sprintf("Answer to your question %q:\n\n%s", prompt, text), Scope: "run"})
+		Text: delivery.AnswerDirective(prompt, items, a, name, false), Scope: "run"})
 	if err != nil {
 		return "", err
 	}

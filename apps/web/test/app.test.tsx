@@ -103,12 +103,16 @@ describe("the first load with no place", () => {
     }
   }
 
-  test("opens the first project's board", async () => {
+  test("shows the welcome, not a board, and leaves the URL as it was", async () => {
     const client = new SlowTree("a");
-    await app("", client);
+    const page = await app("", client);
     client.arrive();
-    await until(() => (window.location.hash.startsWith("#/project/") ? true : null), "the board's hash");
-    expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    await settle(100);
+    expect(page.querySelector("[aria-label$=' board']") === null).toBe(true);
+    expect(window.location.hash).toBe("");
+    expect(document.title).toBe("dude");
+    expect(document.activeElement === page.querySelector("[data-testid=welcome] textarea")).toBe(true);
   });
 
   test("keeps a place the URL named after the app read it, before the tree arrived", async () => {
@@ -135,6 +139,268 @@ describe("the first load with no place", () => {
     expect(window.location.hash).toBe(named);
     await settle(100);
     expect(window.location.hash).toBe(named);
+  });
+});
+
+describe("home", () => {
+  test("the sidebar's brand is a button named for its words and home, that goes to the welcome", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+    const brand = page.querySelector<HTMLButtonElement>("[data-testid=brand-home]")!;
+    expect(brand.tagName).toBe("BUTTON");
+    expect(brand.getAttribute("aria-label")).toBe("El Duderino, home");
+    await click(brand);
+    expect(window.location.hash).toBe("#/");
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+  });
+
+  test("the sidebar's New session goes to the welcome and makes nothing", async () => {
+    class Counting extends FixtureClient {
+      made = 0;
+      override createSession(): Promise<never> {
+        this.made++;
+        return super.createSession();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    await click(await until(() => page.querySelector("[data-testid=sidebar-sessions] [data-testid=new-session]"), "New session"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    expect(client.made).toBe(0);
+  });
+
+  test("an organisation with no projects gets the welcome, with New project in it for an admin", async () => {
+    class Empty extends FixtureClient {
+      override navigation() {
+        return super.navigation().then((n) => ({ ...n, projects: [] }));
+      }
+    }
+    const page = await app("#/", new Empty("a"));
+    const offer = await until(() => page.querySelector("[data-testid=welcome] [data-testid=new-project-empty]"), "New project in the welcome");
+    expect(page.querySelector("[data-testid=welcome] textarea") !== null).toBe(true);
+    expect(page.querySelector("main")!.textContent).not.toContain("No projects yet");
+    await click(offer);
+    await until(() => page.ownerDocument.querySelector("[data-testid=project-name]"), "the new-project dialog");
+  });
+
+  test("an organisation with no projects offers a member, who may not make one, the welcome alone", async () => {
+    class EmptyForAMember extends FixtureClient {
+      override navigation() {
+        return super.navigation().then((n) => ({ ...n, projects: [] }));
+      }
+      override listPeople() {
+        return super.listPeople().then((l) => ({ ...l, people: l.people.map((p) => (p.id === l.you ? { ...p, role: "member" as const } : p)) }));
+      }
+    }
+    const page = await app("#/", new EmptyForAMember("a"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    // Both reads in: the tree is empty and the profile band knows who you are.
+    await until(() => (page.querySelector("aside")?.textContent?.includes("No projects yet") ? true : null), "the empty tree");
+    await until(() => page.querySelector("[data-testid=my-settings-button]")?.textContent?.includes("Márcio") ? true : null, "who you are");
+    await settle(50);
+    expect(page.querySelector("[data-testid=new-project-empty]") === null).toBe(true);
+  });
+
+  test("while the projects load, the welcome offers no New project", async () => {
+    class Never extends FixtureClient {
+      override navigation(): never {
+        return new Promise(() => undefined) as never;
+      }
+    }
+    const page = await app("#/", new Never("a"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    await settle(50);
+    expect(page.querySelector("[data-testid=new-project-empty]") === null).toBe(true);
+  });
+
+  test("a send from the welcome opens the new session and reads the sessions list again", async () => {
+    class Making extends FixtureClient {
+      reads = 0;
+      override sessions() {
+        this.reads++;
+        return super.sessions();
+      }
+      override async createSession() {
+        return { id: "ssn_new", title: null, runId: "run_new" };
+      }
+    }
+    const client = new Making("a");
+    const page = await app("#/", client);
+    const area = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await until(() => (client.reads >= 1 ? true : null), "the first read");
+    await settle(100);
+    const before = client.reads;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "plan the meter");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await until(() => (window.location.hash === "#/sessions/ssn_new" ? true : null), "the new session's place");
+    // The fixture's stream sends no session event here, so every read after the send is the app's own.
+    await settle(300);
+    expect(client.reads).toBe(before + 1);
+  });
+});
+
+describe("the sidebar's rail", () => {
+  afterEach(() => localStorage.removeItem("dude.sidebar"));
+  const key = (target: EventTarget, init: KeyboardEventInit = {}) =>
+    act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { key: "[", bubbles: true, cancelable: true, ...init })));
+
+  test("[ folds the sidebar to its rail and back, and the choice is kept", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("a reload keeps the rail; a project's face opens its board; the chevron expands it", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app("", new FixtureClient("a"));
+    const face = await until(() => page.querySelector<HTMLElement>(`[data-testid=rail-project][data-project="${PROJECT.id}"]`), "the project's face");
+    await click(face);
+    expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+    expect(face.getAttribute("aria-current")).toBe("page");
+    await click(page.querySelector("[data-testid=rail-expand]")!);
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("[ in a field is a character, and with ⌘ or Ctrl held it is not the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    const field = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await key(field);
+    const search = page.querySelector<HTMLInputElement>("input[type=search]")!;
+    await key(search);
+    await key(document.body, { metaKey: true });
+    await key(document.body, { ctrlKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("[ typed with Option (a Mac's pt/de layout) or AltGr (Ctrl+Alt) is the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=welcome] textarea"), "the composer");
+    await key(document.body, { altKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    await key(document.body, { ctrlKey: true, altKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("/ typed with Shift (Shift+7 on a pt/de layout) on the rail unfolds it with the search focused", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/", shiftKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(true);
+  });
+
+  test("[ in a contenteditable or on a select is not the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=welcome] textarea"), "the composer");
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
+    const select = document.createElement("select");
+    document.body.append(editable, select);
+    try {
+      await key(editable);
+      await key(select);
+      expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+      expect(localStorage.getItem("dude.sidebar")).toBeNull();
+    } finally {
+      editable.remove();
+      select.remove();
+    }
+  });
+
+  test("[ under 1000px, where there is no rail, changes nothing kept", async () => {
+    const happyDOM = (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM;
+    const width = window.innerWidth;
+    happyDOM.setInnerWidth(800);
+    try {
+      const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await key(document.body);
+      expect(localStorage.getItem("dude.sidebar")).toBeNull();
+    } finally {
+      happyDOM.setInnerWidth(width);
+    }
+  });
+
+  test("[ and / under 1000px leave a kept rail choice as it was", async () => {
+    const happyDOM = (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM;
+    const width = window.innerWidth;
+    happyDOM.setInnerWidth(800);
+    localStorage.setItem("dude.sidebar", "rail");
+    try {
+      const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await key(document.body);
+      await key(document.body, { key: "/" });
+      expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    } finally {
+      happyDOM.setInnerWidth(width);
+    }
+  });
+
+  test("/ on the rail unfolds it with the search focused; with the sidebar open it does nothing here", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/" });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(true);
+    (document.activeElement as HTMLElement).blur();
+    localStorage.removeItem("dude.sidebar");
+    await key(document.body, { key: "/" });
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("/ on the rail, in a field or with a modifier, is not the shortcut", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app("", new FixtureClient("a"));
+    const field = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await key(field, { key: "/" });
+    await key(document.body, { key: "/", metaKey: true });
+    await key(document.body, { key: "/", ctrlKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+  });
+
+  test("after / unfolds the rail, [ twice folds and unfolds it without taking the focus to the search", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/" });
+    (document.activeElement as HTMLElement).blur();
+    await key(document.body);
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(document.activeElement === page.querySelector("input[type=search]")).toBe(false);
+  });
+
+  test("the rail's New session, Sessions and Waiting on you go where the sidebar's do", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await click(await until(() => page.querySelector("[data-testid=rail-sessions]"), "Sessions"));
+    expect(window.location.hash).toBe("#/sessions");
+    await click(page.querySelector("[data-testid=rail-new-session]")!);
+    expect(window.location.hash).toBe("#/");
+    await click(page.querySelector("[data-testid=rail-waiting]")!);
+    expect(window.location.hash).toBe("#/waiting");
+    await click(page.querySelector("[data-testid=rail-home]")!);
+    expect(window.location.hash).toBe("#/");
   });
 });
 

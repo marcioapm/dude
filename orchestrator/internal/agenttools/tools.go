@@ -34,9 +34,7 @@ var tools = []tool{
 		"already exists.", nil, listTasks),
 	define("list_epics", "The project's epics, in priority order, with how many tasks each has and how many "+
 		"are still open.", nil, listEpics),
-	define("ask_person", "Ask a person something only a person can decide — the task is ambiguous in a way that "+
-		"changes what you build, or two reasonable readings conflict. After calling it, end your turn: the answer "+
-		"is your next message. Do not ask about anything you can decide or find out yourself.",
+	define("ask_person", askDescription+" After calling it, end your turn: the answers are your next message.",
 		[]string{"implementer", "investigator", "conductor"}, askPerson),
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
@@ -311,10 +309,33 @@ func listEpics(ctx context.Context, tx pgx.Tx, c Caller, _ listEpicsIn) ([]epicO
 
 // ---- ask_person -------------------------------------------------------------
 
+// askDescription is how ask_person reads to a model, in tasks and sessions.
+const askDescription = "Ask a person for decisions only a person can make — the task is ambiguous in a way that " +
+	"changes what you build, or two reasonable readings conflict. Do not ask about anything you can decide or find out " +
+	"yourself. When you have several such decisions, ask them together in one call (questions, up to 4) rather than " +
+	"one at a time. Give each a short header and, when there are sensible options, choices with a one-line description " +
+	"of why; mark the one you would pick recommended. Never add an \"other\" choice: dude always lets the person answer " +
+	"in their own words. One question alone may be asked as question and choices."
+
+// askItemIn is one question of ask_person's questions.
+type askItemIn struct {
+	Header   string        `json:"header" jsonschema:"a few words naming it, shown as its tab (at most 24 characters), like Retry scope"`
+	Question string        `json:"question" jsonschema:"the question, with enough context to answer it (at most 4000 characters)"`
+	Choices  []askChoiceIn `json:"choices,omitempty" jsonschema:"0 to 6 answers to offer, when there are sensible options; never an other or something-else choice: dude adds one"`
+	Multiple bool          `json:"multiple,omitempty" jsonschema:"the person may pick several choices (default one)"`
+}
+
+type askChoiceIn struct {
+	Label       string `json:"label" jsonschema:"the answer, short (at most 120 characters)"`
+	Description string `json:"description,omitempty" jsonschema:"one line on what it means or why (at most 300 characters)"`
+	Recommended bool   `json:"recommended,omitempty" jsonschema:"the one you would pick, shown as your suggestion; at most one per question"`
+}
+
 type askIn struct {
-	Question string   `json:"question" jsonschema:"what you need a person to decide, with enough context to answer it"`
-	Choices  []string `json:"choices,omitempty" jsonschema:"answers to offer, when there are some"`
-	Actions  []string `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it"`
+	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
+	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer, when there are some"`
+	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; the person answers them all at once"`
+	Actions   []string    `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it"`
 }
 
 type askOut struct {
@@ -322,16 +343,43 @@ type askOut struct {
 	Next       string `json:"next"`
 }
 
-// askPerson records a question for a person. The agent ends its turn; the
-// answer arrives as its next message — parked in between if the person
-// takes longer than the project's grace period.
-func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, error) {
-	q := strings.TrimSpace(in.Question)
+// askItems is what an ask_person call asks, either shape, normalized:
+// question (and choices) is one item; questions is one to four.
+func askItems(question string, choices []string, questions []askItemIn) ([]delivery.QuestionItem, error) {
+	var items []delivery.QuestionItem
 	switch {
-	case q == "":
-		return askOut{}, refuse("a question is required")
-	case len(q) > 4000 || len(in.Choices) > 10:
-		return askOut{}, refuse("too long: a question of at most 4000 characters, at most 10 choices")
+	case strings.TrimSpace(question) != "" && len(questions) > 0:
+		return nil, refuse("ask with question or with questions, not both")
+	case len(questions) > 0:
+		if len(choices) > 0 {
+			return nil, refuse("with questions, each question has its own choices")
+		}
+		for _, q := range questions {
+			item := delivery.QuestionItem{Header: q.Header, Question: q.Question, Multiple: q.Multiple}
+			for _, c := range q.Choices {
+				item.Choices = append(item.Choices, delivery.Choice{Label: c.Label, Description: c.Description, Recommended: c.Recommended})
+			}
+			items = append(items, item)
+		}
+	case strings.TrimSpace(question) == "":
+		return nil, refuse("a question is required: question, or questions (1 to %d)", delivery.MaxQuestionItems)
+	default:
+		items = []delivery.QuestionItem{delivery.SingleItem(question, choices)}
+	}
+	return conducted(delivery.NormalizeItems(items))
+}
+
+// askPerson records a question for a person — or up to four, answered
+// together. The agent ends its turn; the answer arrives as its next
+// message — parked in between if the person takes longer than the
+// project's grace period.
+func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, error) {
+	items, err := askItems(in.Question, in.Choices, in.Questions)
+	if err != nil {
+		return askOut{}, err
+	}
+	if len(in.Actions) > 0 && len(items) > 1 {
+		return askOut{}, refuse("actions go with one question (question and choices), about an escalation")
 	}
 	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
 	if err != nil {
@@ -344,13 +392,13 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	// is that escalation's question.
 	var escalation string
 	if c.Role == delivery.RoleConductor {
-		if escalation, err = conducted(delivery.EscalationQuestion(ctx, tx, c.run(), in.Choices, in.Actions)); err != nil {
+		if escalation, err = conducted(delivery.EscalationQuestion(ctx, tx, c.run(), items, in.Actions)); err != nil {
 			return askOut{}, err
 		}
 	} else if len(in.Actions) > 0 {
 		return askOut{}, refuse("actions are a conductor's, for a question about an escalation")
 	}
-	id, err := delivery.AskTx(ctx, tx, c.run(), q, in.Choices)
+	id, err := delivery.AskItemsTx(ctx, tx, c.run(), items)
 	if err != nil {
 		return askOut{}, err
 	}

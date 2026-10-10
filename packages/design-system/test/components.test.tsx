@@ -40,20 +40,19 @@ function text(html: string, attr: string): string {
 describe("QuestionCard choices", () => {
   const options = ["Yes", "No"];
 
-  test("waiting without onChoose: choices are left to the composer", () => {
+  test("waiting without a form: the question alone, no choices to press", () => {
     const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} />);
-    expect(h).not.toContain(">Yes<");
     expect(buttons(h)).toEqual([]);
   });
 
-  test("waiting with onChoose: one numbered button per choice", () => {
-    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} />);
+  test("a request waiting with onChoose: one numbered button per choice", () => {
+    const h = html(<QuestionCard role="conductor" kind="request" text="Read web?" options={options} onChoose={noop} />);
     expect(buttons(h).map((b) => b.text)).toEqual(["1Yes", "2No"]);
   });
 
-  test("answered and dismissed: choices are listed, not clickable", () => {
-    for (const props of [{ answeredAt: "2026-09-24T10:05:00Z" }, { dismissed: true }]) {
-      const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} askedAt="2026-09-24T10:00:00Z" {...props} />);
+  test("dismissed: choices are listed, not clickable", () => {
+    for (const props of [{ dismissed: true }, { settledBy: "Decided on the banner" }]) {
+      const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onSubmit={noop} askedAt="2026-09-24T10:00:00Z" {...props} />);
       expect(buttons(h)).toEqual([]);
       expect(h).toContain("Yes</span>");
       expect(h).toContain('aria-label="Choices offered"');
@@ -61,7 +60,7 @@ describe("QuestionCard choices", () => {
   });
 
   test("waiting on someone else: says who, lists the choices, offers none", () => {
-    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
+    const h = html(<QuestionCard role="conductor" text="Ship it?" options={options} onSubmit={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
     // Whom it waits on, and how to make it yours, in words everyone sees.
     expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to answer · Take over this task to answer");
@@ -112,33 +111,18 @@ describe("ToolCallCard exit chip", () => {
   });
 });
 
-describe("ChatComposer answer mode", () => {
-  const question = { id: "q1", text: "Ship it?", options: ["Yes", "No"] };
-
-  test("names the asker, or the agent when unknown", () => {
-    expect(html(<ChatComposer question={question} onSubmit={noop} />)).toContain("Answering the agent:");
-    expect(html(<ChatComposer question={{ ...question, askedBy: "Orchestrator" }} onSubmit={noop} />)).toContain("Answering Orchestrator:");
+describe("ChatComposer while the agent waits on you", () => {
+  test("one quiet line points to the question above, with a way to write instead; no field, no Send", () => {
+    const h = html(<ChatComposer mode="steer" waitingFor="Implement" onSubmit={noop} />);
+    expect(h).toContain("Implement is waiting for your answer above.");
+    expect(buttons(h).map((b) => b.text)).toEqual(["Write to the agent instead"]);
+    expect(h).not.toContain("<textarea");
   });
 
-  test("choices are a labelled group of chips", () => {
-    const h = html(<ChatComposer question={question} onSubmit={noop} />);
-    expect(groups(h)).toEqual(["Answer with one of"]);
-    const chips = buttons(h).filter((b) => b.attrs.includes('type="button"'));
-    expect(chips.map((b) => b.text)).toEqual(["Yes", "No"]);
-    expect(chips.every((b) => !/\bdisabled\b/.test(b.attrs))).toBe(true);
-  });
-
-  test("chips are disabled with the composer", () => {
-    const h = html(<ChatComposer question={question} disabled onSubmit={noop} />);
-    const chips = buttons(h).filter((b) => b.attrs.includes('type="button"'));
-    expect(chips).toHaveLength(2);
-    expect(chips.every((b) => /\bdisabled\b/.test(b.attrs))).toBe(true);
-  });
-
-  test("no group without options, and none in steer mode", () => {
-    expect(groups(html(<ChatComposer question={{ id: "q", text: "?" }} onSubmit={noop} />))).toEqual([]);
-    expect(groups(html(<ChatComposer question={{ id: "q", text: "?", options: [] }} onSubmit={noop} />))).toEqual([]);
-    expect(groups(html(<ChatComposer mode="steer" question={question} onSubmit={noop} />))).toEqual([]);
+  test("disabled (someone else's to answer) is the disabled composer, not the waiting line", () => {
+    const h = html(<ChatComposer mode="steer" waitingFor="Implement" disabled disabledReason="Waiting for Ana to answer." onSubmit={noop} />);
+    expect(h).not.toContain("waiting for your answer above");
+    expect(h).toContain("Waiting for Ana to answer.");
   });
 });
 
@@ -314,8 +298,8 @@ describe("ChatComposer lands hint", () => {
     expect(text(h, 'data-testid="lands-hint"')).toBe("Lands after the current tool");
   });
 
-  test("an answer, or a finished session, says nothing about landing", () => {
-    expect(html(<ChatComposer question={{ id: "q", text: "?" }} landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
+  test("waiting for an answer, or a finished session, says nothing about landing", () => {
+    expect(html(<ChatComposer mode="steer" waitingFor="Implement" landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
     expect(html(<ChatComposer mode="steer" disabled landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
     });
   });
