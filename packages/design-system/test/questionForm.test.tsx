@@ -247,7 +247,30 @@ test("each radio group is one tab stop; ↑/↓ move within it without picking; 
   await key(tab, "ArrowRight");
   expect(all('[role="tab"]')[3]!.getAttribute("aria-selected")).toBe("true");
   expect(document.activeElement === all('[role="tab"]')[3]).toBe(true);
+  await key(all('[role="tab"]')[3]!, "ArrowLeft");
+  expect(all('[role="tab"]')[2]!.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement === all('[role="tab"]')[2]).toBe(true);
+  // Space picks the focused row.
+  await click(all('[role="tab"]')[0]!);
+  await act(async () => radios()[0]!.focus());
+  await key(radios()[0]!, " ");
+  expect(radios().map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+  // In their own words, the stop is "Something else…".
+  await click(q('[data-choice="own"]'));
+  expect(radios().map((r) => r.tabIndex)).toEqual([-1, -1, 0]);
   expect(sent).toEqual([]);
+});
+
+test("one question: ↑/↓ only move, so they neither pick nor send", async () => {
+  const sent: QuestionSubmission[] = [];
+  await render(form(ONE, sent));
+  const radios = () => all('[role="radio"]');
+  await act(async () => radios()[0]!.focus());
+  await key(radios()[0]!, "ArrowDown");
+  await key(radios()[1]!, "ArrowDown");
+  expect(sent).toEqual([]);
+  expect(radios().every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+  expect(focusedChoice()).toBe("own");
 });
 
 test("the note's images: Send waits while one uploads, and sends the uploaded ids", async () => {
