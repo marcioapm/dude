@@ -470,7 +470,8 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
 	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
-	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A`, " +
+	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A` (one question; several at once: " +
+	"`dude ask --questions-json '[{\"header\":H,\"question\":Q,\"choices\":[{\"label\":L}]},...]'`), " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
