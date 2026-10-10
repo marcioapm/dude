@@ -113,9 +113,13 @@ type harnessState struct {
 	// that ended last was one: a turn that did not fail resets the count.
 	failedTurns int
 	lastFailed  bool
-	// What lux last warned about the agent (lux.warning), until a session
-	// it may explain is reported (session).
-	warning string
+	// What lux last warned about the agent (lux.warning), and in which
+	// placement: the reason for a session replaced in that placement only.
+	warning      string
+	warningEpoch int
+	// The agent's current harness session (session), "" on a Run from
+	// before it was kept here.
+	sessionID string
 }
 
 type codexTokens struct {
@@ -135,12 +139,14 @@ type harnessStateJSON struct {
 	FailedTurns    int              `json:"failedTurns,omitempty"`
 	LastFailed     bool             `json:"lastFailed,omitempty"`
 	Warning        string           `json:"warning,omitempty"`
+	WarningEpoch   int              `json:"warningEpoch,omitempty"`
+	SessionID      string           `json:"sessionId,omitempty"`
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning}
+		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning, WarningEpoch: h.warningEpoch, SessionID: h.sessionID}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -154,7 +160,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning}
+		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning, warningEpoch: j.WarningEpoch, sessionID: j.SessionID}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -524,7 +530,7 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	case "lux.warning":
 		// What lux says went wrong around the agent, as it says it: a
 		// session it could not reload among them (session).
-		t.warning = str("message")
+		t.warning, t.warningEpoch = str("message"), epoch
 		return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem, map[string]any{"message": t.warning})
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"), epoch)
@@ -748,9 +754,9 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		// Its state event says so too, but trails the agent's records on
 		// the stream, the first busy included.
 		t.resumeRunning(ctx, tx, s, epoch)
-		return t.sessionKept(ctx, tx, s, id)
+		return t.sessionKept(ctx, tx, s, id, epoch)
 	}
-	t.warning = ""
+	t.warning, t.sessionID = "", id
 	role := t.run.Phase
 	if t.run.talker() {
 		role = t.run.Role
@@ -765,16 +771,24 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 // recorded as agent.session.replaced, and a talker is briefed again, its
 // briefing queued as its next input (delivery.Rebriefing). The resume's own
 // input (a person's message, or the resume nudge) went first: the session
-// is known only after it was sent.
-func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id string) error {
-	reason := t.warning
-	t.warning = ""
-	var had string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
-		t.run.ID, evSessionStarted, evSessionReplaced).Scan(&had); err != nil {
-		return err
+// is known only after it was sent. The reason is lux's warning in this
+// placement, if it gave one.
+func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id string, epoch int) error {
+	reason := ""
+	if t.warningEpoch == epoch {
+		reason = t.warning
 	}
+	t.warning = ""
+	had := t.sessionID
+	// A Run from before the session was kept: the last one its events name.
+	if had == "" {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
+			t.run.ID, evSessionStarted, evSessionReplaced).Scan(&had); err != nil {
+			return err
+		}
+	}
+	t.sessionID = id
 	if had == "" || had == id {
 		return nil
 	}

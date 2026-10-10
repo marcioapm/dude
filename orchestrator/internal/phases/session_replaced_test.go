@@ -46,3 +46,51 @@ func TestAPhaseRunsReplacedSessionIsRecordedOnly(t *testing.T) {
 		t.Errorf("second replacement %v", again)
 	}
 }
+
+// A warning lux gave in an earlier placement is not why a later resume's
+// session was replaced: only one from the placement the new session is in.
+func TestAnEarlierWarningIsNoReasonForALaterReplacement(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}))
+	w.feedAt(1, rec("lux.warning", map[string]any{"message": "the model proxy answered slowly"}))
+	w.feedAt(2, rec("lux.session", map[string]any{"sessionId": "ses_a"}))
+	w.feedAt(2, rec("lux.warning", map[string]any{"message": "the model proxy answered slowly again"}))
+	w.restart()
+	w.feedAt(3, rec("lux.session", map[string]any{"sessionId": "ses_b"}))
+	replaced := ofType(w.events(), evSessionReplaced)
+	if len(replaced) != 1 || replaced[0].Payload["from"] != "ses_a" || replaced[0].Payload["reason"] != "" {
+		t.Errorf("replaced %v, want from ses_a with no reason", replaced)
+	}
+	// The session it is in now is kept with the cursor, for the next.
+	var kept string
+	if err := w.owner.QueryRow(t.Context(), `SELECT COALESCE(harness_state->>'sessionId', '') FROM runs WHERE id = $1`,
+		w.run.ID).Scan(&kept); err != nil || kept != "ses_b" {
+		t.Errorf("kept session %q (%v), want ses_b", kept, err)
+	}
+}
+
+// A Run from before the translator kept its harness session finds the one
+// it had in its events, and every replacement after chains from there.
+func TestAReplacementOnARunWithNoKeptSessionIsFoundInItsEvents(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}))
+	if _, err := w.owner.Exec(t.Context(), `UPDATE runs SET harness_state = '{}' WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.restart()
+	w.feedAt(2, rec("lux.session", map[string]any{"sessionId": "ses_a"}))
+	if got := ofType(w.events(), evSessionReplaced); len(got) != 0 {
+		t.Fatalf("the same session read as replaced: %v", got)
+	}
+	w.feedAt(3, rec("lux.session", map[string]any{"sessionId": "ses_b"}))
+	if _, err := w.owner.Exec(t.Context(), `UPDATE runs SET harness_state = '{}' WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.restart()
+	w.feedAt(4, rec("lux.session", map[string]any{"sessionId": "ses_c"}))
+	replaced := ofType(w.events(), evSessionReplaced)
+	if len(replaced) != 2 || replaced[0].Payload["from"] != "ses_a" || replaced[0].Payload["to"] != "ses_b" ||
+		replaced[1].Payload["from"] != "ses_b" || replaced[1].Payload["to"] != "ses_c" {
+		t.Errorf("replacements %v", replaced)
+	}
+}
