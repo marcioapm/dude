@@ -361,7 +361,7 @@ def test_a_screenshot_goes_beside_an_open_question(
     page.get_by_test_id("attach-input").set_input_files([{"name": "phone.png", "mimeType": "image/png", "buffer": png(390, 844)}])
     expect(page.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
     _shoot(page, "5-answer")
-    page.get_by_role("button", name="Steer").click()
+    page.get_by_role("button", name="Steer", exact=True).click()
     steered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.steered"],
                          timeout=15, message="no message")
     directive = steered[0]["payload"]["directiveId"]
@@ -390,14 +390,14 @@ def test_several_answers_carry_a_screenshot_in_their_note(
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     turn = page.get_by_test_id("question-turn").last
-    turn.get_by_role("radio", name="Yes").click()
-    turn.get_by_role("button", name="Next").click()
-    turn.get_by_role("radio", name="Pay in parts").click()
-    turn.get_by_role("button", name="Review").click()
+    turn.get_by_role("radio", name="Yes", exact=True).click()
+    turn.get_by_role("button", name="Next", exact=True).click()
+    turn.get_by_role("radio", name="Pay in parts", exact=True).click()
+    turn.get_by_role("button", name="Review", exact=True).click()
     turn.get_by_label("A note for the agent (optional)").fill("It overflows — VAT amount is cut off on the right.")
     turn.get_by_test_id("attach-input").set_input_files([{"name": "phone.png", "mimeType": "image/png", "buffer": png(390, 844)}])
     expect(turn.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
-    turn.get_by_role("button", name="Send answers").click()
+    turn.get_by_role("button", name="Send answers", exact=True).click()
     answered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered"],
                           timeout=15, message="no answer")
     payload = answered[0]["payload"]
