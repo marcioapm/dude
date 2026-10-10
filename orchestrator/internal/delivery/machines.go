@@ -39,6 +39,10 @@ type Machine struct {
 	// the submit's. A memory limit of an earlier placement is not this
 	// size's (phases.RecordMemoryLimit).
 	SinceEpoch int `json:"sinceEpoch,omitempty"`
+	// The size id a resume did not apply because lux's pool list said the
+	// Run's pool is not lux's default and the size names none: a later
+	// resume to the same size does not ask lux again.
+	OtherPool string `json:"otherPool,omitempty"`
 	// Not recorded: the size id the settings name that no longer exists,
 	// when the default was taken because of it.
 	Missing string `json:"-"`

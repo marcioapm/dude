@@ -27,11 +27,22 @@ func TestASizeIsTheOneNamedElseTheDefault(t *testing.T) {
 			t.Errorf("%s over %s = %+v %v, want %s from %s", tc.role, tc.project, got, ok, tc.want, tc.from)
 		}
 	}
-	if got, _ := sizes.ForPreview("large"); got.Name != "Large" || got.From != "project" {
+	if got, _ := sizes.ForPreview("large"); got.Name != "Large" || got.From != "project" || got.Missing != "" {
 		t.Errorf("preview = %+v", got)
 	}
-	if got, _ := sizes.ForPreview(""); got.Name != "Standard" || got.From != "default" {
+	if got, _ := sizes.ForPreview(""); got.Name != "Standard" || got.From != "default" || got.Missing != "" {
 		t.Errorf("preview with none = %+v", got)
+	}
+	// A size that is gone: the default, flagged so a resume keeps the
+	// Run's size (phases.PlanResize).
+	if got, _ := sizes.ForPreview("gone"); got.Name != "Standard" || got.From != "default" || got.Missing != "gone" {
+		t.Errorf("preview naming a size that is gone = %+v", got)
+	}
+	if got, _ := sizes.ForRole("reviewer", nil, org); got.Missing != "gone" {
+		t.Errorf("reviewer naming a size that is gone = %+v", got)
+	}
+	if got, _ := sizes.ForRole("investigator", nil, org); got.Missing != "" {
+		t.Errorf("investigator naming none = %+v", got)
 	}
 	if _, ok := (Sizes{}).ForRole("implementer", nil, nil); ok {
 		t.Error("an organization with no sizes has a size")

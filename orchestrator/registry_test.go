@@ -230,11 +230,12 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 func (w *world) pauseAndResume(wi string) {
 	w.t.Helper()
 	runID := w.parked(wi)
-	resumed := w.lux.Runs()[0].Resumed
+	luxID := w.lux.Runs()[0].ID
+	resumed := len(w.lux.ResumeResourcesOf(luxID))
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == resumed+1 })
+	w.until("the resume", func() bool { return len(w.lux.ResumeResourcesOf(luxID)) == resumed+1 })
 }
 
 // Every way a Run is resumed carries a login minted for it: the one it
@@ -252,7 +253,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 		"parked on a question": func(w *world) func() {
 			w.syncer.ParkAfter = 300 * time.Millisecond
 			wi, _ := w.asking()
-			w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+			w.until("lux to stop it", func() bool { return w.lux.State(w.lux.Runs()[0].ID) == "stopped" })
 			return func() { w.call("/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}) }
 		},
 		"parked idle": func(w *world) func() {
@@ -263,7 +264,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			var runID string
 			w.until("the idle park", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND dude_pause = 'idle' AND status = 'paused'`, wi).Scan(&runID)
-				return runID != "" && w.lux.Runs()[0].State == "stopped"
+				return runID != "" && w.lux.State(w.lux.Runs()[0].ID) == "stopped"
 			})
 			return func() { w.call("/internal/runs/"+runID+"/resume", map[string]any{}) }
 		},
@@ -282,7 +283,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			var runID, reqID string
 			w.until("the run to be parked", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND dude_pause = 'person'`, wi).Scan(&runID)
-				return runID != "" && w.lux.Runs()[0].State == "stopped"
+				return runID != "" && w.lux.State(w.lux.Runs()[0].ID) == "stopped"
 			})
 			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE run_id = $1`, runID).Scan(&reqID)
 			return func() {

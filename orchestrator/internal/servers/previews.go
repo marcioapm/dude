@@ -781,18 +781,16 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	defer stop()
 	// An event of this start (a resuming moves lux_start_event past this)
 	// applied before the answer is newer than it, as for woken.
-	var startBefore int64
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&startBefore)
+	var sizes resumeSizes
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		sizes, err = loadResumeSizes(ctx, tx, r.ID)
+		return err
 	}); err != nil {
 		p.release(ctx, op)
 		return err
 	}
-	plan, err := p.resizePlan(ctx, r, lr)
-	if err != nil {
-		p.release(ctx, op)
-		return err
-	}
+	startBefore := sizes.startBefore
+	plan := sizes.plan(ctx, p.Lux, lr)
 	// lux answers a Run already resuming as it did the first time; a
 	// refusal (cancelled or finished meanwhile) is for good.
 	var refused *lux.Error

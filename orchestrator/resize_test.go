@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -31,14 +33,7 @@ func (w *world) resumeAgent(runID string, r *fakelux.Run) {
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	for i := 0; len(w.lux.ResumeResourcesOf(r.ID)) == before; i++ {
-		if i == 200 {
-			w.t.Fatalf("the Run was not resumed\n%s", w.describeRuns())
-		}
-		if _, err := w.syncer.Sweep(context.Background()); err != nil {
-			w.t.Fatal(err)
-		}
-	}
+	w.until("lux to have the resume", func() bool { return len(w.lux.ResumeResourcesOf(r.ID)) > before })
 }
 
 // resumeResources is the resources each resume lux accepted carried; nil
@@ -199,12 +194,16 @@ func (w *world) pauseAgain(runID string, r *fakelux.Run) {
 
 // A smaller disk lux will not apply (its saved state needs more): the Run
 // resumes with Tiny's CPUs and memory and keeps its disk, and runs.machine
-// says the disk lux kept, not the one asked for, with lux's reason.
+// says the disk lux kept, not the one asked for, with lux's reason. The
+// next wake asks again (the state may fit by then); lux keeping the disk
+// again changes nothing, so nothing is recorded: one run.resized, and the
+// memory limit of the placement on Tiny stays.
 func TestADiskShrinkLuxRefusesRecordsTheDiskItKept(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.tiny()
 	w.lux.DiskUse = 8 * gibB // needs 10 GiB: more than Tiny's 5
+	w.lux.MemoryShare = 0.95
 	runID, web := w.asleepPreview()
 	luxRun := w.previewLux(runID)
 
@@ -220,14 +219,40 @@ func TestADiskShrinkLuxRefusesRecordsTheDiskItKept(t *testing.T) {
 		kept["requestedGiB"] != 5.0 || kept["reason"] != "its saved state used up to 8.0 GiB; a smaller disk must be at least 10.0 GiB (that plus max(25%, 1 GiB))" {
 		t.Errorf("runs.machine = %v, want Tiny with the 20 GiB disk lux kept and why", m)
 	}
+
+	w.sleepAgain(runID, web)
+	w.wakeAgain(runID, web)
+	tiny := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 5 * gibB}
+	if got := w.resumeResources(luxRun); len(got) != 2 || got[1] == nil || *got[1] != tiny {
+		t.Errorf("the second wake sent %v, want Tiny's again", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
+		t.Errorf("%d run.resized after lux kept the disk twice, want 1", n)
+	}
+	// 1 GiB, of which the container gets 95%, to a MiB: the placement on
+	// Tiny's (epoch 2), recorded as the second wake read it.
+	if m := w.machineOf(runID); m["sinceEpoch"] != 2.0 || m["memoryLimit"] != float64(int64(972)<<20) {
+		t.Errorf("runs.machine = %v, want since epoch 2 with Tiny's memory limit", m)
+	}
+}
+
+// sleepAgain lets the woken preview go idle and waits for it to be parked.
+func (w *world) sleepAgain(runID, web string) {
+	w.t.Helper()
+	w.lux.Idle(web)
+	w.until("asleep again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
 }
 
 // A size in another pool cannot be had by a resume: lux binds a Run to the
 // pool it was submitted to. The preview wakes on the size it has, nothing
-// is sent, and its record says why, naming both.
+// is sent, and its record says why, naming both; the memory limit lux gave
+// it, still its size's, is kept.
 func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
+	w.lux.MemoryShare = 0.95
 	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
 		VALUES ('msz_big', $1, 'Big', 8, 16384, 40, $2)`, w.org, bigPool)
 	runID, web := w.asleepPreview()
@@ -244,11 +269,217 @@ func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
 	}
 	m := w.machineOf(runID)
 	want := "Its settings now name Big, in another pool: a stopped Run cannot change pools, so it keeps Standard. A new Run gets Big."
-	if m["name"] != "Standard" || m["cpus"] != 2.0 || m["note"] != want {
-		t.Errorf("runs.machine = %v, want Standard kept with the reason", m)
+	// Standard's 8 GiB, of which the container gets 95%, to a MiB.
+	if m["name"] != "Standard" || m["cpus"] != 2.0 || m["note"] != want || m["memoryLimit"] != float64(int64(7782)<<20) {
+		t.Errorf("runs.machine = %v, want Standard kept with the reason and its memory limit", m)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized' AND payload->'machine'->>'note' = $2`, runID, want); n != 1 {
 		t.Errorf("%d run.resized with the reason, want 1", n)
+	}
+}
+
+// defaultPool is the fake lux's default pool's id (fakelux.DefaultPools).
+const defaultPool = "pool_d4f7k2m9q1x8"
+
+// A size naming lux's default pool by id is in the same pool as one naming
+// none, either way round: a preview on Standard (no pool) resizes to Lean,
+// which names the default by id (the Run's pool, as lux reports it); one
+// on Lean resizes to Tiny (no pool), lux's pool list saying the Run's
+// pool is its default.
+func TestASizeNamingTheDefaultPoolByIdIsTheSamePoolAsNone(t *testing.T) {
+	lean := lux.Resources{CPUs: 1, Memory: 2 << 30, Disk: 10 * gibB}
+	tiny := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 5 * gibB}
+	for name, tc := range map[string]struct {
+		from, to string
+		want     lux.Resources
+		name     string
+	}{
+		"none to the default by id": {"", "msz_lean", lean, "Lean"},
+		"the default by id to none": {"msz_lean", "msz_tiny", tiny, "Tiny"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.tiny()
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+				VALUES ('msz_lean', $1, 'Lean', 1, 2048, 10, $2)`, w.org, defaultPool)
+			if tc.from != "" {
+				mustExec(t, w.owner, `UPDATE projects SET preview_settings = jsonb_build_object('machineSize', $2::text) WHERE id = $1`, w.project, tc.from)
+			}
+			runID, web := w.asleepPreview()
+			luxRun := w.previewLux(runID)
+
+			mustExec(t, w.owner, `UPDATE projects SET preview_settings = jsonb_build_object('machineSize', $2::text) WHERE id = $1`, w.project, tc.to)
+			w.wakeAgain(runID, web)
+			if got := w.resumeResources(luxRun); len(got) != 1 || got[0] == nil || *got[0] != tc.want {
+				t.Errorf("the wake sent %v, want %s's", got, tc.name)
+			}
+			if m := w.machineOf(runID); m["name"] != tc.name || m["cpus"] != tc.want.CPUs || m["note"] != nil {
+				t.Errorf("runs.machine = %v, want %s", m, tc.name)
+			}
+		})
+	}
+}
+
+// poolsFailing is a lux whose pool list fails while fail is set; calls
+// counts the lists asked for.
+type poolsFailing struct {
+	lux.Client
+	fail  atomic.Bool
+	calls atomic.Int32
+}
+
+func (c *poolsFailing) Pools(ctx context.Context) ([]lux.Pool, error) {
+	c.calls.Add(1)
+	if c.fail.Load() {
+		return nil, &lux.Error{Status: 503, Code: "unavailable", Message: "down"}
+	}
+	return c.Client.Pools(ctx)
+}
+
+// A preview in a named pool whose settings move to a size naming none
+// (lux's default) needs lux's pool list to tell. While it fails, the wake
+// goes on on the Run's size and nothing is recorded: not knowing is not
+// "another pool". Once lux answers, the record says the size is in
+// another pool; later wakes to the same size do not ask lux again, and
+// record nothing new.
+func TestAWakeWhenLuxsPoolsCannotBeReadSendsAndRecordsNothing(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.tiny()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_big', $1, 'Big', 8, 16384, 40, $2)`, w.org, bigPool)
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_big"}' WHERE id = $1`, w.project)
+	runID, web := w.asleepPreview()
+	luxRun := w.previewLux(runID)
+	pools := &poolsFailing{Client: w.previews.Lux}
+	pools.fail.Store(true)
+	w.previews.Lux = pools
+	before := w.machineOf(runID)
+
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_tiny"}' WHERE id = $1`, w.project)
+	w.wakeAgain(runID, web)
+	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] != nil {
+		t.Errorf("the wake sent %v, want nothing", got)
+	}
+	if m := w.machineOf(runID); m["name"] != "Big" || m["note"] != nil || len(m) != len(before) {
+		t.Errorf("runs.machine = %v, want it as it was: %v", m, before)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 0 {
+		t.Errorf("%d run.resized while lux's pools could not be read", n)
+	}
+	if pools.calls.Load() == 0 {
+		t.Fatal("lux's pools were never asked for")
+	}
+
+	pools.fail.Store(false)
+	w.sleepAgain(runID, web)
+	w.wakeAgain(runID, web)
+	want := "Its settings now name Tiny, in another pool: a stopped Run cannot change pools, so it keeps Big. A new Run gets Tiny."
+	if m := w.machineOf(runID); m["name"] != "Big" || m["note"] != want {
+		t.Errorf("runs.machine = %v, want Big with note %q", m, want)
+	}
+	asked := pools.calls.Load()
+
+	w.sleepAgain(runID, web)
+	w.wakeAgain(runID, web)
+	if got := w.resumeResources(luxRun); len(got) != 3 || got[1] != nil || got[2] != nil {
+		t.Errorf("the wakes sent %v, want nothing", got)
+	}
+	if n := pools.calls.Load(); n != asked {
+		t.Errorf("lux's pools were asked for %d more times for a size already found elsewhere", n-asked)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
+		t.Errorf("%d run.resized, want 1", n)
+	}
+}
+
+// diskOnly is a lux that took a resume's disk and nothing else of its
+// resources, saying nothing of it in its answer (with NoResize, a lux from
+// before lux#51).
+type diskOnly struct{ lux.Client }
+
+func (c diskOnly) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	if in.Resources != nil {
+		in.Resources = &lux.Resources{Disk: in.Resources.Disk}
+	}
+	return c.Client.Resume(ctx, id, in)
+}
+
+// A lux that applied only part of the size leaves the Run on neither size:
+// runs.machine has the numbers lux's spec has, under the size it had, with
+// a note naming the size its settings name.
+func TestAPartlyAppliedSizeKeepsItsNameWithLuxsNumbers(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.tiny()
+	w.lux.NoResize = true
+	runID, web := w.asleepPreview()
+	sizeID := w.machineOf(runID)["sizeId"]
+	w.previews.Lux = diskOnly{w.previews.Lux}
+
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_tiny"}' WHERE id = $1`, w.project)
+	w.wakeAgain(runID, web)
+
+	m := w.machineOf(runID)
+	if m["name"] != "Standard" || m["sizeId"] != sizeID || m["from"] != "default" || m["cpus"] != 2.0 || m["memoryMiB"] != 8192.0 ||
+		m["diskGiB"] != 5.0 || m["note"] != "Its settings name Tiny; lux applied only part of it, as shown." || m["sinceEpoch"] != 2.0 {
+		t.Errorf("runs.machine = %v, want Standard's name with lux's 2 CPUs, 8 GiB and 5 GiB disk", m)
+	}
+}
+
+// answersNoSpec is a lux whose resume answer says nothing of the Run's
+// resources.
+type answersNoSpec struct{ lux.Client }
+
+func (c answersNoSpec) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	res, err := c.Client.Resume(ctx, id, in)
+	res.Resize, res.Spec.Resources = nil, nil
+	return res, err
+}
+
+// An answer that says nothing of the Run's resources is not taken as the
+// request: lux's Run is read again, and what it has is recorded.
+func TestAResumeAnswerWithoutResourcesIsReadAgain(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.tiny()
+	runID, web := w.asleepPreview()
+	w.previews.Lux = answersNoSpec{w.previews.Lux}
+
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_tiny"}' WHERE id = $1`, w.project)
+	w.wakeAgain(runID, web)
+	if m := w.machineOf(runID); m["name"] != "Tiny" || m["cpus"] != 0.5 || m["diskGiB"] != 5.0 {
+		t.Errorf("runs.machine = %v, want Tiny as lux's Run says", m)
+	}
+}
+
+// An eager (not wakeable) preview parked by the previews loop resumes on
+// the size its project names now when a person starts one of its servers.
+func TestAParkedEagerPreviewResumesOnTheSizeItsProjectNamesNow(t *testing.T) {
+	w := newWorld(t)
+	w.tiny()
+	runID := w.parkedPreview()
+	luxRun := w.previewLux(runID)
+	if m := w.machineOf(runID); m["name"] != "Standard" {
+		t.Fatalf("the preview started on %v, want Standard", m)
+	}
+
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = preview_settings || '{"machineSize":"msz_tiny"}' WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `UPDATE runs SET pending_starts = '{docs}' WHERE id = $1`, runID)
+	w.until("the preview to be resumed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+	})
+
+	tiny := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 5 * gibB}
+	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] == nil || *got[0] != tiny {
+		t.Errorf("the resume sent %v, want Tiny's resources", got)
+	}
+	if got := w.luxResources(luxRun); got != tiny {
+		t.Errorf("lux's spec = %+v, want Tiny's", got)
+	}
+	if m := w.machineOf(runID); m["name"] != "Tiny" || m["sizeId"] != "msz_tiny" || m["cpus"] != 0.5 || m["diskGiB"] != 5.0 {
+		t.Errorf("runs.machine = %v, want Tiny", m)
 	}
 }
 
@@ -294,6 +525,9 @@ func TestA409WhileResumingDoesNotFailTheWake(t *testing.T) {
 	w.tiny()
 	runID, web := w.asleepPreview()
 	luxRun := w.previewLux(runID)
+	// The resume lux takes first stays resuming for the whole exchange:
+	// its placement waits StartAfter/5 before it is assigned.
+	w.lux.StartAfter = 2 * time.Second
 	already := &resumingAlready{Client: w.previews.Lux, seen: map[string]bool{}}
 	w.previews.Lux = already
 
@@ -304,8 +538,10 @@ func TestA409WhileResumingDoesNotFailTheWake(t *testing.T) {
 	already.mu.Lock()
 	asked, errs := already.asked, already.errs
 	already.mu.Unlock()
-	if le, ok := lux.AsError(errs[0]); len(asked) != 2 || asked[0] == nil || *asked[0] != tiny || !ok || le.Status != 409 ||
-		asked[1] != nil || errs[1] != nil {
+	if len(asked) != 2 || len(errs) != 2 {
+		t.Fatalf("dude asked %v, lux answered %v; want two resumes", asked, errs)
+	}
+	if le, ok := lux.AsError(errs[0]); asked[0] == nil || *asked[0] != tiny || !ok || le.Status != 409 || asked[1] != nil || errs[1] != nil {
 		t.Errorf("dude asked %v, lux answered %v; want Tiny refused 409, then the same resume without resources taken", asked, errs)
 	}
 	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] != nil {
@@ -345,7 +581,7 @@ func TestALuxThatCannotResizeResumesTheRunAsItIs(t *testing.T) {
 	}
 	m := w.machineOf(runID)
 	note, _ := m["note"].(string)
-	if m["name"] != "Standard" || m["cpus"] != 2.0 || note != `Its settings now name Tiny, but this resume kept Standard (lux said: invalid JSON body: json: unknown field "cpus"). The next resume tries again.` {
+	if m["name"] != "Standard" || m["cpus"] != 2.0 || note != "Its settings now name Tiny, but this resume kept Standard: this lux cannot change a stopped Run's CPUs or memory." {
 		t.Errorf("runs.machine = %v", m)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
@@ -376,8 +612,37 @@ func TestALuxThatIgnoresResourcesIsRecordedAsItsSpecSays(t *testing.T) {
 	w.wakeAgain(runID, web)
 
 	m := w.machineOf(runID)
-	want := "Its settings now name Tiny, but this resume kept Standard (lux did not apply it). The next resume tries again."
+	want := "Its settings now name Tiny, but this resume kept Standard (lux did not apply it)."
 	if m["name"] != "Standard" || m["cpus"] != 2.0 || m["diskGiB"] != 20.0 || m["note"] != want {
 		t.Errorf("runs.machine = %v, want Standard as lux's spec says", m)
+	}
+}
+
+// A conductor resumed on a lux without sync modes is resumed again without
+// its sync (Syncer.resume's fallback): that retry still carries the size
+// its role names now.
+func TestAResumeRetriedWithoutSyncModesStillResizes(t *testing.T) {
+	e := newEditing(t)
+	e.tiny()
+	e.wokenWith(e.task, "after implement")
+	e.syncer.ConductorWarm = 1
+	e.until("the conductor parked", func() bool { _, status, _ := e.conductor(e.task); return status == "paused" })
+	e.syncer.ConductorWarm = 1 << 40
+	mustExec(t, e.owner, `UPDATE projects SET agent_models = agent_models ||
+		jsonb_build_object('conductor', COALESCE(agent_models->'conductor', '{}') || '{"machineSize":"msz_tiny"}') WHERE id = $1`, e.project)
+	e.lux.NoSyncModes = true
+	if status, _ := e.chat(e.task, "resume without modes"); status != 200 {
+		t.Fatalf("chat %d", status)
+	}
+	e.heard("resume without modes")
+
+	luxRun := e.luxRunOf(e.cond)
+	tiny := lux.Resources{CPUs: 0.5, Memory: 1 << 30, Disk: 5 * gibB}
+	got := e.resumeResources(luxRun)
+	if len(got) == 0 || got[len(got)-1] == nil || *got[len(got)-1] != tiny {
+		t.Errorf("the resumes lux took carried %v, want the last Tiny's", got)
+	}
+	if m := e.machineOf(e.cond); m["name"] != "Tiny" || m["cpus"] != 0.5 {
+		t.Errorf("runs.machine = %v, want Tiny", m)
 	}
 }

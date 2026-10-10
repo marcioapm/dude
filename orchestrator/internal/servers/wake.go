@@ -606,17 +606,16 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	}
 	// After what drain applied of the Run's earlier starts: their ends are
 	// older than this resume's answer, whenever they reached dude.
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&r.StartBefore)
+	var sizes resumeSizes
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		sizes, err = loadResumeSizes(ctx, tx, r.ID)
+		return err
 	}); err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
-	plan, err := p.resizePlan(ctx, r.previewRun, lr)
-	if err != nil {
-		_ = p.releaseWake(ctx, r, 5*time.Second)
-		return err
-	}
+	r.StartBefore = sizes.startBefore
+	plan := sizes.plan(ctx, p.Lux, lr)
 	res, err := phases.ResumeSized(ctx, p.Lux, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
 		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())}, plan)
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
