@@ -46,17 +46,17 @@ test("the shell frames: the welcome beside the full sidebar, the first-time line
   const el = await mount();
   for (const frame of el.querySelectorAll("#wl-shell [data-shot]")) {
     expect(frame.querySelector("h1")!.textContent).toBe("Afternoon, Márcio");
-    expect(frame.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(frame.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     const rows = frame.querySelectorAll("[data-testid=recent-session]").length;
     expect(rows).toBe(frame.getAttribute("data-density") === "compact" ? 6 : 4);
   }
   for (const frame of el.querySelectorAll("#wl-first [data-shot]")) {
     expect(frame.querySelector("[data-testid=welcome-note]")!.textContent).toContain("It changes nothing");
-    expect(frame.querySelector("[data-testid=recent-session]")).toBeNull();
+    expect(frame.querySelector("[data-testid=recent-session]") === null).toBe(true);
   }
   for (const frame of el.querySelectorAll("#wl-rail [data-shot]")) {
     expect(frame.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
-    expect(frame.querySelector("[role=tree]")).toBeNull();
+    expect(frame.querySelector("[role=tree]") === null).toBe(true);
   }
 });
 

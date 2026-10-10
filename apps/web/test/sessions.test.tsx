@@ -493,7 +493,7 @@ describe("a session's name", () => {
     await settle();
     expect(welcomed).toBe(1);
     // The screen holds no client; "makes nothing" is that it opens no dialog of its own.
-    expect(document.querySelector("[role=dialog]")).toBeNull();
+    expect(document.querySelector("[role=dialog]") === null).toBe(true);
   });
 });
 

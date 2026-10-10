@@ -106,7 +106,7 @@ describe("the greeting", () => {
 
   test("the composer is focused, says what to write, and goes to the brainstorm", async () => {
     const page = await welcome(new Welcoming());
-    expect(document.activeElement).toBe(textarea(page));
+    expect(document.activeElement === textarea(page)).toBe(true);
     expect(textarea(page).placeholder).toBe("Start a session: an idea, a question, a plan…");
     expect(page.querySelector("[data-testid=composer-to]")!.textContent).toBe("To Brainstorm");
     // The welcome's composer is the raised stage one.
@@ -122,7 +122,7 @@ describe("a starter", () => {
     await click(page.querySelector("[data-starter=epic]")!);
     await settle(40);
     expect(textarea(page).value).toBe("I want to plan an epic for ");
-    expect(document.activeElement).toBe(textarea(page));
+    expect(document.activeElement === textarea(page)).toBe(true);
     expect(textarea(page).selectionStart).toBe("I want to plan an epic for ".length);
     expect(client.made).toEqual([]);
   });
@@ -202,7 +202,7 @@ describe("recent sessions", () => {
     await click(page.querySelector("[data-testid=all-sessions]")!);
     expect(opened).toEqual(["s2"]);
     expect(all).toBe(1);
-    expect(page.querySelector("[data-testid=welcome-note]")).toBeNull();
+    expect(page.querySelector("[data-testid=welcome-note]") === null).toBe(true);
   });
 
   test("six in compact", async () => {
@@ -219,7 +219,7 @@ describe("recent sessions", () => {
   test("none yet: the first-time line in their place", async () => {
     const page = await welcome(new Welcoming(), { sessions: [] });
     expect(page.querySelector("[data-testid=welcome-note]")!.textContent).toBe(FIRST_TIME);
-    expect(page.querySelector("[data-testid=recent-session]")).toBeNull();
+    expect(page.querySelector("[data-testid=recent-session]") === null).toBe(true);
   });
 });
 
