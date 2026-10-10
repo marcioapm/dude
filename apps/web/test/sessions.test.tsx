@@ -22,6 +22,7 @@ let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const unmount of mounted) await unmount();
   mounted = [];
+  localStorage.clear();
 });
 
 const SESSION = "ssn_billing";
