@@ -100,6 +100,13 @@ export interface ProposalItemStatus {
   key?: string;
   canFile?: boolean;
   why?: string;
+  /**
+   * What blocks an item the person can't file: `owner` (its task's owner
+   * may, named in `owner`) and `reader` (a member who can chat may) leave it
+   * to someone else; `started`, `unlinked` and `not_a_task` block everyone.
+   */
+  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "unknown";
+  owner?: PersonRef;
 }
 
 export interface Proposal {
