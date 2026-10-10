@@ -43,9 +43,10 @@ func TestAFailedStopOnParkIsAskedAgain(t *testing.T) {
 		lr, err := w.previews.Lux.Get(context.Background(), r.ID)
 		return err == nil && lr.State == "stopped"
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID); n != 1 {
-		t.Errorf("dude's row:\n%s", w.describeRuns())
-	}
+	// dude's row follows lux's state event on the follower's goroutine.
+	w.until("dude's row paused and stopped", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
 }
 
 // A server lux never reports idle (its command never opens its port) does

@@ -101,6 +101,19 @@ func (w *world) open(serverID string) {
 
 func (w *world) luxRuns() []*fakelux.Run { return w.lux.Runs() }
 
+// luxCalls is how many times the fake took call ("resume", "stop") on Run
+// id, read under its lock: each such call is recorded with Resumed++ or
+// Stopped++, which a poll may not read unlocked.
+func (w *world) luxCalls(id, call string) int {
+	n := 0
+	for _, c := range w.lux.CallsOf(id) {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
 // heard waits, without sweeping, for the feed follower to record a wake.
 func (w *world) heard(runID string) {
 	w.t.Helper()

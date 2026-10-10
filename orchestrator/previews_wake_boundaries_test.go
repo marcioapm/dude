@@ -149,6 +149,10 @@ func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
 				t.Fatalf("the ended Run was not resumed: resumed %d, calls %v\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
 			}
 			w.open(web)
+			// dude's row follows lux's state event on the follower's goroutine.
+			w.untilPreview(runID, "the resumed Run running", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+			})
 			if n := len(w.luxRuns()); n != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
 				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
 				t.Fatalf("%d lux runs, calls %v; want the Run that ran resumed\n%s", n, w.lux.CallsOf(r.ID), w.preview(runID))
@@ -271,6 +275,10 @@ func TestACrashedPreviewWakesWhileItsOutputIsSlowToReplay(t *testing.T) {
 			r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
 	}
 	w.open(web)
+	// dude's row follows lux's state event on the follower's goroutine.
+	w.untilPreview(runID, "the resumed Run running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+	})
 	if n := len(w.luxRuns()); n != 1 || r.Resumed != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
 		w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
 		t.Fatalf("%d lux runs, resumed %d, calls %v; want the Run resumed once\n%s", n, r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
@@ -300,7 +308,7 @@ func (w *world) crashedThenFailedResumes(n int) (runID, web string, r *fakelux.R
 			Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}}}); err != nil {
 			w.t.Fatal(err)
 		}
-		waitFor(w.t, "the resumed start failed", func() bool { return r.Resumed == i && w.lux.State(r.ID) == "failed" })
+		waitFor(w.t, "the resumed start failed", func() bool { return w.luxCalls(r.ID, "resume") == i && w.lux.State(r.ID) == "failed" })
 	}
 	mustExec(w.t, w.owner, `UPDATE runs SET wake_wanted_at = now(), next_attempt_at = NULL WHERE id = $1`, runID)
 	return runID, web, r
@@ -409,7 +417,7 @@ func TestAStaleSweepDoesNotHoldTheNextWake(t *testing.T) {
 	w.lux.FailStarts("dude.preview="+runID, 1)
 	w.lux.RequestServer(web, "/")
 	w.untilPreview(runID, "the follower held before the failed start", func() bool {
-		return r.Resumed == 1 && isClosed(held)
+		return w.luxCalls(r.ID, "resume") == 1 && isClosed(held)
 	})
 	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = now(), next_attempt_at = NULL WHERE id = $1`, runID)
 	var selected time.Time

@@ -230,11 +230,11 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 func (w *world) pauseAndResume(wi string) {
 	w.t.Helper()
 	runID := w.parked(wi)
-	resumed := w.lux.Runs()[0].Resumed
+	resumed := w.luxCalls(w.lux.Runs()[0].ID, "resume")
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == resumed+1 })
+	w.until("the resume", func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == resumed+1 })
 }
 
 // Every way a Run is resumed carries a login minted for it: the one it
@@ -252,7 +252,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 		"parked on a question": func(w *world) func() {
 			w.syncer.ParkAfter = 300 * time.Millisecond
 			wi, _ := w.asking()
-			w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+			w.until("lux to stop it", func() bool { return w.lux.State(w.lux.Runs()[0].ID) == "stopped" })
 			return func() { w.call("/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}) }
 		},
 		"parked idle": func(w *world) func() {
@@ -263,7 +263,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			var runID string
 			w.until("the idle park", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND dude_pause = 'idle' AND status = 'paused'`, wi).Scan(&runID)
-				return runID != "" && w.lux.Runs()[0].State == "stopped"
+				return runID != "" && w.lux.State(w.lux.Runs()[0].ID) == "stopped"
 			})
 			return func() { w.call("/internal/runs/"+runID+"/resume", map[string]any{}) }
 		},
@@ -282,7 +282,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			var runID, reqID string
 			w.until("the run to be parked", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND dude_pause = 'person'`, wi).Scan(&runID)
-				return runID != "" && w.lux.Runs()[0].State == "stopped"
+				return runID != "" && w.lux.State(w.lux.Runs()[0].ID) == "stopped"
 			})
 			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE run_id = $1`, runID).Scan(&reqID)
 			return func() {
@@ -305,7 +305,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			// Parked past the cached token's refresh point.
 			api.advance(11 * time.Hour)
 			resume()
-			w.until("the resume", func() bool { return r.Resumed == 1 })
+			w.until("the resume", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 
 			fresh, ok := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); !ok || len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
@@ -330,7 +330,7 @@ func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w.restart(registry.NewECR(ecrRegistry, api, api.now))
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 	r := w.lux.Runs()[0]
-	w.until("the resume", func() bool { return r.Resumed == 1 })
+	w.until("the resume", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 	if _, ok := loginIn(r.ResumeSecrets[0]); ok || len(api.tokens()) != 0 {
 		t.Errorf("a login was sent to resume a Run started without one (ECR minted %d)", len(api.tokens()))
 	}
@@ -349,7 +349,7 @@ func (w *world) parked(wi string) string {
 		w.t.Fatalf("pause: %d %v", status, out)
 	}
 	w.until("lux to stop it", func() bool {
-		return w.lux.Runs()[0].State == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+		return w.lux.State(w.lux.Runs()[0].ID) == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
 	return runID
 }
@@ -375,7 +375,7 @@ func TestAResumeAfterARestartIsMintedByTheNewIdentity(t *testing.T) {
 		runID := w.parked(wi)
 		w.restart(next.provider)
 		w.call("/internal/runs/"+runID+"/resume", map[string]any{})
-		w.until("the resume", func() bool { return r()[0].Resumed == i+1 })
+		w.until("the resume", func() bool { return w.luxCalls(r()[0].ID, "resume") == i+1 })
 		sent, _ := loginIn(r()[0].ResumeSecrets[i])
 		tokens, signers := api.tokens(), api.signedBy()
 		if len(tokens) != i+2 || sent != "AWS:"+tokens[i+1] {
@@ -486,7 +486,7 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 
 			api.advance(11 * time.Hour)
 			w.restart(registry.NewECR(ecrRegistry, api, api.now))
-			w.retried(runID, time.Minute, func() bool { return r.Resumed == 1 })
+			w.retried(runID, time.Minute, func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 			fresh, _ := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
@@ -610,7 +610,7 @@ func TestRunsWaitingOnAFailingLoginShareOneBackOff(t *testing.T) {
 	api.advance(registry.MaxRetry)
 	w.until("every Run to go ahead", func() bool {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE organization_id = $1`, w.org)
-		return len(w.lux.Runs()) == 5 && w.lux.Runs()[0].Resumed == 1
+		return len(w.lux.Runs()) == 5 && w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1
 	})
 	tokens := api.tokens()
 	if len(tokens) != 2 {
@@ -725,7 +725,7 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 
 	roles.setFail(nil)
 	api.advance(registry.FirstRetry) // past the provider's back-off
-	w.retried(runID, 5*time.Second, func() bool { return r.Resumed == 1 })
+	w.retried(runID, 5*time.Second, func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 	fresh, _ := loginIn(r.ResumeSecrets[0])
 	tokens := api.tokens()
 	if len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
@@ -770,7 +770,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 	})
 	api.setFail(nil)
 	api.advance(registry.FirstRetry) // past the provider's back-off
-	w.retried(runID, 5*time.Second, func() bool { return w.lux.Runs()[0].Resumed == 1 })
+	w.retried(runID, 5*time.Second, func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 })
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})

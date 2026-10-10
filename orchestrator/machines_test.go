@@ -88,7 +88,7 @@ func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 		t.Fatalf("resume: %d %v", status, out)
 	}
 	// The syncer alone, so no artifacts sweep can be what writes the limit.
-	for i := 0; r.Resumed == 0 && i < 200; i++ {
+	for i := 0; w.luxCalls(r.ID, "resume") == 0 && i < 200; i++ {
 		if _, err := w.syncer.Sweep(ctx); err != nil {
 			t.Fatal(err)
 		}

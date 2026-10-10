@@ -55,7 +55,7 @@ func TestATiersNewModelReachesTheNextSessionNotTheRunningOne(t *testing.T) {
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the Run to resume", func() bool { w.pump(); return r.Resumed == 1 })
+	w.until("the Run to resume", func() bool { w.pump(); return w.luxCalls(r.ID, "resume") == 1 })
 	var model, name string
 	if err := w.owner.QueryRow(ctx, `SELECT model, model_tier FROM runs WHERE id = $1`, runID).Scan(&model, &name); err != nil {
 		t.Fatal(err)
