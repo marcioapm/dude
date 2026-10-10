@@ -314,6 +314,41 @@ func TestAMessageUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.
 	}
 }
 
+// An "Interrupt now" that carries the words (its message failed before it
+// went) and was taken and unread when the container stopped is sent again
+// too: the conductor resumes on its own and answers it.
+func TestAnInterruptCarryingTheWordsUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.T) {
+	tk, run := talkers(t)["conductor"](t)
+	tk.lux.InputGate = make(chan struct{})
+	if status, reached := tk.write("did the build pass?"); status != 200 || reached != run {
+		t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
+	}
+	var first string
+	tk.until("the message sent to lux", func() bool {
+		_ = tk.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL
+			AND delivered_at IS NULL`, run).Scan(&first)
+		return first != ""
+	})
+	tk.lux.FailInput(tk.luxRunOf(run), first, "the agent exited")
+	tk.until("the message failed", func() bool {
+		return tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, first) == 1
+	})
+	code, out := tk.call("/internal/runs/"+run+"/steer", map[string]any{
+		"text": "did the build pass?", "supersedes": first, "interrupt": true})
+	if code != 201 {
+		t.Fatalf("interrupt now: %d %v", code, out)
+	}
+	interrupt, _ := out["id"].(string)
+	tk.until("the interrupt sent with the words", func() bool {
+		return tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only = false
+			AND sent_at IS NOT NULL AND delivered_at IS NULL`, interrupt) == 1
+	})
+	tk.stopOnItsOwn(run, "failed")
+	close(tk.lux.InputGate)
+	tk.lux.InputGate = nil
+	tk.resumedAnswering(run, "did the build pass?")
+}
+
 // One lux ended for good (terminated), or no longer has, is ended as
 // before: the next message starts a new Run, which answers it.
 func TestATalkerLuxCannotResumeIsEndedAndReplaced(t *testing.T) {
