@@ -107,6 +107,10 @@ type harnessState struct {
 	claudeIdle     bool
 	codexTurn      codexTokens
 	turnError      string
+	// A talker's turns failed in a row (turnFailed), and whether the turn
+	// that ended last was one: a turn that did not fail resets the count.
+	failedTurns int
+	lastFailed  bool
 }
 
 type codexTokens struct {
@@ -123,11 +127,14 @@ type harnessStateJSON struct {
 	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
 	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
 	TurnError      string           `json:"turnError,omitempty"`
+	FailedTurns    int              `json:"failedTurns,omitempty"`
+	LastFailed     bool             `json:"lastFailed,omitempty"`
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
-		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
+		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
+		FailedTurns: h.failedTurns, LastFailed: h.lastFailed}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -140,7 +147,8 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
-		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
+		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
+		failedTurns: j.FailedTurns, lastFailed: j.LastFailed}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -745,6 +753,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 	case "busy":
 		// A new turn: an idle held for a Claude turn's end is past.
 		t.claudeIdle = false
+		t.lastFailed = false
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -773,6 +782,11 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	clear(t.openCalls)
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
+	// A failed turn's idle: the turn is over, not done (turnFailed).
+	if t.lastFailed {
+		return nil
+	}
+	t.failedTurns = 0
 	// A turn that ended with something open for a person — a question, a
 	// repository it asked for — is not done: the agent waits, and the
 	// answer starts its next turn. The syncer parks it if the wait is
@@ -978,12 +992,47 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
+	t.lastFailed = true
+	if t.run.talker() {
+		t.failedTurns++
+		if t.failedTurns <= maxFailedTurnResumes {
+			return t.parkFailed(ctx, tx, s, reason)
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	return s.failedTx(ctx, tx, t.run, reason)
+}
+
+// maxFailedTurnResumes is how many times in a row a talker whose turn
+// failed is parked to be resumed; a failure past it (a context overflow
+// that fails every turn) ends it, as any Run's.
+const maxFailedTurnResumes = 2
+
+// parkFailed keeps a talker whose turn failed: the failure is said as any
+// Run's (run.failed, kept), and the Run is paused as its warm period's end
+// parks it, its lux Run stopped and kept, so the next message resumes it.
+func (t *translator) parkFailed(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
+	kind := "conductor"
+	if t.run.brainstorm() {
+		kind = "session"
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+			dude_pause = $3, turn_done_at = NULL
+		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL AND control = 'none'`,
+		t.run.ID, "parked after its turn failed", kind)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	if err := s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem,
+		map[string]any{"status": "failed", "error": reason, "kept": true, "failedTurns": t.failedTurns}); err != nil {
+		return err
+	}
+	return s.event(ctx, tx, t.run, evParked, ledger.ActorSystem,
+		map[string]any{"reason": kind, "message": "its turn failed", "failedTurns": t.failedTurns})
 }
 
 // turnFailure says why a turn failed, for a person. OpenCode answers a
