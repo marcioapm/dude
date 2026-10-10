@@ -842,9 +842,12 @@ describe("archiving a session, for yourself", () => {
     archivedIds = new Set<string>();
     calls: Array<[string, boolean]> = [];
     refuse = false;
-    override sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
+    // While set, a list read waits for it before answering.
+    hold: Promise<void> | null = null;
+    override async sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
+      if (this.hold) await this.hold;
       const all = [summary(SESSION, "Usage-based billing", this.archivedIds.has(SESSION)), summary(OTHER, "Pricing", this.archivedIds.has(OTHER))];
-      return Promise.resolve({ sessions: all.filter((s) => opts.archived || !s.archived), invitations: [], questions: [] });
+      return { sessions: all.filter((s) => opts.archived || !s.archived), invitations: [], questions: [] };
     }
     override getSession(): Promise<SessionDetail> {
       return Promise.resolve({ ...this.detail, you: { ...this.detail.you, archived: this.archivedIds.has(SESSION) } });
@@ -865,17 +868,23 @@ describe("archiving a session, for yourself", () => {
   const shownOption = (page: HTMLElement, label: string) =>
     [...page.querySelectorAll("[data-testid=sessions-shown] button")].find((b) => b.textContent === label) ?? null;
 
-  test("Archive on its page calls the API and returns you to the list, without its row there or in the sidebar", async () => {
+  test("Archive on its page calls the API and returns you to the list, its row gone there and from the sidebar at once", async () => {
     const client = new Archiving(detail("read"));
     const page = await shell(`#/sessions/${SESSION}`, client);
     await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
     expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    let release!: () => void;
+    client.hold = new Promise((r) => { release = r; });
     // A reader archives it too: it is their own list.
     await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
     await until(() => page.querySelector("[data-testid=sessions]"), "the list");
     expect(client.calls).toEqual([[SESSION, true]]);
     expect(window.location.hash).toBe("#/sessions");
-    await until(() => (listed(page).includes(OTHER) ? true : null), "the list's rows");
+    // The list read that follows the archive has not answered yet.
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+    await act(async () => release());
+    await settle();
     expect(listed(page)).toEqual([OTHER]);
     expect(inSidebar(page)).toEqual([OTHER]);
   });
