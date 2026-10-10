@@ -1384,10 +1384,17 @@ func (s *Server) archiveSession(archive bool) handler {
 			if _, err := member(r.Context(), tx, id, p.Person); err != nil {
 				return err
 			}
-			_, err := tx.Exec(r.Context(), `UPDATE session_people
+			tag, err := tx.Exec(r.Context(), `UPDATE session_people
 				SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) END
 				WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NOT NULL`, id, p.Person, archive)
-			return err
+			if err != nil {
+				return err
+			}
+			// Removed between member() and here: the same answer as any non-member.
+			if tag.RowsAffected() == 0 {
+				return fail(http.StatusNotFound, "not_found", "session %s not found", id)
+			}
+			return nil
 		})
 		if err != nil {
 			return err
