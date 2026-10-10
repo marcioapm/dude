@@ -10,7 +10,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-composer-gap);
-  padding: var(--ds-space-composer-y) var(--ds-space-chat-pad-x);
+  /* A host that is its own frame (the welcome) sets --cc-inset to 0. */
+  padding: var(--cc-inset, var(--ds-space-composer-y) var(--ds-space-chat-pad-x));
   min-width: 0;
 }
 .answer {
@@ -86,6 +87,8 @@
   background: var(--ds-color-field-raised);
   border: 1px solid var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-control);
+  /* Raised off the page only where it is the page's one thing (Welcome sets --cc-raise). */
+  box-shadow: var(--cc-raise, 0 0 0 0 transparent);
   transition:
     border-color var(--ds-duration-fast) var(--ds-ease-standard),
     box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
@@ -95,7 +98,7 @@
 }
 .field:focus-within {
   border-color: var(--cc-tint);
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent), var(--cc-raise, 0 0 0 0 transparent);
 }
 .disabled .field {
   opacity: 0.6;
@@ -111,6 +114,8 @@
 .textarea {
   flex: 1;
   min-width: 0;
+  /* Taller where a host asks (Welcome's --cc-field-min); otherwise one line. */
+  min-height: var(--cc-field-min, 0);
   padding: var(--ds-space-field-y) var(--ds-space-12);
   background: none;
   border: 0;

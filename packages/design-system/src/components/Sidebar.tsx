@@ -5,10 +5,13 @@ import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
+import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import {
   attentionItems,
   flattenNav,
   navKey,
+  projectCounts,
   waitingSplit,
   type NavFilter,
   type NavOverrides,
@@ -78,6 +81,33 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly open?: boolean | undefined;
   /** Escape, a scrim click and choosing a row ask for `false`. */
   readonly onOpenChange?: ((open: boolean) => void) | undefined;
+  /**
+   * Folded to a 56px rail of faces and glyphs (`SIDEBAR_DRAWER_QUERY` not
+   * matching: 1000px and up; narrower, the drawer works as without it).
+   */
+  readonly collapsed?: boolean | undefined;
+  /** Set, the header has a collapse chevron and the rail an expand one. */
+  readonly onCollapsedChange?: ((collapsed: boolean) => void) | undefined;
+  /** The rail's first item: the brand's face (the `title`'s, without its words). */
+  readonly railMark?: ReactNode;
+  /** Pressing the rail's face: home. */
+  readonly onHome?: (() => void) | undefined;
+  /** Home is what is open: the rail's face is current. */
+  readonly homeSelected?: boolean | undefined;
+  /** The rail's New session and Sessions, from what the `sessions` slot does. */
+  readonly railSessions?: SidebarRailSessions | undefined;
+  /** The band's rail form: `SidebarRailItem`s (settings, your face). */
+  readonly railFooter?: ReactNode;
+}
+
+/** What the rail needs of the `sessions` slot: two places, and the names for the Sessions tooltip. */
+export interface SidebarRailSessions {
+  readonly onNew: () => void;
+  readonly onOpenList: () => void;
+  /** The list (or one of them) is what is open. */
+  readonly current?: boolean | undefined;
+  /** Your latest few, named in the Sessions tooltip. */
+  readonly recent?: ReadonlyArray<string> | undefined;
 }
 
 /** Where a `collapsible` sidebar becomes a drawer. Kept in step with Sidebar.module.css. */
@@ -85,6 +115,31 @@ export const SIDEBAR_DRAWER_QUERY = "(max-width: 999.98px)";
 
 function isDrawerViewport(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches;
+}
+
+/** Whether the viewport is under the drawer breakpoint, followed as it changes. */
+function useDrawerViewport(): boolean {
+  const [narrow, setNarrow] = useState(isDrawerViewport);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(SIDEBAR_DRAWER_QUERY);
+    const follow = () => setNarrow(query.matches);
+    follow();
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, []);
+  return narrow;
+}
+
+/** A project's counts in words, the loud one first and nothing that is zero: "1 needs you · 4 running". */
+export function projectCountWords(p: NavProject, you?: string | null): string {
+  const c = projectCounts(p, you);
+  return [
+    c.needs_you ? `${c.needs_you} ${c.needs_you === 1 ? "needs" : "need"} you` : null,
+    c.active ? `${c.active} running` : null,
+    c.failed ? `${c.failed} failed` : null,
+    c.ready ? `${c.ready} ready` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 /**
@@ -103,6 +158,11 @@ function isDrawerViewport(): boolean {
  *
  * Calm at fifty tasks: colour is on faces and marks, and the one amber
  * thing is the count of what waits on you.
+ *
+ * `collapsed` (1000px and up) folds it to a 56px rail of the same rows'
+ * faces and glyphs, each named in a tooltip: home, expand, search, waiting,
+ * New session and Sessions, each project's face (the needs-you diamond on
+ * one that waits on you), then the band. The tree is not in it.
  */
 export function Sidebar({
   projects,
@@ -131,6 +191,13 @@ export function Sidebar({
   collapsible,
   open,
   onOpenChange,
+  collapsed,
+  onCollapsedChange,
+  railMark,
+  onHome,
+  homeSelected,
+  railSessions,
+  railFooter,
   className,
   style,
   ...rest
@@ -207,6 +274,77 @@ export function Sidebar({
     if (drawerOpen) onOpenChange?.(false);
   };
 
+  // The rail is a wide screen's: under the breakpoint `collapsed` is ignored.
+  const narrow = useDrawerViewport();
+  const rail = Boolean(collapsed && onCollapsedChange && !narrow);
+  // The rail's search expands the sidebar, then the field takes the focus.
+  const searchOnExpand = useRef(false);
+  useEffect(() => {
+    if (rail || !searchOnExpand.current) return;
+    searchOnExpand.current = false;
+    searchRef.current?.focus();
+  }, [rail]);
+  const yoursWaiting = waiting.yours.length + waitingExtra;
+
+  if (rail) {
+    return (
+      <nav className={cx(styles["rail"], className)} style={style} aria-label="Navigation" data-testid="sidebar-rail" {...rest}>
+        <div className={styles["railGroup"]}>
+          {railMark ? (
+            <SidebarRailItem label="Home" current={homeSelected} onClick={onHome} data-testid="rail-home">{railMark}</SidebarRailItem>
+          ) : null}
+          <SidebarRailItem label="Expand sidebar" shortcut="[" onClick={() => onCollapsedChange?.(false)} data-testid="rail-expand">
+            <Icon name="chevron-right" size={16} />
+          </SidebarRailItem>
+        </div>
+        <div className={styles["railGroup"]}>
+          <SidebarRailItem label="Find work" shortcut="/" data-testid="rail-search" onClick={() => {
+            searchOnExpand.current = true;
+            onCollapsedChange?.(false);
+          }}>
+            <Icon name="search" size={16} />
+          </SidebarRailItem>
+          {onWaitingSelect ? (
+            <SidebarRailItem label="Waiting on you" tip={yoursWaiting ? `Waiting on you · ${yoursWaiting}` : "Nothing waiting on you"}
+              current={waitingSelected} onClick={() => onWaitingSelect("you")} data-testid="rail-waiting">
+              {/* With something waiting the count is the item: its diamond is the needs-you shape. */}
+              {yoursWaiting ? <NeedsYouCount count={yoursWaiting} /> : <Icon name="inbox" size={16} />}
+            </SidebarRailItem>
+          ) : null}
+          {railSessions ? (
+            <>
+              <SidebarRailItem label="New session" onClick={railSessions.onNew} data-testid="rail-new-session">
+                <Icon name="plus" size={16} />
+              </SidebarRailItem>
+              <SidebarRailItem label="Sessions" current={railSessions.current} onClick={railSessions.onOpenList} data-testid="rail-sessions"
+                tip={railSessions.recent?.length ? (
+                  <span className={styles["railTip"]}><b>Sessions</b>{railSessions.recent.slice(0, 4).map((t, i) => <span key={i} className={styles["railTipMuted"]}>{t}</span>)}</span>
+                ) : undefined}>
+                <Icon name="brainstorm" size={16} />
+              </SidebarRailItem>
+            </>
+          ) : null}
+        </div>
+        <div className={styles["railProjects"]} role="group" aria-label="Projects">
+          {projects.map((p) => {
+            const words = projectCountWords(p, you);
+            const waits = projectCounts(p, you).needs_you > 0;
+            return (
+              <SidebarRailItem key={p.id} label={words ? `${p.name}: ${words}` : p.name}
+                tip={<span className={styles["railTip"]}><b>{p.name}</b>{words ? <span className={styles["railTipMuted"]}>{words}</span> : null}</span>}
+                current={selected?.kind === "project" && selected.id === p.id} onClick={() => onSelect?.({ kind: "project", id: p.id }, p)}
+                data-testid="rail-project" data-project={p.id}>
+                <ProjectAvatar project={{ id: p.id, name: p.name, imageUrl: p.imageUrl, colorSlot: p.colorSlot }} size={24} />
+                {waits ? <span className={styles["railMark"]} aria-hidden /> : null}
+              </SidebarRailItem>
+            );
+          })}
+        </div>
+        {railFooter ? <div className={styles["railBand"]}>{railFooter}</div> : null}
+      </nav>
+    );
+  }
+
   const aside = (
     <aside
       className={cx(styles["root"], collapsible && styles["collapsible"], drawerOpen && styles["open"], className)}
@@ -215,10 +353,16 @@ export function Sidebar({
       data-open={collapsible ? String(!!open) : undefined}
       {...rest}
     >
-      {title !== undefined || headerActions !== undefined ? (
+      {title !== undefined || headerActions !== undefined || onCollapsedChange ? (
         <header className={styles["header"]}>
           <span className={styles["title"]}>{title}</span>
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
+          {onCollapsedChange ? (
+            <Tooltip content="Collapse sidebar" shortcut="[" side="right">
+              <IconButton icon="chevron-left" label="Collapse sidebar" size="sm" className={styles["collapse"]}
+                onClick={() => onCollapsedChange(true)} data-testid="sidebar-collapse" />
+            </Tooltip>
+          ) : null}
         </header>
       ) : null}
 
@@ -364,6 +508,29 @@ export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNe
       ))}
       <SidebarLink icon="plus" onClick={onNew} data-testid="new-session">New session</SidebarLink>
     </nav>
+  );
+}
+
+export interface SidebarRailItemProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
+  /** Its accessible name, and its tooltip unless `tip` says more. */
+  readonly label: string;
+  readonly tip?: ReactNode;
+  readonly shortcut?: string | undefined;
+  readonly current?: boolean | undefined;
+}
+
+/**
+ * One square of the collapsed sidebar: a sidebar row with its words folded
+ * into a tooltip to the right. The app passes these as `railFooter`.
+ */
+export function SidebarRailItem({ label, tip, shortcut, current, className, children, ...rest }: SidebarRailItemProps) {
+  return (
+    <Tooltip content={tip ?? label} side="right" shortcut={shortcut}>
+      <button type="button" className={cx(styles["railItem"], current && styles["railItemCurrent"], className)} aria-label={label}
+        aria-current={current ? "page" : undefined} {...rest}>
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 
