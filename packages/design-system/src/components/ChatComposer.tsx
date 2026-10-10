@@ -162,6 +162,10 @@ export function ChatComposer({
   const mode: ComposerMode = modeProp ?? (running ? "steer" : "prompt");
   // "Write to the agent instead", for the question it was pressed on: the next question steps back again.
   const [writingFor, setWritingFor] = useState<string | null>(null);
+  // Without a waitingKey the asker's label stands in, so the wait ending is what lets the next question step back.
+  useEffect(() => {
+    if (waitingFor === undefined) setWritingFor(null);
+  }, [waitingFor]);
   const waitedOn = waitingKey ?? waitingFor;
   const stepsBack = waitingFor !== undefined && writingFor !== waitedOn;
   const [internal, setInternal] = useState(defaultValue ?? "");
