@@ -170,9 +170,9 @@ func specResources(rawSpec json.RawMessage) lux.Resources {
 	return *spec.Resources
 }
 
-// peakDisk is the peak disk use a placement of run reports at its exit:
-// DiskUse, else 512 MiB. Callers hold s.mu.
-func (s *Server) peakDisk(*Run) int64 {
+// peakDisk is the peak disk use a placement reports at its exit: DiskUse,
+// else 512 MiB.
+func (s *Server) peakDisk() int64 {
 	if s.DiskUse > 0 {
 		return s.DiskUse
 	}
@@ -221,9 +221,9 @@ func (r resizeRequest) requested() (lux.Resources, string) {
 // whose snapshot it resumes from, reported at that placement's exit. The
 // answer's resize says what was asked and what the Run has now, and why a
 // disk was kept. Callers hold s.mu.
-func (s *Server) resize(run *Run, req resizeRequest, requested lux.Resources) *resize {
+func (s *Server) resize(run *Run, req resizeRequest, requested lux.Resources) *lux.Resize {
 	cur := specResources(run.Spec)
-	rz := &resize{Requested: requested, Applied: cur}
+	rz := &lux.Resize{Requested: requested, Applied: cur}
 	if req.CPUs != nil {
 		rz.Applied.CPUs = *req.CPUs
 	}
@@ -275,14 +275,6 @@ func (s *Server) setResources(run *Run, res lux.Resources) {
 	stored["cpus"], stored["memory"], stored["disk"] = res.CPUs, res.Memory, res.Disk
 	spec["resources"] = stored
 	run.Spec, _ = json.Marshal(spec)
-}
-
-// resize is lux's Resize: in the resume's answer, and kept for a retry
-// while the Run is resuming (pendingResize).
-type resize struct {
-	Requested lux.Resources `json:"requested"`
-	Applied   lux.Resources `json:"applied"`
-	Disk      *lux.DiskKept `json:"disk,omitempty"`
 }
 
 // bytesText is lux's: 1.5 GiB.

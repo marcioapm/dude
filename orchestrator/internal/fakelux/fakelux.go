@@ -168,7 +168,7 @@ type Run struct {
 	pendingSync []lux.SyncRef
 	// The resize of the resume it is resuming from; nil when that resume
 	// asked for none, or lux resumed it itself (a move).
-	pendingResize *resize
+	pendingResize *lux.Resize
 	// Each accepted resume's resources, as received; nil for none.
 	ResumeResources []json.RawMessage
 
@@ -1658,7 +1658,7 @@ func (s *Server) exited(run *Run) {
 	if run.State != "lost" {
 		// The exit status carries the final disk sample; a lost host
 		// reports none.
-		peak := s.peakDisk(run)
+		peak := s.peakDisk()
 		p.peakDisk = &peak
 	}
 	go func() {
@@ -2421,7 +2421,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		git["repositories"] = repos
 		run.Spec, _ = json.Marshal(spec)
 	}
-	var rz *resize
+	var rz *lux.Resize
 	switch {
 	case in.Resources == nil:
 	case s.NoResize:

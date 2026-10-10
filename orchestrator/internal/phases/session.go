@@ -32,7 +32,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var tier delivery.Tier
 	var noTier string
 	var sizes delivery.Sizes
-	var recorded []byte
+	var recorded *delivery.Machine
 	var prompts delivery.Prompts
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
@@ -102,11 +102,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			return lux.Spec{}, runSizes{}, err
 		}
 	}
-	out := runSizes{Now: in.Machine}
-	if out.Recorded, err = ScanMachine(recorded); err != nil {
-		return lux.Spec{}, runSizes{}, err
-	}
-	return buildSpec(s.Agent, in), out, nil
+	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, nil
 }
 
 // sessionResume puts on a session agent's resume the repositories linked

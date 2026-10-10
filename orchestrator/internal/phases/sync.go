@@ -963,7 +963,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
-	var recorded []byte
+	var recorded *delivery.Machine
 	var briefing, conductorNote, restartNote, tierOverride string
 	var tier delivery.Tier
 	var noTier string
@@ -1139,11 +1139,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			return lux.Spec{}, runSizes{}, nil, err
 		}
 	}
-	out := runSizes{Now: in.Machine}
-	if out.Recorded, err = ScanMachine(recorded); err != nil {
-		return lux.Spec{}, runSizes{}, nil, err
-	}
-	return buildSpec(s.Agent, in), out, taskImages, nil
+	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
 }
 
 // toolsToken is the token for this start of the Run: the same however

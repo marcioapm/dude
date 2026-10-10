@@ -136,8 +136,9 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 
 // ResumeSized resumes with the plan's resources. lux refusing them — a Run
 // already resuming with others (409 not_resumable: lux's docs make a resume
-// without resources the retry), or a lux from before resizing that does not
-// know them (400, 422) — is answered by the same resume without them.
+// without resources the retry), a lux from before lux#51 that does not know
+// them (400), or lux refusing these resources (422) — is answered by the
+// same resume without them.
 func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeInput, plan *ResizePlan) (lux.Run, error) {
 	if plan == nil || plan.Send == nil || plan.refused != nil {
 		in.Resources = nil
@@ -189,25 +190,29 @@ func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
 	default:
 		return nil
 	}
-	cpus, mem, disk := applied.CPUs, applied.Memory>>20, applied.Disk>>30
-	if answer.Resize == nil && cpus == rec.CPUs && mem == rec.MemoryMiB && disk == rec.DiskGiB {
-		rec.Note = p.keptNote()
+	got := delivery.Machine{CPUs: applied.CPUs, MemoryMiB: applied.Memory >> 20, DiskGiB: applied.Disk >> 30}
+	partial := fmt.Sprintf("Its settings name %s; lux applied only part of it, as shown.", p.Target.Name)
+	switch {
+	case answer.Resize == nil && delivery.SameSize(got, rec):
+		// lux left the Run as it was; numbers a partial apply recorded
+		// keep that note.
+		if rec.Note = p.keptNote(); p.Recorded.Note == partial {
+			rec.Note = partial
+		}
 		return &rec
-	}
-	if answer.Resize == nil && (cpus != p.Target.CPUs || mem != p.Target.MemoryMiB || disk != p.Target.DiskGiB) {
-		// No resize in the answer, and lux's spec is neither size: a lux
-		// that applied part of it (one from before lux#51 grows only the
-		// disk), or a retry of a resume lux had taken with other resources.
-		// It is on neither size, so it keeps its size's name.
-		rec.Note = fmt.Sprintf("Its settings name %s; lux applied only part of it, as shown.", p.Target.Name)
-	} else {
+	case answer.Resize == nil && !delivery.SameSize(got, *p.Target):
+		// On neither size: a lux that applied part of it (one from before
+		// lux#51 grows only the disk), or a retry of a resume lux had taken
+		// with other resources. It keeps its size's name.
+		rec.Note = partial
+	default:
 		rec.SizeID, rec.Name, rec.From = p.Target.SizeID, p.Target.Name, p.Target.From
 	}
 	if r := answer.Resize; r != nil && r.Disk != nil {
 		rec.DiskKept = &delivery.DiskKept{RequestedGiB: r.Disk.Requested >> 30, Reason: r.Disk.Reason}
 	}
-	if cpus != rec.CPUs || mem != rec.MemoryMiB || disk != rec.DiskGiB || rec.SizeID != p.Recorded.SizeID {
-		rec.CPUs, rec.MemoryMiB, rec.DiskGiB = cpus, mem, disk
+	if !delivery.SameSize(got, rec) || rec.SizeID != p.Recorded.SizeID {
+		rec.CPUs, rec.MemoryMiB, rec.DiskGiB = got.CPUs, got.MemoryMiB, got.DiskGiB
 		rec.SinceEpoch = p.SinceEpoch
 	}
 	return &rec
@@ -215,7 +220,8 @@ func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
 
 // keptNote says why the resume left the Run on its size. Only a Run lux
 // was resuming already (409) may get its size at the next resume: a lux
-// from before lux#51 (400) never changes cpus or memory.
+// from before lux#51 (400) never changes cpus or memory; a 422 is lux
+// refusing these resources.
 func (p *ResizePlan) keptNote() string {
 	kept := fmt.Sprintf("Its settings now name %s, but this resume kept %s", p.Target.Name, p.Recorded.Name)
 	switch le := p.refused; {
@@ -236,26 +242,12 @@ type runSizes struct {
 	Now, Recorded *delivery.Machine
 }
 
-// ScanMachine is runs.machine from its JSON; nil for none.
-func ScanMachine(raw []byte) (*delivery.Machine, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	var m delivery.Machine
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
-
 // RecordResize writes the plan's outcome over runs.machine when it differs
-// from what is recorded, with run.resized. An answer that says nothing of
-// the Run's resources is read again from lux (GET), so what is recorded is
-// always lux's word; current lux's answer always carries spec.resources, so
-// only a lux whose answer omits them is read again. The memory limit lux
-// reported is kept while sinceEpoch is: it is of a placement on this size.
-// A failed read or write is logged: the next resume compares and records
-// again.
+// from what is recorded, with run.resized. An answer without the Run's
+// resources (only a lux that omits spec.resources) is read again with a
+// GET, so what is recorded is lux's word. The memory limit lux reported is
+// kept while sinceEpoch is: it is of a placement on this size. A failed
+// read or write is logged; the next resume compares and records again.
 func RecordResize(ctx context.Context, d *db.DB, c lux.Client, log *slog.Logger, ref delivery.RunRef, luxRunID string, plan *ResizePlan, answer lux.Run) {
 	if log == nil {
 		log = slog.Default()
