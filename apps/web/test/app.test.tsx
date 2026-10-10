@@ -6,7 +6,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, mount, settle, until } from "./dom.ts";
+import { click, emitForTest, mount, settle, until } from "./dom.ts";
+import { EventTypes } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
@@ -239,6 +240,35 @@ describe("home", () => {
     // The fixture's stream sends no session event here, so every read after the send is the app's own.
     await settle(300);
     expect(client.reads).toBe(before + 1);
+  });
+});
+
+describe("the welcome's model picker", () => {
+  test("is read once across visits, and again after the organisation's settings or tiers change", async () => {
+    class Counting extends FixtureClient {
+      reads = 0;
+      override modelTiers() {
+        this.reads++;
+        return super.modelTiers();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app("#/", client);
+    const picker = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    const revisit = async () => {
+      await act(async () => {
+        window.location.hash = `#/project/${PROJECT.id}`;
+      });
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await click(page.querySelector("[data-testid=brand-home]")!);
+      await until(picker, "the picker again");
+    };
+    await until(picker, "the picker");
+    await revisit();
+    expect(client.reads).toBe(1);
+    await emitForTest(EventTypes.SettingsUpdated, { scope: "organization", changed: { modelTiers: {} } });
+    await revisit();
+    expect(client.reads).toBe(2);
   });
 });
 

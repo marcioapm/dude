@@ -18,9 +18,9 @@ import {
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
+import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
-import { modelChangeWords, organizationOf, pickerTier, useModelOptions } from "../sessionModel.ts";
+import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import type { QuestionSubmission } from "@dude/design-system/components";
@@ -163,8 +163,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   }, [client, sessionId, onChanged]);
 
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
-  // The owner's picker lists the organisation's tiers; anyone else reads the detail's words alone.
-  const tierOptions = useModelOptions(client, detail?.you.role === "owner" && detail.model !== undefined, false);
+  // The owner's picker lists the organisation's tiers, read when its menu first opens; until then
+  // (and for anyone else) the chip reads the detail's words alone.
+  const [menuOpened, setMenuOpened] = useState(false);
+  const tierOptions = useTiers(client, menuOpened);
   // What the owner picked, shown at once while its posts are out: a second pick before the first
   // is answered builds on it, and the posts go one after another so the last pick is the one kept.
   // Once the last one settles the detail drives the chip again. A failure cancels the picks queued
@@ -319,11 +321,13 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               {detail.model ? (
                 <SessionRailBlock label="Model" data-testid="session-model">
                   <ModelPicker
-                    tiers={tierOptions?.tiers ?? (detail.model.tier ? [pickerTier(detail.model.tier)] : [])}
+                    tiers={Array.isArray(tierOptions) ? tierOptions : (detail.model.tier ? [pickerTier(detail.model.tier)] : [])}
                     organization={organizationOf(detail.model)}
                     value={picked ?? { tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
-                    readOnly={!isOwner || !tierOptions}
-                    onChange={chooseModel} />
+                    misfit={picked ? null : detail.model.misfit}
+                    onChange={isOwner ? chooseModel : undefined}
+                    onOpenChange={(open) => open && setMenuOpened(true)}
+                    menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpened ? "Loading the tiers…" : undefined} />
                   <span className="muted sessionModelNote">Applies the next time the agent starts.</span>
                 </SessionRailBlock>
               ) : null}
@@ -380,16 +384,21 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
 }
 
 /**
- * The header's model: what the agent runs on now while one is live (a
- * change waits for its next start), else what its next start would use;
- * "(organisation default)" when the session follows the organisation.
+ * The header's model, "· <tier> · <harness>": what the agent runs on now
+ * while one is live (a change waits for its next start), as its Run
+ * records it, else what its next start would use, "(organisation
+ * default)" when the session follows the organisation.
  */
 export function headerModel(detail: SessionDetail): string {
   const run = detail.session.run;
   const live = run && !["completed", "failed", "aborted"].includes(run.status);
-  if (live && run.model) return ` · ${run.model}`;
+  if (live && (run.modelTier || run.model)) {
+    // The scripted agent is recorded as "scripted": named so, as the Run's own chip leaves it out.
+    const harness = run.harness ? HARNESS_LABEL[run.harness as Harness] ?? run.harness : null;
+    return ` · ${[run.modelTier ?? run.model, harness].filter(Boolean).join(" · ")}`;
+  }
   const m = detail.model;
-  if (!m) return run?.model ? ` · ${run.model}` : "";
+  if (!m) return run?.model ? ` · ${run.modelTier ?? run.model}` : "";
   const words = `${m.effective.tierName ?? "no tier"} · ${HARNESS_LABEL[m.effective.harness]}`;
   return ` · ${words}${m.tier === null && m.harness === null ? " (organisation default)" : ""}`;
 }
