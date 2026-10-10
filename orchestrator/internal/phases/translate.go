@@ -28,6 +28,8 @@ const (
 	evPlanUpdated        = "agent.plan.updated"
 	evModelRequestDone   = "agent.model.request.completed"
 	evSessionStarted     = "agent.session.started"
+	evSessionReplaced    = "agent.session.replaced"
+	evAgentWarning       = "agent.warning"
 	evSessionStopped     = "agent.session.stopped"
 	evRunStarted         = "run.started"
 	evRuntimeStopped     = "runtime.stopped"
@@ -111,6 +113,9 @@ type harnessState struct {
 	// that ended last was one: a turn that did not fail resets the count.
 	failedTurns int
 	lastFailed  bool
+	// What lux last warned about the agent (lux.warning), until a session
+	// it may explain is reported (session).
+	warning string
 }
 
 type codexTokens struct {
@@ -129,12 +134,13 @@ type harnessStateJSON struct {
 	TurnError      string           `json:"turnError,omitempty"`
 	FailedTurns    int              `json:"failedTurns,omitempty"`
 	LastFailed     bool             `json:"lastFailed,omitempty"`
+	Warning        string           `json:"warning,omitempty"`
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		FailedTurns: h.failedTurns, LastFailed: h.lastFailed}
+		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -148,7 +154,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		failedTurns: j.FailedTurns, lastFailed: j.LastFailed}
+		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -515,6 +521,11 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	switch typ {
 	case "lux.session":
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
+	case "lux.warning":
+		// What lux says went wrong around the agent, as it says it: a
+		// session it could not reload among them (session).
+		t.warning = str("message")
+		return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem, map[string]any{"message": t.warning})
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"), epoch)
 	case lux.RecordInputConsumed, lux.RecordInputFailed:
@@ -735,14 +746,58 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		// Its state event says so too, but trails the agent's records on
 		// the stream, the first busy included.
 		t.resumeRunning(ctx, tx, s, epoch)
-		return nil
+		return t.sessionKept(ctx, tx, s, id)
 	}
+	t.warning = ""
 	role := t.run.Phase
 	if t.run.talker() {
 		role = t.run.Role
 	}
 	return s.event(ctx, tx, t.run, evSessionStarted, ledger.ActorAgent,
 		map[string]any{"role": role, "externalSessionId": id})
+}
+
+// sessionKept checks a resumed agent's session is the one it had. lux
+// starts a blank one when the harness cannot reload its own (session/load,
+// thread/resume failed), says why in a lux.warning, and reports the new id:
+// recorded as agent.session.replaced, and a talker is briefed again, its
+// briefing queued as its next input (delivery.Rebriefing). The resume's own
+// input (a person's message, or the resume nudge) went first: the session
+// is known only after it was sent.
+func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id string) error {
+	reason := t.warning
+	t.warning = ""
+	var had string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
+		t.run.ID, evSessionStarted, evSessionReplaced).Scan(&had); err != nil {
+		return err
+	}
+	if had == "" || had == id {
+		return nil
+	}
+	payload := map[string]any{"from": had, "to": id, "reason": reason}
+	if t.run.talker() {
+		ref := t.run.ref()
+		text, err := delivery.Rebriefing(ctx, tx, ref, reason)
+		if err != nil {
+			return err
+		}
+		directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"})
+		if err != nil {
+			return err
+		}
+		// Sent before the messages still waiting (deliverDirectives sends
+		// by created_at): the agent reads who it is before what they say.
+		if _, err := tx.Exec(ctx, `UPDATE directives d SET created_at = LEAST(d.created_at,
+				(SELECT min(o.created_at) - interval '1 millisecond' FROM directives o
+				 WHERE o.run_id = d.run_id AND o.id <> d.id AND o.sent_at IS NULL AND o.failed_at IS NULL))
+			WHERE d.id = $1`, directiveID); err != nil {
+			return err
+		}
+		payload["directiveId"] = directiveID
+	}
+	return s.event(ctx, tx, t.run, evSessionReplaced, ledger.ActorSystem, payload)
 }
 
 // activity tracks the agent's turn. Busy means it took its task; idle after
