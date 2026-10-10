@@ -323,6 +323,32 @@ describe("a brainstorm session's page", () => {
     expect(Boolean(card.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
+  test("a card filed here folds to its line at once, in its place, and opens read only", async () => {
+    const proposal = (filed: boolean) => ({ id: "prp_1", runId: RUN, createdAt: at(20), items: [
+      { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },
+      { kind: "comment" as const, task: "WC-214", text: "keep it there" },
+    ], status: filed
+      ? [{ filed: true, filedBy: ME.name, key: "BL-61" }, { canFile: false, why: "Only Ana can file this" }]
+      : [{ canFile: true }, { canFile: false, why: "Only Ana can file this" }] });
+    const client = new SessionClient(detail("chat", { proposals: [proposal(false)] }), [
+      { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
+      { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
+    ]);
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.getAttribute("data-folded")).toBeNull();
+    client.detail = detail("chat", { proposals: [proposal(true)] });
+    await click(card.querySelector("[data-testid=file-proposal]")!);
+    const line = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=proposal-fold]"), "the folded line");
+    expect(line.textContent).toBe("Proposed work · 1 task, 1 comment · 1 filed · 1 for others to file");
+    const [, after] = [...page.querySelectorAll("[data-testid=human-turn]")];
+    expect(Boolean(line.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    await click(line);
+    expect(line.getAttribute("aria-expanded")).toBe("true");
+    expect(page.querySelector("[data-testid=proposal-unfolded]")!.textContent).toContain(`${ME.name} filed BL-61`);
+    expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+  });
+
   test("a question withdrawn when its one recipient left says so, and asks for nothing", async () => {
     const client = new SessionClient(detail("owner"), [
       ev("question.asked", { kind: "agent", questionId: "q_w", prompt: "Grow the window?", options: ["Yes", "No"], to: ANA.id, toName: ANA.name },

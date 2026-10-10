@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
@@ -29,13 +29,41 @@ const ITEMS: ProposalCardItem[] = [
     detail: "“Invoice for annual plans assumes the plan step owns the method list; v2 should keep it there.”", canFile: true },
 ];
 
-function Card({ readOnly }: { readonly readOnly?: boolean }) {
-  const [selected, setSelected] = useState<Set<number>>(() => new Set([0, 1, 3, 4]));
+function Card({ readOnly, items = ITEMS }: { readonly readOnly?: boolean; readonly items?: ProposalCardItem[] }) {
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(items.flatMap((it, i) => (it.canFile && !it.filed ? [i] : []))));
   return (
-    <ProposalCard items={ITEMS} selected={selected} filingAs="Ana" readOnly={readOnly}
+    <ProposalCard items={items} selected={selected} filingAs="Ana" readOnly={readOnly}
       onToggle={(i) => setSelected((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
       onFile={() => undefined} />
   );
+}
+
+/** The card's states as its items make them: what is left for Ana to file decides whether it folds. */
+const filedBy = (by: string, key: string) => ({ by, key });
+const FRESH: ProposalCardItem[] = ITEMS.map((it) => (it.filed ? { ...it, filed: undefined } : it));
+const ALL_FILED: ProposalCardItem[] = [
+  { ...ITEMS[0]!, filed: filedBy("Ana Ribeiro", "") },
+  { ...ITEMS[1]!, filed: filedBy("Ana Ribeiro", "BL-61") },
+  ITEMS[2]!,
+  { kind: "epic", title: "Usage panel", detail: "What each kind costs, in the console.", project: { key: "WC", name: "web-console" },
+    canFile: true, filed: filedBy("Márcio Martins", "") },
+  { kind: "task", child: true, title: "Usage panel lists kinds by cost", project: { key: "WC", name: "web-console" },
+    canFile: true, filed: filedBy("Márcio Martins", "WC-241") },
+  { kind: "task", child: true, title: "Usage panel exports a CSV", project: { key: "WC", name: "web-console" },
+    canFile: true, filed: filedBy("Ana Ribeiro", "WC-242") },
+];
+const LEFT_FOR_OTHERS: ProposalCardItem[] = ITEMS.map((it, i) =>
+  (it.canFile && !it.filed ? { ...it, filed: filedBy("Ana Ribeiro", it.kind === "epic" ? "" : it.taskKey ?? `BL-6${i}`) } : it));
+
+/** Folded, then opened, as a person who pressed its line sees it. */
+function OpenedFromFolded() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => ref.current?.querySelector<HTMLButtonElement>("[data-testid=proposal-fold]")?.click(), []);
+  return <div ref={ref}><Card items={ALL_FILED} /></div>;
+}
+
+function NothingTicked() {
+  return <ProposalCard items={FRESH} selected={new Set()} filingAs="Ana" onToggle={() => undefined} onFile={() => undefined} />;
 }
 
 function TitleDemo({ initial }: { readonly initial: string | null }) {
@@ -111,12 +139,22 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-proposal" title="ProposalCard"
-        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. A reader sees the card and files nothing. Nothing on it names the session.">
+        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. With nothing ticked, File stays, disabled, beside “Tick what to file.” With nothing left for the person looking to file, the card folds to one line where it was proposed, in the Chat's margin grammar; the line opens the whole card, read only. Nothing on it names the session.">
         <Panes mode={mode} surface>
           <Col>
-            <Label>Ana, who can chat</Label>
+            <Label>open: Ana, who can chat, before anything is filed</Label>
+            <Card items={FRESH} />
+            <Label>partly filed, some still Ana's to file</Label>
             <Card />
-            <Label>a reader</Label>
+            <Label>nothing ticked: File disabled, the footer says to tick</Label>
+            <NothingTicked />
+            <Label>folded: all filed</Label>
+            <Card items={ALL_FILED} />
+            <Label>folded: nothing left for Ana, one for Márcio</Label>
+            <Card items={LEFT_FOR_OTHERS} />
+            <Label>opened from folded</Label>
+            <OpenedFromFolded />
+            <Label>a reader: nothing is theirs to file, so it folds</Label>
             <Card readOnly />
           </Col>
         </Panes>

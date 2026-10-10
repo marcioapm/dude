@@ -121,6 +121,79 @@
   gap: var(--ds-space-12);
 }
 
+/* A card with nothing left to file: one muted row in the transcript's
+   margin, as a ChatEvent's — no frame, no tone, the chevron at its end. */
+.folded {
+  min-width: 0;
+  max-width: 860px;
+}
+.foldedOpen {
+  background: var(--ds-color-surface);
+}
+.foldLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  width: 100%;
+  min-height: var(--ds-size-row-compact);
+  margin: 0;
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ds-color-text-muted);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  text-align: left;
+  outline: none;
+}
+.foldLine:hover {
+  background: var(--ds-color-hover-wash);
+}
+.foldLine:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-control);
+}
+.foldGlyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.foldWords {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.foldWords b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.foldChevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.foldChevronIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.foldedOpen .foldChevronIcon {
+  transform: rotate(90deg);
+}
+/* Opened from its line: the items, under it, on the line's own surface. */
+.unfolded {
+  margin-top: 0;
+  background: none;
+  border-radius: 0;
+  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-8) calc(var(--ds-space-8) + 16px);
+}
+
 /* Shared: the glyph, and the owner's face. */
 .shared {
   display: inline-flex;

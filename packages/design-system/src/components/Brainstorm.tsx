@@ -3,6 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
 import { Icon } from "../icons/index.tsx";
+import { firstName } from "../util/format.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import styles from "./Brainstorm.module.css";
@@ -166,6 +167,31 @@ export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
     .join(", ");
 }
 
+/** How many filed items the folded line names before "+N more". */
+export const FOLDED_NAMES = 4;
+
+/** Nothing on the card is left for the person looking to file: each item is filed, or someone else's to file. */
+export function nothingLeftToFile(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): boolean {
+  return items.length > 0 && items.every((item) => item.filed || readOnly || !item.canFile);
+}
+
+/**
+ * The folded card's words after "Proposed work · 2 epics, 3 tasks": all
+ * filed, what they became (an epic, which has no key, by its title) and who
+ * filed them; otherwise how many are filed and how many wait for others.
+ */
+export function foldedWords(items: ReadonlyArray<ProposalCardItem>): string[] {
+  const filed = items.flatMap((item) => (item.filed ? [{ item, filed: item.filed }] : []));
+  const open = items.length - filed.length;
+  if (open > 0) return [...(filed.length > 0 ? [`${filed.length} filed`] : []), `${open} for others to file`];
+  const names = filed.map(({ item, filed: f }) =>
+    (item.kind === "epic" || !f.key) && typeof item.title === "string" ? item.title : f.key || "an item");
+  const shown = names.length > FOLDED_NAMES ? [...names.slice(0, FOLDED_NAMES), `+${names.length - FOLDED_NAMES} more`] : names;
+  const by = [...new Set(filed.map(({ filed: f }) => firstName(f.by)))];
+  const who = by.length > 1 ? `${by.slice(0, -1).join(", ")} and ${by.at(-1)}` : by[0];
+  return [`all filed: ${shown.join(", ")}`, ...(who ? [`by ${who}`] : [])];
+}
+
 /**
  * What the session's agent proposes, for a member to file with a click.
  * Each item says where it goes; an edit shows its text before and after.
@@ -173,13 +199,41 @@ export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
  * them, so an item only someone else may file stays, saying who. Filed
  * items say who filed them as what. Nothing here mentions the session: the
  * work filed is theirs, as if they had typed it.
+ *
+ * With nothing left for the person looking to file, the card folds to one
+ * line in its place in the Chat, in the margin-note grammar of a
+ * `ChatEvent`; the line opens the whole card, read only. The fold follows
+ * from the items alone: a card filed here folds as soon as it says so.
  */
-export function ProposalCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly, className, ...rest }: ProposalCardProps) {
+export function ProposalCard(props: ProposalCardProps) {
+  const [open, setOpen] = useState(false);
+  const { items, selected, onToggle, onFile, filingAs, busy, readOnly, className, ...rest } = props;
+  if (!nothingLeftToFile(items, readOnly)) return <OpenCard {...props} />;
+  const words = [proposalSummary(items.map((i) => i.kind)), ...foldedWords(items)].join(" · ");
+  return (
+    <section className={cx(styles["folded"], open && styles["foldedOpen"], className)} aria-label="Proposed work"
+      data-testid="proposal-card" data-folded="true" {...rest}>
+      <button type="button" className={styles["foldLine"]} aria-expanded={open} onClick={() => setOpen((o) => !o)}
+        data-testid="proposal-fold" title={`Proposed work · ${words}`}>
+        <span className={styles["foldGlyph"]} aria-hidden><Icon name="list-check" size={12} /></span>
+        <span className={styles["foldWords"]}><b>Proposed work</b> · {words}</span>
+        <span className={styles["foldChevron"]} aria-hidden><Icon name="chevron-right" size={14} className={styles["foldChevronIcon"]} /></span>
+      </button>
+      {open ? <OpenCard items={items} selected={selected} onToggle={onToggle} onFile={onFile} filingAs={filingAs}
+        readOnly={readOnly} folded /> : null}
+    </section>
+  );
+}
+
+function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly, folded, className, ...rest }: ProposalCardProps & { readonly folded?: boolean }) {
   const ticked = items.flatMap((item, i) => (selected.has(i) && item.canFile && !item.filed ? [item] : []));
   const stays = items.filter((item) => !item.filed && !item.canFile && item.why);
-  let foot: string;
+  let foot: string | null;
   if (readOnly) {
     foot = "You can read this session: filing is for its owner and members who can chat.";
+  } else if (folded) {
+    // Opened from its line, nothing on it to file: the line says what became of it.
+    foot = null;
   } else if (ticked.length === 0) {
     foot = "Tick what to file.";
   } else {
@@ -187,12 +241,15 @@ export function ProposalCard({ items, selected, onToggle, onFile, filingAs, busy
     foot = `Filing as ${filingAs}: ${proposalSummary(ticked.map((t) => t.kind))}${staying}. Nothing starts.`;
   }
   return (
-    <section className={cx(styles["card"], className)} aria-label="Proposed work" data-testid="proposal-card" {...rest}>
-      <header className={styles["cardHead"]}>
-        <Icon name="list-check" size={14} />
-        <b>Proposed work</b>
-        <span className={styles["muted"]}>· {proposalSummary(items.map((i) => i.kind))}</span>
-      </header>
+    <section className={cx(styles["card"], folded && styles["unfolded"], className)} aria-label="Proposed work"
+      data-testid={folded ? "proposal-unfolded" : "proposal-card"} {...rest}>
+      {folded ? null : (
+        <header className={styles["cardHead"]}>
+          <Icon name="list-check" size={14} />
+          <b>Proposed work</b>
+          <span className={styles["muted"]}>· {proposalSummary(items.map((i) => i.kind))}</span>
+        </header>
+      )}
       <ul className={styles["items"]}>
         {items.map((item, i) => {
           const blocked = !item.canFile && !item.filed;
@@ -238,14 +295,17 @@ export function ProposalCard({ items, selected, onToggle, onFile, filingAs, busy
           );
         })}
       </ul>
-      <footer className={styles["cardFoot"]}>
-        <span className={styles["muted"]}>{foot}</span>
-        {readOnly ? null : (
-          <Button variant="primary" size="sm" onClick={onFile} disabled={busy || ticked.length === 0} data-testid="file-proposal">
-            {ticked.length === 0 ? "Nothing to file" : `File ${ticked.length}`}
-          </Button>
-        )}
-      </footer>
+      {foot === null ? null : (
+        <footer className={styles["cardFoot"]}>
+          <span className={styles["muted"]}>{foot}</span>
+          {/* Disabled, never gone, while nothing is ticked: the footer beside it says why. */}
+          {readOnly ? null : (
+            <Button variant="primary" size="sm" onClick={onFile} disabled={busy || ticked.length === 0} data-testid="file-proposal">
+              {ticked.length === 0 ? "File" : `File ${ticked.length}`}
+            </Button>
+          )}
+        </footer>
+      )}
     </section>
   );
 }

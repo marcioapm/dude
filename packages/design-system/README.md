@@ -487,6 +487,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   his task"); a filed one says who filed it as what ("Ana filed BL-61").
   A reader (`readOnly`) sees the card and files nothing. Nothing on the
   card names the session: the work filed is the person's, as if typed.
+  With nothing ticked, **File stays, disabled**, and the footer beside it
+  says "Tick what to file.": the way to act is never missing, and never
+  greyed without saying why (the button reads "File", not "Nothing to
+  file", which reads as a fact about the card rather than the ticks).
+- **A filed card folds to a line in its place in time.** Once nothing on
+  it is left for the person looking to file — each item filed, or someone
+  else's to file (a reader's card, all of it) — `ProposalCard` draws one
+  muted line where the card was proposed, in the margin grammar of a
+  `ChatEvent` row: the list glyph, "Proposed work · 2 epics, 3 tasks",
+  then "all filed: Usage metering, BILL-1, BILL-2, DASH-1, +1 more · by Ana
+  and Márcio" (in the card's order: keys, an epic by its title, four names
+  then "+N more"), or "3
+  filed · 2 for others to file". No frame, no tone. The line is a toggle
+  (`aria-expanded`, the chevron at its end) that opens the whole card, read
+  only. The fold is derived from the items (`filed`, `canFile`), so a card
+  filed in this tab folds as soon as the app reads it again; only the line
+  being open is the component's own state. The Chat's `session.filed`
+  notice ("Ana filed BILL-1, …") stays where it happened: the line is the
+  proposal, the notice the moment it was filed.
 - **`QuestionCard onlyThey`** is the agent's question to one member: "Only
   Ana can answer this one", and no "Take over this task" hint, because
   there is no task to take over.
@@ -1429,6 +1448,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
+| `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a filed card kept full size at the Chat's foot, saying "Tick what to file." beside a dead button |
 
 ## Components
 
@@ -1705,8 +1725,10 @@ MarkdownCheatsheet.
 `src/components/` — brainstorm sessions (the rules are under *Brainstorm
 sessions*):
 
-- **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
-  as whoever presses File.
+- **ProposalCard** (+ `proposalSummary`, `nothingLeftToFile`,
+  `foldedWords`) — what the agent proposes, filed as whoever presses File;
+  with nothing left for the person looking to file, one line in the Chat
+  (what became of it, who filed it) that opens the card read only.
 - **SessionTitle** — the session's name in its header: "New session"
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
