@@ -22,8 +22,24 @@
   max-width: 720px;
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-20);
+  /* 24 comfortable, 16 compact: the column's air follows the density. */
+  gap: var(--ds-space-panel-gap);
   margin: auto 0;
+}
+/* Compact takes the welcome's big spaces in, never its text: less air above,
+   a smaller face, a shorter field, and six recent sessions where there were four. */
+:global([data-density="compact"]) .stage {
+  padding-top: 6vh;
+}
+:global([data-density="compact"]) .greeting {
+  gap: var(--ds-space-4);
+  margin-bottom: 0;
+}
+:global([data-density="compact"]) .composer :global(textarea) {
+  min-height: 52px;
+}
+:global([data-density="compact"]) .recent {
+  margin-top: var(--ds-space-8);
 }
 
 .greeting {
@@ -56,7 +72,8 @@
 }
 .composer :global(textarea) {
   min-height: 72px;
-  font-size: var(--ds-text-lg);
+  /* 16 comfortable, 15 compact. */
+  font-size: var(--ds-text-prose);
 }
 .composer > * > div:has(textarea) {
   box-shadow: var(--ds-shadow-2);

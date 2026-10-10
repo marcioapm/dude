@@ -54,6 +54,49 @@ anyone meant to go.
 - **A phone** (under 640px): the greeting takes a size down (`3xl`), the
   stage less air, and the recent rows drop their summary.
 
+## Comfortable and compact
+
+The welcome follows the density rule (README *Density*): compact takes the
+big spaces in, never the text below readable.
+
+| | comfortable | compact |
+|---|---|---|
+| space above the column | 12vh | 6vh |
+| gap between its parts (`space-panel-gap`) | 24 | 16 |
+| dude's face | 64 | 48 |
+| greeting / line | 34 / 16 | 34 / 16 (unchanged: one per page) |
+| composer field height, text (`text-prose`) | 72, 16 | 52, 15 |
+| recent sessions shown | 4 | 6 |
+| recent row (`size-row-comfortable`) | 40 | 36 |
+
+At 1440×900 both fit without scrolling; compact shows two more sessions.
+
+## A collapsible sidebar
+
+On a wide screen (1000px and up) the sidebar folds to a **56px rail** and
+back; under 1000px it stays the drawer it is today.
+
+- **Collapse** with a quiet chevron-left beside the sidebar's title, or
+  **`[`** from anywhere outside a field; **expand** with the chevron-right
+  under the rail's face, or `[` again. The choice is the person's and is
+  remembered (`dude.sidebar` in localStorage), as the density is.
+- **The rail is the sidebar's rows with their words folded away**, in the
+  same order and on the same chrome shade, each a 40px square with the nav
+  row's hover and current washes and its name in a tooltip to the right:
+  dude's face (home: the welcome), expand, search (expands with the field
+  focused, `/`), **Waiting on you** (the inbox glyph, or the `NeedsYouCount`
+  pill itself when there is something — the one loud thing stays loud),
+  New session, Sessions (the bulb; your recent ones in its tooltip), then
+  **each project's face** — pressed, its board; a project with something
+  waiting on you wears the needs-you diamond on its corner, cut out of the
+  chrome, and its tooltip gives its counts in words ("1 needs you · 4
+  running · 1 failed") — and the band: organisation settings and your face.
+- **The tree is not in the rail.** Epics, tasks and agents need their words;
+  a project's face opens its board, and expanding gives the tree back.
+- Density moves the rail's rows as it moves the sidebar's
+  (`size-row-comfortable` 40 → 36, `space-nav-row-gap`, `-nav-section-gap`);
+  its width stays 56.
+
 ## What changes outside the web app
 
 - **API**: `POST /sessions` takes the first message and the projects to
@@ -79,10 +122,16 @@ with the build):
   wash chips with the project's face and a 12px close, a quiet "+ Link"
   opening a float menu (`float` radius, `overlay`, `shadow-3`); read only
   without `onLink`/`onUnlink`.
+- **`Sidebar collapsed` / `onCollapsedChange`** — the rail, drawn by the
+  sidebar itself from what it already has (projects, counts, sessions
+  slot, footer), so the app passes one flag; a `SidebarCollapse` button for
+  the header. `SIDEBAR_DRAWER_QUERY` still decides drawer vs rail.
 - **`RecentSessions`** — the short list: rows of `row-comfortable` height
   told apart by space, a `row-hover` wash, the age tabular.
 
-Rules to add to the README's *Brainstorm sessions*:
+Rules to add to the README's *Brainstorm sessions* (and, for the rail,
+*Triage (the sidebar)*: collapsed, the rail keeps the one loud count and
+marks each project that waits on you; nothing else in it takes a tone):
 
 - dude opens on the welcome; New session opens it; a session is made by
   its first message, never empty.

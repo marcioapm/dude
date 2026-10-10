@@ -15,6 +15,11 @@
       /* Proposed in the app: the sidebar's brand is a button home (to the welcome). */
       .brandHome { all: unset; cursor: pointer; border-radius: var(--ds-radius-control); }
       .brandHome:focus-visible { outline: 2px solid var(--ds-color-focus-ring); outline-offset: 2px; }
+      /* Proposed in the Sidebar: collapsed to a rail on a wide screen; under 1000px it stays the drawer it is. */
+      .sidebarSlot { display: contents; }
+      .railSlot { display: contents; }
+      @media (min-width: 1000px) { .sidebarSlot.isCollapsed { display: none; } }
+      @media (max-width: 999.98px) { .railSlot { display: none; } .collapseButton { display: none !important; } }
     </style>
   </head>
   <body>

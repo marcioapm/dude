@@ -18,7 +18,7 @@ import {
   Capabilities, ChatComposer, ChatMessage, ChatTranscript, CostDisplay, LinkedProjects, PersonAvatar, ProjectAvatar, ScreenHeader,
   SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle,
 } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
+import { Icon, useTheme } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
 import dudeSvg from "../../public/dude.svg?url";
 import dudeOutlinedSvg from "../../public/dude-outlined.svg?url";
@@ -72,7 +72,7 @@ function LinkChips({ linked, onUnlink, onLink }: { linked: readonly Project[]; o
   );
 }
 
-function RecentSessions({ recent, onOpen, onAll }: { recent: readonly Recent[]; onOpen: (id: string) => void; onAll: () => void }) {
+function RecentSessions({ recent, show, onOpen, onAll }: { recent: readonly Recent[]; show: number; onOpen: (id: string) => void; onAll: () => void }) {
   return (
     <section className={s.recent} aria-label="Recent sessions">
       <div className={s.recentHead}>
@@ -80,7 +80,7 @@ function RecentSessions({ recent, onOpen, onAll }: { recent: readonly Recent[]; 
         <Button size="sm" variant="quiet" onClick={onAll}>All sessions</Button>
       </div>
       <ul className={s.recentList}>
-        {recent.slice(0, 4).map((r) => (
+        {recent.slice(0, show).map((r) => (
           <li key={r.id}>
             <button type="button" className={s.recentRow} onClick={() => onOpen(r.id)} data-session={r.id}>
               <Icon name="brainstorm" size={14} className={s.recentIcon} />
@@ -108,6 +108,8 @@ export function Welcome({ recent, startLinked, onStart, onOpen, onAll }: {
   onOpen: (id: string) => void;
   onAll: () => void;
 }) {
+  const { density } = useTheme();
+  const compact = density === "compact";
   const [text, setText] = useState("");
   const [linked, setLinked] = useState<Project[]>(() => (startLinked ? [PROJECTS[0], PROJECTS[1]] : []));
   const wrap = useRef<HTMLDivElement>(null);
@@ -124,7 +126,7 @@ export function Welcome({ recent, startLinked, onStart, onOpen, onAll }: {
       <div className={s.stage}>
         <div className={s.column}>
           <header className={s.greeting}>
-            <Mark size={64} />
+            <Mark size={compact ? 48 : 64} />
             <h1 className={s.hello}>{partOfDay()}, Márcio</h1>
             <p className={s.sub}>What are we working out today?</p>
           </header>
@@ -148,7 +150,7 @@ export function Welcome({ recent, startLinked, onStart, onOpen, onAll }: {
               </button>
             ))}
           </div>
-          {recent.length > 0 ? <RecentSessions recent={recent} onOpen={onOpen} onAll={onAll} /> : (
+          {recent.length > 0 ? <RecentSessions recent={recent} show={compact ? 6 : 4} onOpen={onOpen} onAll={onAll} /> : (
             <p className={s.promise}>A session reads what you link, asks what it needs and proposes work. It changes nothing: you file what you want.</p>
           )}
         </div>

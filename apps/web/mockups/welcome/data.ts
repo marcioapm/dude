@@ -79,4 +79,8 @@ export const RECENT: readonly Recent[] = [
     linked: [PROJECTS[2]] },
   { id: "s4", title: "Docs IA", summary: "Filed 1 epic", age: "2 weeks ago",
     first: "Help me restructure the docs navigation.", reply: "Proposed: Concepts, Guides, Reference, Operations.", linked: [PROJECTS[3]] },
+  { id: "s5", title: "Webhook retry policy", summary: "Edited WI-2401", age: "3 weeks ago",
+    first: "Should the webhook handler retry 4xx?", reply: "Only 408 and 429; the rest are the caller's fault.", linked: [PROJECTS[0]] },
+  { id: "s6", title: "Onboarding checklist", summary: "Nothing filed yet", age: "a month ago",
+    first: "What does a new engineer need on day one?", reply: "Access, a seeded dev env, and one small task with a reviewer.", linked: [] },
 ];
