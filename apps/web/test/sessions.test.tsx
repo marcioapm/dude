@@ -705,6 +705,24 @@ describe("Waiting on you", () => {
     expect(client.accepted).toEqual([SESSION]);
     expect(opened).toEqual([SESSION]);
   });
+
+  test("a question of several is named as the board names it: how many, and their headers", async () => {
+    const items = ["Retry scope", "Old route", "Tests"].map((header) => ({ header, question: `${header}?`, multiple: false, choices: [] }));
+    const several: SessionsList = { ...list, invitations: [],
+      questions: [{ id: "q_3", prompt: "3 questions: Retry scope, Old route, Tests", options: [], items, askedAt: at(5), sessionId: "ssn_other", title: "Meter v2" }] };
+    const client = new InboxClient("a");
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <InboxScreen client={client} projects={[]} sessions={several} onSelect={() => {}} onOpenSession={() => {}} onChanged={() => {}} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(unmount);
+    const question = await until(() => container.querySelector("[data-testid=session-question]"), "the question");
+    expect(question.textContent).toContain("The brainstorm in Meter v2 asks 3 questions · Retry scope, Old route, Tests");
+    expect(question.textContent).not.toContain("3 questions: Retry scope");
+  });
 });
 
 describe("a session's URL", () => {
