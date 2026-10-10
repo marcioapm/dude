@@ -14,21 +14,20 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// On a host and a database in Europe/Lisbon, every time the API sends is
-// UTC: a time Go encodes ends in Z, and one Postgres renders in JSON is at
+// On a host and a database outside UTC, every time the API sends is UTC: a
+// time Go encodes ends in Z, and one Postgres renders in JSON is at
 // +00:00. The browser merges the session's proposal cards with its UTC
 // event times; a card stamped +01:00 once sorted an hour late, after
-// everything said since.
+// everything said since. Both zones have a fixed offset and no daylight
+// saving (the host at +01:00, the database in Asia/Kolkata at +05:30), so
+// the check holds on any date.
 func TestTheAPISendsUTCOnAHostOutsideIt(t *testing.T) {
-	lisbon, err := time.LoadLocation("Europe/Lisbon")
-	if err != nil {
-		t.Skipf("no zone data: %v", err)
-	}
-	s := newSessionWorld(t)
-	mustExec(t, s.owner, fmt.Sprintf(`ALTER DATABASE %q SET timezone = 'Europe/Lisbon'`, s.owner.Config().Database))
+	// Set before the world starts its goroutines, which read time.Local.
 	local := time.Local
-	time.Local = lisbon
+	time.Local = time.FixedZone("UTC+1", 3600)
 	t.Cleanup(func() { time.Local = local })
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, fmt.Sprintf(`ALTER DATABASE %q SET timezone = 'Asia/Kolkata'`, s.owner.Config().Database))
 
 	// A pool opened after both, as the orchestrator opens its own.
 	app, err := db.Open(t0(), s.app.Pool.Config().ConnString())
