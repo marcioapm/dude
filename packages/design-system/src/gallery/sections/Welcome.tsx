@@ -3,7 +3,7 @@ import { Block, Label, PaneDensityContext, Panes, Section, densitiesFor, type Pa
 import styles from "../gallery.module.css";
 import { ChatComposer } from "../../components/ChatComposer.tsx";
 import { Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions } from "../../components/Sidebar.tsx";
-import { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, Welcome, WelcomeNote, type LinkableProject, type RecentSession, type Starter } from "../../components/Welcome.tsx";
+import { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote, type LinkableProject, type RecentSession } from "../../components/Welcome.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { Icon } from "../../icons/index.tsx";
 import type { ThemeMode } from "../../tokens/themes.ts";
@@ -12,14 +12,6 @@ import type { NavRef } from "../../util/navModel.ts";
 import { navProjects, people } from "../navFixtures.ts";
 
 const P = people;
-
-export const STARTERS: readonly Starter[] = [
-  { id: "epic", icon: "layers", title: "Plan an epic", detail: "Turn a goal into an epic and tasks you can file.", prompt: "I want to plan an epic for " },
-  { id: "task", icon: "edit", title: "Shape a task", detail: "From a rough idea to a goal and acceptance criteria.", prompt: "Help me write a task for " },
-  { id: "code", icon: "search", title: "Ask the code", detail: "How something works, where it lives, what it touches.", prompt: "How does " },
-  { id: "triage", icon: "list-check", title: "Triage what's open", detail: "Findings, failed tasks and stale PRs, with what to do.",
-    prompt: "Go through what's open and tell me what to do first." },
-];
 
 const PROJECTS: readonly LinkableProject[] = navProjects.map((p) => ({ id: p.id, name: p.name }));
 
@@ -31,8 +23,6 @@ const RECENT: readonly RecentSession[] = [
   { id: "s5", title: "Webhook retry policy", summary: "Edited WI-2401", age: "3 weeks ago" },
   { id: "s6", title: "Onboarding checklist", summary: "Nothing filed yet", age: "a month ago" },
 ];
-
-const FIRST_TIME = "A session reads what you link, asks what it needs and proposes work. It changes nothing: you file what you want.";
 
 /** The app passes its own face (DudeMark); the gallery a stand-in in the brainstorm's colour. */
 function Mark() {
@@ -49,13 +39,13 @@ function WelcomeDemo({ density, firstTime }: { readonly density: Density; readon
       greeting="Afternoon, Márcio"
       line="What are we working out today?"
       composer={
-        <ChatComposer mode="chat" value={text} onValueChange={setText} placeholder="Start a session: an idea, a question, a plan…"
+        <ChatComposer mode="chat" variant="stage" value={text} onValueChange={setText} placeholder="Start a session: an idea, a question, a plan…"
           to={<>To <b>Brainstorm</b></>} onSubmit={() => false}
           leading={<ComposerLinks linked={linked} projects={PROJECTS} onLink={(p) => setLinked((l) => [...l, p])}
             onUnlink={(p) => setLinked((l) => l.filter((x) => x.id !== p.id))} />} />
       }
-      starters={<StarterPills starters={STARTERS} onPick={(s) => setText(s.prompt)} />}
-      footer={firstTime ? <WelcomeNote>{FIRST_TIME}</WelcomeNote>
+      starters={<StarterPills starters={WELCOME_STARTERS} onPick={(s) => setText(s.prompt)} />}
+      footer={firstTime ? <WelcomeNote>{WELCOME_FIRST_TIME}</WelcomeNote>
         : <RecentSessions sessions={RECENT.slice(0, RECENT_SESSIONS_SHOWN[density])} onOpen={() => undefined} onAll={() => undefined} />}
     />
   );
@@ -129,7 +119,7 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
     <Section id="welcome" title="Welcome"
       intro="What dude opens on, and what New session opens: nothing is made until the first message is sent. The greeting, the composer raised off the page with what the session will read said in it, starters that fill it and never send, and the sessions you were in last. Beside it, the sidebar, which folds to a rail on a wide screen.">
       <Block id="wl-shell" title="Welcome beside the sidebar"
-        note="The 720px column a little above the middle: 12vh of air (6vh compact), a 64px face (48), a 72px field (52), four recent sessions (six). The composer is raised (shadow-2) only here.">
+        note={`The 720px column a little above the middle: 12vh of air (6vh compact), a 64px face (48), four recent sessions (six). The composer is ChatComposer variant="stage": raised (shadow-2), a 72px field (52), only here.`}>
         <Frames mode={mode} shot="welcome">{(d) => <Shell><WelcomeDemo density={d} /></Shell>}</Frames>
       </Block>
       <Block id="wl-first" title="The first time"
@@ -141,9 +131,9 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
         <Frames mode={mode} shot="welcome-rail">{(d) => <Shell collapsed><WelcomeDemo density={d} /></Shell>}</Frames>
       </Block>
       <Block id="wl-starters" title="StarterPills"
-        note="Raised full-radius pills, the glyph in the brainstorm's colour. No border: shade in dark, shadow-1 in light, a secondary-hover wash on hover. What each is for is its tooltip. Picking one fills the composer; it never sends.">
+        note="Raised full-radius pills; the glyph takes the label's ink, secondary, brightening with it on hover. No border: shade in dark, shadow-1 in light, a secondary-hover wash on hover. What each is for is its tooltip. Picking one fills the composer; it never sends.">
         <Panes mode={mode} surface>
-          <StarterPills starters={STARTERS} onPick={() => undefined} />
+          <StarterPills starters={WELCOME_STARTERS} onPick={() => undefined} />
         </Panes>
       </Block>
       <Block id="wl-links" title="ComposerLinks"
@@ -166,7 +156,7 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="wl-recent" title="RecentSessions"
-        note="One line each at row-comfortable height, told apart by space and a row-hover wash: the bulb, the title, the shared mark, what came of it (dropped on a phone), the age, tabular.">
+        note="One line each at row-default height (32, 28 compact), told apart by space and a row-hover wash: the bulb in the brainstorm's role colour (it is the role glyph), the title, the shared mark, what came of it (dropped on a phone), the age, tabular.">
         <Panes mode={mode} surface>
           {(_t, d) => <div style={{ maxWidth: 720 }}><RecentSessions sessions={RECENT.slice(0, RECENT_SESSIONS_SHOWN[d])} onOpen={() => undefined} onAll={() => undefined} /></div>}
         </Panes>

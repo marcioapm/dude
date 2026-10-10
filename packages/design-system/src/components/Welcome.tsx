@@ -17,7 +17,7 @@ export interface WelcomeProps extends Omit<HTMLAttributes<HTMLDivElement>, "chil
   readonly greeting: ReactNode;
   /** One line under it: "What are we working out today?". */
   readonly line?: ReactNode;
-  /** A `ChatComposer`: the stage raises it and makes its field taller. */
+  /** A `ChatComposer variant="stage"`: raised, with the taller field. */
   readonly composer: ReactNode;
   /** `StarterPills`. */
   readonly starters?: ReactNode;
@@ -63,6 +63,21 @@ export interface Starter {
   /** The words it writes in the composer for the person to finish; never sent by itself. */
   readonly prompt: string;
 }
+
+/** The welcome's four ways to start: the app's and the gallery's one copy. */
+export const WELCOME_STARTERS: ReadonlyArray<Starter> = [
+  { id: "epic", icon: "layers", title: "Plan an epic", detail: "Turn a goal into an epic and tasks you can file.",
+    prompt: "I want to plan an epic for " },
+  { id: "task", icon: "edit", title: "Shape a task", detail: "From a rough idea to a goal and acceptance criteria.",
+    prompt: "Help me write a task for " },
+  { id: "code", icon: "search", title: "Ask the code", detail: "How something works, where it lives, what it touches.",
+    prompt: "How does " },
+  { id: "triage", icon: "list-check", title: "Triage what's open", detail: "Findings, failed tasks and stale PRs, with what to do.",
+    prompt: "Go through what's open and tell me what to do first." },
+];
+
+/** `WelcomeNote`'s words for someone with no sessions yet. */
+export const WELCOME_FIRST_TIME = "A session reads what you link, asks what it needs and proposes work. It changes nothing: you file what you want.";
 
 export interface StarterPillsProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly starters: ReadonlyArray<Starter>;

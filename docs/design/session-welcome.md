@@ -68,7 +68,7 @@ big spaces in, never the text below readable.
 | greeting / line | 34 / 16 | 34 / 16 (unchanged: one per page) |
 | composer field height, text (`text-prose`) | 72, 16 | 52, 15 |
 | recent sessions shown | 4 | 6 |
-| recent row (`size-row-comfortable`) | 40 | 36 |
+| recent row (`size-row-default`) | 32 | 28 |
 
 At 1440×900 both fit without scrolling; compact shows two more sessions.
 
@@ -120,7 +120,8 @@ with the build):
   starters slot and a recent slot; centres its column, and narrows on a
   phone.
 - **`StarterPills`** — the starters: `raised` pills with a full radius,
-  their glyph in the brainstorm's role colour (these are the brainstorm's).
+  their glyph in the label's ink (secondary, brightening on hover): they
+  are actions, not the brainstorm's role glyph.
   No border: shade in dark, `shadow-1` in light, a `secondary-hover` wash on
   hover. Each takes `{ id, icon, title, detail, prompt }`; `onPick(starter)`.
 - **`ComposerLinks`** — the link chips for `ChatComposer leading`: neutral
@@ -134,8 +135,8 @@ with the build):
   `railFooter` (the band's `SidebarRailItem`s). The collapse chevron is the
   sidebar's own, shown when `onCollapsedChange` is given.
   `SIDEBAR_DRAWER_QUERY` still decides drawer vs rail.
-- **`RecentSessions`** — the short list: rows of `row-comfortable` height
-  told apart by space, a `row-hover` wash, the age tabular.
+- **`RecentSessions`** — the short list: one-line rows of `row-default`
+  height told apart by space, a `row-hover` wash, the age tabular.
 
 Rules to add to the README's *Brainstorm sessions* (and, for the rail,
 *Triage (the sidebar)*: collapsed, the rail keeps the one loud count and
@@ -177,9 +178,10 @@ What the build decided where this page left it open:
 - **How many recent sessions** is the app's choice, by the density in force
   (`RECENT_SESSIONS_SHOWN`: 4 comfortable, 6 compact); `RecentSessions`
   draws what it is given.
-- **The composer is raised by the stage, not by a second stylesheet**:
-  `ChatComposer` reads `--cc-raise`, `--cc-field-min` and `--cc-inset`,
-  which `Welcome` sets.
+- **The composer is raised by a prop of its own, not by its host**:
+  `ChatComposer variant="stage"` (raised `shadow-2`, a 72px field, 52
+  compact, `text-prose`, no inset), which the app passes; `Welcome` does not
+  reach into its child.
 - **An organisation with no projects** still sees "No projects yet" and
   New project at `#/`: the welcome follows once there is a project.
 - **The tab reads "dude"** on the welcome, as with nothing selected before.

@@ -10,7 +10,8 @@ import type { SessionSummary } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
-import { FIRST_TIME, STARTERS, WelcomeScreen, partOfDay } from "../src/screens/WelcomeScreen.tsx";
+import { WelcomeScreen, partOfDay } from "../src/screens/WelcomeScreen.tsx";
+import { WELCOME_FIRST_TIME as FIRST_TIME, WELCOME_STARTERS as STARTERS } from "@dude/design-system/components";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { SessionLink } from "@dude/domain";
 

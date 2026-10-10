@@ -13,6 +13,7 @@ import { Sidebar, SidebarRailItem, projectCountWords } from "../src/components/S
 import { ChatComposer } from "../src/components/ChatComposer.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import type { NavProject, NavRef } from "../src/util/navModel.ts";
+import { projectCounts } from "../src/util/navModel.ts";
 import { byRole } from "./queries.ts";
 
 let root: Root | null = null;
@@ -111,6 +112,17 @@ describe("ComposerLinks", () => {
   });
 });
 
+describe("ChatComposer variant", () => {
+  test("stage marks the composer as the stage's; the default does not", async () => {
+    const el = await mount(<>
+      <ChatComposer mode="chat" variant="stage" onSubmit={() => undefined} data-testid="staged" />
+      <ChatComposer mode="chat" onSubmit={() => undefined} data-testid="plain" />
+    </>);
+    expect(el.querySelector("[data-testid=staged]")!.getAttribute("data-variant")).toBe("stage");
+    expect(el.querySelector("[data-testid=plain]")!.hasAttribute("data-variant")).toBe(false);
+  });
+});
+
 describe("RecentSessions", () => {
   test("each row opens its session; the shared one carries the owner's mark; All sessions opens the list", async () => {
     const opened: string[] = [];
@@ -155,7 +167,7 @@ describe("Sidebar collapsed", () => {
     expect(rail.getAttribute("aria-label")).toBe("Navigation");
     expect(rail.getAttribute("data-testid")).toBe("sidebar-rail");
     expect([...rail.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
-      "Home", "Expand sidebar", "Find work", "Waiting on you", "New session", "Sessions",
+      "Home", "Expand sidebar", "Find work", "Waiting on you: 1", "New session", "Sessions",
       "control-plane: 1 needs you · 2 running · 1 failed", "docs: 1 running", "Organisation settings",
     ]);
     expect(el.querySelector("[role=tree]")).toBeNull();
@@ -164,9 +176,15 @@ describe("Sidebar collapsed", () => {
 
   test("Waiting on you is the loud count itself; a project waiting on you wears the diamond, one that does not, none", async () => {
     const el = await mount(<Rail onWaiting={() => undefined} />);
-    expect(byRole(el, "button", "Waiting on you").querySelector('[aria-label="1 needs you"]')).toBeTruthy();
+    expect(byRole(el, "button", "Waiting on you: 1").querySelector('[aria-label="1 needs you"]')).toBeTruthy();
+    // The diamond is aria-hidden: what it means is in the face's name.
     const faces = [...el.querySelectorAll("[data-testid=rail-project]")];
-    expect(faces.map((f) => f.children.length)).toEqual([2, 1]);
+    expect(faces.map((f) => f.getAttribute("aria-label"))).toEqual(["control-plane: 1 needs you · 2 running · 1 failed", "docs: 1 running"]);
+  });
+
+  test("with nothing waiting, Waiting on you is named without a count", async () => {
+    const el = await mount(<Sidebar projects={[PROJECTS[1]!]} title="dude" collapsed onCollapsedChange={() => undefined} onWaitingSelect={() => undefined} />);
+    expect(byRole(el, "button", "Waiting on you")).toBeTruthy();
   });
 
   test("a project's face opens its board, current after; home, New session, Sessions and Waiting do what the sidebar's do", async () => {
@@ -175,7 +193,7 @@ describe("Sidebar collapsed", () => {
       onWaiting={() => calls.push("waiting")} />);
     await act(async () => byRole(el, "button", "docs: 1 running").click());
     expect(byRole(el, "button", "docs: 1 running").getAttribute("aria-current")).toBe("page");
-    for (const name of ["Home", "New session", "Sessions", "Waiting on you"]) await act(async () => byRole(el, "button", name).click());
+    for (const name of ["Home", "New session", "Sessions", "Waiting on you: 1"]) await act(async () => byRole(el, "button", name).click());
     expect(calls).toEqual(["home", "new", "list", "waiting"]);
   });
 
@@ -210,7 +228,28 @@ describe("Sidebar collapsed", () => {
   });
 
   test("a project's counts in words name the loud one first and leave out what is zero", () => {
-    expect(projectCountWords(PROJECTS[0]!)).toBe("1 needs you · 2 running · 1 failed");
-    expect(projectCountWords({ id: "p", name: "empty", tasks: [] })).toBe("");
+    expect(projectCountWords(projectCounts(PROJECTS[0]!))).toBe("1 needs you · 2 running · 1 failed");
+    expect(projectCountWords(projectCounts({ id: "p", name: "empty", tasks: [] }))).toBe("");
+  });
+
+  test("the viewport is followed with one listener while mounted, removed on unmount", async () => {
+    const was = window.matchMedia;
+    let added = 0;
+    let removed = 0;
+    window.matchMedia = ((query: string) => ({
+      matches: false, media: query, onchange: null,
+      addEventListener: () => void added++, removeEventListener: () => void removed++,
+      addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      const el = await mount(<Rail />);
+      for (let i = 0; i < 3; i++) await act(async () => byRole(el, "button", i % 2 ? "Collapse sidebar" : "Expand sidebar").click());
+      expect([added, removed]).toEqual([1, 0]);
+      await act(async () => root!.unmount());
+      root = null;
+      expect([added, removed]).toEqual([1, 1]);
+    } finally {
+      window.matchMedia = was;
+    }
   });
 });

@@ -10,9 +10,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-composer-gap);
-  /* A host that is its own frame (the welcome) sets --cc-inset to 0. */
-  padding: var(--cc-inset, var(--ds-space-composer-y) var(--ds-space-chat-pad-x));
+  padding: var(--ds-space-composer-y) var(--ds-space-chat-pad-x);
   min-width: 0;
+}
+/* The page's one thing (the welcome): its host is the frame, so no inset. */
+.stage {
+  padding: 0;
 }
 .answer {
   --cc-tint: var(--ds-tone-attention-solid);
@@ -87,8 +90,6 @@
   background: var(--ds-color-field-raised);
   border: 1px solid var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-control);
-  /* Raised off the page only where it is the page's one thing (Welcome sets --cc-raise). */
-  box-shadow: var(--cc-raise, 0 0 0 0 transparent);
   transition:
     border-color var(--ds-duration-fast) var(--ds-ease-standard),
     box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
@@ -98,7 +99,14 @@
 }
 .field:focus-within {
   border-color: var(--cc-tint);
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent), var(--cc-raise, 0 0 0 0 transparent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent);
+}
+/* On the stage the field is raised off the page, and keeps it under the focus ring. */
+.stage .field {
+  box-shadow: var(--ds-shadow-2);
+}
+.stage .field:focus-within {
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent), var(--ds-shadow-2);
 }
 .disabled .field {
   opacity: 0.6;
@@ -114,8 +122,6 @@
 .textarea {
   flex: 1;
   min-width: 0;
-  /* Taller where a host asks (Welcome's --cc-field-min); otherwise one line. */
-  min-height: var(--cc-field-min, 0);
   padding: var(--ds-space-field-y) var(--ds-space-12);
   background: none;
   border: 0;
@@ -125,6 +131,12 @@
   line-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
   color: var(--ds-color-text-primary);
   font-family: inherit;
+}
+.stage .textarea {
+  min-height: 72px;
+}
+:global([data-density="compact"]) .stage .textarea {
+  min-height: 52px;
 }
 .textarea::placeholder {
   color: var(--ds-color-text-muted);
