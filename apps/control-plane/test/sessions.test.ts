@@ -61,7 +61,7 @@ let stopListening: () => Promise<void>;
 let marcio: Key, joao: Key, ana: Key, outsider: Key, boss: Key;
 let outsiders: Array<[string, Key]>;
 let orchestrator: ReturnType<typeof Bun.serve>;
-const forwarded: Array<{ method: string; path: string; body: unknown; person: string | null }> = [];
+const forwarded: Array<{ method: string; path: string; search?: string; body: unknown; person: string | null }> = [];
 
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
@@ -100,7 +100,7 @@ beforeAll(async () => {
 
   orchestrator = Bun.serve({ port: 0, async fetch(request) {
     const url = new URL(request.url);
-    forwarded.push({ method: request.method, path: url.pathname, body: await request.json().catch(() => null),
+    forwarded.push({ method: request.method, path: url.pathname, search: url.search, body: await request.json().catch(() => null),
       person: request.headers.get("x-dude-person") });
     if (url.pathname.endsWith("/content")) return new Response(BYTES, { headers: { "content-type": "text/markdown" } });
     return Response.json({ ok: true });
@@ -150,6 +150,9 @@ test("every session route goes to the orchestrator as the person, and a bad body
     ["POST", `/v1/brainstorms/${SESSION}/chat`, { text: "one sec", aside: true }, `/internal/sessions/${SESSION}/chat`],
     ["POST", `/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" },
       `/internal/sessions/${SESSION}/questions/q_1/answer`],
+
+    ["POST", `/v1/brainstorms/${SESSION}/archive`, undefined, `/internal/sessions/${SESSION}/archive`],
+    ["POST", `/v1/brainstorms/${SESSION}/unarchive`, undefined, `/internal/sessions/${SESSION}/unarchive`],
     // Made by its first message, with what it reads.
     ["POST", "/v1/brainstorms", { message: " where does metering go? ", projects: [{ projectId: "prj_1" }] }, "/internal/sessions"],
   ] as const;
@@ -159,8 +162,9 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded[1]!.body).toEqual({ title: "Ideas", projects: [{ projectId: "prj_1", repositoryIds: ["repo_1"] }] });
   expect(forwarded[2]!.body).toEqual({ projects: [] });
   expect(forwarded[4]!.body).toEqual({ title: "Billing v2" });
-  expect(forwarded.at(-3)!.body).toEqual({ text: "one sec", aside: true });
-  expect(forwarded.at(-2)!.body).toEqual({ answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" });
+  // Counted from the end: archive and unarchive (no body) sit between these and the create.
+  expect(forwarded.at(-5)!.body).toEqual({ text: "one sec", aside: true });
+  expect(forwarded.at(-4)!.body).toEqual({ answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" });
   expect(forwarded.at(-1)!.body).toEqual({ message: "where does metering go?", projects: [{ projectId: "prj_1", repositoryIds: [] }] });
 
   forwarded.length = 0;
@@ -181,6 +185,32 @@ test("every session route goes to the orchestrator as the person, and a bad body
     [`/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: [{ choices: [0] }], attachmentIds: ["att_1"] }],
   ] as const) expect((await call(marcio, "POST", path, body)).status).toBe(400);
   expect(forwarded).toEqual([]);
+});
+
+test("the list asks for archived sessions only with archived=1, and passes nothing else of the query on", async () => {
+  forwarded.length = 0;
+  for (const query of ["?archived=1", "", "?archived=0", "?archived=true", "?archived=1&x=../people", "?sessionId=ssn_x"]) {
+    expect((await call(marcio, "GET", `/v1/brainstorms${query}`)).status).toBe(200);
+  }
+  expect(forwarded.map((f) => [f.method, f.path, f.search, f.person])).toEqual([
+    ["GET", "/internal/sessions", "?archived=1", marcio.personId],
+    ["GET", "/internal/sessions", "", marcio.personId],
+    ["GET", "/internal/sessions", "", marcio.personId],
+    ["GET", "/internal/sessions", "", marcio.personId],
+    ["GET", "/internal/sessions", "?archived=1", marcio.personId],
+    ["GET", "/internal/sessions", "", marcio.personId],
+  ]);
+});
+
+test("archive and unarchive forward as the person with no body, whatever was sent", async () => {
+  forwarded.length = 0;
+  for (const verb of ["archive", "unarchive"]) {
+    expect((await call(joao, "POST", `/v1/brainstorms/${SESSION}/${verb}`, { person: marcio.personId })).status).toBe(200);
+  }
+  expect(forwarded.map((f) => [f.path, f.body, f.person])).toEqual([
+    [`/internal/sessions/${SESSION}/archive`, {}, joao.personId],
+    [`/internal/sessions/${SESSION}/unarchive`, {}, joao.personId],
+  ]);
 });
 
 test("a session's Run, its events, questions, directives and agent sessions are its accepted members' alone", async () => {
