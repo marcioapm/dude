@@ -136,6 +136,9 @@ type runRow struct {
 	// Starts of its lux Run in a row that failed before running, and its error.
 	StartFailures int
 	Error         string
+	// The epoch of the first placement on the size runs.machine records (a
+	// resume's resize); 0 for the submit's.
+	SizeSince int
 }
 
 const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text, COALESCE(r.phase::text, ''),
@@ -146,7 +149,8 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 			WHERE tp.task_id = r.task_id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) END),
 	(SELECT preview_settings(pr) FROM projects pr WHERE pr.id = r.project_id),
 	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> ''),
-	r.wakeable, r.wake_wanted_at IS NOT NULL, r.start_failures, COALESCE(r.error, '')
+	r.wakeable, r.wake_wanted_at IS NOT NULL, r.start_failures, COALESCE(r.error, ''),
+	COALESCE((r.machine->>'sinceEpoch')::int, 0)
 	FROM runs r`
 
 func scanRun(row pgx.Row) (runRow, error) {
@@ -154,7 +158,7 @@ func scanRun(row pgx.Row) (runRow, error) {
 	var settings []byte
 	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
 		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup, &r.Wakeable, &r.WakeWanted,
-		&r.StartFailures, &r.Error)
+		&r.StartFailures, &r.Error, &r.SizeSince)
 	if err == nil {
 		err = json.Unmarshal(settings, &r.Settings)
 	}
@@ -274,7 +278,10 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		if luxRun, err = s.Lux.Get(ctx, r.LuxRunID); err == nil {
 			v.LuxState = luxRun.State
 			v.Host = nonEmpty(luxRun.Host)
-			v.MemoryLimit = luxRun.MemoryLimit()
+			if n := len(luxRun.Placements); n > 0 && luxRun.Placements[n-1].Epoch >= r.SizeSince {
+				// Not a placement's from before a resize: not this size's.
+				v.MemoryLimit = luxRun.Placements[n-1].MemoryLimit
+			}
 			if lux.Waiting(luxRun.State) {
 				v.WaitingReason = nonEmpty(luxRun.StateReason)
 			}

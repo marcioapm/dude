@@ -131,7 +131,9 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 - **Every Run is on a machine size.** The organisation's sizes
   (`machine_sizes`) are named by each role's settings and a project's
   previews; the spec carries the size as `resources` and its pool, by
-  lux's id, as `placement.poolId`, and `runs.machine` keeps what it ran on. Design:
+  lux's id, as `placement.poolId`, and `runs.machine` keeps what it runs on.
+  A parked Run resumes on the size its settings name now (lux#51), in the
+  same pool; `runs.machine` then records what lux applied. Design:
   [`design/machine-sizes.md`](design/machine-sizes.md).
 - **Every agent runs on a model tier, never a model.** The organisation's
   tiers (`model_tiers`) are named by each role's settings; a tier names the

@@ -7,12 +7,12 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // The fake lux's pool "big" (fakelux.DefaultPools), by lux's id.
@@ -64,56 +64,95 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	}
 }
 
-// A Run keeps the record of the size it started on: its size edited and
-// then removed while it is parked, the resume (which builds its spec again
-// from the settings as they are now) neither fails nor rewrites runs.machine,
-// and lux keeps the resources it was submitted with.
-func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
+// A parked Run resumes on the size its settings name now, in place: its
+// size edited while it is parked (renamed, more CPUs, same pool), the
+// resume sends lux the new resources, lux's spec has them, and runs.machine
+// records what lux's answer applied. The memory limit of the placement
+// before the resume is not the new size's: it is dropped, and only a
+// placement from the resume on records one.
+func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
 		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, $2)`, w.org, bigPool)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
 	w.lux.Decide = hang
+	w.lux.MemoryShare = 0.95
 	wi := w.task()
 	w.deliver(wi)
 	runID := w.parked(wi)
-
-	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
-	mustExec(t, w.owner, `DELETE FROM machine_sizes WHERE id = 'msz_large'`)
-	// lux reports a limit from now on; only the resume reads it below.
-	w.lux.MemoryShare = 0.95
 	r := w.lux.Runs()[0]
-	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
-		t.Fatalf("resume: %d %v", status, out)
-	}
-	// The syncer alone, so no artifacts sweep can be what writes the limit.
-	for i := 0; w.luxCalls(r.ID, "resume") == 0 && i < 200; i++ {
-		if _, err := w.syncer.Sweep(ctx); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if w.luxCalls(r.ID, "resume") != 1 {
-		t.Fatalf("the Run was not resumed\n%s", w.describeRuns())
-	}
-	// Large's 23040 MiB, of which the container gets 95%, to a MiB.
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (machine->>'memoryLimit')::bigint = $2`, runID, int64(21888)<<20); n != 1 {
-		t.Errorf("the resume did not record the memory limit lux reported")
-	}
-	w.pump()
-
-	var name, from string
-	var cpus float64
-	if err := w.owner.QueryRow(ctx, `SELECT machine->>'name', machine->>'from', (machine->>'cpus')::float8 FROM runs WHERE id = $1`, runID).
-		Scan(&name, &from, &cpus); err != nil {
+	before, err := w.syncer.Lux.Get(ctx, r.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "Large" || from != "project" || cpus != 6.5 {
-		t.Errorf("after the size changed and the Run resumed it says %s from %s, %g CPUs; want Large from project, 6.5", name, from, cpus)
+
+	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
+	w.resumeAgent(runID, r)
+
+	huge := lux.Resources{CPUs: 16, Memory: 23040 << 20, Disk: 120 << 30}
+	if got := w.resumeResources(r.ID); len(got) != 1 || got[0] == nil || *got[0] != huge {
+		t.Errorf("the resume sent resources %v, want Huge's", got)
 	}
-	if spec := submitted(t, r); spec.Resources == nil || spec.Resources.CPUs != 6.5 || spec.Placement == nil || spec.Placement.PoolID != bigPool {
-		t.Errorf("lux's spec for the resumed Run: resources %+v placement %+v, want Large's", spec.Resources, spec.Placement)
+	if spec := submitted(t, r); spec.Resources == nil || *spec.Resources != huge || spec.Placement == nil || spec.Placement.PoolID != bigPool {
+		t.Errorf("lux's spec after the resume: resources %+v placement %+v, want Huge's in big", spec.Resources, spec.Placement)
+	}
+	m := w.machineOf(runID)
+	if m["name"] != "Huge" || m["sizeId"] != "msz_large" || m["from"] != "project" || m["cpus"] != 16.0 || m["memoryMiB"] != 23040.0 ||
+		m["diskGiB"] != 120.0 || m["poolId"] != bigPool || m["pool"] != "big" || m["note"] != nil || m["sinceEpoch"] != 2.0 {
+		t.Errorf("runs.machine after the resume = %v, want Huge from project, since epoch 2", m)
+	}
+	if _, ok := m["memoryLimit"]; ok {
+		t.Errorf("the old size's memory limit was kept: %v", m)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized' AND payload->'machine'->>'name' = 'Huge'`, runID); n != 1 {
+		t.Errorf("%d run.resized saying Huge, want 1", n)
+	}
+
+	// The placement before the resume is not the new size's.
+	phases.RecordMemoryLimit(ctx, w.app, quiet, w.org, runID, before)
+	if _, ok := w.machineOf(runID)["memoryLimit"]; ok {
+		t.Error("the placement before the resume recorded its limit as the new size's")
+	}
+	w.until("the resumed placement to run", func() bool { return w.lux.State(r.ID) == "running" })
+	after, _ := w.syncer.Lux.Get(ctx, r.ID)
+	phases.RecordMemoryLimit(ctx, w.app, quiet, w.org, runID, after)
+	// 23040 MiB, of which the container gets 95%, to a MiB.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (machine->>'memoryLimit')::bigint = $2`, runID, int64(21888)<<20); n != 1 {
+		t.Errorf("the resumed placement's limit was not recorded: %v", w.machineOf(runID))
+	}
+}
+
+// A Run whose size was deleted while it was parked (its settings still
+// naming it) resumes on the size it has: the default the settings fall
+// back to is not what anyone chose for it. Nothing is sent, and its record
+// says why it was not moved.
+func TestAResumedRunWhoseSizeWasDeletedKeepsItsSize(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib)
+		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120)`, w.org)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
+	w.lux.Decide = hang
+	wi := w.task()
+	w.deliver(wi)
+	runID := w.parked(wi)
+	r := w.lux.Runs()[0]
+
+	mustExec(t, w.owner, `DELETE FROM machine_sizes WHERE id = 'msz_large'`)
+	w.resumeAgent(runID, r)
+
+	if got := w.resumeResources(r.ID); len(got) != 1 || got[0] != nil {
+		t.Errorf("the resume sent resources %v, want none", got)
+	}
+	if spec := submitted(t, r); spec.Resources == nil || spec.Resources.CPUs != 6.5 {
+		t.Errorf("lux's spec: %+v, want Large's", spec.Resources)
+	}
+	m := w.machineOf(runID)
+	if m["name"] != "Large" || m["cpus"] != 6.5 || m["sizeId"] != "msz_large" {
+		t.Errorf("runs.machine = %v, want Large kept", m)
+	}
+	if note, _ := m["note"].(string); note != "Its settings name a machine size that no longer exists, so it keeps Large." {
+		t.Errorf("note = %q", note)
 	}
 }
 
