@@ -374,6 +374,42 @@ def test_a_screenshot_goes_beside_an_open_question(
     assert console_errors == []
 
 
+@pytest.mark.ui
+def test_several_answers_carry_a_screenshot_in_their_note(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    """Several questions are answered together with a note, and the note
+    takes images: the screenshot goes to the agent with the answers."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask-several", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
+    task = client.create_task(forge_project["id"], "Phone layout, two questions")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
+    wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"], timeout=60, message="no questions")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    turn = page.get_by_test_id("question-turn").last
+    turn.get_by_role("radio", name="Yes").click()
+    turn.get_by_role("button", name="Next").click()
+    turn.get_by_role("radio", name="Pay in parts").click()
+    turn.get_by_role("button", name="Review").click()
+    turn.get_by_label("A note for the agent (optional)").fill("It overflows — VAT amount is cut off on the right.")
+    turn.get_by_test_id("attach-input").set_input_files([{"name": "phone.png", "mimeType": "image/png", "buffer": png(390, 844)}])
+    expect(turn.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
+    turn.get_by_role("button", name="Send answers").click()
+    answered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered"],
+                          timeout=15, message="no answer")
+    payload = answered[0]["payload"]
+    assert [a["name"] for a in payload["attachments"]] == ["phone.png"]
+    assert payload["note"] == "It overflows — VAT amount is cut off on the right."
+    assert payload["answers"] == [{"choices": [0], "text": ""}, {"choices": [1], "text": ""}]
+    luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get(payload["directiveId"]),
+                       timeout=30, message="lux never got it")
+    assert [a["name"] for a in luxed] == ["phone.png"]
+    assert console_errors == []
+
+
 def lux_spec(env, lux_run: str) -> dict:
     """The spec dude submitted for a lux Run, as the fake lux keeps it."""
     res = requests.get(f"{env.lux_url}/v1/runs/{lux_run}", headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10)
