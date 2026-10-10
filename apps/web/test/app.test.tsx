@@ -228,6 +228,7 @@ describe("home", () => {
     const page = await app("#/", client);
     const area = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
     await until(() => (client.reads >= 1 ? true : null), "the first read");
+    await settle(100);
     const before = client.reads;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "plan the meter");
@@ -235,7 +236,9 @@ describe("home", () => {
     });
     await act(async () => void area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await until(() => (window.location.hash === "#/sessions/ssn_new" ? true : null), "the new session's place");
-    expect(client.reads).toBeGreaterThan(before);
+    // The fixture's stream sends no session event here, so every read after the send is the app's own.
+    await settle(300);
+    expect(client.reads).toBe(before + 1);
   });
 });
 
