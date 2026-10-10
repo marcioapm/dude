@@ -10,8 +10,12 @@ import { Input } from "../../primitives/Input.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
 import { ModelPicker } from "../../components/ModelPicker.tsx";
-import { GALLERY_ORG_MODEL, GALLERY_TIERS } from "./Welcome.tsx";
+import { GALLERY_MISFIT, GALLERY_ORG_MODEL, GALLERY_TIERS } from "./Welcome.tsx";
 import { people } from "../navFixtures.ts";
+import styles from "../gallery.module.css";
+
+/** The app's line under the rail's picker. */
+const RAIL_MODEL_NOTE = "Applies the next time the agent starts.";
 
 const P = people;
 
@@ -165,10 +169,33 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               </SessionRailBlock>
               <SessionRailBlock label="Model" data-testid="rail-model">
                 <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }} onChange={() => undefined} />
+                <span className={styles["railNote"]}>{RAIL_MODEL_NOTE}</span>
               </SessionRailBlock>
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read linked code, tasks, PRs, findings", "Propose epics and tasks · you file them"]}
                   cannot={["Change code, push, start or steer work", "Touch projects you didn't link"]} />
+              </SessionRailBlock>
+            </SessionRail>
+          </div>
+        </Panes>
+      </Block>
+      <Block id="bs-rail-model" title="The rail's Model"
+        note="The owner's chip on a chosen pair (no default mark), a member's read-only chip on the hover wash with nothing to open, and a pair that stopped fitting: the danger mark, and why under the chip. Under each, muted: when a change applies.">
+        <Panes mode={mode}>
+          <div style={{ width: 300 }}>
+            <SessionRail>
+              <SessionRailBlock label="Model · chosen" data-testid="rail-model-chosen">
+                <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: "mtr_sol", harness: "codex" }} onChange={() => undefined} />
+                <span className={styles["railNote"]}>{RAIL_MODEL_NOTE}</span>
+              </SessionRailBlock>
+              <SessionRailBlock label="Model · read only" data-testid="rail-model-readonly">
+                <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: "mtr_coder", harness: null }} readOnly />
+                <span className={styles["railNote"]}>{RAIL_MODEL_NOTE}</span>
+              </SessionRailBlock>
+              <SessionRailBlock label="Model · no longer fits" data-testid="rail-model-misfit">
+                <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: "mtr_coder", harness: "codex" }}
+                  misfit={GALLERY_MISFIT} onChange={() => undefined} />
+                <span className={styles["railNote"]}>{RAIL_MODEL_NOTE}</span>
               </SessionRailBlock>
             </SessionRail>
           </div>

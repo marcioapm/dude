@@ -123,6 +123,9 @@ export function RowMenu({ items, label = "More actions", size = "sm", trigger, o
           side={side}
           sideOffset={4}
           collisionPadding={8}
+          // A preview stays under its own trigger wherever the page is scrolled: flipped or shifted
+          // into the viewport it lands over the next pane's.
+          avoidCollisions={!forceMount}
           loop
           onClick={stop}
           onKeyDown={stopIfActivation}
