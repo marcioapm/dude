@@ -1554,7 +1554,8 @@ RowMenu (+ `rowMenuOpeners`; a `kind: "radio"` item is one choice of
 several under a small caps heading, `keepOpen` to pick in several groups at
 once; an item's `descriptionMono` and `descriptionWraps` set its second
 line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
-is not an item, for what the menu cannot list), Skeleton/SkeletonLines/Spinner, EmptyState,
+is not an item, for what the menu cannot list, and the menu's description
+for a screen reader, whose menu mode reads items alone), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 

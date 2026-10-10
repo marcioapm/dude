@@ -163,10 +163,19 @@ describe("ModelPicker", () => {
     expect(fits.querySelector("[data-testid=model-picker-misfit]")).toBeNull();
   });
 
-  test("a note atop the menu, when it cannot list everything yet", async () => {
+  test("a note atop the menu, when it cannot list everything yet, is the menu's description", async () => {
     const el = await mount(<ModelPicker tiers={[]} organization={ORG} value={DEFAULT} menuNote="Could not load the tiers" onChange={() => undefined} />);
     const menu = await openMenu(el);
     expect(menu.textContent).toContain("Could not load the tiers");
+    // Menu mode reads items alone: the note reaches a screen reader only as what the menu says it is.
+    const description = (menu.getAttribute("aria-describedby") ?? "").split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(" ");
+    expect(description).toBe("Could not load the tiers");
+  });
+
+  test("with no note, the menu has no description", async () => {
+    const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={DEFAULT} onChange={() => undefined} />);
+    const menu = await openMenu(el);
+    expect(menu.hasAttribute("aria-describedby")).toBe(false);
   });
 
   test("Escape closes the menu and changes nothing", async () => {
