@@ -375,8 +375,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   - **Keys**, outside a field: 1–9 pick the choice with that number (the
     number shows on hover or while the form has focus), ←/→ move between
     questions, Enter is Next / Send. Typing in a field never triggers them,
-    and on a focused button or tab (Change, Back, Send, a question's tab)
-    Enter is that button. A one-answer question's choices are a radio group
+    and none of them act on a focused button or tab (Change, Back, Send, a
+    question's tab), except ←/→ on a tab, which move between tabs, and
+    Enter, which is that button. A one-answer question's choices are a radio group
     with one tab stop (the pick, else the first row); ↑/↓ move focus within
     it without picking, Space picks. ←/→ are not the group's arrows: they
     stay the question tabs'. Several-answer choices are a stop each.
