@@ -163,6 +163,28 @@ describe("ModelPicker", () => {
     expect(fits.querySelector("[data-testid=model-picker-misfit]")).toBeNull();
   });
 
+  test("a misfit going away (a pick pending) keeps the same trigger and the same open menu", async () => {
+    const why = "Codex takes an OpenAI model, but the tier Claude (High) requests claude-opus-5.";
+    const picker = (misfit: string | null) =>
+      <ModelPicker tiers={TIERS} organization={ORG} value={{ tier: null, harness: "codex" }} misfit={misfit} onChange={() => undefined} />;
+    // mount() wraps in TooltipProvider; a re-render must keep that shape.
+    const rerender = (misfit: string | null) => act(async () => root!.render(<TooltipProvider>{picker(misfit)}</TooltipProvider>));
+    // Identity compared as a boolean: a failing toBe on a DOM node prints the whole happy-dom window.
+    const sameTrigger = () => el.querySelector("[data-testid=model-picker]") === trigger;
+    const el = await mount(picker(why));
+    const trigger = el.querySelector("[data-testid=model-picker]");
+    await rerender(null);
+    expect(sameTrigger()).toBe(true);
+    expect(trigger!.hasAttribute("aria-describedby")).toBe(false);
+    await rerender(why);
+    expect(sameTrigger()).toBe(true);
+    // With the menu open, it stays the same node too.
+    const menu = await openMenu(el);
+    await rerender(null);
+    expect(sameTrigger()).toBe(true);
+    expect(document.querySelector("[role=menu]") === menu).toBe(true);
+  });
+
   test("a note atop the menu, when it cannot list everything yet, is the menu's description", async () => {
     const el = await mount(<ModelPicker tiers={[]} organization={ORG} value={DEFAULT} menuNote="Could not load the tiers" onChange={() => undefined} />);
     const menu = await openMenu(el);

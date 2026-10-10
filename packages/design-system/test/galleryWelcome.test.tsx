@@ -96,9 +96,9 @@ test("ModelPicker: default, chosen, read only, a misfit, and one menu open in it
     expect(item("Fast").getAttribute("aria-disabled")).toBe("true");
     expect(item("Fast").textContent).toContain("names no model yet");
   }
-  // The welcome's own composer carries the picker after "To Brainstorm".
+  // The welcome's own composer carries the picker (in its wrapper) after "To Brainstorm".
   const shell = el.querySelector("#wl-shell [data-shot]")!;
-  expect(shell.querySelector("[data-testid=composer-to] + [data-testid=model-picker]")).not.toBeNull();
+  expect(shell.querySelector("[data-testid=composer-to] + span > [data-testid=model-picker]")).not.toBeNull();
 });
 
 test("ModelPicker's menu when the tiers could not be read: the note atop it, as the menu's description, in every frame", async () => {

@@ -99,12 +99,13 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, mi
       {eff.isDefault ? <span className={styles["default"]} data-testid={`${testId}-default`}>default</span> : null}
     </>
   );
-  const described = (chip: ReactElement) => wrong ? (
+  // Always the same wrapper, so a misfit appearing or going (a pick pending) keeps the trigger and its open menu mounted.
+  const described = (chip: ReactElement) => (
     <span className={styles["withMisfit"]}>
       {chip}
-      <span id={describedBy} className={styles["misfit"]}>{wrong}</span>
+      {wrong ? <span id={describedBy} className={styles["misfit"]}>{wrong}</span> : null}
     </span>
-  ) : chip;
+  );
   if (readOnly || !onChange) {
     return described(
       <span className={cx(styles["chip"], styles["readOnly"])} data-testid={testId} data-readonly="" aria-describedby={wrong ? describedBy : undefined}>
