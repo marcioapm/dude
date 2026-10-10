@@ -14,8 +14,8 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { AttachmentInfo, CostOrigin, PersistedEvent, Run, RunStatus } from "@dude/domain";
-import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
+import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus } from "@dude/domain";
+import { EventTypes, TERMINAL_RUN_STATUSES, askItems, itemAnswers } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
@@ -62,16 +62,22 @@ export interface ThoughtTurn {
   at: string;
 }
 
-/** A question the agent stopped on, for a person to answer. */
+/** A question the agent stopped on, for a person to answer — or several, asked together. */
 export interface QuestionTurn {
   kind: "question";
   id: string;
   questionId: string;
   text: string;
   options: string[];
+  /** What it asks: one to four questions, each with its choices. */
+  items: AskItem[];
   at: string;
   /** Null while it waits for an answer. */
   answeredAt: string | null;
+  /** The answer to each item, once answered: the record the turn becomes. */
+  answers: ItemAnswer[] | null;
+  /** Who answered. */
+  answeredBy: ActorRef | null;
   /**
    * Closed unanswered, when: what it asked was decided elsewhere (an
    * escalation decided on the task's banner). Null while it may be answered.
@@ -802,8 +808,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           questionId: String(payload.questionId ?? ""),
           text: String(payload.prompt ?? ""),
           options: Array.isArray(payload.options) ? payload.options.map(String) : [],
+          items: askItems(payload.items, payload.prompt, payload.options),
           at: event.occurredAt,
           answeredAt: null,
+          answers: null,
+          answeredBy: null,
           closedAt: null,
           to: typeof payload.to === "string" && payload.to ? { id: payload.to, name: typeof payload.toName === "string" ? payload.toName : null } : null,
         };
@@ -827,11 +836,27 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.QuestionAnswered: {
         const question = state.questionsById.get(String(payload.questionId ?? ""));
-        if (question) question.answeredAt = event.occurredAt;
-        // Delivered the way a steer is: queued until the agent takes it.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
-        const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId,
-          attachments: attachmentsOf(payload.attachments) };
+        const attachments = attachmentsOf(payload.attachments);
+        const answer = String(payload.answer ?? "");
+        if (question) {
+          // The question's turn becomes the record: each question with its
+          // answer under it. An answer from before answers were kept per
+          // question is one question's: the choice it names, or its words.
+          question.answeredAt = event.occurredAt;
+          question.answeredBy = humanActor(event);
+          question.answers = itemAnswers(payload.answers) ?? [answerOfText(question.items[0], answer)];
+          // A note, or images, are the person's own words after it.
+          const note = typeof payload.note === "string" ? payload.note : "";
+          if (note || attachments.length > 0) {
+            const turn = { ...humanTurn(event, "message", note, directiveId ? null : event.occurredAt), directiveId, attachments };
+            if (directiveId !== null) state.steersByDirective.set(directiveId, turn);
+            turns.push(turn);
+          }
+          break;
+        }
+        // Delivered the way a steer is: queued until the agent takes it.
+        const turn = { ...humanTurn(event, "answer", answer, directiveId ? null : event.occurredAt), directiveId, attachments };
         if (directiveId !== null) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
@@ -1144,6 +1169,12 @@ function attachmentsOf(value: unknown): AttachmentInfo[] {
 
 function landsOf(value: unknown): SteerLands | null {
   return value === "next_step" || value === "next_turn" ? value : null;
+}
+
+/** One question's answer given as text: the choice it names (case and spaces aside, as dude matches it), else the person's words. */
+function answerOfText(item: AskItem | undefined, text: string): ItemAnswer {
+  const i = item ? item.choices.findIndex((c) => c.label.trim().toLowerCase() === text.trim().toLowerCase()) : -1;
+  return i >= 0 ? { choices: [i], text: "" } : { choices: [], text: text.trim() };
 }
 
 function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: string, deliveredAt: string | null): HumanTurn {

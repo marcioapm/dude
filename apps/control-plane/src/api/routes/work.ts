@@ -206,7 +206,7 @@ async function decideTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
-const chatInput = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+const chatInput = z.object({ text: z.string().trim().min(1).max(16_384), aside: z.boolean().optional() }).strict();
 
 /**
  * A message in a task's Chat: it starts the task's conductor, or is its
