@@ -197,7 +197,8 @@ export function RecentSessions({ sessions, onOpen, onAll, className, ...rest }: 
               <Icon name="brainstorm" size={14} className={styles["recentIcon"]} />
               <span className={styles["recentTitle"]}>{s.title}</span>
               {s.shared ? <SharedMark owner={s.shared.owner ?? undefined} /> : null}
-              {s.summary ? <span className={styles["recentSummary"]}>{s.summary}</span> : <span className={styles["recentSummary"]} />}
+              {/* Kept when empty: it takes the row's slack, so the age stays at the end. */}
+              <span className={styles["recentSummary"]}>{s.summary || null}</span>
               {s.age ? <span className={cx(styles["recentAge"], "ds-tnum")}>{s.age}</span> : null}
             </button>
           </li>
