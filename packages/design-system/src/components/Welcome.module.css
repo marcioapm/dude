@@ -37,9 +37,6 @@
   gap: var(--ds-space-8);
   text-align: center;
 }
-:global([data-density="compact"]) .greeting {
-  gap: var(--ds-space-4);
-}
 .mark {
   display: inline-flex;
   width: var(--welcome-mark);
@@ -59,16 +56,6 @@
   font-size: var(--ds-text-lg);
   line-height: var(--ds-leading-normal);
   color: var(--ds-color-text-secondary);
-}
-
-/* The composer, raised off the page while it is the page's one thing (ChatComposer reads these). */
-.composer {
-  --cc-inset: 0;
-  --cc-raise: var(--ds-shadow-2);
-  --cc-field-min: 72px;
-}
-:global([data-density="compact"]) .composer {
-  --cc-field-min: 52px;
 }
 
 .note {
@@ -108,10 +95,6 @@
 .pill:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
-}
-/* The starters are the brainstorm's: its glyph colour. */
-.pill :global(svg) {
-  color: var(--ds-role-brainstorm-fg);
 }
 /* Light elevates with shadow, not shade: raised is the surface's white. */
 :global([data-theme="light"]) .pill {
@@ -213,7 +196,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   width: 100%;
-  height: var(--ds-size-row-comfortable);
+  height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-8);
   border: 0;
   border-radius: var(--ds-radius-control);

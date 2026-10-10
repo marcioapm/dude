@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { firstName, useDensity, type NavProject } from "@dude/design-system";
 import {
-  ChatComposer, ComposerLinks, Duration, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, Welcome, WelcomeNote,
+  ChatComposer, ComposerLinks, Duration, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote,
   type LinkableProject, type Starter,
 } from "@dude/design-system/components";
 import { Callout } from "@dude/design-system/primitives";
@@ -25,19 +25,6 @@ export function partOfDay(d: Date = new Date()): string {
   if (h < 18) return "Afternoon";
   return "Evening";
 }
-
-export const STARTERS: readonly Starter[] = [
-  { id: "epic", icon: "layers", title: "Plan an epic", detail: "Turn a goal into an epic and tasks you can file.",
-    prompt: "I want to plan an epic for " },
-  { id: "task", icon: "edit", title: "Shape a task", detail: "From a rough idea to a goal and acceptance criteria.",
-    prompt: "Help me write a task for " },
-  { id: "code", icon: "search", title: "Ask the code", detail: "How something works, where it lives, what it touches.",
-    prompt: "How does " },
-  { id: "triage", icon: "list-check", title: "Triage what's open", detail: "Findings, failed tasks and stale PRs, with what to do.",
-    prompt: "Go through what's open and tell me what to do first." },
-];
-
-export const FIRST_TIME = "A session reads what you link, asks what it needs and proposes work. It changes nothing: you file what you want.";
 
 export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSession, onAllSessions, onCreated }: {
   client: ApiClient;
@@ -119,6 +106,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSes
           <div ref={wrap} className="welcomeComposer">
             <ChatComposer
               mode="chat"
+              variant="stage"
               autoFocus
               value={text}
               onValueChange={setText}
@@ -136,8 +124,8 @@ export function WelcomeScreen({ client, projects, sessions, name, now, onOpenSes
             {problem ? <Callout tone="danger" data-testid="welcome-problem">{problem}</Callout> : null}
           </div>
         }
-        starters={<StarterPills starters={STARTERS} onPick={fill} />}
-        footer={sessions === null ? null : shown.length === 0 ? <WelcomeNote>{FIRST_TIME}</WelcomeNote> : (
+        starters={<StarterPills starters={WELCOME_STARTERS} onPick={fill} />}
+        footer={sessions === null ? null : shown.length === 0 ? <WelcomeNote>{WELCOME_FIRST_TIME}</WelcomeNote> : (
           <RecentSessions onOpen={onOpenSession} onAll={onAllSessions} sessions={shown.map((s) => ({
             id: s.id,
             title: sessionTitle(s),

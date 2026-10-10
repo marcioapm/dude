@@ -25,6 +25,7 @@ import { NeedsYouCount } from "./StatusMark.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
+import type { TriageCounts } from "../tokens/triage.ts";
 import styles from "./Sidebar.module.css";
 
 export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
@@ -132,8 +133,7 @@ function useDrawerViewport(): boolean {
 }
 
 /** A project's counts in words, the loud one first and nothing that is zero: "1 needs you · 4 running". */
-export function projectCountWords(p: NavProject, you?: string | null): string {
-  const c = projectCounts(p, you);
+export function projectCountWords(c: TriageCounts): string {
   return [
     c.needs_you ? `${c.needs_you} ${c.needs_you === 1 ? "needs" : "need"} you` : null,
     c.active ? `${c.active} running` : null,
@@ -285,6 +285,8 @@ export function Sidebar({
     searchRef.current?.focus();
   }, [rail]);
   const yoursWaiting = waiting.yours.length + waitingExtra;
+  // Each project's counts walk its whole subtree: once per tree, not per render.
+  const railCounts = useMemo(() => (rail ? new Map(projects.map((p) => [p.id, projectCounts(p, you)])) : null), [rail, projects, you]);
 
   if (rail) {
     return (
@@ -305,7 +307,8 @@ export function Sidebar({
             <Icon name="search" size={16} />
           </SidebarRailItem>
           {onWaitingSelect ? (
-            <SidebarRailItem label="Waiting on you" tip={yoursWaiting ? `Waiting on you · ${yoursWaiting}` : "Nothing waiting on you"}
+            <SidebarRailItem label={yoursWaiting ? `Waiting on you: ${yoursWaiting}` : "Waiting on you"}
+              tip={yoursWaiting ? `Waiting on you · ${yoursWaiting}` : "Nothing waiting on you"}
               current={waitingSelected} onClick={() => onWaitingSelect("you")} data-testid="rail-waiting">
               {/* With something waiting the count is the item: its diamond is the needs-you shape. */}
               {yoursWaiting ? <NeedsYouCount count={yoursWaiting} /> : <Icon name="inbox" size={16} />}
@@ -327,8 +330,9 @@ export function Sidebar({
         </div>
         <div className={styles["railProjects"]} role="group" aria-label="Projects">
           {projects.map((p) => {
-            const words = projectCountWords(p, you);
-            const waits = projectCounts(p, you).needs_you > 0;
+            const counts = railCounts!.get(p.id)!;
+            const words = projectCountWords(counts);
+            const waits = counts.needs_you > 0;
             return (
               <SidebarRailItem key={p.id} label={words ? `${p.name}: ${words}` : p.name}
                 tip={<span className={styles["railTip"]}><b>{p.name}</b>{words ? <span className={styles["railTipMuted"]}>{words}</span> : null}</span>}

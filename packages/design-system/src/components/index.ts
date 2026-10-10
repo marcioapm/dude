@@ -60,7 +60,7 @@ export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
 export { Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, projectCountWords } from "./Sidebar.tsx";
 export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarRailItemProps, SidebarRailSessions, SidebarSession, SidebarSessionsProps, SidebarToggleProps } from "./Sidebar.tsx";
-export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, Welcome, WelcomeNote } from "./Welcome.tsx";
+export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote } from "./Welcome.tsx";
 export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessionsProps, Starter, StarterPillsProps, WelcomeProps } from "./Welcome.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps } from "./Board.tsx";

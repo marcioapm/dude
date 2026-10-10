@@ -88,6 +88,12 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   readonly attachHint?: ReactNode;
   /** Set, the paperclip is off and says why ("Image storage isn't set up"). */
   readonly attachDisabledReason?: string | undefined;
+  /**
+   * `stage`: the page's one thing (the welcome). Raised off the page
+   * (`shadow-2`), a 72px field (52 compact) in `text-prose`, and no inset of
+   * its own: its host is the frame.
+   */
+  readonly variant?: "stage" | undefined;
 }
 
 export type ComposerSubmission =
@@ -158,6 +164,7 @@ export function ChatComposer({
   attachAccept,
   attachHint,
   attachDisabledReason,
+  variant,
   className,
   ...rest
 }: ChatComposerProps) {
@@ -252,8 +259,9 @@ export function ChatComposer({
 
   return (
     <form
-      className={cx(styles["root"], styles[mode], isDisabled && styles["disabled"], className)}
+      className={cx(styles["root"], styles[mode], variant === "stage" && styles["stage"], isDisabled && styles["disabled"], className)}
       data-mode={mode}
+      data-variant={variant}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
