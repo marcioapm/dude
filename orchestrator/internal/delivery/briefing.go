@@ -62,12 +62,50 @@ func TaskHeads(ctx context.Context, tx pgx.Tx, taskID string) ([]RepoHead, error
 // Briefing writes the conductor's first prompt: dude's note on the task,
 // then the person's message.
 func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, message string) (string, error) {
-	return briefing(ctx, tx, taskID, conductorRunID, person, message, false)
+	return briefing(ctx, tx, taskID, conductorRunID, person, message, byPerson)
 }
 
-// briefing is Briefing, or with woken, a conductor dude starts to hear a
-// wake note (message) rather than a person.
-func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, message string, woken bool) (string, error) {
+// Why a conductor is briefed, which sets the briefing's opening line.
+type briefedFor int
+
+const (
+	byPerson briefedFor = iota // a person wrote in the Chat
+	byWake                     // dude woke it with a note
+	rebrief                    // its harness lost the conversation (Rebriefing)
+)
+
+// lostConversation is dude's message in a talker's briefing again, after
+// its harness restarted without the conversation (Rebriefing).
+const lostConversation = "Your agent session restarted without its earlier conversation: what was said before this " +
+	"is lost to you. This is your briefing again, as things stand now. Read again with your tools what you need, " +
+	"and answer the messages that follow, or that just came before this one, as if they were the first."
+
+// Rebriefing is the briefing of a talker whose harness restarted without
+// its conversation (lux started a blank session on resume), in dude's own
+// words: its briefing as it would be written now, saying the conversation
+// is lost, and lux's reason when it gave one. A conductor gets the task's
+// (briefing, opened as a briefing again), a session's agent the session's
+// (sessionAbout) under a heading of dude's before it. The caller wraps it
+// as the first prompt was (instructions, checkouts, tools).
+func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (string, error) {
+	message := lostConversation
+	if reason != "" {
+		message += "\n\n(lux: " + oneLine(reason) + ")"
+	}
+	// PR B: the conversation replayed from the ledger joins the briefing here.
+	if ref.SessionID != "" {
+		about, err := sessionAbout(ctx, tx, ref.SessionID)
+		if err != nil {
+			return "", err
+		}
+		return "## Your earlier conversation is lost\n\n" + message + "\n\n" + about, nil
+	}
+	return briefing(ctx, tx, ref.TaskID, ref.RunID, "dude", message, rebrief)
+}
+
+// briefing is the conductor's briefing; message is from person, or from
+// dude when it wakes the conductor or briefs it again.
+func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, message string, why briefedFor) (string, error) {
 	var key, title, goal, status string
 	var criteria json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.title, t.goal, t.status::text, t.acceptance_criteria
@@ -80,11 +118,16 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if who == "" {
 		who = "Someone"
 	}
-	if woken {
+	switch why {
+	case byWake:
 		who = "dude"
 		fmt.Fprintf(&b, "Conductor, dude woke you about %s, %q: a decision is yours. You are this task's conductor. "+
 			"Below is what dude knows about the task, in short; read more with your tools.", key, oneLine(title))
-	} else {
+	case rebrief:
+		who = "dude"
+		fmt.Fprintf(&b, "Conductor, dude is briefing you again on %s, %q. You are this task's conductor. "+
+			"Below is what dude knows about the task, in short; read more with your tools.", key, oneLine(title))
+	default:
 		fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
 			"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
 	}

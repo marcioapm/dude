@@ -114,7 +114,7 @@ func TestAPublishIsJudgedAgainBeforeItMoves(t *testing.T) {
 	t.Run("the conductor replaced", func(t *testing.T) {
 		e, g, id := pausedAtCompare(t)
 		before := e.gh.SHA(e.branch)
-		mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+		mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 		if status, out := e.chat(e.task, "are you there?"); status != 201 {
 			t.Fatalf("chat: %d %v", status, out)
 		}
@@ -186,7 +186,7 @@ func TestAMovingPublishHoldsOffWritersAndTheConductorsEnd(t *testing.T) {
 	}
 	// Its container stopped meanwhile: Chat would end it and start another,
 	// and waits instead.
-	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 	if status, out := e.chat(e.task, "replace while moving"); status != 409 {
 		t.Errorf("Chat replacing the conductor while moving: %d %v", status, out)
 	}

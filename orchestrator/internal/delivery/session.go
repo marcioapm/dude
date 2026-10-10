@@ -245,6 +245,16 @@ func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 // sessionBriefing is the brainstorm's first prompt before its
 // instructions: the session, who is in it, what it reads, and the message.
 func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) (string, error) {
+	about, err := sessionAbout(ctx, tx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return about + "\n\n## The first message\n\n" + message, nil
+}
+
+// sessionAbout is the session as its agent is briefed on it: its name,
+// its people and its linked projects.
+func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, error) {
 	var title, titledBy *string
 	if err := tx.QueryRow(ctx, `SELECT title, titled_by FROM sessions WHERE id = $1`, sessionID).Scan(&title, &titledBy); err != nil {
 		return "", fmt.Errorf("briefing: the session: %w", err)
@@ -291,7 +301,6 @@ func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) 
 			}
 		}
 	}
-	fmt.Fprintf(&b, "\n\n## The first message\n\n%s", message)
 	return b.String(), nil
 }
 
