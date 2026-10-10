@@ -163,13 +163,15 @@ func TestTheCLIAsksSeveralQuestions(t *testing.T) {
 		{"ask", "--questions-json", `{"header":"x"}`},
 		{"ask", "--questions-json", `[{"header":"x"`},
 		{"ask", "Also this?", "--questions-json", `[{"header":"A","question":"a?"}]`},
+		{"ask", "--questions-json", `[{"header":"A","question":"a?"}]`, "--choice", "x"},
+		{"ask", "--questions-json", `[{"header":"A","question":"a?"}]`, "--action", "retry"},
 	} {
 		if out, err := dude(args...); err == nil || !strings.Contains(out, "usage: dude ask") {
 			t.Errorf("%v: %v\n%s", args, err, out)
 		}
 	}
 	five := `[{"header":"1","question":"a?"},{"header":"2","question":"b?"},{"header":"3","question":"c?"},{"header":"4","question":"d?"},{"header":"5","question":"e?"}]`
-	if out, err := dude("ask", "--questions-json", five); err == nil || !strings.Contains(out, "4") {
+	if out, err := dude("ask", "--questions-json", five); err == nil || !strings.Contains(out, "ask 1 to 4 questions in one call; you asked 5") {
 		t.Errorf("five questions: %v\n%s", err, out)
 	}
 	if n := asked(); n != 0 {
