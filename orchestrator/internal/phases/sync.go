@@ -665,11 +665,13 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool
 // new placement replays nothing: the queue and the ids die together, and
 // the re-send is new input. A harness that had already written the message
 // to its own transcript before dying may show it to the resumed agent
-// twice; a duplicate is preferred to a lost message. An interrupt is left
-// alone: the turn it stopped is over.
+// twice; a duplicate is preferred to a lost message. An interrupt alone
+// (interrupt_only) is left: the turn it stopped is over, and it carries no
+// words.
 func unsendUnread(ctx context.Context, tx pgx.Tx, runID string) error {
 	_, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
-		WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL AND NOT interrupt`, runID)
+		WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL
+		  AND interrupt_only IS NOT TRUE`, runID)
 	return err
 }
 
