@@ -1,7 +1,8 @@
 /**
  * Unsent words, kept in this browser the way a chat app keeps them: one
  * localStorage entry per person and place (`dude.draft.<personId>.<place>`,
- * place as `session:<id>`, `task:<id>`, `run:<id>`), so leaving a composer
+ * place as `session:<id>`, `task:<id>`, `run:<id>`, or `welcome` for the
+ * welcome's first message), so leaving a composer
  * and coming back finds what was being written. Nothing reaches the server.
  *
  * Saved 2 s after the last change, and at once when the composer unmounts
@@ -82,6 +83,11 @@ function writeDraft(key: string, text: string): void {
   } catch {
     // Quota or private mode: this draft is not kept.
   }
+}
+
+/** Removes the draft at `key` only while it holds `text` (trimmed): other words there were written since and stay. */
+export function clearDraftIfSent(key: string, text: string): void {
+  if (readDraft(key)?.text.trim() === text.trim()) writeDraft(key, "");
 }
 
 export interface Draft {

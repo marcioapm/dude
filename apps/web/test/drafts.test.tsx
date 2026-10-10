@@ -2,13 +2,13 @@
  * A composer's unsent words, kept in this browser per person and place:
  * saved after 2 s idle, at once on leaving, restored on coming back, and
  * gone once the message is sent. Driven through a brainstorm session's
- * page, one of the composers that keep one.
+ * page, a Run, a task's Chat and the welcome's first message.
  */
 
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { useState } from "react";
 import type { Member, SessionDetail } from "@dude/domain";
-import { ToastProvider } from "@dude/design-system/primitives";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
@@ -17,6 +17,7 @@ import { SessionScreen } from "../src/screens/SessionScreen.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import { ChatSection } from "../src/screens/ChatSection.tsx";
 import { EndedLedgers } from "../src/screens/endedLedgers.ts";
+import { WELCOME_DRAFT, WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
 import { DRAFT_MAX_AGE_MS, draftKey, pruneDrafts, readDraft } from "../src/hooks/useDraft.ts";
 
 const SESSION = "ssn_drafts";
@@ -374,6 +375,135 @@ describe("a task's Chat", () => {
     const after = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
     await until(() => (after.value === "plan the invoice option" ? true : null), "the words carried over");
     expect(JSON.parse(stored(draftKey(YOU, `task:${TASK_ID}`))!).text).toBe("plan the invoice option");
+  });
+});
+
+describe("the welcome's first message", () => {
+  const WELCOME_KEY = draftKey(YOU, WELCOME_DRAFT);
+
+  class Welcoming extends DraftClient {
+    made: string[] = [];
+    fail: Error | null = null;
+    hold: PromiseWithResolvers<void> | null = null;
+    override async createSession(input: { message?: string } = {}) {
+      if (this.fail) throw this.fail;
+      this.made.push(input.message ?? "");
+      await this.hold?.promise;
+      return { id: "ssn_new", title: null, runId: "run_new" };
+    }
+  }
+
+  async function welcome(client: Welcoming, created: Array<[string, boolean]> = []) {
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <TooltipProvider>
+          <ToastProvider>
+            <WelcomeScreen client={client} projects={[]} sessions={[]} name={ME.name} onOpenSession={() => {}} onAllSessions={() => {}}
+              onCreated={(id, stillHere) => created.push([id, stillHere])} />
+          </ToastProvider>
+        </TooltipProvider>
+      </PeopleProvider>,
+    );
+    let gone = false;
+    const close = async () => {
+      if (gone) return;
+      gone = true;
+      await unmount();
+    };
+    mounted.push(close);
+    const composer = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the welcome's composer");
+    await settle();
+    return { container, composer, close };
+  }
+
+  test("is there again after leaving the welcome and coming back", async () => {
+    const client = new Welcoming();
+    const first = await welcome(client);
+    await typeInto(first.composer, "where does metering go?");
+    await first.close();
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("where does metering go?");
+    const again = await welcome(client);
+    expect(again.composer.value).toBe("where does metering go?");
+  });
+
+  test("is cleared once the create is confirmed", async () => {
+    localStorage.setItem(WELCOME_KEY, JSON.stringify({ text: "plan the meter", savedAt: Date.now() }));
+    const client = new Welcoming();
+    const created: Array<[string, boolean]> = [];
+    const { composer, close } = await welcome(client, created);
+    expect(composer.value).toBe("plan the meter");
+    await enter(composer);
+    expect(client.made).toEqual(["plan the meter"]);
+    expect(created).toEqual([["ssn_new", true]]);
+    expect(composer.value).toBe("");
+    expect(stored(WELCOME_KEY)).toBeNull();
+    await close();
+    expect(stored(WELCOME_KEY)).toBeNull();
+  });
+
+  test("stays when the create fails", async () => {
+    const client = new Welcoming();
+    client.fail = new Error("the orchestrator is down");
+    const created: Array<[string, boolean]> = [];
+    const { container, composer, close } = await welcome(client, created);
+    await typeInto(composer, "this one bounces");
+    await enter(composer);
+    await until(() => container.querySelector("[data-testid=welcome-problem]"), "the problem");
+    expect(created).toEqual([]);
+    expect(composer.value).toBe("this one bounces");
+    await close();
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("this one bounces");
+  });
+
+  test("a starter's words are drafted like typed ones", async () => {
+    const client = new Welcoming();
+    const first = await welcome(client);
+    await act(async () => {
+      first.container.querySelector<HTMLElement>("[data-starter=task]")!.click();
+    });
+    await settle();
+    expect(first.composer.value).toBe("Help me write a task for ");
+    expect(stored(WELCOME_KEY)).toBeNull();
+    await first.close();
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("Help me write a task for ");
+    const again = await welcome(client);
+    expect(again.composer.value).toBe("Help me write a task for ");
+    expect(client.made).toEqual([]);
+  });
+
+  test("a create that lands after the welcome was left removes the sent words and does not open the session", async () => {
+    const client = new Welcoming();
+    client.hold = Promise.withResolvers<void>();
+    const created: Array<[string, boolean]> = [];
+    const first = await welcome(client, created);
+    await typeInto(first.composer, "plan the meter");
+    await enter(first.composer);
+    await first.close();
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("plan the meter");
+    await act(async () => client.hold!.resolve());
+    await until(() => (created.length ? true : null), "the create answered");
+    expect(created).toEqual([["ssn_new", false]]);
+    expect(stored(WELCOME_KEY)).toBeNull();
+  });
+
+  test("a create that lands after the welcome was left and written in again keeps the new words", async () => {
+    const client = new Welcoming();
+    client.hold = Promise.withResolvers<void>();
+    const created: Array<[string, boolean]> = [];
+    const first = await welcome(client, created);
+    await typeInto(first.composer, "plan the meter");
+    await enter(first.composer);
+    await first.close();
+    const again = await welcome(client, created);
+    await typeInto(again.composer, "a second idea");
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await act(async () => client.hold!.resolve());
+    await until(() => (created.length ? true : null), "the create answered");
+    expect(created).toEqual([["ssn_new", false]]);
+    expect(again.composer.value).toBe("a second idea");
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("a second idea");
   });
 });
 
