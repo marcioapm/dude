@@ -15,25 +15,26 @@ ALTER TABLE questions
   ADD COLUMN items jsonb,
   ADD COLUMN answers jsonb;
 
--- Every existing question is one item: its prompt and its options.
-UPDATE questions SET items = jsonb_build_array(jsonb_build_object(
-  'header', '', 'question', prompt, 'multiple', false,
-  'choices', COALESCE((SELECT jsonb_agg(jsonb_build_object('label', o #>> '{}', 'description', '', 'recommended', false)
-                                        ORDER BY n)
-                       FROM jsonb_array_elements(CASE jsonb_typeof(options) WHEN 'array' THEN options ELSE '[]' END)
-                            WITH ORDINALITY AS t(o, n)), '[]'::jsonb)));
+-- The one item a question asked the old way is: its prompt, its options'
+-- labels as choices (delivery.SingleItem).
+CREATE FUNCTION question_items_of(prompt text, options jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_build_array(jsonb_build_object(
+    'header', '', 'question', prompt, 'multiple', false,
+    'choices', COALESCE((SELECT jsonb_agg(jsonb_build_object('label', o #>> '{}', 'description', '', 'recommended', false)
+                                          ORDER BY n)
+                         FROM jsonb_array_elements(CASE jsonb_typeof(options) WHEN 'array' THEN options ELSE '[]' END)
+                              WITH ORDINALITY AS t(o, n)), '[]'::jsonb)))
+$$;
 
--- A writer that names no items (a decision recorded as an answered
--- question, an older caller) gets the same one item from prompt and options.
+-- Every existing question is one item.
+UPDATE questions SET items = question_items_of(prompt, options);
+
+-- Every writer names its items; this keeps an INSERT that names none (test
+-- fixtures, an older caller) valid with the same one item.
 CREATE FUNCTION questions_default_items() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.items IS NULL THEN
-    NEW.items := jsonb_build_array(jsonb_build_object(
-      'header', '', 'question', NEW.prompt, 'multiple', false,
-      'choices', COALESCE((SELECT jsonb_agg(jsonb_build_object('label', o #>> '{}', 'description', '', 'recommended', false)
-                                            ORDER BY n)
-                           FROM jsonb_array_elements(CASE jsonb_typeof(NEW.options) WHEN 'array' THEN NEW.options ELSE '[]' END)
-                                WITH ORDINALITY AS t(o, n)), '[]'::jsonb)));
+    NEW.items := question_items_of(NEW.prompt, NEW.options);
   END IF;
   RETURN NEW;
 END $$;

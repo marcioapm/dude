@@ -743,8 +743,9 @@ const waitBlocked = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id A
 // RecordDecisionTx records something a person decided about the task, as
 // an answered question: every phase from then on is told it (Decisions).
 func RecordDecisionTx(ctx context.Context, tx pgx.Tx, org, taskID, question, answer string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, prompt, status, answer, answered_at)
-		VALUES ($1, $2, $3, $4, 'answered', $5, now())`, ids.New(ids.Question), org, taskID, question, answer)
+	items, _ := json.Marshal([]QuestionItem{SingleItem(question, nil)})
+	_, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, prompt, items, status, answer, answered_at)
+		VALUES ($1, $2, $3, $4, $5::jsonb, 'answered', $6, now())`, ids.New(ids.Question), org, taskID, question, items, answer)
 	return err
 }
 
