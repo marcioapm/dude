@@ -374,12 +374,14 @@ func TestFilingActsAsThePersonWhoPressesFile(t *testing.T) {
 
 // The card says what blocks an item, beside its words: another member's
 // task is "owner", naming them, so a client may leave it to them; a task
-// that has started blocks everyone, its owner too, so it is "started"
-// whoever looks.
+// that has started, or a project not linked, blocks everyone, its owner and
+// a reader too, so it is "started" or "unlinked" whoever looks; what a
+// member could file is "reader" to a reader.
 func TestTheCardSaysWhatBlocksAnItem(t *testing.T) {
 	s := newSessionWorld(t)
 	id := s.session()
 	s.join(id, s.ana, "chat")
+	s.join(id, s.joao, "read")
 	marcios := s.taskIn(s.project, "Daily rollup", s.marcio)
 	started := s.taskIn(s.project, "Started one", s.marcio)
 	mustExec(t, s.owner, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, step, task_id)
@@ -388,6 +390,8 @@ func TestTheCardSaysWhatBlocksAnItem(t *testing.T) {
 	s.proposal(id, []delivery.ProposalItem{
 		{Kind: "edit", Task: s.keyOf(marcios), After: &delivery.TaskText{Goal: ptr(after)}},
 		{Kind: "edit", Task: s.keyOf(started), After: &delivery.TaskText{Goal: ptr(after)}},
+		{Kind: "task", Project: "BL", Title: "Meter runs", Goal: "Count experiment runs per org per day"},
+		{Kind: "task", Project: "ZZ", Title: "Elsewhere", Goal: "A project this session does not link"},
 	})
 	status := func(person string) []map[string]any {
 		t.Helper()
@@ -420,6 +424,17 @@ func TestTheCardSaysWhatBlocksAnItem(t *testing.T) {
 	}
 	if marcio[1]["canFile"] != false || marcio[1]["blockedBy"] != "started" || !strings.Contains(fmt.Sprint(marcio[1]["why"]), "started") {
 		t.Errorf("his started task, as Márcio: %v", marcio[1])
+	}
+	if marcio[2]["canFile"] != true || marcio[3]["canFile"] != false || marcio[3]["blockedBy"] != "unlinked" {
+		t.Errorf("a linked and an unlinked project's task, as Márcio: %v %v", marcio[2], marcio[3])
+	}
+
+	joao := status(s.joao)
+	if joao[2]["canFile"] != false || joao[2]["blockedBy"] != "reader" {
+		t.Errorf("a task a member could file, as a reader: %v", joao[2])
+	}
+	if joao[1]["blockedBy"] != "started" || joao[3]["blockedBy"] != "unlinked" {
+		t.Errorf("a started task and an unlinked project's, as a reader: %v %v", joao[1], joao[3])
 	}
 }
 
