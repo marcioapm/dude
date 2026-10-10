@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const overflow = "session/prompt: Internal error: prompt is too long: 212000 tokens > 200000 maximum (-32603)"
@@ -84,6 +85,60 @@ func TestATalkersFailedTurnParksItBoundedByTwoResumes(t *testing.T) {
 			tk.parkedAfterFailure(run)
 			if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, run); n != 0 {
 				t.Errorf("ended after a good turn reset the count:\n%s", tk.describeRuns())
+			}
+		})
+	}
+}
+
+// A turn that fails while a person's pause is pending is still told — a
+// run.failed, kept — and the pause parks the Run as the person asked. It
+// was not parked for the failure, so it does not count towards the bound.
+func TestATalkersTurnFailingUnderAPendingPauseIsStillTold(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			tk.lux.FailTurns(tk.luxRunOf(run), 1, overflow)
+			tk.lux.InputGate = make(chan struct{})
+			if status, reached := tk.write("one more thing"); status != 200 || reached != run {
+				t.Fatalf("the message: %d reached %q", status, reached)
+			}
+			tk.until("the message sent to lux", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL
+					AND strpos(text, 'one more thing') > 0`, run) == 1
+			})
+			if kind == "conductor" {
+				if status, body := tk.call("/internal/runs/"+run+"/pause", map[string]any{}); status != 200 {
+					t.Fatalf("pause: %d %v", status, body)
+				}
+			} else {
+				// A session's Run has no person's pause route: the control
+				// the conductor's route writes, pending as it would be.
+				mustExec(t, tk.owner, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now() WHERE id = $1`, run)
+			}
+			close(tk.lux.InputGate)
+			tk.lux.InputGate = nil
+			// Without sweeping, so the pause waits on the failed turn's record.
+			deadline := time.Now().Add(10 * time.Second)
+			for tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatalf("the failed turn under a pending pause was never told:\n%s", tk.describeRuns())
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			var kept bool
+			var failedTurns *string
+			if err := tk.owner.QueryRow(t0(), `SELECT (payload->>'kept')::boolean, payload->>'failedTurns' FROM events
+				WHERE run_id = $1 AND event_type = 'run.failed'`, run).Scan(&kept, &failedTurns); err != nil {
+				t.Fatal(err)
+			}
+			if !kept || failedTurns != nil {
+				t.Errorf("run.failed kept %v failedTurns %v, want kept and not counted", kept, failedTurns)
+			}
+			tk.until("the person's pause to park it", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause IS NULL`, run) == 1
+			})
+			if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness_state ? 'failedTurns'`, run); n != 0 {
+				t.Errorf("a failure not parked for was counted")
 			}
 		})
 	}
