@@ -1073,7 +1073,10 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 
 // maxFailedTurnResumes is how many times in a row a talker whose turn
 // failed is parked to be resumed; a failure past it (a context overflow
-// that fails every turn) ends it, as any Run's.
+// that fails every turn) ends it, as any Run's. Any turn that ends without
+// failing resets the count (idle), a resume nudge's included: the bound
+// is on consecutive failures, and a person's Resume, whose nudge turn can
+// succeed, may start a new count.
 const maxFailedTurnResumes = 2
 
 // parkFailed keeps a talker whose turn failed: the failure is said as any
