@@ -463,3 +463,136 @@ def test_restart_a_talkers_failed_turn_parks_it_twice_and_the_third_ends_it(
     assert t.runs_created() == [run, nxt["runId"]]
 
 
+# ---------------------------------------------------------------------------
+# 5. lux.compacted end to end
+# ---------------------------------------------------------------------------
+
+
+def _compacted(t: Talker, run: str) -> list[dict]:
+    return [e for e in t.run_events(run) if e["eventType"] == "agent.context.compacted"]
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_restart_a_compaction_is_recorded_once_with_luxs_summary(
+        client: ApiClient, env, lux_project, kind: str, harness: str):
+    t = _talker(client, env, kind, lux_project, harness=harness)
+    run = _started(t)
+    lux_id = t.lux_id(run)
+    t.say(_first_line(kind, "echo remember periwinkle"))
+    t.answered(run, "remember periwinkle")
+    t.say(_first_line(kind, "compact\necho compacted now"))
+    t.answered(run, "compacted now")
+    # lux writes its record up to 10 s after Codex's item.
+    got = wait_until(lambda: _compacted(t, run), timeout=60, interval=1, message="no agent.context.compacted")
+    time.sleep(12)
+    got = _compacted(t, run)
+    luxs = [r["data"] for r in _records(env, lux_id) if r["type"] == "lux.compacted"]
+    _log(f"5/{kind}/{harness}", {"run": run, "luxRunId": lux_id, "luxCompacted": luxs,
+                                 "dude": [e["payload"] for e in got]})
+    assert len(luxs) == 1 and len(got) == 1, (luxs, got)
+    payload = got[0]["payload"]
+    assert payload.get("summary") == luxs[0]["summary"] and "remember periwinkle" in payload["summary"], (payload, luxs)
+    if harness == "claude-code":
+        assert (payload.get("trigger"), payload.get("preTokens"), payload.get("postTokens")) == ("manual", 36663, 972), payload
+
+
+@pytest.mark.ui
+@pytest.mark.timeout(600)
+def test_restart_the_compaction_notice_shows_in_the_sessions_chat(
+        client: ApiClient, env, org: dict, lux_project, page: Page, web_url: str):
+    t = _talker(client, env, "brainstorm", lux_project, harness="claude-code")
+    run = _started(t)
+    t.say(_first_line("brainstorm", "compact\necho compacted now"))
+    t.answered(run, "compacted now")
+    wait_until(lambda: _compacted(t, run), timeout=60, interval=1, message="no agent.context.compacted")
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    sign_in(page, web_url, org["api_key"])
+    page.goto(t.page_url(web_url))
+    notice = page.get_by_role("note").filter(has_text="The agent compacted its context.")
+    expect(notice).to_have_count(1, timeout=30_000)
+    expect(page.get_by_text("Primary Request and Intent")).to_have_count(0)
+    notice.scroll_into_view_if_needed()
+    page.screenshot(path=str(SHOTS / "5-brainstorm-compacted.png"))
+
+
+# ---------------------------------------------------------------------------
+# 6. A resume in a new harness session
+# ---------------------------------------------------------------------------
+
+
+def _lose_transcript(env, lux_id: str) -> None:
+    """lux-fake keeps its conversation under $HOME/.lux-fake, the agent's
+    home (/home/agent, dude's home state volume); removed, session/load
+    finds nothing and lux starts a new session. Removed inside the
+    container (podman exec runs as root, whose HOME is not the agent's),
+    then the container is killed."""
+    host, ctr = _agent_container(env, lux_id)
+    _docker("exec", host["container"], "podman", "exec", ctr, "rm", "-rf", "/home/agent/.lux-fake")
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("kind", KINDS)
+def test_restart_a_resume_in_a_new_session_is_recorded_and_briefed_again_first(
+        client: ApiClient, env, lux_project, kind: str):
+    t = _talker(client, env, kind, lux_project)
+    run = _started(t)
+    lux_id = t.lux_id(run)
+    before = t.session_ids(run)
+    _lose_transcript(env, lux_id)
+    kill_container(env, lux_id)
+    wait_until(lambda: t.row(run)["status"] == "paused", timeout=120, interval=1, message="never parked")
+    msg = t.say(_first_line(kind, "echo after the new session"))
+    assert msg["runId"] == run, msg
+    t.answered(run, "after the new session", timeout=240)
+    replaced = wait_until(lambda: [e for e in t.run_events(run) if e["eventType"] == "agent.session.replaced"],
+                          timeout=60, interval=1, message="no agent.session.replaced")
+    warnings = [e["payload"] for e in t.run_events(run) if e["eventType"] == "agent.warning"]
+    brief = replaced[0]["payload"].get("directiveId")
+    assert brief, replaced
+    wait_until(lambda: query(env.owner_dsn, "SELECT 1 FROM directives WHERE id = %s AND delivered_at IS NOT NULL", (brief,)),
+               timeout=120, interval=1, message="the re-brief was never delivered")
+    records = _records(env, lux_id)
+    resumed_epoch = _lux_run(env, lux_id)["epoch"]
+    inputs = [(r["data"].get("requestId"), r["data"].get("phase"), r["epoch"]) for r in records
+              if r["type"] == "lux.input" and r["epoch"] == resumed_epoch]
+    order = [i[0] for i in inputs if i[1] == "accepted"]
+    brief_text = query(env.owner_dsn, "SELECT text FROM directives WHERE id = %s", (brief,))[0]["text"]
+    _log(f"6/{kind}", {"run": run, "luxRunId": lux_id, "sessionsBefore": before, "replaced": replaced[0]["payload"],
+                       "warnings": warnings, "acceptedInResumedEpoch": order, "message": msg["directiveId"],
+                       "events": _order(t.run_events(run), ("run.parked", "run.unparked", "agent.warning", "agent.session.started",
+                                                            "agent.session.replaced", "run.directive.delivered"))})
+    assert replaced[0]["payload"]["from"] == before[0] and replaced[0]["payload"]["to"] != before[0], replaced
+    assert any("session/load failed" in w.get("message", "") for w in warnings), warnings
+    assert "session/load failed" in replaced[0]["payload"].get("reason", ""), replaced
+    assert "earlier conversation is lost" in brief_text or "restarted without its earlier conversation" in brief_text, brief_text
+    assert brief in order and msg["directiveId"] in order, order
+    assert order.index(brief) < order.index(msg["directiveId"]), order
+
+
+@pytest.mark.ui
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("kind", KINDS)
+def test_restart_the_restarted_without_its_conversation_notice_shows_in_chat(
+        client: ApiClient, env, org: dict, lux_project, page: Page, web_url: str, kind: str):
+    t = _talker(client, env, kind, lux_project)
+    run = _started(t)
+    lux_id = t.lux_id(run)
+    _lose_transcript(env, lux_id)
+    kill_container(env, lux_id)
+    wait_until(lambda: t.row(run)["status"] == "paused", timeout=120, interval=1, message="never parked")
+    t.say(_first_line(kind, "echo after the new session"))
+    t.answered(run, "after the new session", timeout=240)
+    wait_until(lambda: [e for e in t.run_events(run) if e["eventType"] == "agent.session.replaced"],
+               timeout=60, interval=1, message="no agent.session.replaced")
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    sign_in(page, web_url, org["api_key"])
+    page.goto(t.page_url(web_url))
+    notice = page.get_by_role("note").filter(has_text="The agent restarted without its earlier conversation.")
+    expect(notice).to_have_count(1, timeout=30_000)
+    expect(page.get_by_role("note").filter(has_text="Its container stopped")).to_have_count(1)
+    notice.scroll_into_view_if_needed()
+    page.screenshot(path=str(SHOTS / f"6-{kind}-session-replaced.png"))
+
+
