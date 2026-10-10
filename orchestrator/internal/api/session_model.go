@@ -12,8 +12,13 @@ import (
 )
 
 // checkSessionModel refuses, with a 400 in words, a tier and harness a
-// session cannot choose (delivery.SessionModelProblem).
+// session cannot choose (delivery.SessionModelProblem). A session that
+// chooses neither follows the organisation and is not checked: a misfit
+// there is the organisation's, and its Run says so.
 func checkSessionModel(ctx context.Context, tx pgx.Tx, m delivery.SessionModel) error {
+	if !m.Chose() {
+		return nil
+	}
 	var orgModels json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = current_organization_id()`).Scan(&orgModels); err != nil {
 		return err
@@ -91,8 +96,10 @@ func sameChoice(a, b *string) bool { return (a == nil) == (b == nil) && (a == ni
 // sessionModelView is a session's model as its detail shows it: what it
 // chose (tier, harness; null follows the organisation), what the
 // organisation's Brainstorm setting is, and what the agent's next start
-// would use (effective). A tier that names no model, or no tier at all,
-// leaves the effective tierName or model null.
+// would use (effective), with misfit saying why that pair cannot run (the
+// session's wording when it chose either half, as its Run fails with). A
+// tier that names no model, or no tier at all, leaves the effective
+// tierName or model null.
 func sessionModelView(ctx context.Context, tx pgx.Tx, sessionID string) (map[string]any, error) {
 	var orgModels json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = current_organization_id()`).Scan(&orgModels); err != nil {
@@ -135,9 +142,13 @@ func sessionModelView(ctx context.Context, tx pgx.Tx, sessionID string) (map[str
 		effTier = own
 	}
 	effective := map[string]any{"tierName": nil, "model": nil, "harness": eff.HarnessName()}
+	var misfit any
 	if effTier != nil {
 		effective["tierName"], effective["model"] = effTier.Name, effTier.Model
+		if effTier.Model != nil {
+			misfit = db.Nullable(delivery.BrainstormMisfit(chosen, eff.HarnessName(), delivery.Tier{Name: effTier.Name, Model: *effTier.Model}))
+		}
 	}
 	organization := map[string]any{"tier": orgTier, "harness": org.HarnessName()}
-	return map[string]any{"tier": own, "harness": chosen.Harness, "effective": effective, "organization": organization}, nil
+	return map[string]any{"tier": own, "harness": chosen.Harness, "effective": effective, "organization": organization, "misfit": misfit}, nil
 }

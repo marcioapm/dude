@@ -58,7 +58,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, role, settings); err != nil || noTier != "" {
 			return err
-		} else if noTier = harnessMisfit(settings, tier, role); noTier != "" {
+		} else if noTier = delivery.BrainstormMisfit(chosen, settings.HarnessName(), tier); noTier != "" {
 			return nil
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
