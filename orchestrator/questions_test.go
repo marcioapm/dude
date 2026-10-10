@@ -27,6 +27,9 @@ const fourAsked = `{"questions":[
 		"choices":[{"label":"Unit (PaymentSplitter)"},{"label":"API contract"},{"label":"Browser e2e on checkout"}]},
 	{"header":"Button","question":"What should the split button say?","choices":[{"label":"Split payment"},{"label":"Pay in parts"}]}]}`
 
+// fourPicks answers each of fourAsked with one choice.
+var fourPicks = []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+
 // askingFour starts a delivery whose implementer asks fourAsked.
 func (w *world) askingFour() (wi, runID, qid string) {
 	w.withTools()
@@ -125,7 +128,7 @@ func TestFourAnswersCarryTheNotesImageToTheAgent(t *testing.T) {
 	b := w.withImages()
 	wi, runID, qid := w.askingFour()
 	w.upload(b, "att_checkout", wi, "checkout.png", screenshot)
-	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	full := fourPicks
 	status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"answers": full, "note": "It looks like this now.",
 		"attachmentIds": []string{"att_checkout"}})
 	if status != 200 {
@@ -200,7 +203,7 @@ func TestASessionsFourQuestionsAreTheNamedMembersToAnswer(t *testing.T) {
 	}
 	qid := out["questionId"].(string)
 	path := "/internal/sessions/" + id + "/questions/" + qid + "/answer"
-	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	full := fourPicks
 	if status, body := s.as(s.marcio, "POST", path, map[string]any{"answers": full}); status != 403 {
 		t.Errorf("another member answered Ana's questions: %d %v", status, body)
 	}
@@ -254,7 +257,7 @@ func TestASessionsQuestionsToNobodyAreAWritersToAnswerOnce(t *testing.T) {
 	}
 	qid := out["questionId"].(string)
 	path := "/internal/sessions/" + id + "/questions/" + qid + "/answer"
-	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	full := fourPicks
 	if status, body := s.as(s.joao, "POST", path, map[string]any{"answers": full}); status != 403 || !strings.Contains(fmt.Sprint(body["error"]), "read_only") {
 		t.Errorf("a reader answered: %d %v", status, body)
 	}
@@ -336,7 +339,7 @@ func TestAConductorsFourQuestionsAreAnsweredThroughChat(t *testing.T) {
 	if q := w.conductorQuestion(task); q != qid {
 		t.Fatalf("an aside settled the questions")
 	}
-	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	full := fourPicks
 	// Shapes Chat refuses before anything is read.
 	for _, c := range []struct {
 		body map[string]any

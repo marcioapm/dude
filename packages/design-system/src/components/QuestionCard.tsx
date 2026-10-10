@@ -173,9 +173,11 @@ function startDraft(items: ReadonlyArray<QuestionItem>, draft: QuestionDraft | u
   };
 }
 
-/** The answer as the record and the review read it: labels picked, then the person's words in quotes. */
-function answerWords(item: QuestionItem, a: QuestionAnswer): { picked: string; own: string } {
-  return { picked: a.choices.map((c) => item.choices?.[c]?.label ?? "").filter(Boolean).join("; "), own: a.text.trim() };
+/** The answer as the record and the review read it: labels picked, then the person's words in quotes, and whose they are. */
+function AnswerWords({ item, answer, whose }: { readonly item: QuestionItem; readonly answer: QuestionAnswer; readonly whose: string }) {
+  const picked = answer.choices.map((c) => item.choices?.[c]?.label ?? "").filter(Boolean).join("; ");
+  const own = answer.text.trim();
+  return <>{picked}{picked && own ? "; " : null}{own ? <>“{own}”<small className={styles["ownWords"]}>{whose}</small></> : null}</>;
 }
 
 const isField = (el: EventTarget | null) => el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -299,19 +301,14 @@ export function QuestionCard({
 function Record({ items, answers, answeredBy }: { readonly items: ReadonlyArray<QuestionItem>; readonly answers: ReadonlyArray<QuestionAnswer>; readonly answeredBy: string | undefined }) {
   return (
     <ol className={styles["record"]} data-testid="question-record">
-      {items.map((item, i) => {
-        const { picked, own } = answerWords(item, answers[i]!);
-        return (
-          <li key={i} className={styles["recordItem"]}>
-            <Markdown source={item.question} unmeasured className={styles["recordQuestion"]} />
-            <p className={styles["recordAnswer"]} data-testid="record-answer">
-              {picked}
-              {picked && own ? "; " : null}
-              {own ? <>“{own}”<small className={styles["ownWords"]}>{answeredBy ? `in ${answeredBy}'s words` : "in their own words"}</small></> : null}
-            </p>
-          </li>
-        );
-      })}
+      {items.map((item, i) => (
+        <li key={i} className={styles["recordItem"]}>
+          <Markdown source={item.question} unmeasured className={styles["recordQuestion"]} />
+          <p className={styles["recordAnswer"]} data-testid="record-answer">
+            <AnswerWords item={item} answer={answers[i]!} whose={answeredBy ? `in ${answeredBy}'s words` : "in their own words"} />
+          </p>
+        </li>
+      ))}
     </ol>
   );
 }
@@ -676,13 +673,12 @@ function Review({ items, answers, onChange }: { readonly items: ReadonlyArray<Qu
       {items.map((item, i) => {
         const a = answers[i]!;
         const ok = answered(a);
-        const { picked, own } = answerWords(item, { choices: a.choices, text: a.own ?? "" });
         return (
           <li key={i} className={styles["reviewItem"]}>
             <div>
               <Markdown source={item.question} unmeasured className={styles["reviewQuestion"]} />
               <div className={cx(styles["reviewAnswer"], !ok && styles["reviewMissing"])} data-testid="review-answer">
-                {ok ? <>{picked}{picked && own ? "; " : null}{own ? <>“{own}”<small className={styles["ownWords"]}>your words</small></> : null}</> : "Not answered yet"}
+                {ok ? <AnswerWords item={item} answer={{ choices: a.choices, text: a.own ?? "" }} whose="your words" /> : "Not answered yet"}
               </div>
             </div>
             <Button type="button" size="sm" variant="quiet" onClick={() => onChange(i)} aria-label={`${ok ? "Change" : "Answer"}: ${item.header ?? item.question}`}>

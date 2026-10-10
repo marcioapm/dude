@@ -605,19 +605,15 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			}
 		}
 		var runID, status, prompt string
-		var rawItems []byte
+		var items []delivery.QuestionItem
 		if err := tx.QueryRow(r.Context(), `SELECT run_id, status::text, prompt, items FROM questions WHERE id = $1 FOR UPDATE`,
-			questionID).Scan(&runID, &status, &prompt, &rawItems); err != nil {
+			questionID).Scan(&runID, &status, &prompt, &items); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "question %s not found", questionID)
 			}
 			return err
 		}
 		if err := stillOpen("question", questionID, status, "open"); err != nil {
-			return err
-		}
-		items, err := delivery.ReadItems(rawItems)
-		if err != nil {
 			return err
 		}
 		answered, err := body.check(items)
@@ -635,11 +631,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		name, err := delivery.PersonName(r.Context(), tx, principalOf(r).Person)
-		if err != nil {
-			return err
-		}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, name, principalOf(r))
+		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
 		if err != nil {
 			return err
 		}
@@ -718,7 +710,11 @@ func answeredPayload(questionID, directiveID string, a delivery.Answered) map[st
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
 func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, error) {
+	name, err := delivery.PersonName(ctx, tx, p.Person)
+	if err != nil {
+		return "", err
+	}
 	answers, _ := json.Marshal(a.Answers)
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $5::jsonb, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3), answered_by_person = NULLIF($4, '') WHERE id = $1`,
