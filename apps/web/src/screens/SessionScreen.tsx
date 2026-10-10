@@ -155,7 +155,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
     for (const proposal of detail.proposals ?? []) {
       out.push({ id: proposal.id, at: proposal.createdAt, node: (
         <ProposalBlock key={proposal.id} client={client} sessionId={sessionId} proposal={proposal} linked={linkedKeys}
-          readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} onFiled={() => void load()} />
+          readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} you={detail.you.id}
+          onFiled={() => void load()} />
       ) });
     }
     for (const e of events) {
@@ -353,13 +354,14 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
-function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs, onFiled }: {
+function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs, you, onFiled }: {
   client: ApiClient;
   sessionId: string;
   proposal: Proposal;
   linked: ReadonlyMap<string, { key: string; name: string }>;
   readOnly: boolean;
   filingAs: string;
+  you: string;
   onFiled: () => void;
 }) {
   const fileable = proposal.items.flatMap((_, i) => (proposal.status[i]?.canFile && !proposal.status[i]?.filed ? [i] : []));
@@ -367,7 +369,7 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const epics = new Set(proposal.items.filter((i) => i.kind === "epic").map((i) => i.title));
-  const items = proposal.items.map((item, i) => cardItem(item, proposal.status[i] ?? {}, linked, epics));
+  const items = proposal.items.map((item, i) => cardItem(item, proposal.status[i] ?? {}, linked, epics, you));
   const file = async () => {
     setBusy(true);
     setProblem(null);
@@ -399,10 +401,13 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
 }
 
 function cardItem(item: ProposalItem, status: Proposal["status"][number], linked: ReadonlyMap<string, { key: string; name: string }>,
-  epics: ReadonlySet<string | undefined>): ProposalCardItem {
+  epics: ReadonlySet<string | undefined>, you: string): ProposalCardItem {
   const project = item.project ? linked.get(item.project.toUpperCase()) : undefined;
+  // Someone else may file it: its task's owner (never you), or a member when you only read.
+  const theirs = (status.blockedBy === "owner" && status.owner?.id !== you) || status.blockedBy === "reader";
   const common = {
     canFile: Boolean(status.canFile),
+    ...(status.canFile ? {} : { blockedFor: theirs ? "you" as const : "everyone" as const }),
     ...(status.why ? { why: status.why } : {}),
     ...(status.filed ? { filed: { by: status.filedBy ?? "Someone", key: status.key ?? "" } } : {}),
   };
