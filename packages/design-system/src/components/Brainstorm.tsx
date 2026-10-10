@@ -201,8 +201,10 @@ export function nothingLeftToFile(items: ReadonlyArray<ProposalCardItem>, readOn
  */
 export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): string[] {
   const filed = items.flatMap((item) => (item.filed ? [{ item, filed: item.filed }] : []));
-  const others = items.filter((item) => othersToFile(item, readOnly)).length;
-  if (filed.length < items.length) return [...(filed.length > 0 ? [`${filed.length} filed`] : []), `${others} for others to file`];
+  if (filed.length < items.length) {
+    const others = `${items.filter((item) => othersToFile(item, readOnly)).length} for others to file`;
+    return filed.length > 0 ? [`${filed.length} filed`, others] : [others];
+  }
   const names = filed.map(({ item, filed: f }) =>
     (item.kind === "epic" || !f.key) && typeof item.title === "string" ? item.title : f.key || "an item");
   const shown = names.length > FOLDED_NAMES ? [...names.slice(0, FOLDED_NAMES), `+${names.length - FOLDED_NAMES} more`] : names;
