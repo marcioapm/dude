@@ -6,6 +6,7 @@ package delivery
 // that is gone, runs on the organization's default.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,36 @@ type Machine struct {
 	// Where the size came from: "project", "organization", "implementer"
 	// (a fixer with none of its own), or "default".
 	From string `json:"from"`
+	// Why the Run is not on the size its settings name, said at a resume
+	// that could not resize it (phases.PlanResize); "" when it is.
+	Note string `json:"note,omitempty"`
+	// A smaller disk lux would not apply at a resume; DiskGiB is the disk
+	// it kept.
+	DiskKept *DiskKept `json:"diskKept,omitempty"`
+	// The epoch of the placement this size was given at, by a resume; 0 is
+	// the submit's. A memory limit of an earlier placement is not this
+	// size's (phases.RecordMemoryLimit).
+	SinceEpoch int `json:"sinceEpoch,omitempty"`
+	// The size id a resume did not apply because lux's pool list said the
+	// Run's pool is not lux's default and the size names none: a later
+	// resume to the same size does not ask lux again.
+	OtherPool string `json:"otherPool,omitempty"`
+	// Not recorded: the size id the settings name that no longer exists,
+	// when the default was taken because of it.
+	Missing string `json:"-"`
+}
+
+// DiskKept is lux refusing to shrink a Run's disk at a resume: the disk
+// asked for, and lux's reason.
+type DiskKept struct {
+	RequestedGiB int64  `json:"requestedGiB"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// SameSize: a and b give a Run the same CPUs, memory and disk, whatever
+// their names.
+func SameSize(a, b Machine) bool {
+	return a.CPUs == b.CPUs && a.MemoryMiB == b.MemoryMiB && a.DiskGiB == b.DiskGiB
 }
 
 // Sizes are an organization's machine sizes by id, and its default's id.
@@ -77,6 +108,7 @@ func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool
 			layers[i].roles = nil
 		}
 	}
+	missing := ""
 	for _, r := range chain {
 		for _, l := range layers {
 			id := l.roles[r].MachineSize
@@ -90,9 +122,12 @@ func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool
 				}
 				return size, true
 			}
+			missing = cmp.Or(missing, *id)
 		}
 	}
-	return s.fallback()
+	size, ok := s.fallback()
+	size.Missing = missing
+	return size, ok
 }
 
 // ForPreview is the size a project's branch previews run on: the one its
@@ -102,7 +137,9 @@ func (s Sizes) ForPreview(sizeID string) (Machine, bool) {
 		size.From = "project"
 		return size, true
 	}
-	return s.fallback()
+	size, ok := s.fallback()
+	size.Missing = sizeID
+	return size, ok
 }
 
 func (s Sizes) fallback() (Machine, bool) {

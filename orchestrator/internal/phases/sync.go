@@ -790,7 +790,8 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, machine, sent, err := s.spec(ctx, r, nil, chosenImage{image, nested})
+	spec, sizes, sent, err := s.spec(ctx, r, nil, chosenImage{image, nested})
+	machine := sizes.Now
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -944,13 +945,14 @@ const EvImagePreparing = "run.image_preparing"
 // (Syncer.image).
 //
 // Also returns the size the Run's role resolves to now (nil: the
-// organization has none); submit records it, a resume does not. And the
+// organization has none), which submit records, and for a resume the size
+// runs.machine records, read in the same transaction. And the
 // task's images in the order the prompt numbers them, read in the same
 // transaction as its text: submit sends exactly these.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, *delivery.Machine, []delivery.SentAttachment, error) {
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, error) {
 	if r.brainstorm() {
-		spec, machine, err := s.brainstormSpec(ctx, r, stored, image)
-		return spec, machine, nil, err
+		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
+		return spec, sizes, nil, err
 	}
 	var in specInput
 	var title, goal string
@@ -961,6 +963,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var recorded *delivery.Machine
 	var briefing, conductorNote, restartNote, tierOverride, ranOn string
 	var tier delivery.Tier
 	var noTier string
@@ -995,8 +998,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
@@ -1042,10 +1045,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, nil, nil, err
+		return lux.Spec{}, runSizes{}, nil, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, nil, nil, errNoModel(noTier)
+		return lux.Spec{}, runSizes{}, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
 	if r.conductor() {
@@ -1087,7 +1090,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, nil, nil, err
+		return lux.Spec{}, runSizes{}, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -1119,11 +1122,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, nil, nil, errForge{err}
+		return lux.Spec{}, runSizes{}, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, nil, nil, errForge{err}
+			return lux.Spec{}, runSizes{}, nil, errForge{err}
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -1131,17 +1134,17 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, nil, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, runSizes{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
 		if in.ToolsToken, err = s.toolsToken(ctx, r); err != nil {
-			return lux.Spec{}, nil, nil, err
+			return lux.Spec{}, runSizes{}, nil, err
 		}
 	}
-	return buildSpec(s.Agent, in), in.Machine, taskImages, nil
+	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
 }
 
 // toolsToken is the token for this start of the Run: the same however
@@ -1867,13 +1870,14 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, _, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
+	spec, sizes, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}
 	if err != nil {
 		return lux.Run{}, 0, errCannotResume{err}
 	}
+	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
 	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
 	if r.brainstorm() {
 		if err := s.sessionResume(ctx, r, spec, &in); err != nil {
@@ -1894,12 +1898,17 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		}
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
-	resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+	defer func() {
+		if err == nil {
+			RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, resumed)
+		}
+	}()
+	resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	if len(in.Sync) > 0 && lux.SyncModesRefused(err) {
 		if r.brainstorm() {
 			// A lux without sync modes: resumed as it is, not brought current.
 			in.Sync = nil
-			resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+			resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 			return resumed, foreseen, err
 		}
 		// A lux that cannot keep the checkout current: read-only for the
@@ -1908,7 +1917,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 			return lux.Run{}, foreseen, err
 		}
 		in.Sync = nil
-		resumed, err = s.Lux.Resume(ctx, r.LuxRunID, in)
+		resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	}
 	return resumed, foreseen, err
 }

@@ -325,6 +325,8 @@ func (s *Server) Migrate(id string) {
 	run.Epoch++
 	run.starts++
 	run.moveNext = true
+	// A move is a resume that asked for no resources (lux's pendingResize).
+	run.pendingResize = nil
 	// lux's waiting since on a move is needs_host_since, the now() of the
 	// transaction that also ended the placement.
 	accepted := time.Now()

@@ -523,9 +523,9 @@ export const runSchema = z.object({
     })
     .default({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }),
   /**
-   * What it ran on, as it was when its spec was built: the size's name and
-   * spec then, whatever happened to the size since. Null for a Run from
-   * before sizes, or not yet submitted.
+   * What it runs on: the size its spec was built with, then, from each
+   * resume, the size its settings named then as lux applied it. Null for
+   * a Run from before sizes, or not yet submitted.
    */
   machine: z
     .object({
@@ -541,6 +541,10 @@ export const runSchema = z.object({
       from: z.string().optional(),
       /** The memory limit lux gave its container, in bytes, when lux reports one. */
       memoryLimit: z.number().nullable().optional(),
+      /** Why it is not on the size its settings name, said at the resume that could not move it. */
+      note: z.string().optional(),
+      /** A smaller disk lux would not apply at a resume: `diskGiB` is the disk it kept. */
+      diskKept: z.object({ requestedGiB: z.number(), reason: z.string().optional() }).optional(),
     })
     .nullable()
     .default(null),

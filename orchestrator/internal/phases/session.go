@@ -24,7 +24,7 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
 	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
-func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, *delivery.Machine, error) {
+func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, error) {
 	var in specInput
 	var orgModels json.RawMessage
 	var briefing string
@@ -32,6 +32,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var tier delivery.Tier
 	var noTier string
 	var sizes delivery.Sizes
+	var recorded *delivery.Machine
 	var prompts delivery.Prompts
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
@@ -45,8 +46,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		var err error
 		if stored != nil {
 			var ranOn string
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, '') FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
@@ -65,10 +66,10 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		return err
 	})
 	if err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, runSizes{}, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, nil, errNoModel(noTier)
+		return lux.Spec{}, runSizes{}, errNoModel(noTier)
 	}
 	var promptRepos []delivery.PromptRepo
 	for _, repo := range repos {
@@ -89,25 +90,25 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, nil, err
+		return lux.Spec{}, runSizes{}, err
 	}
 	in.Prompt = delivery.BrainstormPrompt(briefing, delivery.PromptInput{Repositories: promptRepos,
 		Tools: s.Agent.ToolsURL != "", Context: settings.Context, OrgPrompt: prompts.Org})
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, nil, errForge{err}
+		return lux.Spec{}, runSizes{}, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, nil, errForge{err}
+			return lux.Spec{}, runSizes{}, errForge{err}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
 		if in.ToolsToken, err = s.toolsToken(ctx, r); err != nil {
-			return lux.Spec{}, nil, err
+			return lux.Spec{}, runSizes{}, err
 		}
 	}
-	return buildSpec(s.Agent, in), in.Machine, nil
+	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, nil
 }
 
 // sessionResume puts on a session agent's resume the repositories linked

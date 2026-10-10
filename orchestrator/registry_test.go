@@ -230,11 +230,12 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 func (w *world) pauseAndResume(wi string) {
 	w.t.Helper()
 	runID := w.parked(wi)
-	resumed := w.luxCalls(w.lux.Runs()[0].ID, "resume")
+	luxID := w.lux.Runs()[0].ID
+	resumed := w.luxCalls(luxID, "resume")
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the resume", func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == resumed+1 })
+	w.until("the resume", func() bool { return w.luxCalls(luxID, "resume") == resumed+1 })
 }
 
 // Every way a Run is resumed carries a login minted for it: the one it
