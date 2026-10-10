@@ -213,6 +213,9 @@ type Run struct {
 	harness *harnessSay
 	// Turns the agent finished (went idle after), for TurnsEnded.
 	turnsEnded int
+	// Its next failTurns turns fail at once with failWith (FailTurns).
+	failTurns int
+	failWith  string
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
 	openTools []string
 	queued    []queuedInput
@@ -1012,6 +1015,16 @@ func (s *Server) Succeed(id string) {
 	}
 }
 
+// FailTurns has the Run's next n turns fail at once with err, as
+// TurnError does for every turn.
+func (s *Server) FailTurns(id string, n int, err string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.failTurns, run.failWith = n, err
+	}
+}
+
 // StopOnItsOwn stops a Run nobody asked to stop, with no reason, as lux
 // reports a container stopped from outside it: resumable.
 func (s *Server) StopOnItsOwn(id string) {
@@ -1355,6 +1368,12 @@ func (s *Server) turn(run *Run) {
 	run.busy = true
 	run.openTools = nil
 	b := run.behavior
+	if run.failTurns > 0 {
+		run.failTurns--
+		s.turnEnd(run, map[string]any{"stopReason": "", "error": run.failWith}, true)
+		run.busy = false
+		return
+	}
 	if b.TurnError != "" {
 		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError}, true)
 		run.busy = false
