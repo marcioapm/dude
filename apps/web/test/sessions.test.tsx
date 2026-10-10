@@ -842,11 +842,12 @@ describe("archiving a session, for yourself", () => {
     archivedIds = new Set<string>();
     calls: Array<[string, boolean]> = [];
     refuse = false;
-    // While set, a list read waits for it before answering.
+    // While set, a list read answers only once it settles, with what was true when it was asked.
     hold: Promise<void> | null = null;
     override async sessions(opts: { archived?: boolean } = {}): Promise<SessionsList> {
-      if (this.hold) await this.hold;
+      const hold = this.hold;
       const all = [summary(SESSION, "Usage-based billing", this.archivedIds.has(SESSION)), summary(OTHER, "Pricing", this.archivedIds.has(OTHER))];
+      if (hold) await hold;
       return { sessions: all.filter((s) => opts.archived || !s.archived), invitations: [], questions: [] };
     }
     override getSession(): Promise<SessionDetail> {
@@ -882,6 +883,29 @@ describe("archiving a session, for yourself", () => {
     expect(window.location.hash).toBe("#/sessions");
     // The list read that follows the archive has not answered yet.
     expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+    await act(async () => release());
+    await settle();
+    expect(listed(page)).toEqual([OTHER]);
+    expect(inSidebar(page)).toEqual([OTHER]);
+  });
+
+  test("a list read asked before the archive and answered after the one that follows it does not bring the row back", async () => {
+    const client = new Archiving(detail("owner"));
+    const page = await shell(`#/sessions/${SESSION}`, client);
+    await until(() => (inSidebar(page).includes(SESSION) ? true : null), "the session in the sidebar");
+    let release!: () => void;
+    client.hold = new Promise((r) => { release = r; });
+    // A renamed session re-reads the list; that read is asked now and answers last.
+    await act(async () => {
+      emit({ eventType: "session.renamed", occurredAt: at(50), organizationId: "org_1", projectId: null as unknown as string,
+        taskId: null as unknown as string, runId: null, sessionId: OTHER, workflowRunId: null, actor: { type: "human", id: ANA.id },
+        source: "orchestrator", correlationId: null, causationId: null, payload: { title: "Pricing" } });
+    });
+    client.hold = null;
+    await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
+    await until(() => page.querySelector("[data-testid=sessions]"), "the list");
+    await settle();
     expect(inSidebar(page)).toEqual([OTHER]);
     await act(async () => release());
     await settle();

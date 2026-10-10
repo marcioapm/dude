@@ -207,9 +207,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // sidebar's list and the inbox's lines. Re-read when a session's event
   // reaches you (the stream gives you only your sessions').
   const [sessionsList, setSessionsList] = useState<SessionsList | null>(null);
+  // Only the latest read is kept: an older one answering late would bring back a row just archived.
+  const sessionsRead = useRef(0);
   const loadSessions = useCallback(async () => {
+    const read = ++sessionsRead.current;
     try {
-      setSessionsList(await client.sessions());
+      const list = await client.sessions();
+      if (read === sessionsRead.current) setSessionsList(list);
     } catch {
       // The list is a nicety beside the tree: kept as it was.
     }
