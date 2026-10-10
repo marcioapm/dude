@@ -486,6 +486,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 <ChatComposer
                   mode="chat"
                   waitingFor={waitingForYou}
+                  waitingKey={asked?.questionId}
                   disabled={asking !== null && waitingOn !== undefined}
                   disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
                   onSubmit={send}
@@ -649,6 +650,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   // the form is the question's turn; otherwise anything said steers it.
                   mode="steer"
                   waitingFor={waitingForYou}
+                  waitingKey={asked?.questionId}
                   // A paused Run takes an answer (a parked one is resumed by it),
                   // not a steer; a question is its owner's to answer.
                   disabled={(run.status === "paused" && !conversation.openQuestion) ||

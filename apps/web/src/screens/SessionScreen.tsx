@@ -237,6 +237,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                 <ChatComposer
                   mode="chat"
                   waitingFor={yours ? "The brainstorm" : undefined}
+                  waitingKey={yours?.id}
                   disabled={reader}
                   // A session nobody has written to yet (a new one, opened at once) is for writing in.
                   autoFocus={!reader && session.messages === 0}

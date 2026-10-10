@@ -282,6 +282,27 @@ describe("a brainstorm session's page", () => {
     expect(mine.sent).toEqual(["aside:Experiment runs only"]);
   });
 
+  test("Write to the agent instead lasts for that question: the next one read with no wait between steps the composer back", async () => {
+    const q1 = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
+    const q2 = { id: "q_2", prompt: "And the 7d window?", options: ["Yes", "No"], askedAt: at(42) };
+    const mine = new SessionClient(detail("chat", { question: { ...q1, to: ref(ME), yours: true } }), [
+      ev("question.asked", { kind: "agent", questionId: "q_1", prompt: q1.prompt, options: q1.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
+    ]);
+    const page = await sessionPage(mine);
+    const waiting = () => page.querySelectorAll("[data-testid=session-screen] [data-testid=composer-waiting]").length;
+    await click(await until(() => page.querySelector<HTMLElement>("[data-testid=session-screen] [data-testid=write-instead]"), "write instead"));
+    expect(waiting()).toBe(0);
+    // The next read finds q_2 already open: q_1's answer and q_2 came between two reads.
+    mine.detail = detail("chat", { question: { ...q2, to: ref(ME), yours: true } });
+    await act(async () => {
+      emit({ eventType: "question.asked", occurredAt: at(42), organizationId: "org_1", projectId: null as unknown as string,
+        taskId: null as unknown as string, runId: RUN, sessionId: SESSION, workflowRunId: null, actor: { type: "agent", id: RUN },
+        source: "orchestrator", correlationId: null, causationId: null,
+        payload: { kind: "agent", questionId: "q_2", prompt: q2.prompt, options: q2.options, to: YOU, toName: ME.name } });
+    });
+    await until(() => (waiting() === 1 ? true : null), "the composer stepped back for q_2");
+  });
+
   test("the card files what you tick, as you, and says what was refused", async () => {
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [

@@ -288,14 +288,17 @@ test("the note's images: Send waits while one uploads, and sends the uploaded id
     note: "See this", attachmentIds: ["att_1"] }]);
 });
 
-test("Write to the agent instead lasts for that wait: answered, the next question steps the composer back again", async () => {
-  const at = (waitingFor: string | undefined) => <ChatComposer mode="chat" waitingFor={waitingFor} onSubmit={() => {}} />;
-  await render(at("The conductor"));
+test("Write to the agent instead lasts for that question: the next one from the same asker steps the composer back again", async () => {
+  const at = (waitingKey: string) => <ChatComposer mode="chat" waitingFor="The conductor" waitingKey={waitingKey} onSubmit={() => {}} />;
+  const waiting = () => all('[data-testid="composer-waiting"]').length;
+  await render(at("q_1"));
   await click(q('[data-testid="write-instead"]'));
-  expect(q('[data-testid="composer-waiting"]')).toBeNull();
-  await render(at(undefined));
-  await render(at("The conductor"));
-  expect(q('[data-testid="composer-waiting"]')).not.toBeNull();
+  expect(waiting()).toBe(0);
+  await render(at("q_1"));
+  expect(waiting()).toBe(0);
+  // Answered and asked again in one batch: no render in between where nothing waits.
+  await render(at("q_2"));
+  expect(waiting()).toBe(1);
 });
 
 test("someone else's: no form, the choices muted, how to take it over", async () => {

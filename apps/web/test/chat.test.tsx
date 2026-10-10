@@ -9,11 +9,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, Run } from "@dude/domain";
 import { act, mount, settle, until } from "./dom.ts";
-import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
+import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import type { SentAnswer } from "../src/api/client.ts";
 import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import { RunScreen } from "../src/screens/RunScreen.tsx";
 import { project } from "../src/api/conversation.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
@@ -363,6 +364,49 @@ describe("the Chat tab", () => {
     await act(async () => instead.click());
     await write(page, "what does it touch?");
     expect(client.sent).toEqual([`${TASK_ID}:aside:what does it touch?`]);
+  });
+
+  test("Write to the agent instead lasts for that question: answered and asked again at once, the composer steps back", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_8", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
+    const page = await chatPage(new ChatClient({ status: "running" }, asking));
+    const instead = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=write-instead]"), "write instead");
+    await act(async () => instead.click());
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(0);
+    // The answer and the next question arrive in one batch: no render between them where nothing waits.
+    const live = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"]) => {
+      const { cursor: _c, eventId: _e, ...rest } = ev(eventType, payload, actor);
+      emit({ ...rest, occurredAt: new Date().toISOString() });
+    };
+    await act(async () => {
+      live("question.answered", { questionId: "q_8", answer: "Yes", directiveId: "dir_8", answers: [{ choices: [0], text: "" }] }, MARCIO);
+      live("question.asked", { kind: "agent", questionId: "q_9", prompt: "And a second one?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR });
+    });
+    await until(() => page.textContent?.includes("And a second one?") ? page : null, "the next question");
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(1);
+  });
+
+  test("on the Run's own page too: Write to the agent instead lasts for that question", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_10", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    const { container: page, unmount } = await mount(
+      <PeopleProvider client={client}><RunScreen client={client} runId={CONDUCTOR} onBack={() => {}} /></PeopleProvider>);
+    mounted.push(unmount);
+    const waiting = () => page.querySelectorAll("[data-testid=composer-waiting]").length;
+    const instead = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=write-instead]"), "write instead");
+    await act(async () => instead.click());
+    expect(waiting()).toBe(0);
+    const live = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"]) => {
+      const { cursor: _c, eventId: _e, ...rest } = ev(eventType, payload, actor);
+      emit({ ...rest, occurredAt: new Date().toISOString() });
+    };
+    await act(async () => {
+      live("question.answered", { questionId: "q_10", answer: "Yes", directiveId: "dir_10", answers: [{ choices: [0], text: "" }] }, MARCIO);
+      live("question.asked", { kind: "agent", questionId: "q_11", prompt: "And a third one?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR });
+    });
+    await until(() => page.textContent?.includes("And a third one?") ? page : null, "the next question");
+    expect(waiting()).toBe(1);
   });
 
   test("four questions: picks are kept in this browser across a reload until sent; nothing goes before Send", async () => {
