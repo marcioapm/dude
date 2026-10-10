@@ -346,7 +346,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   steps back to one quiet line on the hover wash — "Implement is waiting
   for your answer above" — with **Write to the agent instead** (accent
   link), which brings the composer back for a message that does not answer;
-  the question stays open.
+  the question stays open. It lasts for that wait: once `waitingFor` goes
+  (answered), the next question steps the composer back again.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. In grayscale it is still the only barred, tinted turn.

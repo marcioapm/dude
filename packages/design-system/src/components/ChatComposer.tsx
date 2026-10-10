@@ -159,6 +159,10 @@ export function ChatComposer({
   const mode: ComposerMode = modeProp ?? (running ? "steer" : "prompt");
   // "Write to the agent instead", for the question it was pressed on.
   const [writingFor, setWritingFor] = useState<string | null>(null);
+  // The wait over, the next question from the same asker steps back again.
+  useEffect(() => {
+    if (waitingFor === undefined) setWritingFor(null);
+  }, [waitingFor]);
   const stepsBack = waitingFor !== undefined && writingFor !== waitingFor;
   const [internal, setInternal] = useState(defaultValue ?? "");
   const text = value ?? internal;
