@@ -355,16 +355,8 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		if err, outcome = images.Settle(err); err != nil || outcome != nil {
 			return err
 		}
-		sizes, err := delivery.LoadSizes(ctx, tx)
-		if err != nil {
+		if machine, err = previewSize(ctx, tx, settings); err != nil {
 			return err
-		}
-		sizeID := ""
-		if settings.MachineSize != nil {
-			sizeID = *settings.MachineSize
-		}
-		if m, ok := sizes.ForPreview(sizeID); ok {
-			machine = &m
 		}
 		if repos, err = taskRefs(ctx, tx, r); err != nil {
 			return err
@@ -789,10 +781,8 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	defer stop()
 	// An event of this start (a resuming moves lux_start_event past this)
 	// applied before the answer is newer than it, as for woken.
-	var startBefore int64
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&startBefore)
-	}); err != nil {
+	startBefore, plan, err := p.planResize(ctx, r, lr)
+	if err != nil {
 		p.release(ctx, op)
 		return err
 	}
@@ -801,7 +791,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	var refused *lux.Error
 	err = op.call(octx, func(c context.Context) error {
 		var err error
-		lr, err = p.Lux.Resume(c, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
+		lr, err = phases.ResumeSized(c, p.Lux, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID}, plan)
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			refused, err = le, nil
 		}
@@ -856,6 +846,9 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		}
 		return true, phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "resumed"})
 	})
+	if err == nil {
+		p.recordResize(ctx, r, plan, lr)
+	}
 	return err
 }
 

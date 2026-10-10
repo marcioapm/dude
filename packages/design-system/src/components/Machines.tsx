@@ -100,7 +100,7 @@ export interface MachineChipProps {
   readonly name: string;
   /** Its spec, muted: "16 CPUs · 48 GiB · 200 GiB". */
   readonly spec: string;
-  /** What the tooltip says: where the size came from, that it is fixed for the session. */
+  /** What the tooltip says: where the size came from, and when it changes. */
   readonly tooltip?: ReactNode;
   /** `cube`: the image a session runs in, in the same grammar ("Image: …"). */
   readonly icon?: "chip" | "cube" | undefined;

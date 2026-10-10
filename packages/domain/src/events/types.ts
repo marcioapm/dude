@@ -170,6 +170,12 @@ export const EventTypes = {
    */
   RunResumed: "run.resumed",
   /**
+   * A resume changed what the Run records it is on (`runs.machine`): the
+   * size its settings name now, as lux applied it, or why it kept the one
+   * it had. Payload: `{ machine }`, the Run's `machine` as now recorded.
+   */
+  RunResized: "run.resized",
+  /**
    * How long a resume of the Run took, end to end, written once its agent
    * said something. Payload: `{ epoch, cause, moved, hostName, totalMs,
    * untilBusyMs, phases }`: `cause` is `answer`, `repository`, `person` or
