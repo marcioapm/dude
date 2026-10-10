@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { focusedElement, returnFocus } from "../util/focusReturn.ts";
+import { isBareKey } from "../util/keys.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
@@ -284,15 +285,11 @@ export function Sidebar({
     searchOnExpand.current = false;
     searchRef.current?.focus();
   }, [rail]);
-  // `/` outside a field does what the rail's search item does. Only ⌘ and
-  // Ctrl (not AltGr, Ctrl+Alt) make it a command: Shift or Option is how
-  // some layouts type `/`, and `e.key` is already what was typed.
+  // `/` outside a field does what the rail's search item does.
   useEffect(() => {
     if (!rail || !onCollapsedChange) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (!isBareKey(e, "/")) return;
       e.preventDefault();
       searchOnExpand.current = true;
       onCollapsedChange(false);
