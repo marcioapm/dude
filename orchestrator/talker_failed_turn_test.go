@@ -26,9 +26,7 @@ func (tk *talking) failedTurn(run, text string) {
 // its lux Run stopped and kept.
 func (tk *talking) parkedAfterFailure(run string) {
 	tk.t.Helper()
-	tk.until("parked after its failed turn", func() bool {
-		return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = $2`, run, tk.park) == 1
-	})
+	tk.parked(run)
 	if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, run); n != 0 {
 		tk.t.Errorf("the lux Run of a parked talker was cancelled")
 	}
@@ -129,8 +127,7 @@ func TestATalkersTurnFailingUnderAPendingPauseIsStillTold(t *testing.T) {
 				// the conductor's route writes, pending as it would be.
 				mustExec(t, tk.owner, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now() WHERE id = $1`, run)
 			}
-			close(tk.lux.InputGate)
-			tk.lux.InputGate = nil
+			tk.releaseInput()
 			// Without sweeping, so the pause waits on the failed turn's record.
 			deadline := time.Now().Add(10 * time.Second)
 			for tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run) == 0 {

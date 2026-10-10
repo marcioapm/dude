@@ -337,10 +337,16 @@ func (w *world) luxRunOf(runID string) string {
 func (w *world) stopped(runID string) {
 	w.t.Helper()
 	w.lux.CancelInLux(w.luxRunOf(runID))
+	w.luxStateRecorded(runID, "terminated")
+}
+
+// luxStateRecorded waits, without sweeping, for the Run's follower to record lux's state.
+func (w *world) luxStateRecorded(runID, state string) {
+	w.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'terminated'`, runID) == 0 {
+	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = $2`, runID, state) == 0 {
 		if time.Now().After(deadline) {
-			w.t.Fatalf("lux's stop of %s was never recorded:\n%s", runID, w.describeRuns())
+			w.t.Fatalf("lux's %s of %s was never recorded:\n%s", state, runID, w.describeRuns())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
