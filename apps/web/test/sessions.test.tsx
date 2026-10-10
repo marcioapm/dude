@@ -672,6 +672,33 @@ describe("a session's model", () => {
     expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Claude Code");
   });
 
+  test("two picks before the first is answered: the second builds on the first, and they are posted in order", async () => {
+    class Slow extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Slow(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    const chip = await until(() => rail.querySelector("button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click(document.querySelector("[data-testid=rowmenu-mtr_coder]")!);
+    await click(document.querySelector("[data-testid=rowmenu-claude-code]")!);
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+    // Only the first is out; the second waits for its answer.
+    expect(client.release.length).toBe(1);
+    await act(async () => client.release[0]!());
+    await until(() => client.release.length === 2 || null, "the second post");
+    await act(async () => client.release[1]!());
+    await settle();
+    expect(client.chosen).toEqual([{ tier: "mtr_coder", harness: null }, { tier: "mtr_coder", harness: "claude-code" }]);
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+  });
+
   test("a member who is not the owner reads it, with nothing to open", async () => {
     const client = new Choosing(detail("chat", { model: { ...MODEL, tier: { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null },
       effective: { tierName: "Coder", model: "claude-opus-5-5", harness: "opencode" } } }));
@@ -685,7 +712,7 @@ describe("a session's model", () => {
   test("while its agent runs, the header says what it runs on", async () => {
     const client = new Choosing(detail("owner", { model: { ...MODEL, harness: "claude-code", effective: { ...MODEL.effective, harness: "claude-code" } } }));
     const page = await sessionPage(client);
-    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · small (claude-opus-5-5)");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · claude-opus-5-5");
   });
 
   test("the Chat's words for a change, a reset and a removed tier", () => {
