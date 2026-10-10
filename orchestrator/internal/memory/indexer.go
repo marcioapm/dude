@@ -212,6 +212,8 @@ func (x *Indexer) broke(cause error, at time.Time) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.failures++
+	// UTC: Since and Retry reach the Index page as JSON.
+	at = at.UTC()
 	retry := at.Add(down(x.failures))
 	since := at
 	if x.health.Since != nil {

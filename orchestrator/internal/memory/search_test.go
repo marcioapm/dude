@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -311,6 +312,29 @@ func TestAnEmbedderThatFailsBacksOffNoDocument(t *testing.T) {
 		if left != 0 || x.Health().Error != "" {
 			t.Errorf("%d: once fixed, %d left unembedded, health %+v", status, left, x.Health())
 		}
+	}
+}
+
+// The Index page's health is sent in UTC from a process in Europe/Lisbon.
+func TestAFailingEmbeddersHealthIsUTC(t *testing.T) {
+	lisbon, err := time.LoadLocation("Europe/Lisbon")
+	if err != nil {
+		t.Skipf("no zone data: %v", err)
+	}
+	local := time.Local
+	time.Local = lisbon
+	t.Cleanup(func() { time.Local = local })
+	app, owner := dbtest.Open(t)
+	seed(t, owner)
+	x := &memory.Indexer{DB: app, Embedder: &statusFake{Fake: &embeddings.Fake{Dims: 768}, status: 502}, Now: time.Now}
+	if _, err := x.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(x.Health())
+	var h struct{ Since, Retry string }
+	_ = json.Unmarshal(b, &h)
+	if !strings.HasSuffix(h.Since, "Z") || !strings.HasSuffix(h.Retry, "Z") {
+		t.Errorf("health %s, want since and retry in UTC (…Z)", b)
 	}
 }
 
