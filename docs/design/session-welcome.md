@@ -193,7 +193,8 @@ What the build decided where this page left it open:
   are how some layouts type `[` and `/`, so they do not refuse it), and
   under 1000px, where there is no rail. Nothing
   else bound it. **`/`** on the rail, under the same guards, unfolds the
-  sidebar with its search focused, as the rail's search item does.
+  sidebar with its search focused, as the rail's search item does; the
+  `Sidebar` handles it, since it owns the field.
 - **The brand's accessible name is "El Duderino, home"**: its visible
   words, then where it goes.
 - **A session made through the API without a message can be empty**; its

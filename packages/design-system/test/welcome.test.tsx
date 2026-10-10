@@ -209,6 +209,25 @@ describe("Sidebar collapsed", () => {
     expect(document.activeElement?.getAttribute("type")).toBe("search");
   });
 
+  test("/ on the rail expands it with the search field focused; in a field, or with ⌘ or Ctrl, it does not", async () => {
+    const el = await mount(<Rail />);
+    const slash = (target: EventTarget, init: KeyboardEventInit = {}) =>
+      act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true, ...init })));
+    const field = document.createElement("input");
+    document.body.append(field);
+    try {
+      await slash(field);
+      await slash(document.body, { metaKey: true });
+      await slash(document.body, { ctrlKey: true });
+      expect(el.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    } finally {
+      field.remove();
+    }
+    await slash(document.body, { shiftKey: true });
+    expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(document.activeElement === el.querySelector("input[type=search]")).toBe(true);
+  });
+
   test("without onCollapsedChange there is no collapse chevron, and collapsed draws the full sidebar", async () => {
     const el = await mount(<Sidebar projects={PROJECTS} title="dude" collapsed />);
     expect(el.querySelector("[data-testid=sidebar-collapse]")).toBeNull();

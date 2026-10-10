@@ -143,27 +143,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     localStorage.setItem(SIDEBAR, rail ? "rail" : "full");
     setRailed(rail);
   }, []);
-  // `[` from anywhere outside a field folds or unfolds it; `/` on the rail
-  // unfolds it with the search focused, as the rail's search item does.
-  // `e.key` is the character typed, so Shift or Option producing it on
-  // another layout is still that key; only ⌘ and Ctrl (not AltGr, which is
-  // Ctrl+Alt) make a command.
-  const railedNow = useRef(railed);
-  railedNow.current = railed;
-  const searchOnExpand = useRef(false);
+  // `[` from anywhere outside a field folds or unfolds it (the rail's own `/`
+  // is the Sidebar's). `e.key` is the character typed, so Shift or Option
+  // producing it on another layout is still `[`; only ⌘ and Ctrl (not AltGr,
+  // which is Ctrl+Alt) make a command.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== "[" && e.key !== "/") || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented || typingIn(e.target)) return;
+      if (e.key !== "[" || e.metaKey || (e.ctrlKey && !e.altKey) || e.defaultPrevented || typingIn(e.target)) return;
       // Under the drawer breakpoint there is no rail to fold to.
       if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
-      if (e.key === "/") {
-        if (!railedNow.current) return;
-        e.preventDefault();
-        searchOnExpand.current = true;
-        localStorage.setItem(SIDEBAR, "full");
-        setRailed(false);
-        return;
-      }
       e.preventDefault();
       setRailed((rail) => {
         localStorage.setItem(SIDEBAR, rail ? "full" : "rail");
@@ -173,11 +161,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  useEffect(() => {
-    if (railed || !searchOnExpand.current) return;
-    searchOnExpand.current = false;
-    document.querySelector<HTMLInputElement>("#nav input[type=search]")?.focus();
-  }, [railed]);
   const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);

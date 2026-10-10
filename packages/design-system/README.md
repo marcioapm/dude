@@ -689,7 +689,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   its counts in words ("1 needs you · 4 running · 1 failed").
   **Nothing else in it takes a tone.** The tree is not in it: a project's
   face opens its board, and expanding gives the tree back. Its search
-  expands the sidebar with the field focused (`/` does the same in the app).
+  expands the sidebar with the field focused, and so does `/` outside a
+  field while it is the rail (only ⌘ or Ctrl, not Shift, Option or AltGr,
+  make `/` something else).
 
 ### Board (the overview)
 
