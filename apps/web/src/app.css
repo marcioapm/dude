@@ -302,6 +302,27 @@ body {
   align-items: center;
   gap: var(--ds-space-12);
 }
+/* The brand is the way home: a button that looks like the words it was. */
+.brandHome {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+.brandHome:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+/* The welcome's composer and the failure under it, one column. */
+.welcomeComposer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
 .dudeMark {
   display: inline-block;
   flex-shrink: 0;
