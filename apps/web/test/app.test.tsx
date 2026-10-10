@@ -103,12 +103,16 @@ describe("the first load with no place", () => {
     }
   }
 
-  test("opens the first project's board", async () => {
+  test("shows the welcome, not a board, and leaves the URL as it was", async () => {
     const client = new SlowTree("a");
-    await app("", client);
+    const page = await app("", client);
     client.arrive();
-    await until(() => (window.location.hash.startsWith("#/project/") ? true : null), "the board's hash");
-    expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    await settle(100);
+    expect(page.querySelector("[aria-label$=' board']")).toBeNull();
+    expect(window.location.hash).toBe("");
+    expect(document.title).toBe("dude");
+    expect(document.activeElement).toBe(page.querySelector("[data-testid=welcome] textarea"));
   });
 
   test("keeps a place the URL named after the app read it, before the tree arrived", async () => {
@@ -135,6 +139,89 @@ describe("the first load with no place", () => {
     expect(window.location.hash).toBe(named);
     await settle(100);
     expect(window.location.hash).toBe(named);
+  });
+});
+
+describe("home", () => {
+  test("the sidebar's brand is a button named Home that goes to the welcome", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+    const brand = page.querySelector<HTMLButtonElement>("[data-testid=brand-home]")!;
+    expect(brand.tagName).toBe("BUTTON");
+    expect(brand.getAttribute("aria-label")).toBe("Home");
+    await click(brand);
+    expect(window.location.hash).toBe("#/");
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+  });
+
+  test("the sidebar's New session goes to the welcome and makes nothing", async () => {
+    class Counting extends FixtureClient {
+      made = 0;
+      override createSession(): Promise<never> {
+        this.made++;
+        return super.createSession();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    await click(await until(() => page.querySelector("[data-testid=sidebar-sessions] [data-testid=new-session]"), "New session"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    expect(client.made).toBe(0);
+  });
+});
+
+describe("the sidebar's rail", () => {
+  afterEach(() => localStorage.removeItem("dude.sidebar"));
+  const key = (target: EventTarget, init: KeyboardEventInit = {}) =>
+    act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { key: "[", bubbles: true, cancelable: true, ...init })));
+
+  test("[ folds the sidebar to its rail and back, and the choice is kept", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("a reload keeps the rail; a project's face opens its board; the chevron expands it", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app("", new FixtureClient("a"));
+    const face = await until(() => page.querySelector<HTMLElement>(`[data-testid=rail-project][data-project="${PROJECT.id}"]`), "the project's face");
+    await click(face);
+    expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+    expect(face.getAttribute("aria-current")).toBe("page");
+    await click(page.querySelector("[data-testid=rail-expand]")!);
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("[ in a field is a character, and with a modifier held it is not the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    const field = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await key(field);
+    const search = page.querySelector<HTMLInputElement>("input[type=search]")!;
+    await key(search);
+    await key(document.body, { metaKey: true });
+    await key(document.body, { ctrlKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("the rail's New session, Sessions and Waiting on you go where the sidebar's do", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await click(await until(() => page.querySelector("[data-testid=rail-sessions]"), "Sessions"));
+    expect(window.location.hash).toBe("#/sessions");
+    await click(page.querySelector("[data-testid=rail-new-session]")!);
+    expect(window.location.hash).toBe("#/");
+    await click(page.querySelector("[data-testid=rail-waiting]")!);
+    expect(window.location.hash).toBe("#/waiting");
+    await click(page.querySelector("[data-testid=rail-home]")!);
+    expect(window.location.hash).toBe("#/");
   });
 });
 
