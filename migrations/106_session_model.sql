@@ -1,4 +1,4 @@
--- 105_session_model.sql — a session may choose its agent's tier and harness.
+-- 106_session_model.sql — a session may choose its agent's tier and harness.
 --
 -- tier     the model tier its brainstorm runs on; NULL: the organisation's
 --          Brainstorm setting. A tier removed sets it back to NULL (the
@@ -17,7 +17,7 @@
 -- they bind every write from now on without scanning sessions under the
 -- ACCESS EXCLUSIVE lock. Every existing row holds NULL in both, which
 -- satisfies them: there is nothing for a scan to find. The index on tier
--- is built concurrently by 106, outside this lock; until it exists a tier's
+-- is built concurrently by 107, outside this lock; until it exists a tier's
 -- removal scans sessions, all NULL. sessions keeps its RLS policy and
 -- grants; new columns are covered by them.
 
