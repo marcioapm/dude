@@ -1,21 +1,23 @@
 /**
  * The welcome: what dude opens on, and where New session goes. Nothing is
  * made here until the first message is sent; then the session is made with
- * that message and the projects linked in the composer, in one call, and
- * opened. A starter fills the composer and never sends.
+ * that message, the projects linked in the composer and the model chosen
+ * in it (the organisation's Brainstorm setting unless changed), in one
+ * call, and opened. A starter fills the composer and never sends.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { firstName, useDensity, type NavProject } from "@dude/design-system";
 import {
-  ChatComposer, ComposerLinks, Duration, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote,
-  type LinkableProject, type Starter,
+  ChatComposer, ComposerLinks, Duration, ModelPicker, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote,
+  type LinkableProject, type ModelChoice, type Starter,
 } from "@dude/design-system/components";
 import { Callout } from "@dude/design-system/primitives";
 import { sessionTitle, type SessionLink, type SessionSummary } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { DudeMark } from "../DudeMark.tsx";
+import { useModelOptions } from "../sessionModel.ts";
 
 /** The greeting's word for now, on the reader's clock. */
 export function partOfDay(d: Date = new Date()): string {
@@ -46,6 +48,9 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
   const density = useDensity();
   const [text, setText] = useState("");
   const [linked, setLinked] = useState<LinkableProject[]>([]);
+  // The session's own tier and harness; null follows the organisation's Brainstorm setting.
+  const [model, setModel] = useState<ModelChoice>({ tier: null, harness: null });
+  const options = useModelOptions(client, true, true);
   const [problem, setProblem] = useState<string | null>(null);
   const sending = useRef(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -84,7 +89,8 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
     setProblem(null);
     try {
       const links: SessionLink[] = await Promise.all(linked.map(async (p) => ({ projectId: p.id, repositoryIds: await reposOf(p.id) })));
-      const { id } = await client.createSession({ message, projects: links });
+      const { id } = await client.createSession({ message, projects: links,
+        ...(model.tier ? { tier: model.tier } : {}), ...(model.harness ? { harness: model.harness } : {}) });
       onCreated(id);
       return true;
     } catch (err) {
@@ -113,6 +119,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
               onValueChange={setText}
               placeholder="Start a session: an idea, a question, a plan…"
               to={<>To <b>Brainstorm</b></>}
+              toAside={options ? <ModelPicker tiers={options.tiers} organization={options.organization} value={model} onChange={setModel} /> : undefined}
               leading={<ComposerLinks linked={linked} projects={projects}
                 onLink={(p) => {
                   void reposOf(p.id).catch(() => undefined);

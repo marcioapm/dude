@@ -16,6 +16,8 @@ import type {
   AgentRole,
   FileResult,
   SessionDetail,
+  SessionModel,
+  Harness,
   SessionLink,
   SessionsList,
   TaskRepository,
@@ -1065,8 +1067,13 @@ export class ApiClient {
    * what it reads in one call, its agent started (`runId`); without one it is
    * untitled and empty until someone writes.
    */
-  createSession(input: { message?: string; projects?: SessionLink[] } = {}): Promise<{ id: string; title: string | null; runId?: string }> {
+  createSession(input: { message?: string; projects?: SessionLink[]; tier?: string; harness?: Harness } = {}): Promise<{ id: string; title: string | null; runId?: string }> {
     return this.#request("POST", "/v1/brainstorms", input);
+  }
+
+  /** The owner sets the model tier and harness its agent's next start uses; null follows the organisation. */
+  setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }): Promise<{ id: string; model: SessionModel }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/model`, choice);
   }
 
   /** Name the session, as a member who can chat: the agent leaves a person's name alone. */

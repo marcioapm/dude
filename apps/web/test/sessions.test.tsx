@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { PersistedEvent, SessionDetail, SessionsList } from "@dude/domain";
+import type { Harness, PersistedEvent, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -542,9 +542,9 @@ describe("a session made from the welcome", () => {
   const PROJECTS = [{ id: "prj_bl", name: "billing" }, { id: "prj_wc", name: "web-console" }];
 
   class Making extends SessionClient {
-    made: Array<{ message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> }> = [];
+    made: Array<{ message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }>; tier?: string; harness?: string }> = [];
     fail: Error | null = null;
-    override createSession(input: { message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> } = {}) {
+    override createSession(input: { message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }>; tier?: string; harness?: Harness } = {}) {
       if (this.fail) return Promise.reject(this.fail);
       this.made.push(input);
       return Promise.resolve({ id: "ssn_new", title: null, runId: "run_new" });
@@ -596,6 +596,106 @@ describe("a session made from the welcome", () => {
     expect(opened).toEqual([]);
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea")!.value).toBe("where does metering go?");
     expect(page.querySelector("[data-testid=welcome-problem]")!.textContent).toContain("Could not start the session");
+  });
+
+  // The fixtures' organisation: Brainstorm on Thinker (claude-fable-5-1), on OpenCode.
+  async function pickModel(page: HTMLElement, ...ids: string[]) {
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    for (const id of ids) await click(document.querySelector(`[data-testid="rowmenu-${id}"]`)!);
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  }
+
+  test("the composer says the organisation's model; sent as it is, the session names none", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on OpenCode (organisation default)");
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([{ message: "where does metering go?", projects: [] }]);
+  });
+
+  test("a tier and harness chosen in the composer go with the first message", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    await pickModel(page, "mtr_coder", "claude-code");
+    expect(page.querySelector("[data-testid=welcome] [data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([{ message: "where does metering go?", projects: [], tier: "mtr_coder", harness: "claude-code" }]);
+  });
+
+  test("only the half chosen is sent; set back to the organisation's, it is left out", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    await pickModel(page, "claude-code", "mtr_coder", "tier-default");
+    await send(page, "hello");
+    expect(client.made).toEqual([{ message: "hello", projects: [], harness: "claude-code" }]);
+  });
+});
+
+describe("a session's model", () => {
+  const MODEL: SessionModel = {
+    tier: null, harness: null,
+    effective: { tierName: "Thinker", model: "claude-fable-5-1", harness: "opencode" },
+    organization: { tier: { id: "mtr_thinker", name: "Thinker", model: "claude-fable-5-1", effort: "high" }, harness: "opencode" },
+  };
+
+  class Choosing extends SessionClient {
+    chosen: Array<{ tier: string | null; harness: string | null }> = [];
+    override setSessionModel(_id: string, choice: { tier: string | null; harness: Harness | null }) {
+      this.chosen.push(choice);
+      const tier = choice.tier === "mtr_coder" ? { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null } : null;
+      const model: SessionModel = { ...MODEL, tier, harness: choice.harness,
+        effective: { tierName: tier?.name ?? "Thinker", model: tier?.model ?? "claude-fable-5-1", harness: choice.harness ?? "opencode" } };
+      this.detail = { ...this.detail, model };
+      // The orchestrator records it on the session, and the stream brings it.
+      this.ledger.push(ev("session.model.changed", { by: YOU, tier: tier && { id: tier.id, name: tier.name }, harness: choice.harness },
+        { type: "human", id: YOU }));
+      emit(this.ledger.at(-1)!);
+      return Promise.resolve({ id: SESSION, model });
+    }
+  }
+
+  test("the owner changes it in the rail: it posts both halves, and the Chat says who and when it applies", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · OpenCode (organisation default)");
+    const chip = await until(() => rail.querySelector("button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click(document.querySelector("[data-testid=rowmenu-claude-code]")!);
+    expect(client.chosen).toEqual([{ tier: null, harness: "claude-code" }]);
+    await until(() => [...page.querySelectorAll("[data-testid=session-notice]")].find((n) => n.textContent?.includes("set the model")), "the notice");
+    const notice = [...page.querySelectorAll("[data-testid=session-notice]")].map((n) => n.textContent).find((t) => t?.includes("set the model"));
+    expect(notice).toContain(`${ME.name.split(" ")[0]} set the model to the organisation's tier · Claude Code; it applies the next time the agent starts.`);
+    expect(rail.querySelector("[data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Thinker on Claude Code");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Claude Code");
+  });
+
+  test("a member who is not the owner reads it, with nothing to open", async () => {
+    const client = new Choosing(detail("chat", { model: { ...MODEL, tier: { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null },
+      effective: { tierName: "Coder", model: "claude-opus-5-5", harness: "opencode" } } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    expect(rail.querySelectorAll("button").length).toBe(0);
+    expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Coder on OpenCode");
+    expect(rail.textContent).toContain("Applies the next time the agent starts.");
+  });
+
+  test("while its agent runs, the header says what it runs on", async () => {
+    const client = new Choosing(detail("owner", { model: { ...MODEL, harness: "claude-code", effective: { ...MODEL.effective, harness: "claude-code" } } }));
+    const page = await sessionPage(client);
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · small (claude-opus-5-5)");
+  });
+
+  test("the Chat's words for a change, a reset and a removed tier", () => {
+    const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
+    expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: { id: "mtr_opus", name: "Opus (High)" }, harness: "claude-code" }), people))
+      .toBe(`${ANA.name.split(" ")[0]} set the model to Opus (High) · Claude Code; it applies the next time the agent starts.`);
+    expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: null, harness: null }), people))
+      .toBe(`${ANA.name.split(" ")[0]} set the model back to the organisation's default; it applies the next time the agent starts.`);
+    expect(sessionNotice(ev("session.model.fallback", { tier: { id: "mtr_opus", name: "Opus (High)" } }), people))
+      .toBe("The tier Opus (High) was removed: the session follows the organisation's from the agent's next start.");
   });
 });
 
