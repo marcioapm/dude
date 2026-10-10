@@ -28,6 +28,8 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    * composer back for a message that does not answer.
    */
   readonly waitingFor?: string | undefined;
+  /** The question waited on (its id): "Write to the agent instead" lasts while it stays the same. Unset, the asker's label stands in. */
+  readonly waitingKey?: string | undefined;
   /** "Write to the agent instead" was pressed: the composer is back for this question. */
   readonly onWriteInstead?: (() => void) | undefined;
   /** The session is running; a steer will interrupt it. */
@@ -131,6 +133,7 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
 export function ChatComposer({
   mode: modeProp,
   waitingFor,
+  waitingKey,
   onWriteInstead,
   running,
   disabled,
@@ -157,13 +160,10 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const [interrupt, setInterrupt] = useState(false);
   const mode: ComposerMode = modeProp ?? (running ? "steer" : "prompt");
-  // "Write to the agent instead", for the question it was pressed on.
+  // "Write to the agent instead", for the question it was pressed on: the next question steps back again.
   const [writingFor, setWritingFor] = useState<string | null>(null);
-  // The wait over, the next question from the same asker steps back again.
-  useEffect(() => {
-    if (waitingFor === undefined) setWritingFor(null);
-  }, [waitingFor]);
-  const stepsBack = waitingFor !== undefined && writingFor !== waitingFor;
+  const waitedOn = waitingKey ?? waitingFor;
+  const stepsBack = waitingFor !== undefined && writingFor !== waitedOn;
   const [internal, setInternal] = useState(defaultValue ?? "");
   const text = value ?? internal;
   const [busy, setBusy] = useState(false);
@@ -259,7 +259,7 @@ export function ChatComposer({
           <button type="button" className={styles["writeInstead"]} data-testid="write-instead"
             title="Sends a message instead of answering; the question stays open"
             onClick={() => {
-              setWritingFor(waitingFor ?? null);
+              setWritingFor(waitedOn ?? null);
               onWriteInstead?.();
               requestAnimationFrame(() => areaRef.current?.focus());
             }}>

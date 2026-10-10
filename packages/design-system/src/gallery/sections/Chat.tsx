@@ -969,7 +969,7 @@ function LiveTranscriptDemo() {
           </>
         }
         pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="conductor" defaultCollapsed /> : undefined}
-        footer={<ChatComposer waitingFor={s?.question ? "Orchestrator" : undefined} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
+        footer={<ChatComposer waitingFor={s?.question ? "Orchestrator" : undefined} waitingKey={s?.question?.id} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
         revision={rev}
         live={playing}
         maxHeight={640}

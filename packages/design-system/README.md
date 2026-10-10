@@ -346,8 +346,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   steps back to one quiet line on the hover wash — "Implement is waiting
   for your answer above" — with **Write to the agent instead** (accent
   link), which brings the composer back for a message that does not answer;
-  the question stays open. It lasts for that wait: once `waitingFor` goes
-  (answered), the next question steps the composer back again.
+  the question stays open. It lasts for that question: `waitingKey` (the
+  question's id) says which, and the next question steps the composer back
+  again, even when it is asked in the same breath as the answer.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. In grayscale it is still the only barred, tinted turn.
@@ -1441,7 +1442,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ChatMessage contextTokens={n} contextWindowTokens={w} costUsd={null} />` | `$0.00` for a cost nobody reported |
 | `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
 | `<ChatMessage intent="steer" deliveredAt={null} pendingReason={<>Lands after <b>Bash</b> finishes.</>} onInterrupt={…} />` until the agent reads it, then `read readAfter="Bash"` where it was read | a steer that looks read before the agent has it, a fixed "waiting for the turn" line whatever the harness does, or an interrupt taken for the person |
-| `<ChatComposer waitingFor="Implement" />` while the agent waits on you | an answer box in the composer, apart from the question it answers |
+| `<ChatComposer waitingFor="Implement" waitingKey={questionId} />` while the agent waits on you | an answer box in the composer, apart from the question it answers |
 | `<QuestionCard items={items} onSubmit={…} draft={…} onDraftChange={…} />` until `answeredAt`, then `answers={…} answeredBy="Ana"` | the question only in the composer, an "other" choice the agent wrote, or a second turn quoting the question to say its answer |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 | `<PersonAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
