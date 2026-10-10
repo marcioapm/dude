@@ -837,17 +837,11 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}
 		var questionID, prompt, to string
-		var rawItems []byte
+		var items []delivery.QuestionItem
 		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, COALESCE(q.to_person, ''), q.items FROM questions q
-			WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).Scan(&questionID, &prompt, &to, &rawItems)
+			WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).Scan(&questionID, &prompt, &to, &items)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
-		}
-		var items []delivery.QuestionItem
-		if qerr == nil {
-			if items, err = delivery.ReadItems(rawItems); err != nil {
-				return err
-			}
 		}
 		// The question's own: their message answers one question. Several
 		// are answered through the form (sessionAnswer); a message beside
@@ -943,10 +937,10 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		var runID, status, prompt, to string
-		var rawItems []byte
+		var items []delivery.QuestionItem
 		if err := tx.QueryRow(r.Context(), `SELECT q.run_id, q.status::text, q.prompt, COALESCE(q.to_person, ''), q.items
 			FROM questions q JOIN runs r ON r.id = q.run_id WHERE q.id = $1 AND r.session_id = $2 FOR UPDATE OF q`,
-			questionID, id).Scan(&runID, &status, &prompt, &to, &rawItems); err != nil {
+			questionID, id).Scan(&runID, &status, &prompt, &to, &items); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "question %s not found in this session", questionID)
 			}
@@ -957,10 +951,6 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 		}
 		if to != "" && to != p.Person {
 			return fail(http.StatusForbidden, "forbidden", "this question is put to another member: only they answer it")
-		}
-		items, err := delivery.ReadItems(rawItems)
-		if err != nil {
-			return err
 		}
 		answered, err := body.check(items)
 		if err != nil {

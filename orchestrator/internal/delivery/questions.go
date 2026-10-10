@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -147,15 +146,6 @@ func AskOptions(items []QuestionItem) []string {
 		return items[0].Labels()
 	}
 	return []string{}
-}
-
-// ReadItems decodes questions.items.
-func ReadItems(raw []byte) ([]QuestionItem, error) {
-	var items []QuestionItem
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("questions.items: %w", err)
-	}
-	return items, nil
 }
 
 // AnswerRefusal is an answer that does not answer what was asked: a 422.

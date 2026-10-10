@@ -9,12 +9,9 @@
 
 import type { NavProject, NavTask } from "@dude/design-system";
 import { escalationWords } from "../escalation.ts";
-
-/** One question's answer as the form sends it: the choices picked, by index, and the person's own words. */
-export interface SentAnswer {
-  readonly choices: ReadonlyArray<number>;
-  readonly text: string;
-}
+// One question's answer as the form sends it: the choices picked, by index, and the person's own words.
+export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
+import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type {
   AgentRole,
   FileResult,

@@ -33,12 +33,8 @@ func TestARecordedDecisionNamesItsItem(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var raw []byte
-	if err := owner.QueryRow(ctx, `SELECT items FROM questions WHERE task_id = 'wi_d'`).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadItems(raw)
-	if err != nil {
+	var got []QuestionItem
+	if err := owner.QueryRow(ctx, `SELECT items FROM questions WHERE task_id = 'wi_d'`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if want := []QuestionItem{SingleItem("Stuck on review: what now?", nil)}; !reflect.DeepEqual(got, want) {
@@ -50,12 +46,8 @@ func TestARecordedDecisionNamesItsItem(t *testing.T) {
 func TestQuestionItemsOfIsSingleItem(t *testing.T) {
 	_, owner := dbtest.Open(t)
 	options, _ := json.Marshal([]string{"Yes", "No — later"})
-	var raw []byte
-	if err := owner.QueryRow(context.Background(), `SELECT question_items_of($1, $2::jsonb)`, "Proceed?", options).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadItems(raw)
-	if err != nil {
+	var got []QuestionItem
+	if err := owner.QueryRow(context.Background(), `SELECT question_items_of($1, $2::jsonb)`, "Proceed?", options).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if want := []QuestionItem{SingleItem("Proceed?", []string{"Yes", "No — later"})}; !reflect.DeepEqual(got, want) {

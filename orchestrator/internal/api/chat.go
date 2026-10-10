@@ -142,18 +142,12 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 
 		// Waiting on its question: this is the answer.
 		var questionID, prompt string
-		var rawItems []byte
+		var items []delivery.QuestionItem
 		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, q.items
 			FROM questions q WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).
-			Scan(&questionID, &prompt, &rawItems)
+			Scan(&questionID, &prompt, &items)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
-		}
-		var items []delivery.QuestionItem
-		if qerr == nil {
-			if items, err = delivery.ReadItems(rawItems); err != nil {
-				return err
-			}
 		}
 		if msg.Answers != nil && (qerr != nil || questionID != msg.QuestionID) {
 			return fail(http.StatusConflict, "conflict", "question %s is no longer waiting for an answer", msg.QuestionID)
@@ -169,11 +163,7 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 			if err != nil {
 				return err
 			}
-			name, err := delivery.PersonName(r.Context(), tx, p.Person)
-			if err != nil {
-				return err
-			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, name, p)
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, p)
 			if err != nil {
 				return err
 			}
