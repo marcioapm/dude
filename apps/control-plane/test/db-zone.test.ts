@@ -8,7 +8,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
-import { openPool } from "../src/db/client.ts";
+import { getPool, setPool } from "../src/db/client.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const NAME = `dude_zone_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -22,10 +22,13 @@ beforeAll(async () => {
   await admin.unsafe(`ALTER DATABASE "${NAME}" SET timezone = 'Europe/Lisbon'`);
   const url = new URL(OWNER_URL);
   url.pathname = `/${NAME}`;
-  db = openPool(url.toString());
+  // The pool every request path uses, built as the backend builds it.
+  setPool(null);
+  db = getPool(url.toString());
 });
 
 afterAll(async () => {
+  setPool(null);
   await db?.end();
   await admin?.unsafe(`DROP DATABASE IF EXISTS "${NAME}" WITH (FORCE)`);
   await admin?.end();
