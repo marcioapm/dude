@@ -577,13 +577,15 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		// bounded by unreadGraceSecs. Once the push is asked for, the work
 		// is what it is: a steer later still is marked not delivered when
 		// the Run completes, not heard after the work was taken.
-		if r.PushRequestID == "" && r.Status == statusRunning && r.LuxState == "running" {
-			if r.HasDirectives {
-				return s.deliverDirectives(ctx, r)
-			}
-			if r.Unread {
-				return false, nil
-			}
+		// lux's state event trails the agent's records, so a turn can end
+		// before the Run is recorded running: what is queued then waits
+		// for it (deliverDirectives sends only to a running Run), unless
+		// lux has already reported the Run over.
+		if r.PushRequestID == "" && r.HasDirectives && !lux.Terminal(r.LuxState) {
+			return s.deliverDirectives(ctx, r)
+		}
+		if r.PushRequestID == "" && r.Status == statusRunning && r.LuxState == "running" && r.Unread {
+			return false, nil
 		}
 		return s.finish(ctx, r)
 	}
