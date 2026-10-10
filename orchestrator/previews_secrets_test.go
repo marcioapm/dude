@@ -122,7 +122,7 @@ func TestAPreviewRunGetsTheProjectsSecretsAndAResumeTheirCurrentValues(t *testin
 	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code >= 300 {
 		t.Fatalf("start web on the parked preview = %d %v", code, body)
 	}
-	w.until("web ready again", func() bool { return r.Resumed == 1 && w.lux.ServerStates(r.ID)["web"] == "ready" })
+	w.until("web ready again", func() bool { return w.luxCalls(r.ID, "resume") == 1 && w.lux.ServerStates(r.ID)["web"] == "ready" })
 	sent := secretsByName(r.ResumeSecrets[0])
 	if sent["SEED_LLM_KEY"] != seedKeyNew || sent["SIGNING_KEY_PEM"] != pem || sent["GIT_TOKEN"] == "" {
 		t.Errorf("resume sent %v", sent)

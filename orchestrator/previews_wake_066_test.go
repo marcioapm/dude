@@ -47,7 +47,7 @@ func (w *world) endedBeforeTheMigration(end string, fails int) (runID, web strin
 		Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}}}); err != nil {
 		w.t.Fatal(err)
 	}
-	waitFor(w.t, "the resumed start ended", func() bool { return r.Resumed == 1 && w.lux.State(r.ID) == end })
+	waitFor(w.t, "the resumed start ended", func() bool { return w.luxCalls(r.ID, "resume") == 1 && w.lux.State(r.ID) == end })
 	mustExec(w.t, w.owner, `UPDATE runs SET lux_state = $2, lux_after_event = $3, status = 'paused' WHERE id = $1`,
 		runID, end, w.lastEventID(r.ID))
 	w.migrate066()

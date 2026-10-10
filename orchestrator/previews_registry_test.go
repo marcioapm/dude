@@ -69,7 +69,7 @@ func TestABranchPreviewPullsTheAgentImageWithTheLogin(t *testing.T) {
 	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{"recipe": "docs"}); code != 201 {
 		t.Fatalf("add docs while parked = %d %v", code, body)
 	}
-	w.until("the preview to be resumed", func() bool { return r.Resumed == 1 })
+	w.until("the preview to be resumed", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 	fresh, ok := loginIn(r.ResumeSecrets[0])
 	if tokens := api.tokens(); !ok || len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 		t.Errorf("preview resumed with %q (sent: %v), ECR minted %d; want the second token", fresh, ok, len(tokens))
@@ -360,7 +360,7 @@ func TestAParkedPreviewWaitsForTheLoginItStartedWith(t *testing.T) {
 			w.previews.Registry = ecrLogin
 			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = next_attempt_at - interval '1 minute' WHERE id = $1`, runID)
 			r := w.lux.Runs()[0]
-			w.until("the preview to be resumed", func() bool { return r.Resumed == 1 })
+			w.until("the preview to be resumed", func() bool { return w.luxCalls(r.ID, "resume") == 1 })
 			fresh, _ := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))

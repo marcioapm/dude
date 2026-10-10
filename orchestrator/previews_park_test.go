@@ -16,7 +16,15 @@ import (
 func (w *world) running(runID, server string) {
 	w.t.Helper()
 	w.lux.RequestServer(w.serverID(runID, server), "/")
-	w.until("running", func() bool {
+	w.untilRunning(runID, "running")
+}
+
+// untilRunning waits for dude's row to be running in status and lux_state:
+// the follower applies lux's state event on its own goroutine, so a Run
+// lux already reports running is not yet running in dude.
+func (w *world) untilRunning(runID, what string) {
+	w.t.Helper()
+	w.untilPreview(runID, what, func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 	})
 }
@@ -43,9 +51,10 @@ func TestAFailedStopOnParkIsAskedAgain(t *testing.T) {
 		lr, err := w.previews.Lux.Get(context.Background(), r.ID)
 		return err == nil && lr.State == "stopped"
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID); n != 1 {
-		t.Errorf("dude's row:\n%s", w.describeRuns())
-	}
+	// dude's row follows lux's state event on the follower's goroutine.
+	w.until("dude's row paused and stopped", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
 }
 
 // A server lux never reports idle (its command never opens its port) does

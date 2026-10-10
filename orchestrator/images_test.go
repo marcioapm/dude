@@ -428,11 +428,11 @@ func TestAResumedRunKeepsItsImage(t *testing.T) {
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, out)
 	}
-	for i := 0; r.Resumed == 0 && i < 200; i++ {
+	for i := 0; w.luxCalls(r.ID, "resume") == 0 && i < 200; i++ {
 		w.pump()
 		time.Sleep(10 * time.Millisecond)
 	}
-	if r.Resumed != 1 {
+	if w.luxCalls(r.ID, "resume") != 1 {
 		t.Fatalf("not resumed\n%s", w.describeRuns())
 	}
 	if got := submitted(t, r).Image.Ref; got != finalRef {
