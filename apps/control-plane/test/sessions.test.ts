@@ -150,7 +150,6 @@ test("every session route goes to the orchestrator as the person, and a bad body
     ["POST", `/v1/brainstorms/${SESSION}/chat`, { text: "one sec", aside: true }, `/internal/sessions/${SESSION}/chat`],
     ["POST", `/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" },
       `/internal/sessions/${SESSION}/questions/q_1/answer`],
-
     ["POST", `/v1/brainstorms/${SESSION}/archive`, undefined, `/internal/sessions/${SESSION}/archive`],
     ["POST", `/v1/brainstorms/${SESSION}/unarchive`, undefined, `/internal/sessions/${SESSION}/unarchive`],
     // Made by its first message, with what it reads.

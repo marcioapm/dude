@@ -359,11 +359,18 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "sessions") {
-    main = <SessionsScreen sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
+    main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
-      onChanged={() => void loadSessions()} />;
+      onChanged={() => void loadSessions()} onArchived={(id, archived) => {
+        // Archived, it leaves your list and sidebar at once, and you go to the list; the read after confirms it.
+        if (archived) {
+          setSessionsList((l) => (l ? { ...l, sessions: l.sessions.filter((s) => s.id !== id) } : l));
+          go({ view: "sessions" });
+        }
+        void loadSessions();
+      }} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
