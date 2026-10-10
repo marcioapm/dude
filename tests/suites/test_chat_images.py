@@ -339,9 +339,12 @@ def test_a_failed_image_steer_keeps_its_image_with_retry(
 
 
 @pytest.mark.ui
-def test_an_answer_carries_a_screenshot(
+def test_a_screenshot_goes_beside_an_open_question(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
+    """One question has no note to carry images: a screenshot goes as a
+    message beside it (Write to the agent instead), and the question stays
+    open for its one-click answer."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
         "implementer": "fake/ask", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
     task = client.create_task(forge_project["id"], "Phone layout")
@@ -351,19 +354,59 @@ def test_an_answer_carries_a_screenshot(
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
-    field = page.get_by_placeholder("Type your answer…")
+    page.get_by_test_id("write-instead").click()
+    field = page.get_by_placeholder("Steer the agent…")
     expect(field).to_be_visible()
     field.fill("It overflows — VAT amount is cut off on the right.")
     page.get_by_test_id("attach-input").set_input_files([{"name": "phone.png", "mimeType": "image/png", "buffer": png(390, 844)}])
     expect(page.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
     _shoot(page, "5-answer")
-    page.get_by_role("button", name="Answer").click()
-    answered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered"],
-                          timeout=15, message="no answer")
-    directive = answered[0]["payload"]["directiveId"]
+    page.get_by_role("button", name="Steer", exact=True).click()
+    steered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.steered"],
+                         timeout=15, message="no message")
+    directive = steered[0]["payload"]["directiveId"]
     luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get(directive), timeout=30, message="lux never got it")
     assert [a["name"] for a in luxed] == ["phone.png"]
-    expect(page.get_by_test_id("human-turn").last.get_by_test_id("message-image")).to_have_count(1)
+    assert client.get(f"/v1/questions?runId={run['id']}").json()["questions"][0]["status"] == "open"
+    page.get_by_test_id("question-turn").get_by_role("radio", name="no", exact=True).click()
+    wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"][0]["status"] == "answered",
+               timeout=15, message="the click did not answer it")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_several_answers_carry_a_screenshot_in_their_note(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    """Several questions are answered together with a note, and the note
+    takes images: the screenshot goes to the agent with the answers."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask-several", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
+    task = client.create_task(forge_project["id"], "Phone layout, two questions")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
+    wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"], timeout=60, message="no questions")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    turn = page.get_by_test_id("question-turn").last
+    turn.get_by_role("radio", name="Yes", exact=True).click()
+    turn.get_by_role("button", name="Next", exact=True).click()
+    turn.get_by_role("radio", name="Pay in parts", exact=True).click()
+    turn.get_by_role("button", name="Review", exact=True).click()
+    turn.get_by_label("A note for the agent (optional)").fill("It overflows — VAT amount is cut off on the right.")
+    turn.get_by_test_id("attach-input").set_input_files([{"name": "phone.png", "mimeType": "image/png", "buffer": png(390, 844)}])
+    expect(turn.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
+    turn.get_by_role("button", name="Send answers", exact=True).click()
+    answered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered"],
+                          timeout=15, message="no answer")
+    payload = answered[0]["payload"]
+    assert [a["name"] for a in payload["attachments"]] == ["phone.png"]
+    assert payload["note"] == "It overflows — VAT amount is cut off on the right."
+    assert payload["answers"] == [{"choices": [0], "text": ""}, {"choices": [1], "text": ""}]
+    luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get(payload["directiveId"]),
+                       timeout=30, message="lux never got it")
+    assert [a["name"] for a in luxed] == ["phone.png"]
     assert console_errors == []
 
 

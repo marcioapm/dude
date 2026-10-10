@@ -19,7 +19,9 @@ import (
 // message creates the task's conductor, briefed by dude; with one, it is
 // the conductor's next input, delivered as a steer is (a directive), which
 // resumes it when it is parked. A question it is waiting on is answered by
-// it, as through the question's own route.
+// it, as through the question's own route — unless the person writes
+// aside (to the agent, leaving the question open), or the question is
+// several, answered only through its form.
 //
 // The first message on a task whose delivery is in progress hands its
 // decisions to the conductor (taking over): the step running finishes, and
@@ -27,19 +29,33 @@ import (
 // it through: a delivery starts, decided by the conductor, waiting on its
 // first decision. A merged or closed task's conductor stays read-only.
 func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error {
-	var body struct {
-		Text string `json:"text"`
-	}
+	var body chatMessage
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" {
+	switch {
+	case body.Answers != nil && body.QuestionID == "":
+		return fail(http.StatusBadRequest, "bad_request", "answers name the question they answer (questionId)")
+	case body.Answers != nil && (body.Text != "" || body.Aside):
+		return fail(http.StatusBadRequest, "bad_request", "answers go alone: no text, not aside")
+	case body.Answers == nil && strings.TrimSpace(body.Text) == "":
 		return fail(http.StatusBadRequest, "bad_request", "text is required")
-	}
-	if len(body.Text) > delivery.ChatMessageMax {
+	case len(body.Text) > delivery.ChatMessageMax:
 		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
 	}
-	return s.converse(w, r, org, body.Text, false)
+	return s.converse(w, r, org, body, false)
+}
+
+// chatMessage is what a person sends in a task's Chat: words, or the
+// answers to the conductor's open question through its form (one per
+// question, a note), naming the question so a form left open on an
+// earlier one answers nothing. Aside: words that leave the question open.
+type chatMessage struct {
+	Text       string                `json:"text"`
+	Aside      bool                  `json:"aside"`
+	QuestionID string                `json:"questionId"`
+	Answers    []delivery.ItemAnswer `json:"answers"`
+	Note       string                `json:"note"`
 }
 
 // TalkItThrough is what a person who pressed Talk it through says to the
@@ -51,12 +67,13 @@ const TalkItThrough = "Let's talk this task through before anything is built. Re
 // by the conductor and waiting on its first decision, and its conductor,
 // asked to plan it with the person.
 func (s *Server) talk(w http.ResponseWriter, r *http.Request, org string) error {
-	return s.converse(w, r, org, TalkItThrough, true)
+	return s.converse(w, r, org, chatMessage{Text: TalkItThrough}, true)
 }
 
 // converse takes a person's message in a task's Chat (see chat); with
 // talk, only on a task not started.
-func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text string, talk bool) error {
+func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, msg chatMessage, talk bool) error {
+	text := msg.Text
 	taskID := r.PathValue("id")
 	p := principalOf(r)
 	writer := delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person}
@@ -107,6 +124,9 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 			err = find()
 		}
 		if db.IsNotFound(err) {
+			if msg.Answers != nil {
+				return fail(http.StatusConflict, "conflict", "question %s is no longer waiting: the conductor that asked it has ended", msg.QuestionID)
+			}
 			created = true
 			runID, err = delivery.StartConductor(r.Context(), tx, org, projectID, taskID, writer, text)
 			if err != nil {
@@ -122,25 +142,34 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 
 		// Waiting on its question: this is the answer.
 		var questionID, prompt string
-		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt
+		var items []delivery.QuestionItem
+		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, q.items
 			FROM questions q WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).
-			Scan(&questionID, &prompt)
+			Scan(&questionID, &prompt, &items)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
-		if qerr == nil {
+		if msg.Answers != nil && (qerr != nil || questionID != msg.QuestionID) {
+			return fail(http.StatusConflict, "conflict", "question %s is no longer waiting for an answer", msg.QuestionID)
+		}
+		// A message answers one question, unless written aside; answers
+		// through the form answer any.
+		if qerr == nil && (msg.Answers != nil || !msg.Aside && len(items) == 1) {
 			ri := runInfo{ProjectID: projectID, TaskID: taskID, Role: delivery.RoleConductor}
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, p)
+			answered, err := answerBody{Text: text, Answers: msg.Answers, Note: msg.Note}.check(items)
+			if err != nil {
+				return err
+			}
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, p)
 			if err != nil {
 				return err
 			}
 			out = map[string]any{"runId": runID, "taskId": taskID, "created": false, "questionId": questionID,
 				"directiveId": directiveID, "decider": decider}
-			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p,
-				map[string]any{"questionId": questionID, "answer": text, "directiveId": directiveID})
+			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p, answeredPayload(questionID, directiveID, answered))
 		}
 
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: text, Scope: "run"})

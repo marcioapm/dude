@@ -626,10 +626,18 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 // (waitCursor): the mark an answer to a conductor checks before putting
 // the task back (EndConductorWait).
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
+	return AskItemsTx(ctx, tx, r, []QuestionItem{SingleItem(prompt, db.NonNil(options))})
+}
+
+// AskItemsTx is AskTx for an ask of one or more questions, normalized
+// (NormalizeItems): prompt and options keep what their readers show.
+func AskItemsTx(ctx context.Context, tx pgx.Tx, r RunRef, items []QuestionItem) (string, error) {
 	id := ids.New(ids.Question)
-	opts, _ := json.Marshal(db.NonNil(options))
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts); err != nil {
+	prompt, options := AskPrompt(items), AskOptions(items)
+	opts, _ := json.Marshal(options)
+	rawItems, _ := json.Marshal(items)
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, items)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts, rawItems); err != nil {
 		return "", err
 	}
 	var before string
@@ -640,7 +648,7 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 	if err != nil {
 		return "", err
 	}
-	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}
+	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": options, "items": items}
 	if moved {
 		// The move's event is this transaction's latest for the task, whose
 		// row the move holds.
@@ -735,8 +743,9 @@ const waitBlocked = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id A
 // RecordDecisionTx records something a person decided about the task, as
 // an answered question: every phase from then on is told it (Decisions).
 func RecordDecisionTx(ctx context.Context, tx pgx.Tx, org, taskID, question, answer string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, prompt, status, answer, answered_at)
-		VALUES ($1, $2, $3, $4, 'answered', $5, now())`, ids.New(ids.Question), org, taskID, question, answer)
+	items, _ := json.Marshal([]QuestionItem{SingleItem(question, nil)})
+	_, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, prompt, items, status, answer, answered_at)
+		VALUES ($1, $2, $3, $4, $5::jsonb, 'answered', $6, now())`, ids.New(ids.Question), org, taskID, question, items, answer)
 	return err
 }
 

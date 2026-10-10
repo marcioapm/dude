@@ -16,7 +16,7 @@ import type { RequestContext, Router } from "../router.ts";
 
 const QUESTION_SELECT = `
   id, organization_id AS "organizationId", task_id AS "taskId",
-  run_id AS "runId", prompt, options, status, answer,
+  run_id AS "runId", prompt, options, items, answers, status, answer,
   asked_at AS "askedAt", answered_at AS "answeredAt"`;
 
 const DIRECTIVE_SELECT = `

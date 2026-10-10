@@ -282,6 +282,22 @@ func (n *Notifier) send(ctx context.Context, s subscription, body []byte, tag, p
 	return true
 }
 
+// askHeaders is how many questions a question.asked payload asks, and their
+// headers joined ("Retry scope, Old route"); 0 for an event from before
+// items were kept.
+func askHeaders(p map[string]any) (int, string) {
+	items, _ := p["items"].([]any)
+	headers := make([]string, 0, len(items))
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
+			if h, _ := m["header"].(string); h != "" {
+				headers = append(headers, h)
+			}
+		}
+	}
+	return len(items), strings.Join(headers, ", ")
+}
+
 // messageFor says what an ask's notification reads, and whether it gets
 // one at all.
 func messageFor(a ask) (Message, bool) {
@@ -300,6 +316,9 @@ func messageFor(a ask) (Message, bool) {
 		}
 		msg.Tag, msg.URL = "session:"+a.Session, "#/sessions/"+a.Session
 		msg.Title, msg.Body = "The brainstorm asks you", str("prompt")
+		if n, headers := askHeaders(p); n > 1 {
+			msg.Title, msg.Body = fmt.Sprintf("The brainstorm asks you %d questions", n), headers
+		}
 		return msg, true
 	}
 	if a.RunID == "" {
@@ -310,6 +329,8 @@ func messageFor(a ask) (Message, bool) {
 		if str("kind") == "escalation" {
 			msg.Title = strings.TrimSpace(a.Task + " needs a decision")
 			msg.Body = strings.ReplaceAll(str("reason"), "_", " ")
+		} else if n, headers := askHeaders(p); n > 1 {
+			msg.Title, msg.Body = fmt.Sprintf("%s asks %d questions", who, n), headers
 		} else {
 			msg.Title, msg.Body = who+" asks", str("prompt")
 		}

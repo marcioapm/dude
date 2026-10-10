@@ -9,10 +9,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, Run } from "@dude/domain";
 import { act, mount, settle, until } from "./dom.ts";
-import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
-import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
+import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
+import type { SentAnswer } from "../src/api/client.ts";
+import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import { RunScreen } from "../src/screens/RunScreen.tsx";
 import { project } from "../src/api/conversation.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
@@ -200,10 +202,15 @@ class ChatClient extends FixtureClient {
     if (params.runId === CONDUCTOR) return this.extra.filter((e) => e.cursor > (params.after ?? 0));
     return super.ledgerFor(params);
   }
-  override async chat(taskId: string, text: string): Promise<ChatSent> {
-    this.sent.push(`${taskId}:${text}`);
+  override async chat(taskId: string, text: string, opts: { aside?: boolean } = {}): Promise<ChatSent> {
+    this.sent.push(`${taskId}:${opts.aside ? "aside:" : ""}${text}`);
     if (this.refuse) throw this.refuse;
     return this.reply ?? { runId: CONDUCTOR, taskId, created: this.conductor === null };
+  }
+  override async chatAnswer(taskId: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = ""): Promise<ChatSent> {
+    this.sent.push(`${taskId}:${questionId}:${JSON.stringify(answers)}${note ? `:${note}` : ""}`);
+    if (this.refuse) throw this.refuse;
+    return { runId: CONDUCTOR, taskId, created: false };
   }
   /** What the next sends fail with; null: they go. */
   refuse: Error | null = null;
@@ -235,6 +242,8 @@ async function chatPage(client: ChatClient, props: Partial<Parameters<typeof Tas
 }
 
 const tabs = (page: HTMLElement) => [...page.querySelectorAll("[role=tab]")].map((t) => t.textContent?.replace(/\d+$/, ""));
+/** The answer drafts this browser keeps. */
+const drafts = () => Object.keys(localStorage).filter((k) => k.startsWith("dude.answer."));
 const selected = (page: HTMLElement) => page.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
 const pickTab = async (page: HTMLElement, name: string) => {
@@ -330,18 +339,253 @@ describe("the Chat tab", () => {
     expect(composer.value).toBe("");
   });
 
-  test("a conductor asking: its question card, and the composer answers it", async () => {
+  test("a conductor asking: its question's turn is the form, and the composer steps back to one line", async () => {
+    localStorage.clear();
     const asking = [...conductorEvents(),
       ev("question.asked", { kind: "agent", questionId: "q_1", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
     const client = new ChatClient({ status: "running" }, asking);
     const page = await chatPage(client);
     await until(() => page.textContent?.includes("Make it a follow-up task?") ? page : null, "the question");
-    const composer = await until(() => page.querySelector("[data-testid=task-chat] form[data-mode=answer]"), "the answer composer");
-    expect(composer.textContent).toContain("Answering the conductor");
-    const yes = [...composer.querySelectorAll("button")].find((b) => b.textContent === "Yes")!;
+    const waiting = await until(() => page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]"), "the waiting line");
+    expect(waiting.textContent).toContain("The conductor is waiting for your answer above.");
+    expect(page.querySelector("[data-testid=task-chat] textarea")).toBeNull();
+    const yes = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")].find((b) => b.textContent?.startsWith("Yes"))!;
     await act(async () => yes.click());
     await settle();
-    expect(client.sent).toEqual([`${TASK_ID}:Yes`]);
+    expect(client.sent).toEqual([`${TASK_ID}:q_1:[{"choices":[0],"text":""}]`]);
+  });
+
+  test("Write to the agent instead: the composer comes back, and what is written leaves the question open", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_2", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    const page = await chatPage(client);
+    const instead = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=write-instead]"), "write instead");
+    await act(async () => instead.click());
+    await write(page, "what does it touch?");
+    expect(client.sent).toEqual([`${TASK_ID}:aside:what does it touch?`]);
+  });
+
+  test("Write to the agent instead lasts for that question: answered and asked again at once, the composer steps back", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_8", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
+    const page = await chatPage(new ChatClient({ status: "running" }, asking));
+    const instead = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=write-instead]"), "write instead");
+    await act(async () => instead.click());
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(0);
+    // The answer and the next question arrive in one batch: no render between them where nothing waits.
+    const live = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"]) => {
+      const { cursor: _c, eventId: _e, ...rest } = ev(eventType, payload, actor);
+      emit({ ...rest, occurredAt: new Date().toISOString() });
+    };
+    await act(async () => {
+      live("question.answered", { questionId: "q_8", answer: "Yes", directiveId: "dir_8", answers: [{ choices: [0], text: "" }] }, MARCIO);
+      live("question.asked", { kind: "agent", questionId: "q_9", prompt: "And a second one?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR });
+    });
+    await until(() => page.textContent?.includes("And a second one?") ? page : null, "the next question");
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(1);
+  });
+
+  test("on the Run's own page too: Write to the agent instead lasts for that question", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_10", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    const { container: page, unmount } = await mount(
+      <PeopleProvider client={client}><RunScreen client={client} runId={CONDUCTOR} onBack={() => {}} /></PeopleProvider>);
+    mounted.push(unmount);
+    const waiting = () => page.querySelectorAll("[data-testid=composer-waiting]").length;
+    const instead = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=write-instead]"), "write instead");
+    await act(async () => instead.click());
+    expect(waiting()).toBe(0);
+    const live = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"]) => {
+      const { cursor: _c, eventId: _e, ...rest } = ev(eventType, payload, actor);
+      emit({ ...rest, occurredAt: new Date().toISOString() });
+    };
+    await act(async () => {
+      live("question.answered", { questionId: "q_10", answer: "Yes", directiveId: "dir_10", answers: [{ choices: [0], text: "" }] }, MARCIO);
+      live("question.asked", { kind: "agent", questionId: "q_11", prompt: "And a third one?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR });
+    });
+    await until(() => page.textContent?.includes("And a third one?") ? page : null, "the next question");
+    expect(waiting()).toBe(1);
+  });
+
+  test("four questions: picks are kept in this browser across a reload until sent; nothing goes before Send", async () => {
+    localStorage.clear();
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: true }, { label: "All", description: "", recommended: false }] },
+      { header: "Route", question: "What about /pay?", multiple: false, choices: [{ label: "Leave it", description: "", recommended: false }] },
+      { header: "Tests", question: "Which layers?", multiple: true, choices: [{ label: "Unit", description: "", recommended: false }, { label: "API", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_4", prompt: "4 questions: Scope, Route, Tests, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    let page = await chatPage(client);
+    const radios = () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")];
+    await until(() => radios().length > 0 ? page : null, "the form");
+    await act(async () => radios()[1]!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => radios()[0]!.click());
+    expect(client.sent).toEqual([]);
+    // The page goes and comes back: the picks are where they were.
+    const again = new ChatClient({ status: "running" }, asking);
+    page = await chatPage(again);
+    await until(() => page.querySelector("[data-testid=question-tabs]"), "the tabs again");
+    const tabs = [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
+    expect(tabs.map((t) => t.dataset.done ?? "")).toEqual(["true", "true", "", "", ""]);
+    expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(drafts()).toHaveLength(1);
+    // Answered and sent: nothing is kept.
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=checkbox]")][0]!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    const own = await until(() => page.querySelector<HTMLInputElement>("[data-testid=question-turn] [data-own-field]"), "the words field");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(own, "Pay in parts");
+      own.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-send]")!.click());
+    await settle();
+    expect(again.sent.at(-1)).toStartWith(`${TASK_ID}:q_4:`);
+    expect(drafts()).toEqual([]);
+  });
+
+  test("a question whose Run ends unanswered drops its kept picks", async () => {
+    localStorage.clear();
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_6", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    let page = await chatPage(new ChatClient({ status: "running" }, asking));
+    const radio = await until(() => page.querySelector<HTMLElement>("[data-testid=question-turn] [role=radio]"), "the form");
+    await act(async () => radio.click());
+    expect(drafts()).toHaveLength(1);
+    // Back later, its Run aborted: the question is dismissed and its draft gone.
+    page = await chatPage(new ChatClient({ status: "aborted", endedAt: new Date().toISOString() }, asking));
+    await until(() => page.querySelector("[data-testid=question-turn][data-state=dismissed], [data-testid=question-turn] [data-state=dismissed]")
+      ?? page.querySelector("article[data-state=dismissed]"), "the dismissed question");
+    await settle();
+    expect(drafts()).toEqual([]);
+  });
+
+  test("picks kept for the person come back once the page knows who they are", async () => {
+    localStorage.clear();
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }, { label: "All", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    localStorage.setItem(`dude.answer.${YOU}.q_7`, JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" }));
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_7", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    let known!: () => void;
+    const people = new Promise<void>((resolve) => { known = resolve; });
+    const listPeople = client.listPeople.bind(client);
+    client.listPeople = async () => {
+      await people;
+      return listPeople();
+    };
+    const page = await chatPage(client);
+    const tabs = () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
+    await until(() => tabs().length > 0 ? page : null, "the tabs");
+    expect(tabs()[0]!.getAttribute("aria-selected")).toBe("true");
+    await act(async () => known());
+    await until(() => tabs()[1]?.getAttribute("aria-selected") === "true" ? page : null, "the person's picks");
+    expect(tabs()[0]!.dataset.done).toBe("true");
+  });
+
+  /** A two-question q_7 (after what `earlier` adds) on a page whose person is known only once `known()` is called. */
+  async function personLater(earlier: () => PersistedEvent[] = () => []) {
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }, { label: "All", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const asking = [...conductorEvents(), ...earlier(),
+      ev("question.asked", { kind: "agent", questionId: "q_7", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
+    const client = new ChatClient({ status: "running" }, asking);
+    let known!: () => void;
+    const people = new Promise<void>((resolve) => { known = resolve; });
+    const listPeople = client.listPeople.bind(client);
+    client.listPeople = async () => {
+      await people;
+      return listPeople();
+    };
+    const page = await chatPage(client);
+    const tabs = () => [...page.querySelectorAll<HTMLElement>("[data-testid=question-tabs] [role=tab]")];
+    await until(() => tabs().length > 0 ? page : null, "the tabs");
+    return { client, page, tabs, known };
+  }
+  const kept = (person: string) => localStorage.getItem(`dude.answer.${person}.q_7`);
+
+  test("picks kept before the page knew the person move to the person once; sent, nothing is kept", async () => {
+    localStorage.clear();
+    const before = JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" });
+    localStorage.setItem("dude.answer.anyone.q_7", before);
+    const { client, page, tabs, known } = await personLater();
+    await act(async () => known());
+    await until(() => kept("anyone") === null ? page : null, "the anyone draft moved");
+    expect(kept(YOU)).toBe(before);
+    expect(tabs()[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(tabs()[0]!.dataset.done).toBe("true");
+    const own = page.querySelector<HTMLInputElement>("[data-testid=question-turn] [data-own-field]")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(own, "Pay in parts");
+      own.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-next]")!.click());
+    await act(async () => page.querySelector<HTMLElement>("[data-testid=question-send]")!.click());
+    await settle();
+    expect(client.sent.at(-1)).toBe(`${TASK_ID}:q_7:[{"choices":[1],"text":""},{"choices":[],"text":"Pay in parts"}]`);
+    expect(drafts()).toEqual([]);
+  });
+
+  test("the person's own kept picks win over ones kept before the page knew them, which are dropped", async () => {
+    localStorage.clear();
+    const mine = JSON.stringify({ tab: 1, answers: [{ choices: [1], own: null }, { choices: [], own: "" }], note: "" });
+    localStorage.setItem(`dude.answer.${YOU}.q_7`, mine);
+    localStorage.setItem("dude.answer.anyone.q_7", JSON.stringify({ tab: 0, answers: [{ choices: [0], own: null }, { choices: [], own: null }], note: "someone's" }));
+    const { page, tabs, known } = await personLater();
+    await act(async () => known());
+    await until(() => kept("anyone") === null ? page : null, "the anyone draft dropped");
+    expect(kept(YOU)).toBe(mine);
+    await until(() => tabs()[1]?.getAttribute("aria-selected") === "true" ? page : null, "the person's picks");
+    await act(async () => tabs()[0]!.click());
+    const radios = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")];
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+  });
+
+  test("an answered question's card is not mounted again when the page learns who the person is", async () => {
+    localStorage.clear();
+    const { page, known } = await personLater(() => [
+      ev("question.asked", { kind: "agent", questionId: "q_3", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR }),
+      ev("question.answered", { questionId: "q_3", answer: "Yes", directiveId: "dir_3", answers: [{ choices: [0], text: "" }] }, MARCIO),
+    ]);
+    const card = () => page.querySelector("[data-question=q_3]");
+    const before = card();
+    expect(before?.getAttribute("data-state")).toBe("answered");
+    await act(async () => known());
+    await settle();
+    expect(card() === before).toBe(true);
+  });
+
+  test("answered through the form, the question's turn is the record, and the note is the person's own turn", async () => {
+    const items = [
+      { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }] },
+      { header: "Button", question: "Its words?", multiple: false, choices: [] },
+    ];
+    const answered = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_5", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR }),
+      ev("question.answered", { questionId: "q_5", answer: "…", directiveId: "dir_5", answers: [{ choices: [0], text: "" }, { choices: [], text: "Pay with two cards" }],
+        note: "Keep it short." }, { type: "person", id: "per_marcio" })];
+    const page = await chatPage(new ChatClient({ status: "running" }, answered));
+    const record = await until(() => page.querySelector("[data-testid=question-record]"), "the record");
+    expect([...record.querySelectorAll("[data-testid=record-answer]")].map((a) => a.textContent)).toEqual(["5xx", expect.stringContaining("“Pay with two cards”")]);
+    const turns = [...page.querySelectorAll("[data-testid=human-turn]")].map((t) => t.textContent ?? "");
+    expect(turns.some((t) => t.includes("Keep it short."))).toBe(true);
+    expect(turns.some((t) => t.includes("Answer"))).toBe(false);
   });
 
   test("the conductor's escalation question, decided on the banner: its card says so, and the composer no longer answers it", async () => {
@@ -353,7 +597,8 @@ describe("the Chat tab", () => {
     const card = page.querySelector("[data-testid=task-chat] article[data-state]")!;
     expect(card.getAttribute("data-state")).toBe("dismissed");
     expect(card.querySelector("[data-testid=settled-by]")?.textContent).toBe("Decided on the banner");
-    expect(page.querySelector("[data-testid=task-chat] form[data-mode=answer]")).toBeNull();
+    expect(page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]")).toBeNull();
+    expect(card.querySelector("[data-testid=question-form]")).toBeNull();
   });
 
   test("Sessions lists the conductor first", async () => {
