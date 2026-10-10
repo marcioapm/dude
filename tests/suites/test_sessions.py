@@ -475,9 +475,12 @@ def test_a_project_linked_in_the_welcomes_composer_is_what_the_session_it_makes_
     links = page.get_by_test_id("composer-links")
     expect(links).to_contain_text("Reads memory only")
     # Linked, then unlinked, then linked: only what is linked at send time is read.
-    for name in ("web-console", "billing"):
+    for count, name in enumerate(("web-console", "billing"), start=1):
         page.get_by_test_id("composer-link").click()
         page.get_by_role("menuitem", name=name).click()
+        # Picked and closed before the next press opens it again.
+        expect(links.locator("[data-project]")).to_have_count(count)
+        expect(page.get_by_role("menu")).to_have_count(0)
     page.get_by_role("button", name="Stop reading web-console").click()
     expect(links.locator("[data-project]")).to_have_count(1)
     expect(links).to_contain_text("billing")
