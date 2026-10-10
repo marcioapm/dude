@@ -72,6 +72,18 @@ class DraftClient extends FixtureClient {
   }
 }
 
+// An unmount that is safe to call again: a test may close a page that afterEach then closes too.
+function closer(unmount: () => Promise<void>) {
+  let gone = false;
+  const close = async () => {
+    if (gone) return;
+    gone = true;
+    await unmount();
+  };
+  mounted.push(close);
+  return close;
+}
+
 // The session page, its composer found before the person is known.
 async function open(client: DraftClient) {
   const { container, unmount } = await mount(
@@ -81,13 +93,7 @@ async function open(client: DraftClient) {
       </ToastProvider>
     </PeopleProvider>,
   );
-  let gone = false;
-  const close = async () => {
-    if (gone) return;
-    gone = true;
-    await unmount();
-  };
-  mounted.push(close);
+  const close = closer(unmount);
   const composer = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea"), "the composer");
   return { container, composer, close };
 }
@@ -312,13 +318,7 @@ describe("a Run's steer composer", () => {
         </ToastProvider>
       </PeopleProvider>,
     );
-    let gone = false;
-    const close = async () => {
-      if (gone) return;
-      gone = true;
-      await unmount();
-    };
-    mounted.push(close);
+    const close = closer(unmount);
     const composer = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=run-screen] textarea"), "the steer composer");
     await settle();
     return { composer, close };
@@ -349,8 +349,10 @@ describe("a Run's steer composer", () => {
 });
 
 describe("a task's Chat", () => {
-  test("words typed before the conductor exists are in the conductor's composer once it does", async () => {
-    const client = new FixtureClient("a");
+  const TASK_KEY = draftKey(YOU, `task:${TASK_ID}`);
+
+  // The task's Chat with no conductor yet; `conduct` gives it one, swapping in RunScreen's composer.
+  async function chatPage(client: FixtureClient) {
     const task = await client.getTask(TASK_ID);
     let conduct: (id: string | null) => void = () => {};
     function Harness() {
@@ -371,15 +373,22 @@ describe("a task's Chat", () => {
     mounted.push(unmount);
     const before = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea"), "the Chat's composer");
     await settle();
+    const conductorAppears = async () => {
+      await act(async () => conduct(RUN_ID));
+      return until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
+    };
+    return { before, conductorAppears };
+  }
+
+  test("words typed before the conductor exists are in the conductor's composer once it does", async () => {
+    const { before, conductorAppears } = await chatPage(new FixtureClient("a"));
     await typeInto(before, "plan the invoice option");
-    await act(async () => conduct(RUN_ID));
-    const after = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
+    const after = await conductorAppears();
     await until(() => (after.value === "plan the invoice option" ? true : null), "the words carried over");
-    expect(JSON.parse(stored(draftKey(YOU, `task:${TASK_ID}`))!).text).toBe("plan the invoice option");
+    expect(JSON.parse(stored(TASK_KEY)!).text).toBe("plan the invoice option");
   });
 
   // The conductor appears while the first message's POST is held: the Chat's composer flushed its words to the task's entry first.
-  const TASK_KEY = draftKey(YOU, `task:${TASK_ID}`);
   async function sentAsConductorAppears() {
     class HeldChat extends FixtureClient {
       hold = Promise.withResolvers<void>();
@@ -391,31 +400,11 @@ describe("a task's Chat", () => {
       }
     }
     const client = new HeldChat("a");
-    const task = await client.getTask(TASK_ID);
-    let conduct: (id: string | null) => void = () => {};
-    function Harness() {
-      const [conductorId, setConductorId] = useState<string | null>(null);
-      conduct = setConductorId;
-      return (
-        <ChatSection client={client} task={task} conductorId={conductorId} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
-          events={[]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}} />
-      );
-    }
-    const { container, unmount } = await mount(
-      <PeopleProvider client={client}>
-        <ToastProvider>
-          <Harness />
-        </ToastProvider>
-      </PeopleProvider>,
-    );
-    mounted.push(unmount);
-    const before = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea"), "the Chat's composer");
-    await settle();
+    const { before, conductorAppears } = await chatPage(client);
     await typeInto(before, "plan the invoice option");
     await enter(before);
     expect(client.chats).toEqual(["plan the invoice option"]);
-    await act(async () => conduct(RUN_ID));
-    const after = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=chat-screen] textarea"), "the conductor's composer");
+    const after = await conductorAppears();
     expect(JSON.parse(stored(TASK_KEY)!).text).toBe("plan the invoice option");
     return { client, after };
   }
@@ -465,13 +454,7 @@ describe("the welcome's first message", () => {
         </TooltipProvider>
       </PeopleProvider>,
     );
-    let gone = false;
-    const close = async () => {
-      if (gone) return;
-      gone = true;
-      await unmount();
-    };
-    mounted.push(close);
+    const close = closer(unmount);
     const composer = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the welcome's composer");
     await settle();
     return { container, composer, close };
