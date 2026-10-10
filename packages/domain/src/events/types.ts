@@ -100,7 +100,7 @@ export const EventTypes = {
   BrainstormModelChanged: "session.model.changed",
   /**
    * The tier the session chose was removed: it follows the organisation's
-   * again. Written by the database (migration 105). Payload: `{ tier: { id, name } }`.
+   * again. Written by the database (migration 106). Payload: `{ tier: { id, name } }`.
    */
   BrainstormModelFallback: "session.model.fallback",
   /**

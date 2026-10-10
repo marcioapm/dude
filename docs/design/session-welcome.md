@@ -213,7 +213,7 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
 "Organisation default (…)".
 
 - **Each half is the session's own or the organisation's**, independently
-  (`sessions.tier`, `sessions.harness`, migration 105; NULL follows). The
+  (`sessions.tier`, `sessions.harness`, migration 106; NULL follows). The
   welcome sends only what was chosen, so a session left alone keeps
   following the organisation when its setting changes.
 - **An invalid pair is never offered.** An item whose harness cannot run
