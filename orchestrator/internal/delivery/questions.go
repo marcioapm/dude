@@ -243,7 +243,7 @@ func CheckAnswers(items []QuestionItem, answers []ItemAnswer, note string) (Answ
 	}
 	ans := Answered{Answers: out, Note: strings.TrimSpace(note)}
 	if len(items) == 1 {
-		ans.Text = itemAnswerText(items[0], out[0])
+		ans.Text = itemAnswerText(items[0], out[0], asTyped)
 	} else {
 		ans.Text = answersBlock(items, out)
 	}
@@ -251,17 +251,21 @@ func CheckAnswers(items []QuestionItem, answers []ItemAnswer, note string) (Answ
 }
 
 // itemAnswerText is one item's answer in words: the labels picked, then
-// the person's own words.
-func itemAnswerText(it QuestionItem, a ItemAnswer) string {
+// the person's own words as words(text) puts them.
+func itemAnswerText(it QuestionItem, a ItemAnswer, words func(string) string) string {
 	parts := make([]string, 0, len(a.Choices)+1)
 	for _, p := range a.Choices {
 		parts = append(parts, it.Choices[p].Label)
 	}
 	if a.Text != "" {
-		parts = append(parts, a.Text)
+		parts = append(parts, words(a.Text))
 	}
 	return strings.Join(parts, "; ")
 }
+
+func asTyped(s string) string { return s }
+
+func inTheirWords(s string) string { return fmt.Sprintf("in their own words: %q", s) }
 
 // answersBlock is several items' answers for the agent and the record:
 // each question, numbered with its header, and its answer under it.
@@ -276,15 +280,7 @@ func answersBlock(items []QuestionItem, answers []ItemAnswer) string {
 		if it.Multiple {
 			b.WriteString(" (several allowed)")
 		}
-		a := answers[i]
-		parts := make([]string, 0, len(a.Choices)+1)
-		for _, p := range a.Choices {
-			parts = append(parts, it.Choices[p].Label)
-		}
-		if a.Text != "" {
-			parts = append(parts, fmt.Sprintf("in their own words: %q", a.Text))
-		}
-		fmt.Fprintf(&b, "\n   → %s", strings.ReplaceAll(strings.Join(parts, "; "), "\n", "\n     "))
+		fmt.Fprintf(&b, "\n   → %s", strings.ReplaceAll(itemAnswerText(it, answers[i], inTheirWords), "\n", "\n     "))
 	}
 	return b.String()
 }
