@@ -179,7 +179,8 @@ describe("Sidebar collapsed", () => {
     expect(byRole(el, "button", "Waiting on you: 1").querySelector('[aria-label="1 needs you"]')).toBeTruthy();
     // The diamond is aria-hidden: what it means is in the face's name.
     const faces = [...el.querySelectorAll("[data-testid=rail-project]")];
-    expect(faces.map((f) => f.getAttribute("aria-label"))).toEqual(["control-plane: 1 needs you · 2 running · 1 failed", "docs: 1 running"]);
+    expect(faces.map((f) => [f.getAttribute("aria-label"), f.hasAttribute("data-needs-you")])).toEqual([
+      ["control-plane: 1 needs you · 2 running · 1 failed", true], ["docs: 1 running", false]]);
   });
 
   test("with nothing waiting, Waiting on you is named without a count", async () => {
