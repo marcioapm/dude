@@ -154,12 +154,15 @@
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
   border-radius: var(--ds-radius-control);
 }
-.foldGlyph {
+.foldGlyph,
+.foldChevron {
   display: inline-grid;
   place-items: center;
+  flex-shrink: 0;
+}
+.foldGlyph {
   width: 16px;
   height: 16px;
-  flex-shrink: 0;
 }
 .foldWords {
   flex: 1;
@@ -173,11 +176,8 @@
   color: var(--ds-color-text-secondary);
 }
 .foldChevron {
-  display: inline-grid;
-  place-items: center;
   width: 14px;
   height: 14px;
-  flex-shrink: 0;
   margin-left: auto;
 }
 .foldChevronIcon {
