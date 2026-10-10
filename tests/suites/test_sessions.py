@@ -555,7 +555,8 @@ def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
     rail = page.get_by_test_id("session-model")
-    rail.get_by_test_id("model-picker").click()
+    # Read only until the organisation's tiers are in; then the owner's chip is a button.
+    rail.get_by_role("button", name=re.compile(r"^Model: ")).click()
     page.get_by_test_id(f"rowmenu-{chosen}").click()
     page.get_by_role("menuitemradio", name="Codex", exact=True).click()
     page.keyboard.press("Escape")
