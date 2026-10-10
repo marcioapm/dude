@@ -165,14 +165,23 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
   // The owner's picker lists the organisation's tiers; anyone else reads the detail's words alone.
   const tierOptions = useModelOptions(client, detail?.you.role === "owner" && detail.model !== undefined, false);
-  const chooseModel = useCallback(async (choice: ModelChoice) => {
+  // What the owner picked, shown at once: a second pick before the first is answered builds on it,
+  // and the posts go one after another so the last pick is the one kept.
+  const [picked, setPicked] = useState<ModelChoice | null>(null);
+  const posting = useRef<Promise<unknown>>(Promise.resolve());
+  useEffect(() => setPicked(null), [sessionId]);
+  const chooseModel = useCallback((choice: ModelChoice) => {
     setProblem(null);
-    try {
-      const { model } = await client.setSessionModel(sessionId, choice);
-      setDetail((d) => (d ? { ...d, model } : d));
-    } catch (err) {
-      setProblem(`Could not change the model: ${errorText(err)}`);
-    }
+    setPicked(choice);
+    posting.current = posting.current.then(async () => {
+      try {
+        const { model } = await client.setSessionModel(sessionId, choice);
+        setDetail((d) => (d ? { ...d, model } : d));
+      } catch (err) {
+        setPicked(null);
+        setProblem(`Could not change the model: ${errorText(err)}`);
+      }
+    });
   }, [client, sessionId]);
   const lines = useMemo(() => {
     if (!detail) return [];
@@ -292,9 +301,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                   <ModelPicker
                     tiers={tierOptions?.tiers ?? (detail.model.tier ? [pickerTier(detail.model.tier)] : [])}
                     organization={organizationOf(detail.model)}
-                    value={{ tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
+                    value={picked ?? { tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
                     readOnly={!isOwner || !tierOptions}
-                    onChange={(c) => void chooseModel(c)} />
+                    onChange={chooseModel} />
                   <span className="muted sessionModelNote">Applies the next time the agent starts.</span>
                 </SessionRailBlock>
               ) : null}
@@ -358,7 +367,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
 export function headerModel(detail: SessionDetail): string {
   const run = detail.session.run;
   const live = run && !["completed", "failed", "aborted"].includes(run.status);
-  if (live && run.model) return ` · ${run.modelTier ? `${run.modelTier} (${run.model})` : run.model}`;
+  if (live && run.model) return ` · ${run.model}`;
   const m = detail.model;
   if (!m) return run?.model ? ` · ${run.model}` : "";
   const words = `${m.effective.tierName ?? "no tier"} · ${HARNESS_LABEL[m.effective.harness]}`;
