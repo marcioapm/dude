@@ -9,6 +9,8 @@ import { Button } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
 import { PublishedFiles, SessionRail, SessionRailBlock } from "../../components/SessionRail.tsx";
+import { ModelPicker } from "../../components/ModelPicker.tsx";
+import { GALLERY_ORG_MODEL, GALLERY_TIERS } from "./Welcome.tsx";
 import { people } from "../navFixtures.ts";
 
 const P = people;
@@ -142,8 +144,8 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="bs-rail" title="SessionPeople / LinkedProjects / Capabilities"
-        note="The session's rail: its people (here: has it open now), what it reads, and what it can and cannot do.">
+      <Block id="bs-rail" title="SessionPeople / LinkedProjects / ModelPicker / Capabilities"
+        note="The session's rail: its people (here: has it open now), what it reads, the model its agent runs on (the owner changes it here; it applies at the agent's next start), and what it can and cannot do.">
         <Panes mode={mode}>
           <div style={{ width: 300 }}>
             <SessionRail>
@@ -160,6 +162,9 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
                   { key: "WC", name: "web-console", repositories: [{ name: "web", defaultBranch: "main" }, { name: "api", defaultBranch: "main" }] },
                   { key: "BL", name: "billing", repositories: [] },
                 ]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Model" data-testid="rail-model">
+                <ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }} onChange={() => undefined} />
               </SessionRailBlock>
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read linked code, tasks, PRs, findings", "Propose epics and tasks · you file them"]}

@@ -1,0 +1,64 @@
+/*
+ * ModelPicker: a quiet chip in ComposerLinks' grammar (chip height, full
+ * radius, no fill until hover), and RowMenu's float a step higher, as the
+ * composer's link menu is: it opens over the raised composer.
+ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: transparent;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+.chip:hover,
+.chip[data-state="open"] {
+  background: var(--ds-color-secondary-hover);
+  color: var(--ds-color-text-primary);
+}
+.chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+/* Read only: the same words on the hover wash, with nothing to press. */
+.readOnly,
+.readOnly:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-secondary);
+}
+.face {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.icon {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.tier {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--ds-weight-medium);
+}
+.harness {
+  flex-shrink: 0;
+}
+.default {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+
+.menu.menu {
+  min-width: 240px;
+  box-shadow: var(--ds-shadow-3);
+}

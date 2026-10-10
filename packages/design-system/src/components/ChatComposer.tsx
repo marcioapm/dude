@@ -71,6 +71,12 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    */
   readonly to?: ReactNode;
   /**
+   * Chat only: a control about who it goes to, right after `to` — the
+   * welcome's `ModelPicker` ("To **Brainstorm** · Claude (High) · Claude
+   * Code"). Shown only with `to`.
+   */
+  readonly toAside?: ReactNode;
+  /**
    * Images in the tray, in order: the app reads, scales and uploads them
    * and says how each is doing. Send waits while one uploads and refuses
    * while one cannot be sent; a message may be images alone.
@@ -155,6 +161,7 @@ export function ChatComposer({
   canInterrupt,
   landsHint,
   to,
+  toAside,
   attachments = [],
   onAttachFiles,
   onRemoveAttachment,
@@ -346,7 +353,10 @@ export function ChatComposer({
         ) : null}
         {leading}
         {mode === "chat" && to && !isDisabled ? (
-          <span className={styles["sentAs"]} data-testid="composer-to">{to}</span>
+          <>
+            <span className={styles["sentAs"]} data-testid="composer-to">{to}</span>
+            {toAside}
+          </>
         ) : sentAs && !isDisabled ? (
           <span className={styles["sentAs"]}>
             Sent as <b>{sentAs}</b>

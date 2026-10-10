@@ -126,3 +126,12 @@
   margin: var(--ds-space-4) var(--ds-space-6);
   background: var(--ds-color-border-subtle);
 }
+
+/* A radio group's heading: small caps, muted, not an item. */
+.groupLabel {
+  padding: var(--ds-space-6) var(--ds-space-8) var(--ds-space-2) var(--ds-space-6);
+  color: var(--ds-color-text-muted);
+}
+.description.mono {
+  font-size: var(--ds-text-xs);
+}
