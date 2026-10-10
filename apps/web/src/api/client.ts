@@ -971,11 +971,6 @@ export class ApiClient {
 
   // -- intervention (plan §24) --------------------------------------------
 
-  /** Answer the question an agent stopped on; the answer starts its next turn. */
-  answer(questionId: string, text: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ id: string; status: "answered" }> {
-    return this.#request("POST", `/v1/questions/${questionId}/answer`, { text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
-  }
-
   /** Answer an agent's question through its form: one answer per question, a note (several only), the note's images. */
   answerQuestions(questionId: string, answers: ReadonlyArray<SentAnswer>, note = "", attachmentIds: ReadonlyArray<string> = []): Promise<{ id: string; status: "answered" }> {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, {

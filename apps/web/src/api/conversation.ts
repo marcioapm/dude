@@ -68,7 +68,6 @@ export interface QuestionTurn {
   id: string;
   questionId: string;
   text: string;
-  options: string[];
   /** What it asks: one to four questions, each with its choices. */
   items: AskItem[];
   at: string;
@@ -807,7 +806,6 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           id: event.eventId,
           questionId: String(payload.questionId ?? ""),
           text: String(payload.prompt ?? ""),
-          options: Array.isArray(payload.options) ? payload.options.map(String) : [],
           items: askItems(payload.items, payload.prompt, payload.options),
           at: event.occurredAt,
           answeredAt: null,

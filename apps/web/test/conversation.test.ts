@@ -655,7 +655,7 @@ describe("an agent that asks", () => {
       ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_1", prompt: "Sort the table?", options: ["yes", "no"] }),
     ];
     let conversation = project(events);
-    expect(conversation.openQuestion).toMatchObject({ questionId: "qst_1", text: "Sort the table?", options: ["yes", "no"],
+    expect(conversation.openQuestion).toMatchObject({ questionId: "qst_1", text: "Sort the table?",
       items: [{ header: "", question: "Sort the table?", multiple: false,
         choices: [{ label: "yes", description: "", recommended: false }, { label: "no", description: "", recommended: false }] }] });
     expect(conversation.activity).toBeNull();
