@@ -27,6 +27,7 @@ import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
+import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
@@ -166,7 +167,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
         kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : renamed ? "renamed" : "notice"}
         by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
-    return out.sort((a, b) => a.at.localeCompare(b.at));
+    return out.sort(byInstant((l) => l.at));
   }, [detail, events, people, client, sessionId, linkedKeys, load]);
 
   if (missing) return <NotFound what="session" onBack={onBack} />;

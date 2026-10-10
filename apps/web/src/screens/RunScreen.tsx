@@ -62,6 +62,7 @@ import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { instant } from "../instant.ts";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
@@ -792,7 +793,7 @@ export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: Readonl
     let at: string | null = null;
     if ("at" in turn) at = turn.at;
     else if ("startedAt" in turn) at = turn.startedAt;
-    while (i < lines.length && at !== null && lines[i]!.at < at) out.push(lines[i++]!);
+    while (i < lines.length && at !== null && instant(lines[i]!.at) < instant(at)) out.push(lines[i++]!);
     out.push({ group });
   }
   while (i < lines.length) out.push(lines[i++]!);

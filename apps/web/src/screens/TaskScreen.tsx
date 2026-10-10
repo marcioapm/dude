@@ -52,6 +52,7 @@ import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskD
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
+import { instant } from "../instant.ts";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useServers } from "../hooks/useServers.ts";
 import { useTaskImages } from "../hooks/useTaskImages.tsx";
@@ -880,7 +881,7 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
 function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
-    if (prEvents.some((e) => e.eventType === "pull_request.opened" && e.occurredAt < run.createdAt)) {
+    if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
       return prFeedbackReason(prEvents, run.createdAt);
     }
     return "for the review";
@@ -896,7 +897,7 @@ function whyItRan(run: Run, index: number, phases: readonly Run[], findings: rea
 export function prFeedbackReason(prEvents: readonly PersistedEvent[], at: string): string {
   // A checks event whose verdict did not change (read access lost or
   // regained) woke no fixer.
-  const feedback = prEvents.findLast((e) => e.occurredAt <= at &&
+  const feedback = prEvents.findLast((e) => instant(e.occurredAt) <= instant(at) &&
     (e.eventType === "pull_request.commented" || e.eventType === "pull_request.reviewed" ||
       (e.eventType === "pull_request.checks_changed" && e.payload.to !== e.payload.from)));
   if (feedback?.eventType === "pull_request.checks_changed") return "for failing CI";
