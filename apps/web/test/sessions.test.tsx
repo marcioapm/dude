@@ -656,10 +656,24 @@ describe("a session made from the welcome", () => {
     expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on Claude Code (organisation default)");
   });
 
+  test("the organisation's tier is the one its setting names, not the first listed", async () => {
+    class OnCoder extends Making {
+      override async organizationSettings() {
+        const settings = await super.organizationSettings();
+        const brainstorm = settings.roles.brainstorm;
+        return { ...settings, roles: { ...settings.roles, brainstorm: { ...brainstorm, tier: { ...brainstorm.tier, value: "mtr_coder" } } } };
+      }
+    }
+    const page = await welcome(new OnCoder(detail("owner")), []);
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on OpenCode (organisation default)");
+  });
+
   test("tiers that cannot be read leave the picker out, and the session is still made, following the organisation", async () => {
     class NoTiers extends Making {
-      override modelTiers(): never {
-        return Promise.reject(new ApiError(503, "unavailable", "down")) as never;
+      down = true;
+      override modelTiers() {
+        return this.down ? Promise.reject(new ApiError(503, "unavailable", "down")) as never : super.modelTiers();
       }
     }
     const client = new NoTiers(detail("owner"));
@@ -668,6 +682,11 @@ describe("a session made from the welcome", () => {
     expect(page.querySelector("[data-testid=welcome] [data-testid=model-picker]")).toBeNull();
     await send(page, "hello");
     expect(client.made).toEqual([{ message: "hello", projects: [] }]);
+    // The failure is not kept: the next welcome reads them again, and has its picker.
+    await mounted.pop()!();
+    client.down = false;
+    const again = await welcome(client, []);
+    await until(() => again.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the picker after a failed read");
   });
 
   test("the welcome mounted again reads the tiers and settings once; once forgotten, again", async () => {
