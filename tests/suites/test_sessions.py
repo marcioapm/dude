@@ -395,35 +395,57 @@ def _title_uncut(page: Page) -> None:
     assert not fits["cut"] and fits["box"] > fits["need"], fits
 
 
+def _welcome_send(page: Page, text: str) -> str:
+    """Write the first message in the welcome's composer and send it; the session it made, once opened."""
+    composer = page.get_by_test_id("welcome").locator("textarea")
+    composer.fill(text)
+    composer.press("Enter")
+    expect(page.get_by_test_id("session-screen")).to_be_visible(timeout=15_000)
+    expect(page).to_have_url(re.compile(r"#/sessions/ssn_"))
+    return page.url.split("#/sessions/")[1]
+
+
 @pytest.mark.ui
 def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_renames_it(
-        client: ApiClient, page: Page, web_url: str, org: dict):
+        client: ApiClient, page: Page, web_url: str, org: dict, fake_github: FakeGitHub):
+    """New session opens the welcome, its composer focused; the first message sent there makes the
+    session, untitled, and opens it; its header renames it."""
     _scripted_brainstorm(client)
     # Warm for the whole test (the organisation's policy: a session has no project), so the agent is
     # not parked after its turn, and only the turn's end can clear Thinking.
     assert client.patch("/v1/settings/organization", {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
+    _project(client, "billing", "BL", fake_github.clone_url)
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"], at="#/sessions")
     page.get_by_test_id("sessions").get_by_test_id("new-session").click()
-    expect(page.get_by_test_id("session-screen")).to_be_visible(timeout=15_000)
-    # No dialog: the session exists, untitled, and the composer has the focus.
+    # New session is the welcome: nothing is made until the first message is sent.
+    expect(page.get_by_test_id("welcome")).to_be_visible()
+    expect(page).to_have_url(re.compile(r"#/$"))
     expect(page.get_by_role("dialog")).to_have_count(0)
+    assert client.get("/v1/brainstorms").json()["sessions"] == []
+    composer = page.get_by_test_id("welcome").locator("textarea")
+    expect(composer).to_be_focused()
+    expect(composer).to_have_attribute("placeholder", "Start a session: an idea, a question, a plan…")
+    # A starter fills the composer and sends nothing.
+    page.locator("[data-starter=code]").click()
+    expect(composer).to_have_value("How does ")
+    expect(composer).to_be_focused()
+    assert client.get("/v1/brainstorms").json()["sessions"] == []
+
+    # The first message makes the session with it and opens it, untitled. The scripted agent's
+    # reply names the untitled session (never an empty task); once its turn is over nothing thinks.
+    session = _welcome_send(page, "where would metering live?")
     expect(page.get_by_test_id("session-title")).to_have_text("New session")
     _title_uncut(page)
-    composer = page.get_by_test_id("session-composer").locator("textarea")
-    expect(composer).to_be_focused()
-    # A session has no task: its composer says who it writes to.
-    expect(composer).to_have_attribute("placeholder", "Message the brainstorm…")
-    # The first message, to the scripted agent through the fake lux: the reply names the untitled
-    # session (never an empty task), and once the turn is over nothing is still thinking.
-    composer.fill("where would metering live?")
-    composer.press("Enter")
+    expect(page.get_by_test_id("human-turn").first).to_contain_text("where would metering live?")
     reply = page.get_by_text('In the session "New session". You asked:')
     expect(reply).to_be_visible(timeout=60_000)
     expect(page.get_by_text('Briefed on ""')).to_have_count(0)
     expect(page.get_by_test_id("session-screen").locator("[data-activity]")).to_have_count(0, timeout=15_000)
-    session = page.url.split("#/sessions/")[1]
+    # A session has no task: its composer says who it writes to.
+    expect(page.get_by_test_id("session-composer").locator("textarea")).to_have_attribute("placeholder", "Message the brainstorm…")
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
+    assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == [session]
     expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")
 
     # Escape cancels; Enter saves, and the Chat says who named it.
@@ -440,6 +462,36 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Billing v2"
     # The tab never carries the name.
     assert "Billing" not in page.title()
+
+
+@pytest.mark.ui
+def test_a_project_linked_in_the_welcomes_composer_is_what_the_session_it_makes_reads(
+        client: ApiClient, page: Page, web_url: str, org: dict, fake_github: FakeGitHub):
+    _scripted_brainstorm(client)
+    billing = _project(client, "billing", "BL", fake_github.clone_url)
+    web = _project(client, "web-console", "WC", fake_github.add_repository("web").clone_url)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"], at="#/")
+    links = page.get_by_test_id("composer-links")
+    expect(links).to_contain_text("Reads memory only")
+    # Linked, then unlinked, then linked: only what is linked at send time is read.
+    for name in ("web-console", "billing"):
+        page.get_by_test_id("composer-link").click()
+        page.get_by_role("menuitem", name=name).click()
+    page.get_by_role("button", name="Stop reading web-console").click()
+    expect(links.locator("[data-project]")).to_have_count(1)
+    expect(links).to_contain_text("billing")
+    session = _welcome_send(page, "where does metering go?")
+    detail = client.get(f"/v1/brainstorms/{session}").json()["session"]
+    # The project with all its repositories; the session's agent was started by the same call.
+    assert [(p["id"], [r["id"] for r in p["repositories"]]) for p in detail["projects"]] == \
+        [(billing["id"], [r["id"] for r in billing["repositories"]])]
+    assert web["id"] not in [p["id"] for p in detail["projects"]]
+    assert detail["run"] is not None
+    # The rail's Linked says so.
+    linked = page.get_by_test_id("session-rail")
+    expect(linked).to_contain_text("billing")
+    expect(linked).not_to_contain_text("web-console")
 
 
 @pytest.mark.ui
