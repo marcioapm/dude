@@ -9,6 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QuestionCard, type QuestionDraft, type QuestionItem, type QuestionSubmission } from "../src/components/QuestionCard.tsx";
+import { ChatComposer } from "../src/components/ChatComposer.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -260,6 +261,16 @@ test("the note's images: Send waits while one uploads, and sends the uploaded id
   await click(q('[data-testid="question-send"]'));
   expect(sent).toEqual([{ answers: [{ choices: [0], text: "" }, { choices: [1], text: "" }, { choices: [0], text: "" }, { choices: [1], text: "" }],
     note: "See this", attachmentIds: ["att_1"] }]);
+});
+
+test("Write to the agent instead lasts for that wait: answered, the next question steps the composer back again", async () => {
+  const at = (waitingFor: string | undefined) => <ChatComposer mode="chat" waitingFor={waitingFor} onSubmit={() => {}} />;
+  await render(at("The conductor"));
+  await click(q('[data-testid="write-instead"]'));
+  expect(q('[data-testid="composer-waiting"]')).toBeNull();
+  await render(at(undefined));
+  await render(at("The conductor"));
+  expect(q('[data-testid="composer-waiting"]')).not.toBeNull();
 });
 
 test("someone else's: no form, the choices muted, how to take it over", async () => {
