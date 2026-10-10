@@ -714,3 +714,46 @@ def test_restart_a_real_model_remembers_the_word_across_a_container_kill(client:
     assert t.session_ids(run) == sessions, (sessions, t.session_ids(run))
     assert "agent.session.replaced" not in [e["eventType"] for e in t.run_events(run)]
     assert t.runs_created() == [run]
+
+
+@needs_model
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("harness", list(HARNESSES))
+def test_restart_a_real_model_compacts_and_still_knows_the_word(client: ApiClient, env, lux_project, harness: str):
+    started = time.time()
+    # Codex takes `/compact` as turn text, and compacts only on its own: a
+    # low auto-compact limit, a -c override in the tier's args, makes the
+    # next turn compact first. dude runs Codex on a provider of its own
+    # (model_providers.dude), which Codex compacts locally, with a summary.
+    options = {"args": ["-c", "model_auto_compact_token_limit=2000"]} if harness == "codex" else None
+    t = _real_conductor(client, env, lux_project, harness, options)
+    first = t.say(f"Remember the code word {WORD}: I will ask you for it later. Reply with just: noted. Do nothing else.")
+    run = first["runId"]
+    t.lux_running(run)
+    _turn_over(t, run)
+    # Claude Code answers /compact after one exchange "Not enough messages
+    # to compact.": two suffice.
+    t.say("Reply with just: ok. Do nothing else.")
+    _turn_over(t, run)
+    t.say("/compact" if harness != "codex" else "Reply with just: ok. Do nothing else.")
+    got = wait_until(lambda: _compacted(t, run), timeout=600, interval=3,
+                     message=f"no agent.context.compacted; row {t.row(run)}; said {t.said(run)[-3:]}")
+    _turn_over(t, run)
+    n = len(t.said(run))
+    t.say(ASK_WORD)
+    said = _answers_word(t, run, n, WORD)
+    lux_id = t.lux_id(run)
+    # lux's record trails OpenCode's and Codex's own by up to 10 s.
+    time.sleep(12)
+    luxs = [r["data"] for r in _records(env, lux_id) if r["type"] == "lux.compacted"]
+    got = _compacted(t, run)
+    warnings = [e["payload"] for e in t.run_events(run) if e["eventType"] == "agent.warning"]
+    clip = lambda d: {k: (v[:400] + "…" if isinstance(v, str) and len(v) > 400 else v) for k, v in d.items()}  # noqa: E731
+    _log(f"8/{harness}", {"run": run, "luxRunId": lux_id, "compacted": [clip(e["payload"]) for e in got],
+                          "luxCompacted": [clip(d) for d in luxs], "warnings": warnings, "answer": said,
+                          "seconds": round(time.time() - started)})
+    for i, e in enumerate(got):
+        print(f"[8/{harness} summary {i}]\n{e['payload'].get('summary')}\n[end]")
+    assert len(got) == len(luxs) >= 1, (got, luxs)
+    assert [e["payload"].get("summary") for e in got] == [d.get("summary") for d in luxs], (got, luxs)
+    assert any(WORD.lower() in (e["payload"].get("summary") or "").lower() for e in got), [e["payload"] for e in got]
