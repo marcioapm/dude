@@ -11,6 +11,7 @@
  * page's heartbeat), which goes to its members only, never the organisation.
  */
 
+import { harnessSchema } from "@dude/domain";
 import { z } from "zod";
 import { withOrg } from "../../db/client.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -39,12 +40,18 @@ const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
 }).strict();
-// A first message makes the session and starts its agent in one call.
+// A first message makes the session and starts its agent in one call. A
+// tier and harness it names are its own; absent, it follows the
+// organisation's Brainstorm setting. The orchestrator checks they fit.
 const create = z.object({
   title: z.string().trim().max(200).optional(),
   projects: z.array(link).max(50).default([]),
   message: chatText().optional(),
+  tier: z.string().min(1).optional(),
+  harness: harnessSchema.optional(),
 }).strict();
+// null sets one back to the organisation's.
+const model = z.object({ tier: z.string().min(1).nullable(), harness: harnessSchema.nullable() }).strict();
 const rename = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const links = z.object({ projects: z.array(link).max(50) }).strict();
 const invite = z.object({ people: z.array(z.string().min(1)).min(1).max(50), role: z.enum(["chat", "read"]).default("chat") }).strict();
@@ -107,5 +114,6 @@ export function registerSessionRoutes(router: Router): void {
   router.post("/v1/brainstorms/:id/accept", forward("POST", at("/accept")));
   router.post("/v1/brainstorms/:id/decline", forward("POST", at("/decline")));
   router.post("/v1/brainstorms/:id/file", forward("POST", at("/file"), file));
+  router.post("/v1/brainstorms/:id/model", forward("POST", at("/model"), model));
   router.post("/v1/brainstorms/:id/open", setOpen);
 }
