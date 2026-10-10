@@ -59,8 +59,11 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompt, err = s.talkerPrompt(ctx, tx, r, briefing, nil); err != nil {
-			return err
+		// A resume sends no prompt: lux keeps the submitted one.
+		if stored == nil {
+			if prompt, err = s.talkerPrompt(ctx, tx, r, briefing, nil); err != nil {
+				return err
+			}
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err

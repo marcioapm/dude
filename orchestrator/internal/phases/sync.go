@@ -1055,7 +1055,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if taskImages, err = delivery.PromptAttachments(ctx, tx, r.ID); err != nil {
 			return err
 		}
-		if r.conductor() {
+		// A resume sends no prompt: lux keeps the submitted one.
+		if r.conductor() && stored == nil {
 			if conductorPrompt, err = s.talkerPrompt(ctx, tx, r, briefing, delivery.PromptImages(taskImages)); err != nil {
 				return err
 			}
