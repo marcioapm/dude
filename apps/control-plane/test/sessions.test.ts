@@ -163,6 +163,9 @@ test("every session route goes to the orchestrator as the person, and a bad body
     ["/v1/brainstorms", { title: "x".repeat(201) }],
     ["/v1/brainstorms", { message: "  " }],
     ["/v1/brainstorms", { message: "x".repeat(16_385) }],
+    // 9 000 characters, 18 000 bytes in UTF-8: over the orchestrator's byte bound.
+    ["/v1/brainstorms", { message: "é".repeat(9_000) }],
+    [`/v1/brainstorms/${SESSION}/chat`, { text: "é".repeat(9_000) }],
     [`/v1/brainstorms/${SESSION}/title`, { title: "  " }],
     [`/v1/brainstorms/${SESSION}/title`, {}],
     [`/v1/brainstorms/${SESSION}/chat`, { text: "" }],
