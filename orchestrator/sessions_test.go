@@ -212,6 +212,8 @@ func TestOnlyAcceptedMembersReachASession(t *testing.T) {
 		{"POST", "/internal/sessions/" + id + "/people/" + s.ana + "/remove", nil},
 		{"POST", "/internal/sessions/" + id + "/owner", map[string]any{"person": s.joao}},
 		{"POST", "/internal/sessions/" + id + "/file", map[string]any{"proposalId": proposal, "items": []int{0}}},
+		{"POST", "/internal/sessions/" + id + "/archive", nil},
+		{"POST", "/internal/sessions/" + id + "/unarchive", nil},
 	}
 	for _, who := range []struct{ name, id string }{{"someone else", s.outsider}, {"an invitee", s.ana}, {"an admin", s.admin}} {
 		for _, r := range routes {

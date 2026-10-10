@@ -40,6 +40,8 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions/{id}/accept", s.auth(s.acceptSession))
 	mux.Handle("POST /internal/sessions/{id}/decline", s.auth(s.declineSession))
 	mux.Handle("POST /internal/sessions/{id}/file", s.auth(s.fileProposal))
+	mux.Handle("POST /internal/sessions/{id}/archive", s.auth(s.archiveSession(true)))
+	mux.Handle("POST /internal/sessions/{id}/unarchive", s.auth(s.archiveSession(false)))
 }
 
 // sessionTitleMax bounds a session's title, as the schema does.
@@ -302,16 +304,20 @@ func (s *Server) linkSession(w http.ResponseWriter, r *http.Request, org string)
 
 // listSessions is the caller's sessions — those they accepted — and their
 // invitations, each only what an inbox line shows: never a word of the
-// conversation.
+// conversation. Sessions the caller archived are left out unless asked for
+// with ?archived=1, which lists them with the rest; each says whether it
+// is. Invitations and questions are listed whatever the archive says: a
+// question put to someone waits on them in a session they archived too.
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
 		return err
 	}
+	archived := r.URL.Query().Get("archived") == "1"
 	var sessions, invitations, questions json.RawMessage
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."lastActivityAt" DESC), '[]') FROM (
-			SELECT s.id, s.title, me.role, s.created_at AS "createdAt",
+			SELECT s.id, s.title, me.role, s.created_at AS "createdAt", me.archived_at IS NOT NULL AS archived,
 				(SELECT person_ref(o) FROM session_people so JOIN people o ON o.id = so.person_id
 				 WHERE so.session_id = s.id AND so.role = 'owner') AS owner,
 				(SELECT count(*) FROM session_people sp WHERE sp.session_id = s.id AND sp.accepted_at IS NOT NULL) > 1 AS shared,
@@ -320,8 +326,9 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 				(SELECT r.dude_pause FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1) AS "dudePause",
 				(SELECT count(*) FROM session_filings f WHERE f.session_id = s.id) AS filed,
 				COALESCE((SELECT max(e.occurred_at) FROM events e WHERE e.session_id = s.id), s.created_at) AS "lastActivityAt"
-			FROM sessions s JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL) x`,
-			p.Person).Scan(&sessions); err != nil {
+			FROM sessions s JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL
+			WHERE $2 OR me.archived_at IS NULL) x`,
+			p.Person, archived).Scan(&sessions); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."invitedAt" DESC), '[]') FROM (
@@ -403,7 +410,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 			ORDER BY q.asked_at DESC LIMIT 1`, id, role, p.Person).Scan(&question); err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		out = map[string]any{"session": session, "you": map[string]any{"id": p.Person, "role": role},
+		var archived bool
+		if err := tx.QueryRow(r.Context(), `SELECT archived_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
+			id, p.Person).Scan(&archived); err != nil {
+			return err
+		}
+		out = map[string]any{"session": session, "you": map[string]any{"id": p.Person, "role": role, "archived": archived},
 			"proposals": proposals, "question": question}
 		return nil
 	})
@@ -1365,4 +1377,42 @@ func (s *Server) declineSession(w http.ResponseWriter, r *http.Request, org stri
 	}
 	write(w, http.StatusOK, map[string]any{"id": id})
 	return nil
+}
+
+// archiveSession is an accepted member, a reader included, taking the
+// session out of their own list (archive) or putting it back (unarchive).
+// It is the caller's alone and changes nothing else: membership, the
+// agent, files and proposals stay, and questions put to them still reach
+// their inbox. A new message does not unarchive it. Idempotent: archiving
+// again keeps the first time. No ledger event: the session's events reach
+// every member, and whether one person archived it is nobody else's.
+func (s *Server) archiveSession(archive bool) handler {
+	return func(w http.ResponseWriter, r *http.Request, org string) error {
+		p, err := sessionPrincipal(r)
+		if err != nil {
+			return err
+		}
+		id := r.PathValue("id")
+		err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+			if _, err := member(r.Context(), tx, id, p.Person); err != nil {
+				return err
+			}
+			tag, err := tx.Exec(r.Context(), `UPDATE session_people
+				SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) END
+				WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NOT NULL`, id, p.Person, archive)
+			if err != nil {
+				return err
+			}
+			// Removed between member() and here: the same answer as any non-member.
+			if tag.RowsAffected() == 0 {
+				return fail(http.StatusNotFound, "not_found", "session %s not found", id)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		write(w, http.StatusOK, map[string]any{"id": id, "archived": archive})
+		return nil
+	}
 }

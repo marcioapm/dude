@@ -90,7 +90,9 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
 }
 
 export function registerSessionRoutes(router: Router): void {
-  router.get("/v1/brainstorms", forward("GET", () => "/internal/sessions"));
+  // ?archived=1 also lists the sessions the person archived; nothing else of the query travels.
+  router.get("/v1/brainstorms", forward("GET", (ctx) =>
+    ctx.url.searchParams.get("archived") === "1" ? "/internal/sessions?archived=1" : "/internal/sessions"));
   router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
   router.get("/v1/brainstorms/:id", forward("GET", at()));
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
@@ -107,5 +109,8 @@ export function registerSessionRoutes(router: Router): void {
   router.post("/v1/brainstorms/:id/accept", forward("POST", at("/accept")));
   router.post("/v1/brainstorms/:id/decline", forward("POST", at("/decline")));
   router.post("/v1/brainstorms/:id/file", forward("POST", at("/file"), file));
+  // The person's own archive mark: no body.
+  router.post("/v1/brainstorms/:id/archive", forward("POST", at("/archive")));
+  router.post("/v1/brainstorms/:id/unarchive", forward("POST", at("/unarchive")));
   router.post("/v1/brainstorms/:id/open", setOpen);
 }

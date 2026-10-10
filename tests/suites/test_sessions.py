@@ -660,6 +660,41 @@ def test_the_session_screen_switches_to_its_events(client: ApiClient, page: Page
     expect(page.get_by_test_id("session-composer")).to_be_visible()
 
 
+@pytest.mark.ui
+def test_archiving_a_session_takes_it_out_of_your_list_and_sidebar_until_you_unarchive_it(
+        client: ApiClient, page: Page, web_url: str, org: dict):
+    _scripted_brainstorm(client)
+    kept = client.post("/v1/brainstorms", {"title": "Keep me"}).json()["id"]
+    sign_in(page, web_url, org["api_key"], at="#/sessions")
+    # New session is the welcome; its first message makes the session and opens it.
+    page.get_by_test_id("sessions").get_by_test_id("new-session").click()
+    expect(page.get_by_test_id("welcome")).to_be_visible()
+    session = _welcome_send(page, "archive me after this")
+    sidebar = page.get_by_test_id("sidebar-sessions")
+    expect(sidebar.locator(f'[data-session="{session}"]')).to_have_count(1, timeout=15_000)
+
+    page.get_by_test_id("session-archive").click()
+    sessions = page.get_by_test_id("sessions")
+    expect(sessions).to_be_visible()
+    expect(sessions.locator(f'[data-testid=session-row][data-session="{kept}"]')).to_have_count(1)
+    expect(sessions.locator(f'[data-testid=session-row][data-session="{session}"]')).to_have_count(0)
+    expect(sidebar.locator(f'[data-session="{session}"]')).to_have_count(0)
+    expect(sidebar.locator(f'[data-session="{kept}"]')).to_have_count(1)
+
+    page.get_by_test_id("sessions-shown").get_by_role("button", name="Archived").click()
+    row = sessions.locator(f'[data-testid=session-row][data-session="{session}"]')
+    expect(row).to_have_count(1)
+    expect(sessions.locator(f'[data-testid=session-row][data-session="{kept}"]')).to_have_count(0)
+    row.get_by_role("button").first.click()
+    expect(page.get_by_test_id("session-archived")).to_have_text("Archived")
+    page.get_by_test_id("session-unarchive").click()
+    expect(sidebar.locator(f'[data-session="{session}"]')).to_have_count(1)
+    expect(page.get_by_test_id("session-archived")).to_have_count(0)
+    # Read back as the API has it: listed again, not archived.
+    listed = {s["id"]: s["archived"] for s in client.get("/v1/brainstorms").json()["sessions"]}
+    assert listed.get(session) is False, listed
+
+
 def _listen(who: ApiClient, frames: list, ready: threading.Event, stop: threading.Event) -> None:
     """Every frame of the organisation's live stream, as `who`'s browser hears it."""
     with requests.get(f"{who.base_url}/v1/events/stream", params={"live": "1", "key": who.api_key},

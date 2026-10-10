@@ -4,7 +4,8 @@ import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
 import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
-import { ScreenHeader } from "../../components/ScreenHeader.tsx";
+import { ScreenHeader, Segmented } from "../../components/ScreenHeader.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { SidebarSessions } from "../../components/Sidebar.tsx";
@@ -85,6 +86,7 @@ function SlowTitleDemo() {
 }
 
 export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
+  const [shown, setShown] = useState<"yours" | "archived">("yours");
   return (
     <Section id="brainstorm" title="Brainstorm sessions"
       intro="A conversation with an agent that belongs to its members, not a task. It reads the linked projects and proposes work; a member files it with a click, as themselves.">
@@ -129,6 +131,11 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               <ScreenHeader fillTitle title={<TitleDemo initial={null} />} meta={<span>Brainstorm</span>} />
               <ScreenHeader fillTitle title={<TitleDemo initial={"Usage-based billing for experiment runs, with a dedupe on run id ".repeat(4).trim()} />}
                 meta={<span>Brainstorm</span>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial="Pricing page copy" />} meta={<span>Brainstorm</span>}
+                actions={<Button size="sm" variant="quiet">Archive</Button>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial="Q4 cleanup ideas" />}
+                meta={<><span>Brainstorm</span><Badge size="sm" icon="archive">Archived</Badge></>}
+                actions={<Button size="sm" variant="quiet">Unarchive</Button>} />
             </div>
             <Label>in the Chat</Label>
             <ChatNotice kind="renamed" by="Brainstorm" text="Named it “Usage-based billing”" at={Date.now() - 60_000} />
@@ -160,8 +167,15 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-row" title="SessionRow / SharedMark"
-        note="A session in the list: what it filed, the projects it reads, how it is. Shared ones carry the shared glyph, and the owner's face when it is someone else.">
+        note="A session in the list: what it filed, the projects it reads, how it is. Shared ones carry the shared glyph, and the owner's face when it is someone else. The list's header switches between yours and those you archived.">
         <Panes mode={mode}>
+          <div style={{ width: "100%" }}>
+            <ScreenHeader title="Sessions" actions={<>
+              <Segmented size="toolbar" label="Which sessions" value={shown} onChange={setShown}
+                options={[{ value: "yours", label: "Yours" }, { value: "archived", label: "Archived" }]} />
+              <Button size="sm" variant="primary">New session</Button>
+            </>} />
+          </div>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
             <SessionRow title="Usage-based billing" summary="Filed 1 epic, 4 tasks · edited BL-58" state="Talking" age="2m ago"
               projects={[{ key: "WC", name: "web-console", repositories: 2 }, { key: "BL", name: "billing", repositories: 1 }]}
