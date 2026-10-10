@@ -341,7 +341,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
-  if (place?.view === "welcome") {
+  // An organisation with no projects yet is offered one first: the welcome
+  // follows once there is something to work on.
+  if (place?.view === "welcome" && projects?.length !== 0) {
     flush = true;
     main = <WelcomeScreen client={client} projects={projects ?? []} sessions={sessionsList?.sessions ?? null} name={people.me?.name ?? null}
       onOpenSession={openSession} onAllSessions={() => go({ view: "sessions" })}
