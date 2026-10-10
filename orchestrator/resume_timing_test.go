@@ -172,7 +172,7 @@ func TestAResumeAnAnswerWokeIsTimedFromTheAnswer(t *testing.T) {
 	wi, runID := w.asking()
 	w.until("the run to be parked and stopped", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1 &&
-			w.lux.Runs()[0].State == "stopped"
+			w.lux.State(w.lux.Runs()[0].ID) == "stopped"
 	})
 	w.stoppedWithSnapshot(runID)
 	qid := w.questionID(wi)

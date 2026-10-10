@@ -276,9 +276,7 @@ func TestRecipesRemovedAndAddedReachTheNextWake(t *testing.T) {
 			if n := c.deletesOf(api); n != 1 {
 				t.Errorf("api's DELETE was sent %d times; want once", n)
 			}
-			// docs served means lux's Run is running; dude records that when
-			// its event follower applies lux's state event, on its own
-			// goroutine, so the row is waited for rather than read once.
+			// dude's row follows lux's state event on the follower's goroutine.
 			w.until("the preview to live on", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 			})

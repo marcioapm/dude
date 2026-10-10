@@ -145,7 +145,7 @@ func TestAStaleSweepDoesNotReplaceAParkedPreviewAnotherResumed(t *testing.T) {
 
 	w.secret("ORIGINAL_KEY", seedKeyNew)
 	w.until("resumed by the other sweep", func() bool {
-		return old.Resumed == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+		return w.luxCalls(old.ID, "resume") == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
 	})
 	close(gate.release)
 	if err := <-swept; err != nil {

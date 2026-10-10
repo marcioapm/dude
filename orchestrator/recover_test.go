@@ -490,7 +490,7 @@ func runSucceededInLux(t *testing.T, w *world, cancelledState bool) {
 	// Kept already (aborted waits for it); its workload then exits 0. dude
 	// follows no kept Run's feed, so only the resume finds it succeeded.
 	w.lux.Succeed(w.lux.Runs()[0].ID)
-	if s := w.lux.Runs()[0].State; s != "succeeded" {
+	if s := w.lux.State(w.lux.Runs()[0].ID); s != "succeeded" {
 		t.Fatalf("the fake's Run is %s, want succeeded", s)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, runID); n != 1 {
@@ -504,7 +504,7 @@ func runSucceededInLux(t *testing.T, w *world, cancelledState bool) {
 	}
 	if !cancelledState {
 		w.until("the same lux Run resumed", func() bool {
-			return w.lux.Runs()[0].Resumed == 1 &&
+			return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 &&
 				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('running', 'completed')`, runID) == 1
 		})
 		if n := len(w.lux.Runs()); n != 1 {
