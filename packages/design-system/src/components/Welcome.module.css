@@ -1,0 +1,276 @@
+/*
+ * The welcome: a stage on the surface shade, a 720px column a little above
+ * the middle. No lines but the composer field's own edge: the starters and
+ * link chips are told apart by shade in dark and a shadow in light, the
+ * recent rows by space and a wash on hover.
+ */
+
+.stage {
+  --welcome-mark: 64px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: auto;
+  /* The column sits a little above the middle, where the eye lands. */
+  padding: 12vh var(--ds-space-24) var(--ds-space-48);
+  background: var(--ds-color-surface);
+}
+.column {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+}
+/* Compact takes the big spaces in, never the text: less air, a smaller face, a shorter field. */
+:global([data-density="compact"]) .stage {
+  --welcome-mark: 48px;
+  padding-top: 6vh;
+}
+
+.greeting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+  text-align: center;
+}
+:global([data-density="compact"]) .greeting {
+  gap: var(--ds-space-4);
+}
+.mark {
+  display: inline-flex;
+  width: var(--welcome-mark);
+  height: var(--welcome-mark);
+}
+.hello {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-4xl);
+  line-height: var(--ds-leading-tight);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  color: var(--ds-color-text-strong);
+}
+.line {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--ds-text-lg);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-secondary);
+}
+
+/* The composer, raised off the page while it is the page's one thing (ChatComposer reads these). */
+.composer {
+  --cc-inset: 0;
+  --cc-raise: var(--ds-shadow-2);
+  --cc-field-min: 72px;
+}
+:global([data-density="compact"]) .composer {
+  --cc-field-min: 52px;
+}
+
+.note {
+  margin: 0;
+  text-align: center;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- Starters: pills on one line under the composer -- */
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--ds-space-8);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  transition:
+    background var(--ds-duration-fast) var(--ds-ease-standard),
+    color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.pill:hover {
+  background: var(--ds-color-secondary-hover);
+  color: var(--ds-color-text-strong);
+}
+.pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+/* The starters are the brainstorm's: its glyph colour. */
+.pill :global(svg) {
+  color: var(--ds-role-brainstorm-fg);
+}
+/* Light elevates with shadow, not shade: raised is the surface's white. */
+:global([data-theme="light"]) .pill {
+  box-shadow: var(--ds-shadow-1);
+}
+
+/* -- Link chips: what the session will read, said where you write -- */
+.links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.linksLabel {
+  margin-right: var(--ds-space-2);
+}
+.chip,
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+}
+.chip {
+  padding-left: var(--ds-space-4);
+}
+.chipRemovable {
+  padding-right: var(--ds-space-2);
+}
+.chipClose {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}
+.chipClose:hover {
+  background: var(--ds-color-row-hover);
+  color: var(--ds-color-text-primary);
+}
+.add {
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}
+.add:hover,
+.add[data-state="open"],
+.chipRemovable:hover {
+  background: var(--ds-color-secondary-hover);
+  color: var(--ds-color-text-primary);
+}
+.chipClose:focus-visible,
+.add:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+/* RowMenu's float, a step higher: it opens over the raised composer. Doubled
+   to outrank RowMenu's own panel whichever stylesheet loads last. */
+.menu.menu {
+  box-shadow: var(--ds-shadow-3);
+}
+
+/* -- Recent sessions: a short list, rows told apart by space, a wash on hover -- */
+.recent {
+  margin-top: var(--ds-space-24);
+}
+:global([data-density="compact"]) .recent {
+  margin-top: var(--ds-space-8);
+}
+.recentHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--ds-space-8);
+  margin-bottom: var(--ds-space-4);
+}
+.recentHead h2 {
+  margin: 0;
+}
+.recentList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.recentRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  width: 100%;
+  height: var(--ds-size-row-comfortable);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: transparent;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+.recentRow:hover {
+  background: var(--ds-color-row-hover);
+}
+.recentRow:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.recentIcon {
+  flex: none;
+  color: var(--ds-role-brainstorm-fg);
+}
+.recentTitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-strong);
+}
+.recentSummary {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.recentAge {
+  flex: none;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* A phone: the greeting a size down, the stage less air, the summary goes. */
+@media (max-width: 640px) {
+  .stage {
+    padding: var(--ds-space-24) var(--ds-space-12) var(--ds-space-32);
+  }
+  .hello {
+    font-size: var(--ds-text-3xl);
+  }
+  .line {
+    font-size: var(--ds-text-md);
+  }
+  .recentSummary {
+    display: none;
+  }
+  .recentTitle {
+    flex: 1 1 auto;
+  }
+}

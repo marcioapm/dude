@@ -58,8 +58,10 @@ export { AttachDropZone, AttachmentChip, ImageViewer, MessageImages, attachmentW
 export type { AttachDropZoneProps, AttachmentChipProps, ComposerAttachment, ImageFacts, ImageViewerProps, MessageImagesProps, SentImage } from "./ImageAttachments.tsx";
 export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
-export { Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY } from "./Sidebar.tsx";
-export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarSession, SidebarSessionsProps, SidebarToggleProps } from "./Sidebar.tsx";
+export { Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, projectCountWords } from "./Sidebar.tsx";
+export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarRailItemProps, SidebarRailSessions, SidebarSession, SidebarSessionsProps, SidebarToggleProps } from "./Sidebar.tsx";
+export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, Welcome, WelcomeNote } from "./Welcome.tsx";
+export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessionsProps, Starter, StarterPillsProps, WelcomeProps } from "./Welcome.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps } from "./Board.tsx";
 export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES, FINDING_STATUS_SPECS } from "./FindingRow.tsx";
