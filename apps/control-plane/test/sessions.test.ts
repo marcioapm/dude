@@ -183,6 +183,36 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded).toEqual([]);
 });
 
+test("a session's tier and harness go to the orchestrator on create and on /model; a harness that is none never does", async () => {
+  forwarded.length = 0;
+  const ok = [
+    ["/v1/brainstorms", { message: "hi", tier: "mtr_opus", harness: "claude-code" }, "/internal/sessions"],
+    ["/v1/brainstorms", { message: "hi", harness: "codex" }, "/internal/sessions"],
+    [`/v1/brainstorms/${SESSION}/model`, { tier: "mtr_opus", harness: "claude-code" }, `/internal/sessions/${SESSION}/model`],
+    [`/v1/brainstorms/${SESSION}/model`, { tier: null, harness: null }, `/internal/sessions/${SESSION}/model`],
+  ] as const;
+  for (const [path, body] of ok) expect((await call(marcio, "POST", path, body)).status).toBe(200);
+  expect(forwarded.map((f) => f.path)).toEqual(ok.map(([, , to]) => to));
+  expect(forwarded.every((f) => f.person === marcio.personId)).toBe(true);
+  expect(forwarded.map((f) => f.body)).toEqual([
+    { message: "hi", projects: [], tier: "mtr_opus", harness: "claude-code" },
+    { message: "hi", projects: [], harness: "codex" },
+    { tier: "mtr_opus", harness: "claude-code" },
+    { tier: null, harness: null },
+  ]);
+
+  forwarded.length = 0;
+  for (const [path, body] of [
+    ["/v1/brainstorms", { message: "hi", harness: "aider" }],
+    ["/v1/brainstorms", { message: "hi", tier: "" }],
+    [`/v1/brainstorms/${SESSION}/model`, { tier: null, harness: "aider" }],
+    // Both named: null is the organisation's, never an absent field.
+    [`/v1/brainstorms/${SESSION}/model`, { tier: "mtr_opus" }],
+    [`/v1/brainstorms/${SESSION}/model`, { tier: null, harness: null, effort: "high" }],
+  ] as const) expect((await call(marcio, "POST", path, body)).status).toBe(400);
+  expect(forwarded).toEqual([]);
+});
+
 test("a session's Run, its events, questions, directives and agent sessions are its accepted members' alone", async () => {
   for (const [, who] of outsiders) {
     for (const path of [`/v1/runs/${RUN}`, `/v1/runs/${RUN}/diff`, `/v1/sessions/${AGENT_SESSION}`]) {
