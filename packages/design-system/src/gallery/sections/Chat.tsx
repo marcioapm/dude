@@ -60,6 +60,29 @@ import {
   type ScenarioStep,
   type ScenarioTurn,
 } from "../chatScenario.ts";
+import type { QuestionItem } from "../../components/QuestionCard.tsx";
+
+/** The mockup's questions: one alone, and four asked together. */
+const ONE_ITEM: ReadonlyArray<QuestionItem> = [{
+  header: "Retry scope",
+  question: "Should 4xx responses be retried? The existing code retries everything, but a 4xx usually means our request is wrong.",
+  choices: [{ label: "Retry 5xx and network only", recommended: true }, { label: "Retry everything (current behaviour)" }],
+}];
+const FOUR_ITEMS: ReadonlyArray<QuestionItem> = [
+  { header: "Retry scope", question: "Which failures should the payment call retry?", choices: [
+    { label: "5xx and network errors only", description: "A 4xx means our request is wrong; retrying it repeats the mistake.", recommended: true },
+    { label: "Everything (current behaviour)", description: "What PaymentClient does today, 4xx included." },
+    { label: "Nothing — show the error", description: "No retry; the person sees the failure and can try again." }] },
+  { header: "Old route", question: "The legacy `/pay` route has its own retry. What should happen to it?", choices: [
+    { label: "Fold it into this change", description: "One retry policy for both routes; touches 3 more files." },
+    { label: "Leave it; file a task", description: "This change stays small; the duplication is tracked.", recommended: true },
+    { label: "Delete the route", description: "Nothing has called it in 30 days (access logs)." }] },
+  { header: "Tests", question: "Which layers should cover the split?", multiple: true, choices: [
+    { label: "Unit (PaymentSplitter)", description: "Amount rounding, the 2-card limit, currency mismatch." },
+    { label: "API contract", description: "POST /checkout/split against the recorded provider responses." },
+    { label: "Browser e2e on checkout", description: "Adds ~40s to CI." }] },
+  { header: "Button", question: "What should the split button say?", choices: [{ label: "Split payment" }, { label: "Pay in parts" }] },
+];
 
 const MD_MESSAGE = `I looked at the handler and the failure path. Two things stand out:
 
@@ -533,23 +556,39 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-question"
         title="QuestionCard"
-        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript, and it is loud once: the attention wash and 2px bar. Inside it everything is neutral — the transcript header's Needs-you badge already names the state, the wait clock is muted, and the offered choices are shown once, as one-click chips in the composer (in the card only with onChoose). In grayscale it is still the only barred, tinted turn. Answered, it settles: no wash, a quiet Answered mark with how long it waited, and the choices listed as the record of what was offered. The answer follows as its own turn — the card never repeats it. A question whose run ended is No longer needed and never rings: an answer would reach nobody."
+        note="An agent stops and asks a person (ask_person): one question, or up to four at once. While it waits this is the one loud turn in a transcript, loud once: the attention wash and 2px bar. With onSubmit the turn is the answer form — there is no separate answer box. One question: a choice answers in one click; Something else… (always there, added by dude) opens a field in place, Enter sends; no choices is the field alone; a multiple question ticks boxes, then Answer. Several: tabs as plain words, a filled check on each answered; Next or Enter moves on, Back goes back; the last tab reviews every answer with Change, takes an optional note with images, and Send is off until every question is answered. Keys outside a field: 1–9 pick (the number shows on hover), ←/→ between questions, Enter is Next / Send. A choice may carry a one-line why and the agent's quiet suggestion, never preselected. Answered, the same turn is the record: each question with its answer under it, own words marked as the person's. Someone else's shows the choices muted and says how to take it over; a question whose run ended is No longer needed; one decided on the banner says so."
       >
         <Panes mode={mode} surface>
           <Col>
-            <Label>waiting — the run is blocked; the clock ticks; choices are in the composer</Label>
-            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 4 * 60_000 - 12_000} />
-            <Label>waiting, no choices, a named session — free-text answer only</Label>
-            <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} />
-            <Label>waiting with onChoose — the chips become one-click replies</Label>
-            <QuestionCard role="conductor" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
+            <Label>one question, no choices — the field alone; Enter answers</Label>
+            <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} onSubmit={() => undefined} />
+            <Label>one question with choices — one click answers; the agent's suggestion is quiet</Label>
+            <QuestionCard role="implementer" items={ONE_ITEM} text={ONE_ITEM[0]!.question} askedAt={Date.now() - 4 * 60_000 - 12_000} onSubmit={() => undefined} />
+            <Label>one question, Something else… open — the field in place, Answer sends</Label>
+            <QuestionCard role="implementer" items={ONE_ITEM} text={ONE_ITEM[0]!.question} askedAt={Date.now() - 4 * 60_000 - 12_000} onSubmit={() => undefined}
+              draft={{ tab: 0, answers: [{ choices: [], own: "Retry 5xx; for 409 re-fetch the cart and retry once" }], note: "" }} />
+            <Label>one question, several allowed — tick, then Answer</Label>
+            <QuestionCard role="implementer" items={[FOUR_ITEMS[2]!]} text={FOUR_ITEMS[2]!.question} askedAt={Date.now() - 70_000} onSubmit={() => undefined}
+              draft={{ tab: 0, answers: [{ choices: [0, 1], own: null }], note: "" }} />
+            <Label>four questions, first tab</Label>
+            <QuestionCard role="implementer" items={FOUR_ITEMS} text="4 questions" askedAt={Date.now() - 4 * 60_000 - 12_000} onSubmit={() => undefined} />
+            <Label>four questions, mid-way — two answered, each tab with its check</Label>
+            <QuestionCard role="implementer" items={FOUR_ITEMS} text="4 questions" askedAt={Date.now() - 6 * 60_000} onSubmit={() => undefined}
+              draft={{ tab: 2, answers: [{ choices: [0], own: null }, { choices: [1], own: null }, { choices: [], own: null }, { choices: [], own: null }], note: "" }} />
+            <Label>review — one still missing, so Send is off</Label>
+            <QuestionCard role="implementer" items={FOUR_ITEMS} text="4 questions" askedAt={Date.now() - 6 * 60_000} onSubmit={() => undefined}
+              draft={{ tab: 4, answers: [{ choices: [0], own: null }, { choices: [1], own: null }, { choices: [0, 1], own: null }, { choices: [], own: null }], note: "" }} />
+            <Label>answered, one question — the record: the answer under the question</Label>
+            <QuestionCard role="implementer" items={ONE_ITEM} text={ONE_ITEM[0]!.question} askedAt={at(45_600)} answeredAt={at(45_600 + 4 * 60_000 + 12_000)}
+              answers={[{ choices: [0], text: "" }]} answeredBy="marcio" />
+            <Label>answered, four questions, one in the person's own words — the note is their own turn after it</Label>
+            <QuestionCard role="implementer" items={FOUR_ITEMS} text="4 questions" askedAt={at(45_600)} answeredAt={at(45_600 + 6 * 60_000 + 5_000)} answeredBy="marcio"
+              answers={[{ choices: [0], text: "" }, { choices: [1], text: "" }, { choices: [0, 1], text: "" }, { choices: [], text: "Pay with two cards" }]} />
+            <ChatMessage role="human" name="marcio" intent="message" content="Keep the retry budget under 10s total — checkout times out at 15." startedAt={at(45_600 + 6 * 60_000 + 5_000)} />
             <Label>waiting on someone else — the note says how to make it yours; the choices are muted, and hovering them says it again</Label>
-            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 90_000} waitingOn="Ana" />
-            <Label>answered — calm; the answer is the next turn, not quoted here</Label>
-            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(45_600)} answeredAt={at(45_600 + 4 * 60_000 + 12_000)} />
-            <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(45_600 + 4 * 60_000 + 12_000)} deliveredAt={at(45_600 + 4 * 60_000 + 13_000)} />
-            <Label>waiting past the grace period — parked: its container stopped, the answer resumes it</Label>
-            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 14 * 60 * 60_000} />
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 90_000} waitingOn="Ana" onSubmit={() => undefined} />
+            <Label>waiting past the grace period — parked: its container stopped; Send resumes it</Label>
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 14 * 60 * 60_000} onSubmit={() => undefined} />
             <ChatNotice kind="parked" text="Parked while it waits for you — nothing is held; answering resumes it." at={Date.now() - 14 * 60 * 60_000 + 10 * 60_000} />
             <Label>no longer needed — its run ended first; settled, never rings</Label>
             <QuestionCard role="qa_browser" text="The save button has no stable selector. Should I add a `data-testid`, or is that out of scope?" options={["Add data-testid", "Out of scope — skip the check"]} askedAt={at(100_000)} dismissed />
@@ -557,8 +596,10 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <QuestionCard role="conductor" text="The review is stuck on one finding. I propose one more narrow fix round." options={["Retry as proposed", "Accept as it is", "Stop"]} askedAt={at(110_000)} settledBy="Decided on the banner" />
             <Label>grayscale check — waiting still separates from answered by wash, bar and clock</Label>
             <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column" }}>
-              <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={Date.now() - 90_000} />
-              <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={at(0)} answeredAt={at(90_000)} />
+              <QuestionCard role="implementer" items={FOUR_ITEMS} text="4 questions" askedAt={Date.now() - 90_000} onSubmit={() => undefined}
+                draft={{ tab: 1, answers: [{ choices: [0], own: null }, { choices: [], own: null }, { choices: [], own: null }, { choices: [], own: null }], note: "" }} />
+              <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={at(0)} answeredAt={at(90_000)}
+                answers={[{ choices: [0], text: "" }]} answeredBy="marcio" />
             </div>
           </Col>
         </Panes>
@@ -567,13 +608,13 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-composer"
         title="ChatComposer"
-        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick. The text is cleared only once onSubmit confirms it: one that resolves false or rejects keeps the words."
+        note="Steer and chat are distinct on four channels: frame tint, hint text, button label and button icon. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick. While the agent waits on your answer the composer steps back to one quiet line — the question's turn above is the form — with Write to the agent instead, which brings the composer back for a message that leaves the question open. The text is cleared only once onSubmit confirms it: one that resolves false or rejects keeps the words."
       >
         <Panes mode={mode} surface>
           <Col>
-            <Label>answer — session blocked on a question</Label>
+            <Label>waiting on your answer — the composer steps back; the form is the question above</Label>
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
-              <ChatComposer question={{ id: "q_44a1", askedBy: "Orchestrator", text: "Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong.", options: ["Retry 5xx and network only", "Retry everything (current behaviour)"] }} onSubmit={() => undefined} />
+              <ChatComposer mode="steer" waitingFor="Implement" onSubmit={() => undefined} />
             </div>
             <Label>steer — session running</Label>
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
@@ -689,8 +730,8 @@ function RealisticTranscript() {
         <ThinkingBlock text={THOUGHT_3} startedAt={at(42_100)} endedAt={at(45_600)} />
       </Aside>
       <ChatMessage role="implementer" model="claude-opus-4" content="All green: 65 pass, 0 fail. The diff is 118 lines. One thing I need a decision on before the PR." startedAt={at(45_600)} endedAt={at(47_000)} costUsd={null} contextTokens={61_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={40} />
-      <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(47_000)} answeredAt={at(47_000 + 4 * MIN + 12_000)} />
-      <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(47_000 + 4 * MIN + 12_000)} deliveredAt={at(47_000 + 4 * MIN + 13_000)} />
+      <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(47_000)} answeredAt={at(47_000 + 4 * MIN + 12_000)}
+        answers={[{ choices: [], text: ANSWER_TEXT }]} answeredBy="marcio" />
       <ChatMessage role="implementer" model="claude-opus-4" content={MSG_4} startedAt={at(47_000 + 4 * MIN + 13_000)} endedAt={at(47_000 + 4 * MIN + 19_000)} costUsd={null} contextTokens={62_000} contextWindowTokens={CONTEXT_WINDOW} outputTokens={480} />
       <Aside>
         <ToolCallCard name="bash" status="completed" args={{ command: 'gh pr create --title "WI-2481: retry GitHub webhook deliveries with backoff" --body-file /tmp/pr.md' }} startedAt={at(47_000 + 4 * MIN + 19_100)} endedAt={at(47_000 + 4 * MIN + 21_900)} exitCode={0} output="https://github.com/dude/dude/pull/412" />
@@ -860,8 +901,7 @@ function LiveTranscriptDemo() {
   }, [stop]);
 
   const onSubmit = (sub: ComposerSubmission) => {
-    if (sub.mode === "answer") play(buildAnswerSteps(Date.now(), sub.text));
-    else if (sub.mode === "steer") {
+    if (sub.mode === "steer") {
       // Inject the steer into the running scenario without restarting it.
       // Its later steps (delivery once the turn ends) run on their own
       // clock so the queued state is actually seen.
@@ -929,21 +969,21 @@ function LiveTranscriptDemo() {
           </>
         }
         pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="conductor" defaultCollapsed /> : undefined}
-        footer={<ChatComposer question={s?.question ?? undefined} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
+        footer={<ChatComposer waitingFor={s?.question ? "Orchestrator" : undefined} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
         revision={rev}
         live={playing}
         maxHeight={640}
         emptyMessage="Press Play to watch a run unfold."
       >
         {s?.turns.map((t) => (
-          <TurnNode key={t.id} turn={t} depth={0} />
+          <TurnNode key={t.id} turn={t} depth={0} onAnswer={(text) => play(buildAnswerSteps(Date.now(), text))} />
         ))}
       </ChatTranscript>
     </Col>
   );
 }
 
-function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth: number }) {
+function TurnNode({ turn, depth, onAnswer }: { readonly turn: ScenarioTurn; readonly depth: number; readonly onAnswer?: ((text: string) => void) | undefined }) {
   if (turn.kind === "thread" && turn.sessionId && turn.threadStatus && turn.task && turn.role !== "human" && turn.role !== "system") {
     const lastTurn = turn.turns?.[turn.turns.length - 1];
     return (
@@ -970,7 +1010,11 @@ function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth
   }
   if (turn.kind === "system") return <ChatMessage role="system" content={turn.text} startedAt={turn.startedAt} isNew />;
   if (turn.kind === "question" && turn.role !== "human" && turn.role !== "system") {
-    return <QuestionCard role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt} isNew />;
+    const options = turn.options ?? [];
+    const answers = turn.answer !== undefined ? [options.includes(turn.answer) ? { choices: [options.indexOf(turn.answer)], text: "" } : { choices: [], text: turn.answer }] : null;
+    return <QuestionCard role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt}
+      answers={answers} answeredBy="marcio" isNew
+      onSubmit={onAnswer ? ({ answers: [a] }) => onAnswer(a!.choices.length > 0 ? options[a!.choices[0]!]! : a!.text) : undefined} />;
   }
   if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} deliveredAt={turn.deliveredAt} read={turn.read} isNew />;
   if (turn.role === "human" || turn.role === "system") return null;

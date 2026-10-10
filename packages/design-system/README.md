@@ -327,12 +327,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 ### Human intervention
 
-- The two ways a person acts on an agent session are distinct on four channels in
+- The ways a person acts on an agent session are distinct on four channels in
   `ChatComposer`: focus tint, context line, button label, button colour.
-  **Answer** (agent session blocked on a question) has an attention-filled button —
-  the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
-  Orchestrator: …") and the offered choices are neutral at rest; a choice
-  chip takes the attention tint only on hover. **Steer** (agent session running) is
+  **Steer** (agent session running) is
   accent-toned. A steer lands at the agent's next step — the harness takes
   it while a tool runs and the model reads it before its next call, in the
   same turn, nothing cancelled — so sending one costs nothing and plain
@@ -344,22 +341,57 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   both. The action row says who it is sent as (`sentAs`). Narrower than
   640px (a panel open beside the transcript) the row wraps, the button
   stays at its end, and the key hints go before where a steer lands does.
+- **An answer is given in the question's own turn**, never in the
+  composer. While the agent waits on the reader (`waitingFor`) the composer
+  steps back to one quiet line on the hover wash — "Implement is waiting
+  for your answer above" — with **Write to the agent instead** (accent
+  link), which brings the composer back for a message that does not answer;
+  the question stays open.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
-  wash and 2px bar. Inside it the ink is neutral — the transcript header's
-  Needs-you badge already names the state, the wait clock is muted, and the
-  avatar is marked live. In grayscale it is still the only barred, tinted
-  turn. The offered choices are shown once, as one-click chips in the
-  composer; the card lists them only with `onChoose` (then they are its own
-  buttons) or once it has settled, as the record of what was offered.
-  `answeredAt` settles it: no wash, "Answered · after 4m 12s", and the answer follows as
-  its own `intent="answer"` turn — the card never quotes it, so nothing is
-  said twice. `dismissed` is for a question the agent session died on: "Not
-  answered", settled, and it never rings. The waiting card is a polite live
-  region announced once; the clock sits outside it.
+  wash and 2px bar. In grayscale it is still the only barred, tinted turn.
+  With `onSubmit` the turn **is the answer form**, laid on the turn's own
+  grid — no card, no box:
+  - **One question** (`text` + `options`, or one `items` entry): no tabs.
+    Choices are rows whose mark (a radio dot) carries the pick, the label
+    in prose and a one-line `description` under it in secondary ink. A
+    click on a choice answers it at once. **Something else…** is always the
+    last row — the design system adds it, the agent never lists it — and
+    opens a field in place, focused; Enter or Answer sends. A question with
+    no choices is the field alone. `multiple` ticks boxes, then Answer.
+  - **Several** (`items`, 2–4): tabs as plain words under a rule tinted
+    toward attention (a real `tablist`), a filled success check on each
+    answered tab, and a last **Send · n/N** tab. Picking does not send;
+    Next (or Enter) moves on, Back goes back, tabs are clickable. The last
+    tab reviews every answer with **Change**, takes an optional note — with
+    images, in the composer's tray and paperclip — and **Send answers**,
+    off until every question is answered. Focus goes to the new tab's
+    choices on Next/Back, into the field when it opens.
+  - A choice the agent `recommended` says "agent suggests" in muted ink; it
+    is never preselected. For a one-answer question own words replace the
+    pick; for a `multiple` one they add to the ticks.
+  - **Keys**, outside a field: 1–9 pick the choice with that number (the
+    number shows on hover or while the form has focus), ←/→ move between
+    questions, Enter is Next / Send. Typing in a field never triggers them.
+  - Answer and Send take the attention fill (the hue of needs-you: they
+    close it); Next is secondary until its question is answered.
+  - The form's state is the app's to keep (`draft` in, `onDraftChange`
+    out), so a reload does not lose picks; nothing reaches the agent before
+    Send. `onSubmit` resolving `false` or rejecting leaves the form as it was.
+  `answeredAt` settles it: no wash, "✓ Answered · by Ana, after 4m 12s"
+  (`answeredBy`), and with `answers` the turn **is the record** — each
+  question in secondary ink with its answer under it after a short dash,
+  own words in quotes marked "in Ana's words". No separate answer turn: a
+  note sent with several answers is the person's own message after it.
+  `dismissed` is for a question the agent session died on: "No longer
+  needed", settled, and it never rings. `waitingOn` (someone else's) shows
+  the questions with their choices muted and how to take it over — no form.
+  The waiting turn is a polite live region announced once; the clock sits
+  outside it.
 - The same tints mark the human turns in the transcript (`ChatMessage
   intent="answer" | "steer"`), so interventions are scannable in a long
-  conversation.
+  conversation. `intent="answer"` remains for answers kept before the
+  question's turn became their record.
 - A steer the agent has not read yet is queued. `ChatMessage
   deliveredAt={null}` shows it on three channels — a dashed bar, a
   "Queued" chip with a clock, and one line under the body saying where it
@@ -429,8 +461,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
-  where "Sent as" would be. While the conductor asks, it is the answer
-  composer, as in an agent session.
+  where "Sent as" would be. While the conductor asks, it steps back to the
+  waiting line, as in an agent session; the answer is given in its
+  question's turn.
 
 ### Brainstorm sessions
 
@@ -446,8 +479,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
   A session has no task, so its composer's placeholder is its own,
-  "Message the brainstorm…", never the task Chat's "Ask about this task…";
-  an answer keeps "Type your answer…".
+  "Message the brainstorm…", never the task Chat's "Ask about this task…".
+  A question put to you is answered in its turn, the whole ask at once.
 - **The same bar as an agent session**, under the header: a `Segmented`
   switch between **Conversation** and **Events** (with its count), from
   the same parts as the Run screen's. There is no Changes: a session
@@ -1402,8 +1435,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ChatMessage contextTokens={n} contextWindowTokens={w} costUsd={null} />` | `$0.00` for a cost nobody reported |
 | `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
 | `<ChatMessage intent="steer" deliveredAt={null} pendingReason={<>Lands after <b>Bash</b> finishes.</>} onInterrupt={…} />` until the agent reads it, then `read readAfter="Bash"` where it was read | a steer that looks read before the agent has it, a fixed "waiting for the turn" line whatever the harness does, or an interrupt taken for the person |
-| `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
-| `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
+| `<ChatComposer waitingFor="Implement" />` while the agent waits on you | an answer box in the composer, apart from the question it answers |
+| `<QuestionCard items={items} onSubmit={…} draft={…} onDraftChange={…} />` until `answeredAt`, then `answers={…} answeredBy="Ana"` | the question only in the composer, an "other" choice the agent wrote, or a second turn quoting the question to say its answer |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 | `<PersonAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
@@ -1503,22 +1536,26 @@ MarkdownCheatsheet.
   so the plan lines up with the turns).
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
-- **QuestionCard** — an agent's question to a person as a turn. Waiting it
-  is the loudest turn in the transcript (attention wash and bar, live
-  avatar, a muted ticking wait clock; no badge of its own); answered or
-  dismissed it becomes a plain row with an "Answered" / "Not answered" tag
-  and how long it waited. While waiting, choices are chips only with
-  `onChoose`; otherwise they live in the composer. Settled, they are listed.
+- **QuestionCard** — an agent's question (or up to four, `items`) to a
+  person as a turn. Waiting it is the loudest turn in the transcript
+  (attention wash and bar, live avatar, a muted ticking wait clock; no badge
+  of its own), and with `onSubmit` it is the answer form (see Human
+  intervention): one question's choice answers in a click, "Something
+  else…" is always offered, several are tabs with a review and Send.
+  Answered it becomes a plain row, "Answered · by Ana, after 4m 12s", and
+  the record of each question and its answer (`answers`); dismissed, "No
+  longer needed". `kind="request"` keeps its one-click choices (`onChoose`).
   Waiting on someone else (`waitingOn`), the note says so and how to make
   it yours, in words everyone sees: "Waiting for Ana to answer · Take over
   this task to answer" (`kind="request"`: "…to decide"). The
   choices are shown muted and do nothing; with a mouse, hovering them says
   it again (`Tooltip keepOnPress`: a press leaves it up). The note is what
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
-- **ChatComposer** — answer (blocked on a question, with one-click options)
-  vs steer (lands at the agent's next step; `landsHint` says where;
-  interrupt now is a tick) vs prompt vs chat (a task's conductor; `to`),
-  visibly different. The words leave the field only once `onSubmit`
+- **ChatComposer** — steer (lands at the agent's next step; `landsHint`
+  says where; interrupt now is a tick) vs prompt vs chat (a task's
+  conductor; `to`), visibly different; while the agent waits on the reader
+  (`waitingFor`), one line pointing to the question above, with "Write to
+  the agent instead". The words leave the field only once `onSubmit`
   confirms them: resolving `false`, or rejecting, keeps them to send again
   (the caller shows why). A person's draft is never lost to a failed send.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
