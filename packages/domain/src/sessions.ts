@@ -124,6 +124,8 @@ export interface SessionDetail {
     people: SessionMemberView[];
     projects: SessionProjectRef[];
     run: { id: string; status: string; dudePause: string | null; model: string | null; modelTier: string | null;
+      /** The harness it was submitted on (runs.harness): "scripted" for the scripted agent; absent from an older orchestrator. */
+      harness?: string | null;
       machine: string | null; waiting: boolean } | null;
     runs: string[];
     costUsd: number;
@@ -154,6 +156,8 @@ export interface SessionModel {
   harness: Harness | null;
   effective: { tierName: string | null; model: string | null; harness: Harness };
   organization: { tier: SessionModelTier | null; harness: Harness };
+  /** Why the effective pair cannot run, as its next start would fail saying; null when it can. Absent from an older orchestrator. */
+  misfit?: string | null;
 }
 
 export interface SessionLink {

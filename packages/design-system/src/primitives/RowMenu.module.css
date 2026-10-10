@@ -128,6 +128,11 @@
 }
 
 /* A radio group's heading: small caps, muted, not an item. */
+.note {
+  padding: var(--ds-space-6) var(--ds-space-8);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
 .groupLabel {
   padding: var(--ds-space-6) var(--ds-space-8) var(--ds-space-2) var(--ds-space-6);
   color: var(--ds-color-text-muted);
