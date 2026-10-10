@@ -1553,7 +1553,8 @@ a `tooltip`), Dialog (`size=
 RowMenu (+ `rowMenuOpeners`; a `kind: "radio"` item is one choice of
 several under a small caps heading, `keepOpen` to pick in several groups at
 once; an item's `descriptionMono` and `descriptionWraps` set its second
-line in mono or let a sentence wrap), Skeleton/SkeletonLines/Spinner, EmptyState,
+line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
+is not an item, for what the menu cannot list), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
@@ -1863,7 +1864,12 @@ sessions*):
   Claude (High) on Claude Code"), "default" while it follows the
   organisation, and a `RowMenu` of two `kind: "radio"` groups that stay
   open as both halves are picked; `onChange({ tier, harness })`, null for
-  "Organisation default". `readOnly`: the chip alone.
+  "Organisation default". A tier naming no model is disabled ("names no
+  model yet"). `misfit`: the pair it is on stopped fitting after it was
+  chosen; the chip takes the `warning` glyph in danger ink and the sentence
+  sits under it, as the chip's description. `menuNote`: a muted line atop
+  the menu ("Could not load the tiers"); `onOpenChange` lets the app read
+  the tiers on the first opening. `readOnly`: the chip alone.
 - **RecentSessions** — the welcome's short list: one line each at
   `row-default` height, the bulb (the role glyph, in the brainstorm's role
   colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,

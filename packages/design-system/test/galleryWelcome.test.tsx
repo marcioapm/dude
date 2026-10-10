@@ -9,7 +9,8 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
-import { WelcomeSection } from "../src/gallery/sections/Welcome.tsx";
+import { GALLERY_MISFIT, WelcomeSection } from "../src/gallery/sections/Welcome.tsx";
+import { accessibleName, allByRole } from "./queries.ts";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -71,7 +72,7 @@ test("ComposerLinks: none, two, read only, and the menu drawn open inside its pa
   expect(pane.querySelector("[role=menu]")).not.toBeNull();
 });
 
-test("ModelPicker: default, chosen, read only, and the menu open in its pane with a refused pair saying why", async () => {
+test("ModelPicker: default, chosen, read only, a misfit, and one menu open in its pane with refused items saying why", async () => {
   const el = await mount();
   const panes = [...el.querySelectorAll("#wl-model [data-theme][data-density]")];
   expect(panes.length).toBe(FRAMES.length);
@@ -82,10 +83,17 @@ test("ModelPicker: default, chosen, read only, and the menu open in its pane wit
     const readOnly = pane.querySelector("[data-testid=model-readonly]")!;
     expect(readOnly.querySelectorAll("button").length).toBe(0);
     expect(readOnly.textContent).toContain("Coder· Claude Code");
-    const menu = pane.querySelector("[role=menu]")!;
-    const sol = menu.querySelector("[data-testid=rowmenu-mtr_sol]")!;
-    expect(sol.hasAttribute("data-disabled")).toBe(true);
-    expect(sol.textContent).toContain("Claude Code takes an Anthropic model");
+    const misfit = pane.querySelector("[data-testid=model-misfit] [data-testid=model-picker]")!;
+    expect(misfit.getAttribute("aria-label")).toBe("Model: Coder on Codex");
+    expect(document.getElementById(misfit.getAttribute("aria-describedby") ?? "")?.textContent).toBe(GALLERY_MISFIT);
+    // One menu per pane, under its own chip.
+    const menus = [...pane.querySelectorAll("[role=menu]")];
+    expect(menus.length).toBe(1);
+    const item = (name: string) => allByRole(menus[0]!, "menuitemradio").find((r) => accessibleName(r).startsWith(name))!;
+    expect(item("Sol").getAttribute("aria-disabled")).toBe("true");
+    expect(item("Sol").textContent).toContain("Claude Code takes an Anthropic model");
+    expect(item("Fast").getAttribute("aria-disabled")).toBe("true");
+    expect(item("Fast").textContent).toContain("names no model yet");
   }
   // The welcome's own composer carries the picker after "To Brainstorm".
   const shell = el.querySelector("#wl-shell [data-shot]")!;
