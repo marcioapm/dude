@@ -655,7 +655,7 @@ function Review({ items, answers, onChange }: { readonly items: ReadonlyArray<Qu
         return (
           <li key={i} className={styles["reviewItem"]}>
             <div>
-              <div className={styles["reviewQuestion"]}>{item.question}</div>
+              <Markdown source={item.question} unmeasured className={styles["reviewQuestion"]} />
               <div className={cx(styles["reviewAnswer"], !ok && styles["reviewMissing"])} data-testid="review-answer">
                 {ok ? <>{picked}{picked && own ? "; " : null}{own ? <>“{own}”<small className={styles["ownWords"]}>your words</small></> : null}</> : "Not answered yet"}
               </div>
