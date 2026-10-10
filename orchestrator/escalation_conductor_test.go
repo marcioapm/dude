@@ -266,6 +266,21 @@ func TestTheEscalationsQuestionNamesItsActions(t *testing.T) {
 	}
 }
 
+// While an escalation waits, the conductor's question is its one question:
+// several in one call are refused, saying to ask that one first.
+func TestAnEscalationsQuestionIsOneQuestion(t *testing.T) {
+	w, task := stuck(t)
+	w.refused(task, "ask_person", `{"questions":[{"header":"Escalation","question":"Retry?","choices":[{"label":"Retry"},{"label":"Stop"}]},
+		{"header":"Also","question":"Anything else?"}]}`, "not 2 questions")
+	if q := w.conductorQuestion(task); q != "" {
+		t.Errorf("question %s recorded with several items at an escalation", q)
+	}
+	// One item in the new shape is the old shape still: it needs actions.
+	w.refused(task, "ask_person", `{"questions":[{"header":"Escalation","question":"Retry?","choices":[{"label":"Retry"},{"label":"Stop"}]}]}`,
+		"actions")
+	w.must(task, "ask_person", escalationQuestion)
+}
+
 // Choices that read as the same answer, case and spaces aside, are refused:
 // an answer picks the choice it equals so, and the second would take the
 // first's action.

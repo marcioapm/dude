@@ -88,9 +88,21 @@ test("a message in Chat goes to the orchestrator as who wrote it, and its answer
   expect(forwarded).toEqual([{ path: "/internal/tasks/wi_1/chat", body: { text: "why 8s?" }, actor: key.id, person: key.personId }]);
 });
 
+test("an aside, and the conductor's question's answers, go through as written", async () => {
+  forwarded.length = 0;
+  const answers = { questionId: "qst_1", answers: [{ choices: [0] }, { choices: [], text: "Pay in parts" }], note: "Small." };
+  for (const body of [{ text: "what does it touch?", aside: true }, answers]) await call("POST", "/v1/tasks/wi_1/chat", body);
+  expect(forwarded.map((f) => f.body)).toEqual([
+    { text: "what does it touch?", aside: true },
+    { questionId: "qst_1", answers: [{ choices: [0] }, { choices: [], text: "Pay in parts" }], note: "Small." },
+  ]);
+});
+
 test("an empty message, or anything else, is refused before the orchestrator hears of it", async () => {
   forwarded.length = 0;
-  for (const body of [{ text: "   " }, {}, { text: "x", runId: "run_other" }, { text: "x".repeat(16_385) }]) {
+  const five = Array.from({ length: 5 }, () => ({ choices: [0] }));
+  for (const body of [{ text: "   " }, {}, { text: "x", runId: "run_other" }, { text: "x".repeat(16_385) },
+    { questionId: "qst_1", answers: five }, { answers: [{ choices: [0] }] }, { questionId: "qst_1", answers: [{ choices: [0] }], text: "x" }]) {
     expect((await call("POST", "/v1/tasks/wi_1/chat", body)).status).toBe(400);
   }
   expect(forwarded).toEqual([]);

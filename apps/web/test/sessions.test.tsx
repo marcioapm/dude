@@ -16,7 +16,7 @@ import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
-import type { Artifact } from "../src/api/client.ts";
+import type { Artifact, SentAnswer } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -79,9 +79,13 @@ class SessionClient extends FixtureClient {
     if (q.sessionId !== SESSION) return super.ledgerFor(q);
     return this.ledger.filter((e) => e.cursor > (q.after ?? 0));
   }
-  override sessionChat(_id: string, text: string) {
-    this.sent.push(text);
+  override sessionChat(_id: string, text: string, opts: { aside?: boolean } = {}) {
+    this.sent.push(`${opts.aside ? "aside:" : ""}${text}`);
     return Promise.resolve({ runId: RUN, created: false });
+  }
+  override sessionAnswer(_id: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = "") {
+    this.sent.push(`${questionId}:${JSON.stringify(answers)}${note ? `:${note}` : ""}`);
+    return Promise.resolve({ id: questionId, status: "answered" as const });
   }
   override fileProposal(_id: string, _proposal: string, items: number[]): Promise<FileResult> {
     this.filed.push(items);
@@ -234,18 +238,19 @@ describe("a brainstorm session's page", () => {
     expect(client.sent).toEqual([]);
   });
 
-  test("a question put to you: its chips answer it; one put to someone else is theirs, and your message waits", async () => {
+  test("a question put to you: its turn is the form and answers it; one put to someone else is theirs, and your message waits", async () => {
     const asked = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
     const mine = new SessionClient(detail("chat", { question: { ...asked, to: ref(ME), yours: true } }), [
       ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
     ]);
     const page = await sessionPage(mine);
-    const form = await until(() => page.querySelector("[data-testid=session-screen] form[data-mode=answer]"), "the answer composer");
-    expect(form.querySelector("textarea")!.placeholder).toBe("Type your answer…");
-    const chip = [...form.querySelectorAll("button")].find((b) => b.textContent === "Experiment runs only")!;
-    await click(chip);
+    const waitingLine = await until(() => page.querySelector("[data-testid=session-screen] [data-testid=composer-waiting]"), "the waiting line");
+    expect(waitingLine.textContent).toContain("The brainstorm is waiting for your answer above.");
+    const choice = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")]
+      .find((b) => b.textContent?.startsWith("Experiment runs only")) ?? null, "the choice");
+    await click(choice);
     await settle();
-    expect(mine.sent).toEqual(["Experiment runs only"]);
+    expect(mine.sent).toEqual([`q_1:[{"choices":[1],"text":""}]`]);
 
     const theirs = new SessionClient(detail("owner", { question: { ...asked, to: ref(ANA), yours: false } }), [
       ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: ANA.id, toName: ANA.name }, { type: "agent", id: RUN }),
@@ -253,8 +258,9 @@ describe("a brainstorm session's page", () => {
     ]);
     const other = await sessionPage(theirs);
     await until(() => other.querySelector("[data-testid=human-turn]"), "the held message");
-    // No chips for you; the composer still writes, after their answer.
-    expect(other.querySelector("[data-testid=session-screen] form[data-mode=answer]")).toBeNull();
+    // No form for you; the composer still writes, after their answer.
+    expect(other.querySelector("[data-testid=question-form]")).toBeNull();
+    expect(other.querySelector("[data-testid=composer-waiting]")).toBeNull();
     const composer = other.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!;
     expect(composer.disabled).toBe(false);
     expect(composer.placeholder).toContain(`Waiting for ${ANA.name.split(" ")[0]}`);
@@ -263,6 +269,39 @@ describe("a brainstorm session's page", () => {
     expect(waiting).toContain(`Waiting for ${ANA.name.split(" ")[0]} to answer`);
     expect(waiting).toContain(`Only ${ANA.name.split(" ")[0]} can answer this one`);
     expect(waiting).not.toContain("Take over");
+  });
+
+  test("your question waiting: Write to the agent instead sends an aside, never the answer", async () => {
+    const asked = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
+    const mine = new SessionClient(detail("chat", { question: { ...asked, to: ref(ME), yours: true } }), [
+      ev("question.asked", { kind: "agent", questionId: "q_1", prompt: asked.prompt, options: asked.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
+    ]);
+    const page = await sessionPage(mine);
+    const instead = await until(() => page.querySelector<HTMLElement>("[data-testid=session-screen] [data-testid=write-instead]"), "write instead");
+    await click(instead);
+    await write(page, "Experiment runs only");
+    expect(mine.sent).toEqual(["aside:Experiment runs only"]);
+  });
+
+  test("Write to the agent instead lasts for that question: the next one read with no wait between steps the composer back", async () => {
+    const q1 = { id: "q_1", prompt: "Grow the 24h window for every kind?", options: ["Every kind", "Experiment runs only"], askedAt: at(40) };
+    const q2 = { id: "q_2", prompt: "And the 7d window?", options: ["Yes", "No"], askedAt: at(42) };
+    const mine = new SessionClient(detail("chat", { question: { ...q1, to: ref(ME), yours: true } }), [
+      ev("question.asked", { kind: "agent", questionId: "q_1", prompt: q1.prompt, options: q1.options, to: YOU, toName: ME.name }, { type: "agent", id: RUN }),
+    ]);
+    const page = await sessionPage(mine);
+    const waiting = () => page.querySelectorAll("[data-testid=session-screen] [data-testid=composer-waiting]").length;
+    await click(await until(() => page.querySelector<HTMLElement>("[data-testid=session-screen] [data-testid=write-instead]"), "write instead"));
+    expect(waiting()).toBe(0);
+    // The next read finds q_2 already open: q_1's answer and q_2 came between two reads.
+    mine.detail = detail("chat", { question: { ...q2, to: ref(ME), yours: true } });
+    await act(async () => {
+      emit({ eventType: "question.asked", occurredAt: at(42), organizationId: "org_1", projectId: null as unknown as string,
+        taskId: null as unknown as string, runId: RUN, sessionId: SESSION, workflowRunId: null, actor: { type: "agent", id: RUN },
+        source: "orchestrator", correlationId: null, causationId: null,
+        payload: { kind: "agent", questionId: "q_2", prompt: q2.prompt, options: q2.options, to: YOU, toName: ME.name } });
+    });
+    await until(() => (waiting() === 1 ? true : null), "the composer stepped back for q_2");
   });
 
   test("the card files what you tick, as you, and says what was refused", async () => {
@@ -409,7 +448,9 @@ describe("a session's name", () => {
     const title = page.querySelector("[data-testid=session-title]")!;
     expect(title.textContent).toBe("New session");
     expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
-    expect(document.activeElement).toBe(page.querySelector("[data-testid=session-screen] textarea"));
+    const composer = page.querySelector("[data-testid=session-screen] textarea");
+    expect(composer).not.toBeNull();
+    expect(document.activeElement === composer).toBe(true);
   });
 
   test("a member who can chat renames it in place: Enter saves, Escape cancels", async () => {
@@ -441,7 +482,7 @@ describe("a session's name", () => {
     expect(title.textContent).toBe("New session");
     await click(title);
     expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
-    expect(document.activeElement).not.toBe(page.querySelector("[data-testid=session-screen] textarea"));
+    expect(document.activeElement === page.querySelector("[data-testid=session-screen] textarea")).toBe(false);
   });
 
   test("the Chat says who named it: the agent, or the person by name", async () => {
@@ -740,6 +781,24 @@ describe("Waiting on you", () => {
     await settle();
     expect(client.accepted).toEqual([SESSION]);
     expect(opened).toEqual([SESSION]);
+  });
+
+  test("a question of several is named as the board names it: how many, and their headers", async () => {
+    const items = ["Retry scope", "Old route", "Tests"].map((header) => ({ header, question: `${header}?`, multiple: false, choices: [] }));
+    const several: SessionsList = { ...list, invitations: [],
+      questions: [{ id: "q_3", prompt: "3 questions: Retry scope, Old route, Tests", options: [], items, askedAt: at(5), sessionId: "ssn_other", title: "Meter v2" }] };
+    const client = new InboxClient("a");
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <InboxScreen client={client} projects={[]} sessions={several} onSelect={() => {}} onOpenSession={() => {}} onChanged={() => {}} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(unmount);
+    const question = await until(() => container.querySelector("[data-testid=session-question]"), "the question");
+    expect(question.textContent).toContain("The brainstorm in Meter v2 asks 3 questions · Retry scope, Old route, Tests");
+    expect(question.textContent).not.toContain("3 questions: Retry scope");
   });
 });
 

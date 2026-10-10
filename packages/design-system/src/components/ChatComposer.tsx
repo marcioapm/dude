@@ -8,30 +8,30 @@ import styles from "./ChatComposer.module.css";
 import trayStyles from "./ImageAttachments.module.css";
 
 /**
- * The two ways a human intervenes, plus the initial prompt, plus `chat`:
+ * The ways a human intervenes, plus the initial prompt, plus `chat`:
  * talking with a task's conductor, which is a conversation, not an
- * intervention in someone's turn.
+ * intervention in someone's turn. An answer is not one of them: the
+ * question's own turn is its form (`QuestionCard`).
  */
-export type ComposerMode = "answer" | "steer" | "prompt" | "chat";
-
-export interface PendingQuestion {
-  readonly id: string;
-  readonly text: string;
-  /** Who asked, for the label ("Orchestrator asks"). */
-  readonly askedBy?: string | undefined;
-  readonly askedAt?: string | number | Date | undefined;
-  /** Offered choices; each becomes a one-click reply. */
-  readonly options?: ReadonlyArray<string> | undefined;
-}
+export type ComposerMode = "steer" | "prompt" | "chat";
 
 export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>, "onSubmit" | "children"> {
   /**
-   * Explicit mode. When omitted: `answer` if a `question` is pending,
-   * `steer` if the session is running, `prompt` otherwise.
+   * Explicit mode. When omitted: `steer` if the session is running,
+   * `prompt` otherwise.
    */
   readonly mode?: ComposerMode | undefined;
-  /** The blocking question, when the session is `awaiting_input`. */
-  readonly question?: PendingQuestion | undefined;
+  /**
+   * Who waits for the reader's answer to a question ("Implement"): the
+   * composer steps back to one quiet line saying the answer goes in the
+   * question above, with "Write to the agent instead", which brings the
+   * composer back for a message that does not answer.
+   */
+  readonly waitingFor?: string | undefined;
+  /** The question waited on (its id): "Write to the agent instead" lasts while it stays the same. Unset, the asker's label stands in. */
+  readonly waitingKey?: string | undefined;
+  /** "Write to the agent instead" was pressed: the composer is back for this question. */
+  readonly onWriteInstead?: (() => void) | undefined;
   /** The session is running; a steer will interrupt it. */
   readonly running?: boolean | undefined;
   /** Nothing accepts input (terminal session). */
@@ -97,33 +97,23 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
 }
 
 export type ComposerSubmission =
-  | { readonly mode: "answer"; readonly questionId: string; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
   | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean; readonly attachmentIds: ReadonlyArray<string> }
   | { readonly mode: "prompt"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
   | { readonly mode: "chat"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> };
 
 const MODE_LABEL: Record<ComposerMode, string> = {
-  answer: "Answer",
   steer: "Steer",
   prompt: "Send",
   chat: "Send",
 };
 const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
-  answer: "Type your answer…",
   steer: "Steer the agent…",
   prompt: "Describe the task…",
   chat: "Ask about this task…",
 };
 
 /**
- * The human's input. Two modes are distinct on purpose:
- *
- *   answer  the session is blocked on a question. The transcript shows the
- *           question in full (`QuestionCard`); the composer says only
- *           which one it answers, on one truncated line, and puts the
- *           offered choices as one-click chips beside the button. The
- *           button says "Answer" in the attention tone. Submitting
- *           unblocks the session.
+ * The human's input. The modes are distinct on purpose:
  *
  *   steer   the session is running. The frame is accent-tinted and the
  *           button says "Steer". A steer lands at the agent's next step
@@ -138,12 +128,19 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
  *           with Send and no interrupt: it starts the conductor's next
  *           turn, never cuts one short. `to` names who it goes to.
  *
+ * While the agent waits on the reader's answer (`waitingFor`) the
+ * composer steps back to one line: the question's turn above is where
+ * the answer goes. "Write to the agent instead" brings it back, for a
+ * message that leaves the question open.
+ *
  * Enter sends in every mode; Shift+Enter always inserts a newline. The
  * action row says who it is sent as.
  */
 export function ChatComposer({
   mode: modeProp,
-  question,
+  waitingFor,
+  waitingKey,
+  onWriteInstead,
   running,
   disabled,
   disabledReason,
@@ -169,7 +166,15 @@ export function ChatComposer({
   ...rest
 }: ChatComposerProps) {
   const [interrupt, setInterrupt] = useState(false);
-  const mode: ComposerMode = modeProp ?? (question ? "answer" : running ? "steer" : "prompt");
+  const mode: ComposerMode = modeProp ?? (running ? "steer" : "prompt");
+  // "Write to the agent instead", for the question it was pressed on: the next question steps back again.
+  const [writingFor, setWritingFor] = useState<string | null>(null);
+  // Without a waitingKey the asker's label stands in, so the wait ending is what lets the next question step back.
+  useEffect(() => {
+    if (waitingFor === undefined) setWritingFor(null);
+  }, [waitingFor]);
+  const waitedOn = waitingKey ?? waitingFor;
+  const stepsBack = waitingFor !== undefined && writingFor !== waitedOn;
   const [internal, setInternal] = useState(defaultValue ?? "");
   const text = value ?? internal;
   const [busy, setBusy] = useState(false);
@@ -211,8 +216,7 @@ export function ChatComposer({
     if (t.length === 0 && ready.length === 0) return;
     const attachmentIds = ready;
     const submission: ComposerSubmission =
-      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t, attachmentIds }
-        : mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds }
+      mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds }
         : mode === "chat" ? { mode: "chat", text: t, attachmentIds }
         : { mode: "prompt", text: t, attachmentIds };
     setBusy(true);
@@ -255,7 +259,27 @@ export function ChatComposer({
   const picker = useRef<HTMLInputElement>(null);
 
   const isDisabled = disabled === true;
-  const answerOptions = mode === "answer" && question?.options ? question.options : [];
+
+  if (stepsBack && !isDisabled) {
+    return (
+      <div className={cx(styles["root"], className)} data-mode="waiting" data-testid="composer-waiting">
+        <div className={styles["waitBar"]}>
+          <Icon name="hand" size={14} className={styles["waitIcon"]} />
+          <span className={styles["waitText"]}><b>{waitingFor} is waiting for your answer above.</b></span>
+          <span className={styles["spacer"]} />
+          <button type="button" className={styles["writeInstead"]} data-testid="write-instead"
+            title="Sends a message instead of answering; the question stays open"
+            onClick={() => {
+              setWritingFor(waitedOn ?? null);
+              onWriteInstead?.();
+              requestAnimationFrame(() => areaRef.current?.focus());
+            }}>
+            Write to the agent instead
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form
@@ -268,14 +292,6 @@ export function ChatComposer({
       }}
       {...rest}
     >
-      {mode === "answer" && question ? (
-        <div className={styles["question"]} role="note" aria-label="Pending question" title={question.text}>
-          <Icon name="hand" size={14} className={styles["questionIcon"]} />
-          <span className={styles["questionLabel"]}>Answering {question.askedBy ?? "the agent"}:</span>
-          <span className={styles["questionText"]}>{question.text}</span>
-        </div>
-      ) : null}
-
       <div className={cx(styles["field"], attachments.length > 0 && styles["withTray"])}>
         {attachments.length > 0 ? (
           <div className={trayStyles["tray"]} role="list" aria-label="Images to send">
@@ -329,15 +345,6 @@ export function ChatComposer({
           </>
         ) : null}
         {leading}
-        {answerOptions.length > 0 ? (
-          <div className={styles["options"]} role="group" aria-label="Answer with one of">
-            {answerOptions.map((o) => (
-              <button key={o} type="button" className={styles["option"]} disabled={isDisabled || busy} onClick={() => void submit(o)} title={o}>
-                <span className="ds-cap">{o}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
         {mode === "chat" && to && !isDisabled ? (
           <span className={styles["sentAs"]} data-testid="composer-to">{to}</span>
         ) : sentAs && !isDisabled ? (
@@ -352,7 +359,7 @@ export function ChatComposer({
           </label>
         ) : null}
         <span className={styles["spacer"]} />
-        <span id={`${id}-hint`} className={cx(styles["hint"], answerOptions.length > 0 && "ds-sr-only")}>
+        <span id={`${id}-hint`} className={styles["hint"]}>
           {isDisabled ? null : (
             <>
               {uploading > 0 ? (
@@ -361,7 +368,7 @@ export function ChatComposer({
                 </span>
               ) : mode === "steer" && landsHint && !interrupt ? <span className={styles["lands"]} data-testid="lands-hint">{landsHint}</span> : null}
               <span className={cx(styles["hint"], Boolean(landsHint) && mode === "steer" && !interrupt && styles["keys"])}>
-                <kbd className={styles["kbd"]}>Enter</kbd> {mode === "answer" ? "answer" : "send"} <kbd className={styles["kbd"]}>⇧ Enter</kbd> new line
+                <kbd className={styles["kbd"]}>Enter</kbd> send <kbd className={styles["kbd"]}>⇧ Enter</kbd> new line
               </span>
             </>
           )}
@@ -370,10 +377,10 @@ export function ChatComposer({
           type="submit"
           size="sm"
           variant={mode === "prompt" ? "secondary" : "primary"}
-          leadingIcon={mode === "answer" ? "hand" : mode === "steer" && interrupt ? "zap" : undefined}
+          leadingIcon={mode === "steer" && interrupt ? "zap" : undefined}
           disabled={!canSubmit}
           loading={busy}
-          className={cx(styles["submit"], styles[`submit-${mode}`])}
+          className={styles["submit"]}
         >
           {MODE_LABEL[mode]}
         </Button>
