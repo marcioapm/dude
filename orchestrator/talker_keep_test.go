@@ -184,6 +184,30 @@ func TestAMessageBeforeTheStopIsSweptQueuesOnTheSameRun(t *testing.T) {
 	}
 }
 
+// A message lux accepted and the agent never read is gone with a crashed
+// harness: once the Run is parked it is sent again, and the Run resumes on
+// its own to answer it.
+func TestAMessageUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			tk.lux.InputGate = make(chan struct{})
+			status, reached := tk.write("did the build pass?")
+			if status != 200 || reached != run {
+				t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
+			}
+			tk.until("the message sent to lux", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL
+					AND delivered_at IS NULL`, run) == 1
+			})
+			tk.stopOnItsOwn(run, "failed")
+			close(tk.lux.InputGate)
+			tk.lux.InputGate = nil
+			tk.resumedAnswering(run, "did the build pass?")
+		})
+	}
+}
+
 // One lux ended for good (terminated), or no longer has, is ended as
 // before: the next message starts a new Run, which answers it.
 func TestATalkerLuxCannotResumeIsEndedAndReplaced(t *testing.T) {
