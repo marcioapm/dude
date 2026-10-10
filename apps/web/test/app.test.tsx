@@ -270,6 +270,24 @@ describe("the welcome's model picker", () => {
     await revisit();
     expect(client.reads).toBe(2);
   });
+
+  test("is read again after the stream comes back: a settings change it missed is never replayed", async () => {
+    class Counting extends FixtureClient {
+      reads = 0;
+      override modelTiers() {
+        this.reads++;
+        return super.modelTiers();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app("#/", client);
+    const picker = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    await until(picker, "the picker");
+    expect(client.reads).toBe(1);
+    // The network back: every stream reopens, reconnecting until it is live.
+    await act(async () => void window.dispatchEvent(new Event("online")));
+    await until(() => (client.reads === 2 ? true : null), "the tiers read again");
+  });
 });
 
 describe("the sidebar's rail", () => {
