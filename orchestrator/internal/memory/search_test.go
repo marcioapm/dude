@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -311,6 +312,30 @@ func TestAnEmbedderThatFailsBacksOffNoDocument(t *testing.T) {
 		if left != 0 || x.Health().Error != "" {
 			t.Errorf("%d: once fixed, %d left unembedded, health %+v", status, left, x.Health())
 		}
+	}
+}
+
+// The Index page's health is sent in UTC from a process whose clock reads
+// in another zone: Asia/Kolkata, +05:30 all year, so the check holds on
+// any date.
+func TestAFailingEmbeddersHealthIsUTC(t *testing.T) {
+	kolkata, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Skipf("no zone data: %v", err)
+	}
+	app, owner := dbtest.Open(t)
+	seed(t, owner)
+	// A fixed instant later than any seeded document's next attempt, so the sweep finds them due.
+	at := time.Date(2100, 7, 1, 12, 0, 0, 0, kolkata)
+	x := &memory.Indexer{DB: app, Embedder: &statusFake{Fake: &embeddings.Fake{Dims: 768}, status: 502}, Now: func() time.Time { return at }}
+	if _, err := x.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(x.Health())
+	var h struct{ Since, Retry string }
+	_ = json.Unmarshal(b, &h)
+	if h.Since != "2100-07-01T06:30:00Z" || !strings.HasSuffix(h.Retry, "Z") {
+		t.Errorf("health %s, want since 2100-07-01T06:30:00Z and retry in UTC (…Z)", b)
 	}
 }
 

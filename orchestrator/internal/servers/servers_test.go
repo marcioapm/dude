@@ -250,6 +250,33 @@ func TestMovedIsSaidOnlyWhenTheMoveStoppedEveryServer(t *testing.T) {
 	}
 }
 
+// lux's times are decoded in lux's own offset; what the API passes on of
+// them (a preview's stage timer, when its Run moved) is UTC.
+func TestLuxsTimesAreSentInUTC(t *testing.T) {
+	var run lux.Run
+	if err := json.Unmarshal([]byte(`{"stage":"image","stageSince":"2026-10-09T17:30:00+05:30","epoch":4,"host":"lux-c9",
+		"placements":[{"epoch":3,"hostName":"lux-c7"},{"epoch":4,"hostName":"lux-c9"}]}`), &run); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	encoded := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+	_, since := previewProgress("running", "starting", run, nil, func(string) bool { return false })
+	if since == nil || encoded(since) != `"2026-10-09T12:00:00Z"` || !since.Equal(want) {
+		t.Errorf("stage since %s, want %q", encoded(since), "2026-10-09T12:00:00Z")
+	}
+
+	var stopped lux.Server
+	if err := json.Unmarshal([]byte(`{"name":"web","state":"stopped","stopReason":"migrated","stoppedEpoch":3,
+		"since":"2026-10-09T17:30:00+05:30"}`), &stopped); err != nil {
+		t.Fatal(err)
+	}
+	m := moved([]lux.Server{stopped}, run)
+	if m == nil || encoded(m.At) != `"2026-10-09T12:00:00Z"` {
+		t.Errorf("moved at %s, want %q", encoded(m), "2026-10-09T12:00:00Z")
+	}
+}
+
 func TestLuxsServerIsPassedOnAsLuxSentIt(t *testing.T) {
 	raw := `{"name":"web","port":3000,"state":"ready","url":"https://web-x.lux.test","somethingNew":1}`
 	var s lux.Server

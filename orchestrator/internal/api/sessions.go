@@ -483,10 +483,13 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
 				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
 			} else {
-				why := facts.cannotFile(it, person, role)
-				st["canFile"] = why == ""
-				if why != "" {
-					st["why"] = why
+				no := facts.cannotFile(it, person, role)
+				st["canFile"] = no.why == ""
+				if no.why != "" {
+					st["why"], st["blockedBy"] = no.why, no.by
+					if no.owner != nil {
+						st["owner"] = no.owner
+					}
 				}
 			}
 			c.Status[n] = st
@@ -514,6 +517,7 @@ type fileFacts struct {
 
 type taskFacts struct {
 	ID, ProjectID, OwnerID, OwnerName, Status string
+	Owner                                     json.RawMessage // PersonRef; nil without an owner
 	Started                                   bool
 }
 
@@ -552,13 +556,13 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	// Matched on the key's parts, so each is an index probe on
 	// tasks (project_id, number) rather than a scan of the projects' tasks.
 	rows, err = tx.Query(ctx, `SELECT upper(p.key_prefix) || '-' || t.number, t.id, t.project_id,
-			COALESCE(o.id, ''), COALESCE(o.name, ''), t.status::text,
+			COALESCE(o.id, ''), COALESCE(o.name, ''), o.ref, t.status::text,
 			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
 		FROM unnest($2::text[], $3::int[]) AS k(prefix, number)
 		JOIN projects p ON upper(p.key_prefix) = k.prefix
 		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1
 		JOIN tasks t ON t.project_id = p.id AND t.number = k.number
-		LEFT JOIN LATERAL (SELECT pe.id, pe.name FROM task_people tp JOIN people pe ON pe.id = tp.person_id
+		LEFT JOIN LATERAL (SELECT pe.id, pe.name, person_ref(pe) AS ref FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true
 		ORDER BY t.id`+lockClause, sessionID, prefixes, numbers)
 	if err != nil {
@@ -566,7 +570,7 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	}
 	var k string
 	var t taskFacts
-	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.ProjectID, &t.OwnerID, &t.OwnerName, &t.Status, &t.Started}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.ProjectID, &t.OwnerID, &t.OwnerName, &t.Owner, &t.Status, &t.Started}, func() error {
 		f.tasks[k] = t
 		return nil
 	})
@@ -588,38 +592,47 @@ func keyParts(key string) (string, int32, bool) {
 	return k[:dash], int32(n), true
 }
 
-// cannotFile says why person may not file item, "" when they may: a
-// reader files nothing; an edit is its task's owner's alone, and only
-// before it has started (the control plane's rule for a task's text); a
-// task or epic needs its project still linked.
-func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) string {
-	if role == delivery.SessionRead {
-		return "readers can't file"
-	}
+// fileBlock is why a person may not file an item: the words the card shows,
+// and what blocks it, so a client can tell an item someone else may file
+// (owner, reader) from one nobody can now (started, unlinked, not_a_task).
+type fileBlock struct {
+	why   string
+	by    string
+	owner json.RawMessage // the task's owner as a PersonRef, when by is "owner"
+}
+
+// cannotFile says why person may not file item, a zero fileBlock when they
+// may. What blocks every member is said first, so a reader or a non-owner
+// is not told someone else can file what nobody can: a task or epic needs
+// its project still linked; an edit or comment needs a task of a linked
+// project, and an edit one not yet started (the control plane's rule for a
+// task's text). Then a reader files nothing, and an edit is its owner's.
+func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) fileBlock {
+	var t taskFacts
 	switch item.Kind {
 	case "epic", "task":
 		if !f.projects[strings.ToUpper(strings.TrimSpace(item.Project))] {
-			return fmt.Sprintf("project %s is not linked to this session", item.Project)
+			return fileBlock{why: fmt.Sprintf("project %s is not linked to this session", item.Project), by: "unlinked"}
 		}
-		return ""
 	case "edit", "comment":
 		k, _ := delivery.TaskKey(item.Task)
-		t, ok := f.tasks[k]
-		if !ok {
-			return fmt.Sprintf("%s is not a task of a linked project", item.Task)
+		var ok bool
+		if t, ok = f.tasks[k]; !ok {
+			return fileBlock{why: fmt.Sprintf("%s is not a task of a linked project", item.Task), by: "not_a_task"}
 		}
-		if item.Kind == "comment" {
-			return ""
+		if item.Kind == "edit" && t.Started {
+			return fileBlock{why: fmt.Sprintf("%s has started (%s): its text can no longer change", item.Task, t.Status), by: "started"}
 		}
-		if t.OwnerID != "" && t.OwnerID != person {
-			return fmt.Sprintf("only %s can file this: it's their task", t.OwnerName)
-		}
-		if t.Started {
-			return fmt.Sprintf("%s has started (%s): its text can no longer change", item.Task, t.Status)
-		}
-		return ""
+	default:
+		return fileBlock{why: "unknown item", by: "unknown"}
 	}
-	return "unknown item"
+	if role == delivery.SessionRead {
+		return fileBlock{why: "readers can't file", by: "reader"}
+	}
+	if item.Kind == "edit" && t.OwnerID != "" && t.OwnerID != person {
+		return fileBlock{why: fmt.Sprintf("only %s can file this: it's their task", t.OwnerName), by: "owner", owner: t.Owner}
+	}
+	return fileBlock{}
 }
 
 // fileProposal files the items a member kept, as that member. Items they
@@ -709,8 +722,8 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			if why := facts.cannotFile(item, p.Person, role); why != "" {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
+			if no := facts.cannotFile(item, p.Person, role); no.why != "" {
+				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
 				continue
 			}
 			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, linked, facts, item, f)

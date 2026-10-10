@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ProposalCard, SessionPeople, proposalSummary, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
+import { ProposalCard, SessionPeople, foldedWords, nothingLeftToFile, proposalSummary, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
 import { SidebarSessions } from "../src/components/Sidebar.tsx";
 import { byRole } from "./queries.ts";
 
@@ -32,7 +32,7 @@ async function mount(el: React.ReactElement): Promise<HTMLElement> {
 
 const ITEMS: ProposalCardItem[] = [
   { kind: "task", title: "Dedupe runs", project: { key: "BL", name: "billing" }, canFile: true },
-  { kind: "edit", title: "Edit BL-58", taskKey: "BL-58", before: "old", after: "new", canFile: false, why: "Only Márcio can file this: it's his task" },
+  { kind: "edit", title: "Edit BL-58", taskKey: "BL-58", before: "old", after: "new", canFile: false, blockedFor: "you", why: "Only Márcio can file this: it's his task" },
   { kind: "comment", title: "Comment on WC-214", taskKey: "WC-214", canFile: true },
   { kind: "task", title: "Usage panel", project: { key: "WC", name: "web-console" }, canFile: true, filed: { by: "Ana Nunes", key: "WC-240" } },
 ];
@@ -66,7 +66,11 @@ describe("ProposalCard", () => {
   });
 
   test("a reader sees the card and files nothing", async () => {
+    // Nothing on it is a reader's to file: it folds, and opens read only.
     const el = await mount(<Card onFile={() => { throw new Error("filed"); }} readOnly />);
+    expect(el.querySelector('[data-folded="true"]')).toBeTruthy();
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="proposal-fold"]')!.click());
+    expect(el.querySelectorAll('[role="checkbox"]').length).toBe(3);
     expect([...el.querySelectorAll('[role="checkbox"]')].every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
     expect(el.querySelector('[data-testid="file-proposal"]')).toBeNull();
     expect(el.textContent).toContain("You can read this session");
@@ -74,6 +78,145 @@ describe("ProposalCard", () => {
 
   test("its summary counts by kind, in the card's order", () => {
     expect(proposalSummary(["task", "edit", "task", "comment", "epic"])).toBe("1 epic, 2 tasks, 1 edit, 1 comment");
+  });
+
+  test("with nothing ticked, File stays, disabled, and the footer says to tick", async () => {
+    const el = await mount(<ProposalCard items={ITEMS} selected={new Set()} filingAs="Ana" onToggle={() => undefined}
+      onFile={() => { throw new Error("filed"); }} />);
+    const file = el.querySelector<HTMLButtonElement>('[data-testid="file-proposal"]')!;
+    expect(file.textContent).toBe("File");
+    expect(file.disabled).toBe(true);
+    const foot = el.querySelector("footer span")!;
+    expect(foot.textContent).toContain("Tick what to file.");
+    // The disabled button carries its reason for a screen reader, not only the text beside it.
+    expect(foot.id).not.toBe("");
+    expect(file.getAttribute("aria-describedby")).toBe(foot.id);
+    expect(el.textContent).not.toContain("Nothing to file");
+  });
+
+  test("once something is ticked, File is not described by the tick prompt", async () => {
+    const el = await mount(<ProposalCard items={ITEMS} selected={new Set([0])} filingAs="Ana" onToggle={() => undefined}
+      onFile={() => undefined} />);
+    expect(el.querySelector('[data-testid="file-proposal"]')!.getAttribute("aria-describedby")).toBeNull();
+  });
+});
+
+const filed = (by: string, key: string) => ({ by, key });
+const task = (title: string, over: Partial<ProposalCardItem> = {}): ProposalCardItem =>
+  ({ kind: "task", title, project: { key: "BL", name: "billing" }, canFile: true, ...over });
+
+function Folding({ items }: { readonly items: ProposalCardItem[] }) {
+  return <ProposalCard items={items} selected={new Set()} filingAs="Ana" onToggle={() => undefined} onFile={() => undefined} />;
+}
+
+describe("ProposalCard folds", () => {
+  test("exactly when nothing on it is left for the person looking to file", () => {
+    const yours = task("Meter runs");
+    const theirs = task("Edit BL-58", { kind: "edit", canFile: false, blockedFor: "you", why: "Only Márcio can file this" });
+    const done = task("Usage panel", { filed: filed("Ana Nunes", "BL-61") });
+    expect(nothingLeftToFile([done])).toBe(true);
+    expect(nothingLeftToFile([done, theirs])).toBe(true);
+    expect(nothingLeftToFile([theirs])).toBe(true);
+    expect(nothingLeftToFile([done, yours])).toBe(false);
+    expect(nothingLeftToFile([done, theirs, yours])).toBe(false);
+    expect(nothingLeftToFile([yours], true)).toBe(true);
+    expect(nothingLeftToFile([])).toBe(false);
+    // Blocked for everyone (started, unlinked), or with no word on whom: not someone else's, so it stays open.
+    const nobodys = task("Edit BL-59", { kind: "edit", canFile: false, blockedFor: "everyone", why: "BL-59 has started" });
+    const unsaid = task("Edit BL-60", { kind: "edit", canFile: false, why: "?" });
+    expect(nothingLeftToFile([done, nobodys])).toBe(false);
+    expect(nothingLeftToFile([theirs, nobodys])).toBe(false);
+    expect(nothingLeftToFile([unsaid])).toBe(false);
+    expect(nothingLeftToFile([nobodys], true)).toBe(false);
+  });
+
+  test("an item blocked for everyone keeps the card open, its why shown, File disabled and described", async () => {
+    const el = await mount(<Folding items={[task("a", { filed: filed("Ana", "BILL-1") }),
+      task("b", { kind: "edit", canFile: false, blockedFor: "you", why: "Only Márcio can file this" }),
+      task("c", { kind: "edit", canFile: false, blockedFor: "everyone", why: "BL-59 has started (running): its text can no longer change" })]} />);
+    expect(el.querySelector("[data-folded]")).toBeNull();
+    expect([...el.querySelectorAll('[data-testid="cannot-file"]')].map((n) => n.textContent))
+      .toEqual(["Only Márcio can file this", "BL-59 has started (running): its text can no longer change"]);
+    expect(el.textContent).not.toContain("for others to file");
+    const foot = el.querySelector("footer span")!;
+    expect(foot.textContent).toBe("Nothing here is yours to file now: each item says why.");
+    const file = el.querySelector<HTMLButtonElement>('[data-testid="file-proposal"]')!;
+    expect(file.disabled).toBe(true);
+    expect(file.getAttribute("aria-describedby")).toBe(foot.id);
+  });
+
+  test("all filed: one line naming what each became, an epic by its title, past four as +N more, and who filed it", async () => {
+    const items: ProposalCardItem[] = [
+      { kind: "epic", title: "Usage metering", canFile: true, filed: filed("Ana Nunes", "BILL-9") },
+      { kind: "epic", title: "Usage panel", canFile: true, filed: filed("Ana Nunes", "") },
+      task("a", { child: true, filed: filed("Ana Nunes", "BILL-1") }),
+      task("b", { child: true, filed: filed("Márcio Martins", "BILL-2") }),
+      task("c", { child: true, filed: filed("Ana Nunes", "DASH-1") }),
+    ];
+    const el = await mount(<Folding items={items} />);
+    const line = el.querySelector('[data-testid="proposal-fold"]')!;
+    expect(line.textContent).toBe("Proposed work · 2 epics, 3 tasks · all filed: Usage metering, Usage panel, BILL-1, BILL-2, +1 more · by Ana and Márcio");
+    expect(el.querySelector('[data-testid="file-proposal"]')).toBeNull();
+    expect(el.querySelectorAll("li").length).toBe(0);
+
+    expect(foldedWords(items.slice(2, 4))).toEqual(["all filed: BILL-1, BILL-2", "by Ana and Márcio"]);
+    expect(foldedWords([items[2]!])).toEqual(["all filed: BILL-1", "by Ana"]);
+    expect(foldedWords(items.slice(2, 5).map((i, n) => ({ ...i, filed: filed(["Ana", "João", "Lin"][n]!, `K-${n}`) }))))
+      .toEqual(["all filed: K-0, K-1, K-2", "by Ana, João and Lin"]);
+  });
+
+  test("nothing left for you, some for others: how many are filed and how many wait for others", async () => {
+    const theirs = (title: string) => task(title, { canFile: false, blockedFor: "you", why: "Only Márcio can file this" });
+    const el = await mount(<Folding items={[
+      { kind: "epic", title: "E1", canFile: true, filed: filed("Ana", "") }, { kind: "epic", title: "E2", canFile: false, blockedFor: "you", why: "x" },
+      task("a", { filed: filed("Ana", "BILL-1") }), task("b", { filed: filed("Ana", "BILL-2") }), theirs("c"),
+    ]} />);
+    expect(el.querySelector('[data-testid="proposal-fold"]')!.textContent).toBe("Proposed work · 2 epics, 3 tasks · 3 filed · 2 for others to file");
+    expect(foldedWords([theirs("c")])).toEqual(["1 for others to file"]);
+    // A reader's own fileable items wait for the members who can chat.
+    expect(foldedWords([task("d"), task("e", { filed: filed("Ana", "BILL-3") })], true)).toEqual(["1 filed", "1 for others to file"]);
+  });
+
+  test("the line is a toggle: it opens the whole card read only, and closes it", async () => {
+    const el = await mount(<Folding items={[task("a", { filed: filed("Ana", "BILL-1") }),
+      task("b", { kind: "edit", canFile: false, blockedFor: "you", why: "Only Márcio can file this" })]} />);
+    const line = el.querySelector<HTMLButtonElement>('[data-testid="proposal-fold"]')!;
+    expect(line.tagName).toBe("BUTTON");
+    expect(line.getAttribute("aria-expanded")).toBe("false");
+    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
+
+    await act(async () => line.click());
+    expect(line.getAttribute("aria-expanded")).toBe("true");
+    const card = el.querySelector('[data-testid="proposal-unfolded"]')!;
+    // The line is its header: the opened card does not repeat it.
+    expect(el.textContent!.split("Proposed work").length - 1).toBe(1);
+    expect(card.querySelector("header")).toBeNull();
+    expect(card.querySelectorAll("li").length).toBe(2);
+    expect(card.textContent).toContain("Ana filed BILL-1");
+    expect(card.querySelector('[data-testid="cannot-file"]')!.textContent).toBe("Only Márcio can file this");
+    expect([...card.querySelectorAll('[role="checkbox"]')].every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(card.querySelector('[data-testid="file-proposal"]')).toBeNull();
+
+    await act(async () => line.click());
+    expect(line.getAttribute("aria-expanded")).toBe("false");
+    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
+  });
+
+  test("a card with something still yours to file stays open, filed items and all", async () => {
+    const el = await mount(<Folding items={[task("a", { filed: filed("Ana", "BILL-1") }), task("b")]} />);
+    expect(el.querySelector('[data-folded]')).toBeNull();
+    expect(el.querySelector('[data-testid="proposal-fold"]')).toBeNull();
+    expect(el.querySelector('[data-testid="file-proposal"]')).toBeTruthy();
+  });
+
+  test("defaultOpen starts the folded card open; the line still closes it", async () => {
+    const el = await mount(<ProposalCard items={[task("a", { filed: filed("Ana", "BILL-1") })]} selected={new Set()} filingAs="Ana"
+      onToggle={() => undefined} onFile={() => undefined} defaultOpen />);
+    const line = el.querySelector<HTMLButtonElement>('[data-testid="proposal-fold"]')!;
+    expect(line.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeTruthy();
+    await act(async () => line.click());
+    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
   });
 });
 

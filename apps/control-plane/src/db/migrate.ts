@@ -122,7 +122,8 @@ export async function migrate(
   opts: { log?: (msg: string) => void } = {},
 ): Promise<{ applied: string[] }> {
   const log = opts.log ?? console.log;
-  const sql = new SQL(databaseUrl);
+  // In UTC: a migration that renders a time into stored JSON (090, 091) renders it at "+00:00".
+  const sql = new SQL(databaseUrl, { connection: { TimeZone: "UTC" } });
   const applied: string[] = [];
 
   try {

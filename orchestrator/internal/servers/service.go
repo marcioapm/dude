@@ -331,8 +331,23 @@ var luxStages = map[string]string{"waiting": "scheduling", "image": "image", "vo
 
 // previewProgress is a preview's stage and since when: infrastructure
 // timing from lux's stage, process timing from its servers. A lux without
-// stages (run.Stage "") gives Stage's coarse label and no timer.
+// stages (run.Stage "") gives Stage's coarse label and no timer. The time is
+// lux's, decoded in lux's offset; it is returned in UTC, as the API sends
+// every time.
 func previewProgress(status, state string, run lux.Run, list []lux.Server, withSetup func(string) bool) (*string, *time.Time) {
+	stage, since := previewStage(status, state, run, list, withSetup)
+	return stage, utc(since)
+}
+
+func utc(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
+func previewStage(status, state string, run lux.Run, list []lux.Server, withSetup func(string) bool) (*string, *time.Time) {
 	coarse := Stage(status, state, list, withSetup)
 	if coarse == nil || run.Stage == "" {
 		return coarse, nil
@@ -429,7 +444,7 @@ func moved(list []lux.Server, run lux.Run) *Moved {
 			m = &Moved{}
 		}
 		if sv.Since != nil && sv.Since.After(m.At) {
-			m.At = *sv.Since
+			m.At = sv.Since.UTC()
 		}
 		if sv.StoppedEpoch != nil {
 			fromEpoch = max(fromEpoch, *sv.StoppedEpoch)

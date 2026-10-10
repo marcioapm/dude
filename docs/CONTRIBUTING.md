@@ -392,6 +392,17 @@ Each of these cost real time.
   connection. Wait on elements in Playwright.
 - **A pushed demo leaves state on GitHub.** A merged PR changes `main`, which
   changes what the next run sees.
+- **Every time the API sends is UTC.** The browser merges times from
+  different sources (a proposal card's, the ledger's), and on a host outside
+  UTC pgx scans a `timestamptz` in the process's zone (`+01:00`). Both pools,
+  the control plane's `LISTEN` connection and the migration runner set the
+  session `TimeZone` to UTC, the orchestrator's scans into UTC (`db.Open`,
+  `openPool`, `listen.ts`, `migrate.ts`), and a time decoded from lux's JSON
+  is passed on in UTC (`servers.previewProgress`, `servers.moved`), except
+  the `servers` list, which is lux's JSON passed through unchanged; the web
+  app still compares instants, never the
+  text (`apps/web/src/instant.ts`). CI and production are UTC, so only a
+  test that sets `time.Local` or the database's zone sees a slip.
 
 ## Testing strategy
 
