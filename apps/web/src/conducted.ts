@@ -10,6 +10,7 @@
 
 import { DECISION_POINT_LABEL, EventTypes, decisionPointSchema, runLabel, type PersistedEvent, type Run } from "@dude/domain";
 import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
+import { byInstant } from "./instant.ts";
 
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
@@ -77,7 +78,7 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
       }
     }
   }
-  return out.sort((a, b) => a.at.localeCompare(b.at));
+  return out.sort(byInstant((l) => l.at));
 }
 
 function pr(p: Record<string, unknown>): string {

@@ -555,9 +555,11 @@ func TestFilingFindsATaskByKeyAmongMany(t *testing.T) {
 	})
 	detail := s.ok(s.ana, "GET", "/internal/sessions/"+id, nil)
 	status := detail["proposals"].([]any)[0].(map[string]any)["status"].([]any)
-	for i, want := range []string{`"canFile":true`, `"canFile":true`, `"canFile":false`} {
-		if got := fmtJSON(status[i]); !strings.Contains(got, want) {
-			t.Errorf("item %d: %s, want %s", i, got, want)
+	for i, wants := range [][]string{{`"canFile":true`}, {`"canFile":true`}, {`"canFile":false`, `"blockedBy":"not_a_task"`}} {
+		for _, want := range wants {
+			if got := fmtJSON(status[i]); !strings.Contains(got, want) {
+				t.Errorf("item %d: %s, want %s", i, got, want)
+			}
 		}
 	}
 	out := s.ok(s.ana, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": prop, "items": []int{0, 1, 2}})
