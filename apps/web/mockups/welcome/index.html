@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
-    <title>dude — A new session's welcome (mockup)</title>
+    <title>dude — The welcome page (mockup)</title>
     <link rel="icon" href="data:," />
     <style>
       /* The switcher above the app; not part of the proposal. */
@@ -12,6 +12,9 @@
       .mockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; background: var(--ds-color-sunken); color: var(--ds-color-text-secondary); font-size: 13px; }
       .mockbar b { color: var(--ds-color-text-strong); font-weight: 600; margin-right: auto; }
       .mocknote { padding: 6px 16px; background: var(--ds-color-sunken); color: var(--ds-color-text-muted); font-size: 12px; }
+      /* Proposed in the app: the sidebar's brand is a button home (to the welcome). */
+      .brandHome { all: unset; cursor: pointer; border-radius: var(--ds-radius-control); }
+      .brandHome:focus-visible { outline: 2px solid var(--ds-color-focus-ring); outline-offset: 2px; }
     </style>
   </head>
   <body>
