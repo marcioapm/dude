@@ -163,10 +163,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   }, [client, sessionId, onChanged]);
 
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
-  // The owner's picker lists the organisation's tiers, read when its menu first opens; until then
-  // (and for anyone else) the chip reads the detail's words alone.
-  const [menuOpened, setMenuOpened] = useState(false);
-  const tierOptions = useTiers(client, menuOpened);
+  // The owner's picker lists the organisation's tiers, read when its menu opens (again on each
+  // opening after a failed read); until then (and for anyone else) the chip reads the detail's words alone.
+  const [menuOpenings, setMenuOpenings] = useState(0);
+  const tierOptions = useTiers(client, menuOpenings);
   // What the owner picked, shown at once while its posts are out: a second pick before the first
   // is answered builds on it, and the posts go one after another so the last pick is the one kept.
   // Once the last one settles the detail drives the chip again. A failure cancels the picks queued
@@ -326,8 +326,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                     value={picked ?? { tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
                     misfit={picked ? null : detail.model.misfit}
                     onChange={isOwner ? chooseModel : undefined}
-                    onOpenChange={(open) => open && setMenuOpened(true)}
-                    menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpened ? "Loading the tiers…" : undefined} />
+                    onOpenChange={(open) => open && setMenuOpenings((n) => n + 1)}
+                    menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpenings > 0 ? "Loading the tiers…" : undefined} />
                   <span className="muted sessionModelNote">Applies the next time the agent starts.</span>
                 </SessionRailBlock>
               ) : null}

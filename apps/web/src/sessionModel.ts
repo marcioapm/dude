@@ -4,7 +4,7 @@
  * picker and the owner's in a session's rail.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PickerTier } from "@dude/design-system/components";
 import { harnessSchema, HARNESS_LABEL, type Harness, type ModelTier, type SessionModel } from "@dude/domain";
 import type { ApiClient } from "./api/client.ts";
@@ -40,10 +40,21 @@ const readOrganization = (client: ApiClient) => kept(organizationRead, client, a
   return { tierId: typeof role?.tier.value === "string" ? role.tier.value : null, harness: harness.success ? harness.data : "opencode" };
 });
 
-/** Drop what was read: the organisation's tiers or settings changed. */
+// Bumped by each forgetModelOptions, so a mounted welcome or rail re-reads rather than keeping a removed tier.
+let forgotten = 0;
+const forgetting = new Set<() => void>();
+function subscribeForgotten(changed: () => void): () => void {
+  forgetting.add(changed);
+  return () => forgetting.delete(changed);
+}
+const useForgotten = () => useSyncExternalStore(subscribeForgotten, () => forgotten);
+
+/** Drop what was read: the organisation's tiers or settings changed. A mounted picker reads them again. */
 export function forgetModelOptions(client: ApiClient): void {
   tiersRead.delete(client);
   organizationRead.delete(client);
+  forgotten += 1;
+  for (const changed of forgetting) changed();
 }
 
 /**
@@ -53,6 +64,7 @@ export function forgetModelOptions(client: ApiClient): void {
  */
 export function useModelOptions(client: ApiClient): ModelOptions | null {
   const [options, setOptions] = useState<ModelOptions | null>(null);
+  const version = useForgotten();
   useEffect(() => {
     let current = true;
     void Promise.all([readTiers(client), readOrganization(client)]).then(([tiers, org]) => {
@@ -61,22 +73,29 @@ export function useModelOptions(client: ApiClient): ModelOptions | null {
     return () => {
       current = false;
     };
-  }, [client]);
+  }, [client, version]);
   return options;
 }
 
-/** The organisation's tiers once `wanted` (the rail's menu first opened): null until read; "failed" when they cannot be. */
-export function useTiers(client: ApiClient, wanted: boolean): readonly PickerTier[] | "failed" | null {
-  const [tiers, setTiers] = useState<readonly PickerTier[] | "failed" | null>(null);
+/**
+ * The organisation's tiers once the rail's menu has opened (`openings` > 0):
+ * null until read; "failed" when they cannot be, until the next opening
+ * tries again.
+ */
+export function useTiers(client: ApiClient, openings: number): readonly PickerTier[] | "failed" | null {
+  const [read, setRead] = useState<{ tiers: readonly PickerTier[] | "failed"; openings: number } | null>(null);
+  const version = useForgotten();
   useEffect(() => {
-    if (!wanted) return;
+    if (openings === 0) return;
     let current = true;
-    void readTiers(client).then((t) => current && setTiers(t), () => current && setTiers("failed"));
+    // A list already read is kept by readTiers: an opening after the first costs no request.
+    void readTiers(client).then((tiers) => current && setRead({ tiers, openings }), () => current && setRead({ tiers: "failed", openings }));
     return () => {
       current = false;
     };
-  }, [client, wanted]);
-  return tiers;
+  }, [client, openings, version]);
+  if (read?.tiers === "failed" && read.openings !== openings) return null;
+  return read?.tiers ?? null;
 }
 
 /** The session's own model as the organisation's setting sees it, for the rail's picker. */
