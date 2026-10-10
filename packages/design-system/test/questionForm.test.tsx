@@ -301,6 +301,17 @@ test("Write to the agent instead lasts for that question: the next one from the 
   expect(waiting()).toBe(1);
 });
 
+test("with no waitingKey, Write to the agent instead lasts until the wait ends: the asker's next question steps back", async () => {
+  const at = (waitingFor?: string) => <ChatComposer mode="chat" waitingFor={waitingFor} onSubmit={() => {}} />;
+  const waiting = () => all('[data-testid="composer-waiting"]').length;
+  await render(at("The conductor"));
+  await click(q('[data-testid="write-instead"]'));
+  expect(waiting()).toBe(0);
+  await render(at(undefined));
+  await render(at("The conductor"));
+  expect(waiting()).toBe(1);
+});
+
 test("someone else's: no form, the choices muted, how to take it over", async () => {
   await render(form(FOUR, [], { waitingOn: "Ana" }));
   expect(q('[data-testid="question-form"]')).toBeNull();
