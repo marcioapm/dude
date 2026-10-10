@@ -543,7 +543,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           onNew: toWelcome,
           onOpenList: () => go({ view: "sessions" }),
           current: place?.view === "sessions" || place?.view === "brainstorm",
-          recent: (sessionsList?.sessions ?? []).slice(0, 4).map((s) => sessionTitle(s)),
+          recent: (sessionsList?.sessions ?? []).map(sessionTitle),
         }}
         railFooter={
           <>
