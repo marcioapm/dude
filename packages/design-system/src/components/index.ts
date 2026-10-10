@@ -140,5 +140,5 @@ export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from 
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
-export { Capabilities, FOLDED_NAMES, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, foldedWords, nothingLeftToFile, proposalSummary } from "./Brainstorm.tsx";
+export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
 export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";

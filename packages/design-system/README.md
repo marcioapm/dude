@@ -485,15 +485,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   "Filing as Ana: 2 tasks, 1 edit. Nothing starts." An item only someone
   else may file is dimmed and says whose ("Only Márcio can file this: it's
   his task"); a filed one says who filed it as what ("Ana filed BL-61").
-  A reader (`readOnly`) sees the card and files nothing. Nothing on the
+  A reader (`readOnly`) sees the folded line, opens it to read, and files
+  nothing. Nothing on the
   card names the session: the work filed is the person's, as if typed.
   With nothing ticked, **File stays, disabled**, and the footer beside it
   says "Tick what to file.": the way to act is never missing, and never
   greyed without saying why (the button reads "File", not "Nothing to
-  file", which reads as a fact about the card rather than the ticks).
+  file", which reads as a fact about the card rather than the ticks). The
+  footer is the disabled button's `aria-describedby`, so a screen reader
+  hears the reason too.
 - **A filed card folds to a line in its place in time.** Once nothing on
   it is left for the person looking to file — each item filed, or someone
-  else's to file (a reader's card, all of it) — `ProposalCard` draws one
+  else's to file (`blockedFor: "you"`: its task's owner's, or, for a
+  reader, a member's) — `ProposalCard` draws one
   muted line where the card was proposed, in the margin grammar of a
   `ChatEvent` row: the list glyph, "Proposed work · 2 epics, 3 tasks",
   then "all filed: Usage metering, BILL-1, BILL-2, DASH-1, +1 more · by Ana
@@ -501,11 +505,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   then "+N more"), or "3
   filed · 2 for others to file". No frame, no tone. The line is a toggle
   (`aria-expanded`, the chevron at its end) that opens the whole card, read
-  only. The fold is derived from the items (`filed`, `canFile`), so a card
+  only; `defaultOpen` sets where the toggle starts. The fold is derived
+  from the items (`filed`, `canFile`, `blockedFor`), so a card
   filed in this tab folds as soon as the app reads it again; only the line
   being open is the component's own state. The Chat's `session.filed`
   notice ("Ana filed BILL-1, …") stays where it happened: the line is the
   proposal, the notice the moment it was filed.
+- **An item nobody can file keeps the card open.** One blocked for
+  everyone (`blockedFor: "everyone"`, or unset: its task has started, its
+  project is no longer linked) is a problem someone may need to act on,
+  not something done: the card stays full size with that item's `why`
+  showing, and is never counted "for others to file". With nothing on it
+  yours to file, its footer reads "Nothing here is yours to file now: each
+  item says why." beside the disabled File.
 - **`QuestionCard onlyThey`** is the agent's question to one member: "Only
   Ana can answer this one", and no "Take over this task" hint, because
   there is no task to take over.
@@ -1448,7 +1460,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
-| `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a filed card kept full size at the Chat's foot, saying "Tick what to file." beside a dead button |
+| `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a card whose unfiled items are all someone else's kept full size, or placed by the text of its time; a "Nothing to file" button; an item nobody can file folded away as "for others" |
 
 ## Components
 
@@ -1725,10 +1737,11 @@ MarkdownCheatsheet.
 `src/components/` — brainstorm sessions (the rules are under *Brainstorm
 sessions*):
 
-- **ProposalCard** (+ `proposalSummary`, `nothingLeftToFile`,
-  `foldedWords`) — what the agent proposes, filed as whoever presses File;
-  with nothing left for the person looking to file, one line in the Chat
-  (what became of it, who filed it) that opens the card read only.
+- **ProposalCard** (+ `proposalSummary`) — what the agent proposes, filed
+  as whoever presses File; with nothing left for the person looking to
+  file, one line in the Chat (what became of it, who filed it) that opens
+  the card read only (`defaultOpen` starts it open). An item nobody can
+  file keeps the card open.
 - **SessionTitle** — the session's name in its header: "New session"
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:

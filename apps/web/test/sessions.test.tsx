@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { PersistedEvent, SessionDetail, SessionsList } from "@dude/domain";
+import type { PersistedEvent, ProposalItemStatus, SessionDetail, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -221,7 +221,7 @@ describe("a brainstorm session's page", () => {
   test("a reader's composer is closed, with why, and the card files nothing", async () => {
     const client = new SessionClient(detail("read", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }],
-        status: [{ canFile: false, why: "You can read this session" }] }],
+        status: [{ canFile: false, why: "readers can't file", blockedBy: "reader" }] }],
     }));
     const page = await sessionPage(client);
     const composer = page.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!;
@@ -333,8 +333,8 @@ describe("a brainstorm session's page", () => {
       { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },
       { kind: "comment" as const, task: "WC-214", text: "keep it there" },
     ], status: filed
-      ? [{ filed: true, filedBy: ME.name, key: "BL-61" }, { canFile: false, why: "Only Ana can file this" }]
-      : [{ canFile: true }, { canFile: false, why: "Only Ana can file this" }] });
+      ? [{ filed: true, filedBy: ME.name, key: "BL-61" }, { canFile: false, why: "Only Ana can file this", blockedBy: "owner" as const, owner: ref(ANA) }]
+      : [{ canFile: true }, { canFile: false, why: "Only Ana can file this", blockedBy: "owner" as const, owner: ref(ANA) }] });
     const client = new SessionClient(detail("chat", { proposals: [proposal(false)] }), [
       { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
       { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
@@ -352,6 +352,25 @@ describe("a brainstorm session's page", () => {
     expect(line.getAttribute("aria-expanded")).toBe("true");
     expect(page.querySelector("[data-testid=proposal-unfolded]")!.textContent).toContain(`${ME.name} filed BL-61`);
     expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+  });
+
+  test("a card whose last item nobody can file stays open, saying why; one only you could file is not someone else's", async () => {
+    const proposal = (status: ProposalItemStatus) => ({ id: "prp_1", runId: RUN, createdAt: at(20), items: [
+      { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },
+      { kind: "edit" as const, task: "BL-58", after: { goal: "new" } },
+    ], status: [{ filed: true, filedBy: ME.name, key: "BL-61" }, status] });
+    const started = { canFile: false, why: "BL-58 has started (running): its text can no longer change", blockedBy: "started" as const };
+    const page = await sessionPage(new SessionClient(detail("chat", { proposals: [proposal(started)] })));
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.getAttribute("data-folded")).toBeNull();
+    expect(card.querySelector("[data-testid=cannot-file]")!.textContent).toBe(started.why);
+    expect(page.textContent).not.toContain("for others to file");
+
+    // An owner named as you is never "others": the card stays open too.
+    const yours = { canFile: false, why: "only Me can file this", blockedBy: "owner" as const, owner: ref(ME) };
+    const mine = await sessionPage(new SessionClient(detail("chat", { proposals: [proposal(yours)] })));
+    const open = await until(() => mine.querySelector("[data-testid=proposal-card]:not([data-folded])"), "the open card");
+    expect(open.querySelector("[data-testid=cannot-file]")!.textContent).toBe(yours.why);
   });
 
   test("a question withdrawn when its one recipient left says so, and asks for nothing", async () => {

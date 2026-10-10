@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
@@ -24,15 +24,15 @@ const ITEMS: ProposalCardItem[] = [
   { kind: "edit", title: "Edit BL-58 · Daily per-org usage rollup", tag: "Márcio's · not started", taskKey: "BL-58",
     before: "meter_daily(org, kind, day, count), backfilled from events.",
     after: "meter_daily(org, kind, day, count), backfilled from events, counting each run id once.",
-    canFile: false, why: "Only Márcio can file this: it's his task" },
+    canFile: false, blockedFor: "you", why: "Only Márcio can file this: it's his task" },
   { kind: "comment", title: "Comment on WC-214 · Checkout v2", tag: "Ana's", taskKey: "WC-214",
     detail: "“Invoice for annual plans assumes the plan step owns the method list; v2 should keep it there.”", canFile: true },
 ];
 
-function Card({ readOnly, items = ITEMS }: { readonly readOnly?: boolean; readonly items?: ProposalCardItem[] }) {
+function Card({ readOnly, items = ITEMS, defaultOpen }: { readonly readOnly?: boolean; readonly items?: ProposalCardItem[]; readonly defaultOpen?: boolean }) {
   const [selected, setSelected] = useState<Set<number>>(() => new Set(items.flatMap((it, i) => (it.canFile && !it.filed ? [i] : []))));
   return (
-    <ProposalCard items={items} selected={selected} filingAs="Ana" readOnly={readOnly}
+    <ProposalCard items={items} selected={selected} filingAs="Ana" readOnly={readOnly} defaultOpen={defaultOpen}
       onToggle={(i) => setSelected((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
       onFile={() => undefined} />
   );
@@ -54,13 +54,11 @@ const ALL_FILED: ProposalCardItem[] = [
 ];
 const LEFT_FOR_OTHERS: ProposalCardItem[] = ITEMS.map((it, i) =>
   (it.canFile && !it.filed ? { ...it, filed: filedBy("Ana Ribeiro", it.kind === "epic" ? "" : it.taskKey ?? `BL-6${i}`) } : it));
-
-/** Folded, then opened, as a person who pressed its line sees it. */
-function OpenedFromFolded() {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.querySelector<HTMLButtonElement>("[data-testid=proposal-fold]")?.click(), []);
-  return <div ref={ref}><Card items={ALL_FILED} /></div>;
-}
+/** As LEFT_FOR_OTHERS, but one more edit's task has started: nobody can file it, so the card stays open. */
+const BLOCKED_FOR_EVERYONE: ProposalCardItem[] = [...LEFT_FOR_OTHERS,
+  { kind: "edit", title: "Edit BL-55 · Meter retention", tag: "Ana's · running", taskKey: "BL-55",
+    before: "Keep meter rows for 90 days.", after: "Keep meter rows for 400 days, for annual invoices.",
+    canFile: false, blockedFor: "everyone", why: "BL-55 has started (running): its text can no longer change" }];
 
 function NothingTicked() {
   return <ProposalCard items={FRESH} selected={new Set()} filingAs="Ana" onToggle={() => undefined} onFile={() => undefined} />;
@@ -139,7 +137,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-proposal" title="ProposalCard"
-        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. With nothing ticked, File stays, disabled, beside “Tick what to file.” With nothing left for the person looking to file, the card folds to one line where it was proposed, in the Chat's margin grammar; the line opens the whole card, read only. Nothing on it names the session.">
+        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. With nothing ticked, File stays, disabled, beside “Tick what to file.” With nothing left for the person looking to file, the card folds to one line where it was proposed, in the Chat's margin grammar; the line opens the whole card, read only. An item nobody can file now (its task started, its project unlinked) keeps the card open with its reason. Nothing on it names the session.">
         <Panes mode={mode} surface>
           <Col>
             <Label>open: Ana, who can chat, before anything is filed</Label>
@@ -152,8 +150,10 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <Card items={ALL_FILED} />
             <Label>folded: nothing left for Ana, one for Márcio</Label>
             <Card items={LEFT_FOR_OTHERS} />
+            <Label>blocked for everyone: stays open, saying why</Label>
+            <Card items={BLOCKED_FOR_EVERYONE} />
             <Label>opened from folded</Label>
-            <OpenedFromFolded />
+            <Card items={ALL_FILED} defaultOpen />
             <Label>a reader: nothing is theirs to file, so it folds</Label>
             <Card readOnly />
           </Col>
