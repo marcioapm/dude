@@ -14,7 +14,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
+  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Button, Callout, Spinner } from "@dude/design-system/primitives";
@@ -24,6 +24,7 @@ import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
+import { DraftedComposer } from "./DraftedComposer.tsx";
 import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
@@ -234,7 +235,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
               turns={conversation.turns.length}
               emptyMessage={reader ? "Nobody has written here yet." : "Write to start: the agent reads the linked projects, asks what it needs, and proposes work you file yourself. It changes nothing."}
               footer={
-                <ChatComposer
+                <DraftedComposer
+                  place={`session:${sessionId}`}
                   mode="chat"
                   waitingFor={yours ? "The brainstorm" : undefined}
                   waitingKey={yours?.id}
