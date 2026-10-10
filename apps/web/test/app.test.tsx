@@ -143,12 +143,12 @@ describe("the first load with no place", () => {
 });
 
 describe("home", () => {
-  test("the sidebar's brand is a button named Home that goes to the welcome", async () => {
+  test("the sidebar's brand is a button named for its words and home, that goes to the welcome", async () => {
     const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
     await until(() => page.querySelector("[aria-label$=' board']"), "the board");
     const brand = page.querySelector<HTMLButtonElement>("[data-testid=brand-home]")!;
     expect(brand.tagName).toBe("BUTTON");
-    expect(brand.getAttribute("aria-label")).toBe("Home");
+    expect(brand.getAttribute("aria-label")).toBe("El Duderino, home");
     await click(brand);
     expect(window.location.hash).toBe("#/");
     await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
@@ -167,6 +167,75 @@ describe("home", () => {
     await click(await until(() => page.querySelector("[data-testid=sidebar-sessions] [data-testid=new-session]"), "New session"));
     await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
     expect(client.made).toBe(0);
+  });
+
+  test("an organisation with no projects gets the welcome, with New project in it for an admin", async () => {
+    class Empty extends FixtureClient {
+      override navigation() {
+        return super.navigation().then((n) => ({ ...n, projects: [] }));
+      }
+    }
+    const page = await app("#/", new Empty("a"));
+    const offer = await until(() => page.querySelector("[data-testid=welcome] [data-testid=new-project-empty]"), "New project in the welcome");
+    expect(page.querySelector("[data-testid=welcome] textarea")).not.toBeNull();
+    expect(page.querySelector("main")!.textContent).not.toContain("No projects yet");
+    await click(offer);
+    await until(() => page.ownerDocument.querySelector("[data-testid=project-name]"), "the new-project dialog");
+  });
+
+  test("an organisation with no projects offers a member, who may not make one, the welcome alone", async () => {
+    class EmptyForAMember extends FixtureClient {
+      override navigation() {
+        return super.navigation().then((n) => ({ ...n, projects: [] }));
+      }
+      override listPeople() {
+        return super.listPeople().then((l) => ({ ...l, people: l.people.map((p) => (p.id === l.you ? { ...p, role: "member" as const } : p)) }));
+      }
+    }
+    const page = await app("#/", new EmptyForAMember("a"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    // Both reads in: the tree is empty and the profile band knows who you are.
+    await until(() => (page.querySelector("aside")?.textContent?.includes("No projects yet") ? true : null), "the empty tree");
+    await until(() => page.querySelector("[data-testid=my-settings-button]")?.textContent?.includes("Márcio") ? true : null, "who you are");
+    await settle(50);
+    expect(page.querySelector("[data-testid=new-project-empty]")).toBeNull();
+  });
+
+  test("while the projects load, the welcome offers no New project", async () => {
+    class Never extends FixtureClient {
+      override navigation(): never {
+        return new Promise(() => undefined) as never;
+      }
+    }
+    const page = await app("#/", new Never("a"));
+    await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
+    await settle(50);
+    expect(page.querySelector("[data-testid=new-project-empty]")).toBeNull();
+  });
+
+  test("a send from the welcome opens the new session and reads the sessions list again", async () => {
+    class Making extends FixtureClient {
+      reads = 0;
+      override sessions() {
+        this.reads++;
+        return super.sessions();
+      }
+      override async createSession() {
+        return { id: "ssn_new", title: null, runId: "run_new" };
+      }
+    }
+    const client = new Making("a");
+    const page = await app("#/", client);
+    const area = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await until(() => (client.reads >= 1 ? true : null), "the first read");
+    const before = client.reads;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "plan the meter");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await until(() => (window.location.hash === "#/sessions/ssn_new" ? true : null), "the new session's place");
+    expect(client.reads).toBeGreaterThan(before);
   });
 });
 
@@ -207,8 +276,68 @@ describe("the sidebar's rail", () => {
     await key(search);
     await key(document.body, { metaKey: true });
     await key(document.body, { ctrlKey: true });
+    await key(document.body, { altKey: true });
+    await key(document.body, { shiftKey: true });
     expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
     expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("[ in a contenteditable or on a select is not the shortcut", async () => {
+    const page = await app("", new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=welcome] textarea"), "the composer");
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
+    const select = document.createElement("select");
+    document.body.append(editable, select);
+    try {
+      await key(editable);
+      await key(select);
+      expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+      expect(localStorage.getItem("dude.sidebar")).toBeNull();
+    } finally {
+      editable.remove();
+      select.remove();
+    }
+  });
+
+  test("[ under 1000px, where there is no rail, changes nothing kept", async () => {
+    const happyDOM = (window as unknown as { happyDOM: { setInnerWidth(w: number): void } }).happyDOM;
+    const width = window.innerWidth;
+    happyDOM.setInnerWidth(800);
+    try {
+      const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await key(document.body);
+      expect(localStorage.getItem("dude.sidebar")).toBeNull();
+    } finally {
+      happyDOM.setInnerWidth(width);
+    }
+  });
+
+  test("/ on the rail unfolds it with the search focused; with the sidebar open it does nothing here", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    await until(() => page.querySelector("[data-testid=sidebar-rail]"), "the rail");
+    await key(document.body, { key: "/" });
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBe("full");
+    expect(document.activeElement).toBe(page.querySelector("input[type=search]"));
+    (document.activeElement as HTMLElement).blur();
+    localStorage.removeItem("dude.sidebar");
+    await key(document.body, { key: "/" });
+    expect(page.querySelector("[data-testid=sidebar-rail]")).toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBeNull();
+  });
+
+  test("/ on the rail, in a field or with a modifier, is not the shortcut", async () => {
+    localStorage.setItem("dude.sidebar", "rail");
+    const page = await app("", new FixtureClient("a"));
+    const field = await until(() => page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea"), "the composer");
+    await key(field, { key: "/" });
+    await key(document.body, { key: "/", metaKey: true });
+    await key(document.body, { key: "/", ctrlKey: true });
+    expect(page.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
+    expect(localStorage.getItem("dude.sidebar")).toBe("rail");
   });
 
   test("the rail's New session, Sessions and Waiting on you go where the sidebar's do", async () => {

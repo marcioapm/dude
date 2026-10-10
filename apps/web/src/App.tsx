@@ -143,12 +143,24 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     localStorage.setItem(SIDEBAR, rail ? "rail" : "full");
     setRailed(rail);
   }, []);
-  // `[` from anywhere outside a field folds or unfolds it.
+  // `[` from anywhere outside a field folds or unfolds it; `/` on the rail
+  // unfolds it with the search focused, as the rail's search item does.
+  const railedNow = useRef(railed);
+  railedNow.current = railed;
+  const searchOnExpand = useRef(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented || typingIn(e.target)) return;
+      if ((e.key !== "[" && e.key !== "/") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented || typingIn(e.target)) return;
       // Under the drawer breakpoint there is no rail to fold to.
       if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
+      if (e.key === "/") {
+        if (!railedNow.current) return;
+        e.preventDefault();
+        searchOnExpand.current = true;
+        localStorage.setItem(SIDEBAR, "full");
+        setRailed(false);
+        return;
+      }
       e.preventDefault();
       setRailed((rail) => {
         localStorage.setItem(SIDEBAR, rail ? "full" : "rail");
@@ -158,6 +170,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  useEffect(() => {
+    if (railed || !searchOnExpand.current) return;
+    searchOnExpand.current = false;
+    document.querySelector<HTMLInputElement>("#nav input[type=search]")?.focus();
+  }, [railed]);
   const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
@@ -341,12 +358,16 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
-  // An organisation with no projects yet is offered one first: the welcome
-  // follows once there is something to work on.
-  if (place?.view === "welcome" && projects?.length !== 0) {
+  const newProject = () => setOpen({ kind: "newProject" });
+  if (place?.view === "welcome") {
     flush = true;
+    // A session needs no project, so the welcome is always the welcome; an
+    // organisation with none (known, not still loading) is also offered one.
     main = <WelcomeScreen client={client} projects={projects ?? []} sessions={sessionsList?.sessions ?? null} name={people.me?.name ?? null}
       onOpenSession={openSession} onAllSessions={() => go({ view: "sessions" })}
+      offer={projects?.length === 0 && isAdmin ? (
+        <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">New project</Button>
+      ) : null}
       onCreated={(id) => {
         void loadSessions();
         openSession(id);
@@ -374,7 +395,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         title="No projects yet"
         description="A project is where work for a codebase lives: its repositories, its agents, its tasks."
         action={isAdmin ? (
-          <Button variant="primary" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project-empty">
+          <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">
             New project
           </Button>
         ) : undefined}
@@ -546,7 +567,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           onNew: toWelcome,
           onOpenList: () => go({ view: "sessions" }),
           current: place?.view === "sessions" || place?.view === "brainstorm",
-          recent: (sessionsList?.sessions ?? []).map((s) => sessionTitle(s)),
+          recent: (sessionsList?.sessions ?? []).slice(0, 4).map((s) => sessionTitle(s)),
         }}
         railFooter={
           <>
@@ -586,7 +607,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           setMine(m);
         }}
         menuItems={menuItems}
-        title={<button type="button" className="brandHome" aria-label="Home" onClick={toWelcome} data-testid="brand-home">
+        title={<button type="button" className="brandHome" aria-label="El Duderino, home" onClick={toWelcome} data-testid="brand-home">
           <span className="brand"><DudeMark size={30} />El Duderino</span>
         </button>}
         treeActions={isAdmin ? (

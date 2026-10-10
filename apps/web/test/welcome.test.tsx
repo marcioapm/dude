@@ -34,6 +34,9 @@ class Welcoming extends FixtureClient {
   repoReads: string[] = [];
   /** Held until released: a send on its way. */
   hold: PromiseWithResolvers<void> | null = null;
+  /** How the next project reads go, in order: held until `held` resolves, or refused. Then at once. */
+  reads: Array<"held" | "refused"> = [];
+  held = Promise.withResolvers<void>();
   constructor() {
     super("a");
   }
@@ -42,9 +45,12 @@ class Welcoming extends FixtureClient {
     await this.hold?.promise;
     return { id: "ssn_new", title: null, runId: "run_new" };
   }
-  override getProject(id: string) {
+  override async getProject(id: string) {
     this.repoReads.push(id);
-    return Promise.resolve({ id, repositories: [{ id: `repo_${id}_1` }, { id: `repo_${id}_2` }] } as unknown as Awaited<ReturnType<FixtureClient["getProject"]>>);
+    const how = this.reads.shift();
+    if (how === "refused") throw new Error("the read failed");
+    if (how === "held") await this.held.promise;
+    return { id, repositories: [{ id: `repo_${id}_1` }, { id: `repo_${id}_2` }] } as unknown as Awaited<ReturnType<FixtureClient["getProject"]>>;
   }
 }
 
@@ -90,6 +96,12 @@ describe("the greeting", () => {
     const page = await welcome(new Welcoming(), { at: at(15) });
     expect(page.querySelector("h1")!.textContent).toBe("Afternoon, Márcio");
     expect(page.textContent).toContain("What are we working out today?");
+  });
+
+  test("is drawn from the clock it is given, not the browser's", async () => {
+    const at = (h: number) => new Date(2026, 9, 10, h, 30);
+    expect((await welcome(new Welcoming(), { at: at(4) })).querySelector("h1")!.textContent).toBe("Late one, Márcio");
+    expect((await welcome(new Welcoming(), { at: at(18) })).querySelector("h1")!.textContent).toBe("Evening, Márcio");
   });
 
   test("the composer is focused, says what to write, and goes to the brainstorm", async () => {
@@ -140,6 +152,36 @@ describe("what it will read", () => {
     expect(client.made).toEqual([{ message: "where does metering go?",
       projects: [{ projectId: "prj_bl", repositoryIds: ["repo_prj_bl_1", "repo_prj_bl_2"] }] }]);
     expect(created).toEqual(["ssn_new"]);
+    // The read made at link time is the one the send used: one per project.
+    expect(client.repoReads).toEqual(["prj_bl"]);
+  });
+
+  test("a send waits for a read still on its way, then carries what it read", async () => {
+    const client = new Welcoming();
+    client.reads = ["held"];
+    const page = await welcome(client);
+    await click((await openLinkMenu(page))[0]!);
+    await write(page, "where does metering go?");
+    await enter(page);
+    await settle(20);
+    expect(client.made).toEqual([]);
+    await act(async () => client.held.resolve());
+    await until(() => (client.made.length ? true : null), "the send");
+    expect(client.made[0]!.projects).toEqual([{ projectId: "prj_bl", repositoryIds: ["repo_prj_bl_1", "repo_prj_bl_2"] }]);
+    expect(client.repoReads).toEqual(["prj_bl"]);
+  });
+
+  test("a read that failed at link time is made again at send, and its repositories go", async () => {
+    const client = new Welcoming();
+    client.reads = ["refused"];
+    const page = await welcome(client);
+    await click((await openLinkMenu(page))[0]!);
+    await settle(20);
+    await write(page, "where does metering go?");
+    await enter(page);
+    await until(() => (client.made.length ? true : null), "the send");
+    expect(client.repoReads).toEqual(["prj_bl", "prj_bl"]);
+    expect(client.made[0]!.projects).toEqual([{ projectId: "prj_bl", repositoryIds: ["repo_prj_bl_1", "repo_prj_bl_2"] }]);
   });
 });
 
@@ -198,5 +240,19 @@ describe("sending", () => {
     await until(() => (created.length ? true : null), "the session opened");
     expect(client.made.length).toBe(1);
     expect(created).toEqual(["ssn_new"]);
+  });
+
+  test("two Enters before the composer re-renders as busy still make one session", async () => {
+    const client = new Welcoming();
+    client.hold = Promise.withResolvers<void>();
+    const page = await welcome(client);
+    await write(page, "plan the meter");
+    // One act: React commits nothing between the two, so the composer is not busy yet for the second.
+    await act(async () => {
+      for (let i = 0; i < 2; i++) textarea(page).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle(20);
+    expect(client.made.length).toBe(1);
+    await act(async () => client.hold!.resolve());
   });
 });
