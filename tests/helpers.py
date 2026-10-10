@@ -287,11 +287,13 @@ def sign_in(page, web_url: str, api_key: str, at: str | None = None) -> None:
     page.goto(web_url + (at or ""))
     expect(page.get_by_test_id("shell")).to_be_visible()
     if at is None:
-        # The tree has loaded once its skeleton is gone.
+        # The tree has loaded once its skeleton is gone. Its first project is
+        # opened by its URL: on a phone the tree is in the closed drawer.
         expect(page.get_by_label("Loading projects")).to_have_count(0)
         first = page.locator("[role=treeitem][data-nav-key^='project:']").first
         if first.count():
-            first.click()
+            project = first.get_attribute("data-nav-key").removeprefix("project:")
+            page.evaluate("id => { window.location.hash = '#/project/' + encodeURIComponent(id) }", project)
             expect(page).to_have_url(re.compile(r"#/project/"))
 
 
