@@ -405,6 +405,21 @@ describe("removing a tier", () => {
     expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id, timeLimitMinutes: 45 } });
   });
 
+  test("a session that chose it falls back to the organisation's and is told so; another organisation's session is not", async () => {
+    const added = await call(adminKey, "POST", "/v1/models/tiers", { name: "Spare", model: "claude-opus-5-5" });
+    expect(added.status).toBe(201);
+    const spare = await byName("Spare");
+    const otherThinker = (await tiers(otherKey))[0];
+    await owner`INSERT INTO sessions (id, organization_id, title, tier) VALUES ('ssn_spare', ${ORG}, 'On Spare', ${spare.id}),
+      ('ssn_other', ${OTHER}, 'On theirs', ${otherThinker.id})`;
+    // Not in use by a role: a session's choice needs no replacement, it falls back.
+    expect((await call(adminKey, "DELETE", `/v1/models/tiers/${spare.id}`, { replacement: null })).status).toBe(200);
+    expect([...await owner`SELECT id, tier FROM sessions WHERE id IN ('ssn_spare', 'ssn_other') ORDER BY id`])
+      .toEqual([{ id: "ssn_other", tier: otherThinker.id }, { id: "ssn_spare", tier: null }]);
+    expect([...await owner`SELECT organization_id, session_id, payload FROM events WHERE event_type = 'session.model.fallback'`])
+      .toEqual([{ organization_id: ORG, session_id: "ssn_spare", payload: { tier: { id: spare.id, name: "Spare" } } }]);
+  });
+
   test("one nothing uses goes with no replacement; the last one cannot go", async () => {
     const fast = await byName("Fast");
     expect((await call(adminKey, "DELETE", `/v1/models/tiers/${fast.id}`, { replacement: null })).status).toBe(200);
