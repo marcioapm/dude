@@ -476,13 +476,14 @@ describe("the welcome's first message", () => {
     client.hold = Promise.withResolvers<void>();
     const created: Array<[string, boolean]> = [];
     const first = await welcome(client, created);
-    await typeInto(first.composer, "plan the meter");
+    await typeInto(first.composer, "plan the meter  ");
     await enter(first.composer);
     await first.close();
-    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("plan the meter");
+    expect(JSON.parse(stored(WELCOME_KEY)!).text).toBe("plan the meter  ");
     await act(async () => client.hold!.resolve());
     await until(() => (created.length ? true : null), "the create answered");
     expect(created).toEqual([["ssn_new", false]]);
+    expect(client.made).toEqual(["plan the meter"]);
     expect(stored(WELCOME_KEY)).toBeNull();
   });
 
