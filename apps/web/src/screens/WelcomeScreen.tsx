@@ -97,7 +97,6 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
 
   const shown = (sessions ?? []).slice(0, RECENT_SESSIONS_SHOWN[density]);
   const clock = now ? now() : new Date();
-  const options: LinkableProject[] = projects.map((p) => ({ id: p.id, name: p.name, imageUrl: p.imageUrl, colorSlot: p.colorSlot }));
   return (
     <div className="screen welcomeScreen" data-testid="welcome">
       <Welcome
@@ -114,7 +113,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
               onValueChange={setText}
               placeholder="Start a session: an idea, a question, a plan…"
               to={<>To <b>Brainstorm</b></>}
-              leading={<ComposerLinks linked={linked} projects={options}
+              leading={<ComposerLinks linked={linked} projects={projects}
                 onLink={(p) => {
                   void reposOf(p.id).catch(() => undefined);
                   setLinked((l) => [...l, p]);
