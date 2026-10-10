@@ -426,7 +426,9 @@ describe("a session's name", () => {
     const title = page.querySelector("[data-testid=session-title]")!;
     expect(title.textContent).toBe("New session");
     expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
-    expect(document.activeElement).toBe(page.querySelector("[data-testid=session-screen] textarea"));
+    const composer = page.querySelector("[data-testid=session-screen] textarea");
+    expect(composer).not.toBeNull();
+    expect(document.activeElement === composer).toBe(true);
   });
 
   test("a member who can chat renames it in place: Enter saves, Escape cancels", async () => {
@@ -458,7 +460,7 @@ describe("a session's name", () => {
     expect(title.textContent).toBe("New session");
     await click(title);
     expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
-    expect(document.activeElement).not.toBe(page.querySelector("[data-testid=session-screen] textarea"));
+    expect(document.activeElement === page.querySelector("[data-testid=session-screen] textarea")).toBe(false);
   });
 
   test("the Chat says who named it: the agent, or the person by name", async () => {
