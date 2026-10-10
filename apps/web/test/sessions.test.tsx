@@ -16,7 +16,8 @@ import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
 import { forgetModelOptions } from "../src/sessionModel.ts";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
-import { ToastProvider } from "@dude/design-system/primitives";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { App } from "../src/App.tsx";
 import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
@@ -885,6 +886,48 @@ describe("a session's model", () => {
     expect(client.posted).toEqual([SESSION]);
     expect(chipName(page)).toBe("Model: Thinker on Codex");
     expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Codex");
+  });
+
+  test("through the App: a post answered after moving to another session's URL changes nothing there", async () => {
+    const OTHER = "ssn_other";
+    class Two extends Choosing {
+      release: Array<() => void> = [];
+      override getSession(id: string): Promise<SessionDetail> {
+        return Promise.resolve(id === OTHER ? { ...this.detail, session: { ...this.detail.session, id: OTHER }, model: { ...MODEL, harness: "codex",
+          effective: { ...MODEL.effective, harness: "codex" } } } : this.detail);
+      }
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Two(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    window.history.replaceState(null, "", `#/sessions/${SESSION}`);
+    const { container: page, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(async () => {
+      await unmount();
+      window.history.replaceState(null, "", " ");
+    });
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => {
+      window.location.hash = `#/sessions/${OTHER}`;
+    });
+    await until(() => chipName(page) === "Model: Thinker on Codex" || null, "the other session's chip");
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(chipName(page)).toBe("Model: Thinker on Codex");
+    // The new screen's own pick is its own: it follows its detail once answered.
+    await openRailMenu(page);
+    await click(await menuItem("Organisation default (OpenCode)"));
+    await act(async () => client.release[1]!());
+    await until(() => chipName(page) === "Model: Thinker on OpenCode (organisation default)" || null, "the pick on the other session answered");
   });
 
   test("handed over after a pick, the former owner's read-only chip says the detail's model", async () => {
