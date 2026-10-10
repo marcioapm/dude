@@ -319,7 +319,9 @@ func escalationNote(proposal, answer, conductorNote string) string {
 // while an escalation is decided but not yet carried out. Checked under the
 // escalation's locks (LockEscalationTx), held until the question is
 // inserted in the same tx, so no decision lands between the check and it.
-func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, actions []string) (string, error) {
+// Its question is one question: several are refused, readably, as the
+// owner's pick of a choice is what decides it.
+func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []QuestionItem, actions []string) (string, error) {
 	_, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return "", err
@@ -336,6 +338,11 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, choices, act
 		return "", nil
 	}
 	offered := d.State.Escalation.Actions()
+	if len(items) != 1 {
+		return "", refusef("the task's escalation waits on a person: ask its one question first (question, choices and "+
+			"actions, each one of %s), not %d questions; ask the rest once it is decided", listOr(offered), len(items))
+	}
+	choices := items[0].Labels()
 	if len(choices) == 0 || len(actions) != len(choices) {
 		return "", refusef("the task's escalation waits on a person: this question is its question. Offer choices, and "+
 			"actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the "+
