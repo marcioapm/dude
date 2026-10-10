@@ -293,6 +293,10 @@ export class FixtureClient extends ApiClient {
   override sessionOpen(_id: string, open: boolean) {
     return Promise.resolve({ open });
   }
+  // Nothing to open in the mockups' world: a session made here is refused, so the welcome shows its failure.
+  override createSession(): Promise<never> {
+    return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
+  }
   override listPullRequests(taskId: string) {
     if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });
     return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID ? [PULL_REQUEST] : [] });

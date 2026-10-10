@@ -22,7 +22,12 @@ const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
 }).strict();
-const create = z.object({ title: z.string().trim().max(200).optional(), projects: z.array(link).max(50).default([]) }).strict();
+// A first message makes the session and starts its agent in one call.
+const create = z.object({
+  title: z.string().trim().max(200).optional(),
+  projects: z.array(link).max(50).default([]),
+  message: z.string().trim().min(1).max(16_384).optional(),
+}).strict();
 const rename = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const links = z.object({ projects: z.array(link).max(50) }).strict();
 const invite = z.object({ people: z.array(z.string().min(1)).min(1).max(50), role: z.enum(["chat", "read"]).default("chat") }).strict();
