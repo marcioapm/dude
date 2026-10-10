@@ -522,9 +522,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (…)", which sets that half back. **An invalid pair is never offered**:
   an item whose harness cannot run the tier's model is disabled, its
   reason in place of its model, wrapping, read with the item
-  ("Claude Code takes an Anthropic model; Sol requests gpt-6-sol"),
-  with `harnessMisfit` from `@dude/domain`, against the other half as it
-  stands. After the first send the rail's **Model** block carries the
+  ("Claude Code takes an Anthropic model (claude-…); Sol requests
+  gpt-6-sol"), with `harnessMisfit` from `@dude/domain`, against the other
+  half as it stands; a tier that names no model is refused the same way
+  ("names no model yet"). A pair that stopped fitting after it was chosen
+  (a tier's model or the organisation's half changed) is still shown, as
+  it is what the session is on: `misfit` puts the warning glyph in
+  attention ink on the chip and its sentence under it. After the first
+  send the rail's **Model** block carries the
   same picker: its owner changes it, everyone else reads it
   (`readOnly`). **A change applies at the agent's next start**, never
   mid-turn; the Chat says so (`ChatNotice`, "Ana set the model to … ; it
