@@ -122,10 +122,14 @@
   outline: none;
 }
 
+/* Wraps at every width: in one line the leading chips, the only item that
+   can shrink, would be squeezed under "To …" and its aside. */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--ds-space-8);
+  row-gap: var(--ds-space-4);
   min-height: var(--ds-size-control-sm);
 }
 .hint {
@@ -147,15 +151,8 @@
   container-type: inline-size;
 }
 @container (max-width: 640px) {
-  .actions {
-    flex-wrap: wrap;
-    row-gap: var(--ds-space-4);
-  }
   .keys {
     display: none;
-  }
-  .submit {
-    margin-left: auto;
   }
   .lands {
     margin-right: 0;
@@ -175,8 +172,10 @@
 .spacer {
   flex: 1;
 }
+/* Ends its line even when it wraps onto one alone. */
 .submit {
   min-width: 88px;
+  margin-left: auto;
 }
 
 /* Who it goes out as, and whether it interrupts: quiet, at the start of the action row. */

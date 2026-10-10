@@ -338,9 +338,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   ends" for a harness that reads only between turns. **Interrupt now** —
   the costly one, which stops the turn — is a checkbox, never a key, and
   never a fallback the app takes on its own. Shift+Enter is a new line in
-  both. The action row says who it is sent as (`sentAs`). Narrower than
-  640px (a panel open beside the transcript) the row wraps, the button
-  stays at its end, and the key hints go before where a steer lands does.
+  both. The action row says who it is sent as (`sentAs`). The row wraps
+  whenever its items do not fit, at any width, the button staying at its
+  end: nothing in it is ever squeezed under its neighbour (the welcome's
+  link chips, "To **Brainstorm**" and its model chip take a line of their
+  own when they must). Narrower than 640px (a panel open beside the
+  transcript) the key hints go before where a steer lands does.
 - **An answer is given in the question's own turn**, never in the
   composer. While the agent waits on the reader (`waitingFor`) the composer
   steps back to one quiet line on the hover wash — "Implement is waiting
