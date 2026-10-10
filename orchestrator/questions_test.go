@@ -142,8 +142,9 @@ func TestOneQuestionThroughTheFormIsTheSameAnswer(t *testing.T) {
 }
 
 // A session's question put to one member: they answer the whole ask
-// through its form; another member cannot, and what they write waits for
-// the answer.
+// through its form; another member, a reader or an outsider cannot; a
+// message from them beside it is an aside that reaches the agent now; an
+// answer once given is not given again.
 func TestASessionsFourQuestionsAreTheNamedMembersToAnswer(t *testing.T) {
 	s := newSessionWorld(t)
 	s.withTools()
@@ -162,13 +163,25 @@ func TestASessionsFourQuestionsAreTheNamedMembersToAnswer(t *testing.T) {
 	if status, body := s.as(s.marcio, "POST", path, map[string]any{"answers": full}); status != 403 {
 		t.Errorf("another member answered Ana's questions: %d %v", status, body)
 	}
-	// A message from Ana is not an answer to several: it waits with others'.
-	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "one sec"})
+	if status, body := s.as(s.ana, "POST", path, map[string]any{"answers": full, "attachmentIds": []string{"att_x"}}); status != 422 {
+		t.Errorf("images on a session's answer: %d %v", status, body)
+	}
+	// A message from Ana is not an answer to several: an aside, not held, heard now.
+	said := s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "one sec"})
 	var st string
+	var heldFor *string
 	_ = s.owner.QueryRow(context.Background(), `SELECT status::text FROM questions WHERE id = $1`, qid).Scan(&st)
 	if st != "open" {
 		t.Fatalf("a chat message settled four questions: %s", st)
 	}
+	_ = s.owner.QueryRow(context.Background(), `SELECT held_for FROM directives WHERE id = $1`, said["directiveId"]).Scan(&heldFor)
+	if said["questionId"] != nil || heldFor != nil {
+		t.Errorf("Ana's message beside four questions: %v, held for %v", said, heldFor)
+	}
+	s.until("Ana's aside to reach the agent", func() bool {
+		v := s.luxRun(run)
+		return slices.ContainsFunc(append(v.inputs, v.resumes...), func(in string) bool { return strings.Contains(in, "one sec") })
+	})
 	if status, body := s.as(s.ana, "POST", path, map[string]any{"answers": full[:2]}); status != 422 {
 		t.Errorf("two answers for four: %d %v", status, body)
 	}
@@ -179,6 +192,73 @@ func TestASessionsFourQuestionsAreTheNamedMembersToAnswer(t *testing.T) {
 			return strings.HasPrefix(in, "Ana Nunes answered your 4 questions:\n\n1. Retry scope") &&
 				strings.HasSuffix(in, "Also from Ana Nunes:\nShip it small.")
 		})
+	})
+	if status, body := s.as(s.ana, "POST", path, map[string]any{"answers": full}); status != 409 {
+		t.Errorf("answered again: %d %v", status, body)
+	}
+}
+
+// Four questions put to nobody: anyone who can chat answers them, once; a
+// reader cannot, and someone outside the session does not see it at all.
+func TestASessionsQuestionsToNobodyAreAWritersToAnswerOnce(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.join(id, s.joao, "read")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "plan the split"})
+	run := s.started(id)
+	status, out := s.tool(run, "ask_person", fourAsked)
+	if status != 200 {
+		t.Fatalf("ask_person: %d %v", status, out)
+	}
+	qid := out["questionId"].(string)
+	path := "/internal/sessions/" + id + "/questions/" + qid + "/answer"
+	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	if status, body := s.as(s.joao, "POST", path, map[string]any{"answers": full}); status != 403 || !strings.Contains(fmt.Sprint(body["error"]), "read_only") {
+		t.Errorf("a reader answered: %d %v", status, body)
+	}
+	if status, body := s.as(s.outsider, "POST", path, map[string]any{"answers": full}); status != 404 {
+		t.Errorf("someone outside the session answered: %d %v", status, body)
+	}
+	s.ok(s.marcio, "POST", path, map[string]any{"answers": full})
+	if status, body := s.as(s.marcio, "POST", path, map[string]any{"answers": []map[string]any{{"choices": []int{1}}, full[1], full[2], full[3]}}); status != 409 {
+		t.Errorf("answered again: %d %v", status, body)
+	}
+	var answers []map[string]any
+	_ = s.owner.QueryRow(context.Background(), `SELECT answers FROM questions WHERE id = $1`, qid).Scan(&answers)
+	if len(answers) != 4 || fmt.Sprint(answers[0]["choices"]) != "[0]" {
+		t.Errorf("kept %v", answers)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE '%answered your 4 questions%'`, run); n != 1 {
+		t.Errorf("%d answer directives", n)
+	}
+}
+
+// Ana's own single question: what she writes aside is not the answer, is
+// not held behind it, and reaches the agent.
+func TestASessionMembersAsideBesideHerQuestionIsHeardNow(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "how long is the window?"})
+	run := s.started(id)
+	status, out := s.tool(run, "ask_person", `{"question":"Grow the 24h window?","choices":["Yes","No"],"to":"Ana"}`)
+	if status != 200 {
+		t.Fatalf("ask_person: %d %v", status, out)
+	}
+	qid := out["questionId"].(string)
+	said := s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "one sec", "aside": true})
+	var st string
+	var heldFor *string
+	_ = s.owner.QueryRow(context.Background(), `SELECT status::text FROM questions WHERE id = $1`, qid).Scan(&st)
+	_ = s.owner.QueryRow(context.Background(), `SELECT held_for FROM directives WHERE id = $1`, said["directiveId"]).Scan(&heldFor)
+	if st != "open" || said["questionId"] != nil || heldFor != nil {
+		t.Fatalf("Ana's aside: question %s, %v, held for %v", st, said, heldFor)
+	}
+	s.until("Ana's aside to reach the agent", func() bool {
+		v := s.luxRun(run)
+		return slices.ContainsFunc(append(v.inputs, v.resumes...), func(in string) bool { return strings.Contains(in, "one sec") })
 	})
 }
 
