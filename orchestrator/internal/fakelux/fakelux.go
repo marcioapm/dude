@@ -978,8 +978,12 @@ func (s *Server) Lose(id string) {
 }
 
 // dropQueued is a harness gone with its process: input it took and the
-// agent never read is lost, and a send of it again under the same request
-// id is new input to the harness that replaces it. Callers hold s.mu.
+// agent never read is lost, and its request ids with it. lux dedupes input
+// only in the container's shim (internal/shim/shim.go, Shim.delivered,
+// checked in deliver); neither luxd's postInput nor the runner's MsgInput
+// does, and host_messages are per host and epoch, acked once the shim took
+// them. So a send under the same id after a resume is new input. Callers
+// hold s.mu.
 func (s *Server) dropQueued(run *Run) {
 	for _, q := range run.queued {
 		delete(run.taken, q.requestID)
@@ -1944,8 +1948,8 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
-	// One request id is one input, as lux keys input by it: a retry of one
-	// it already took is answered, not queued again.
+	// One request id is one input while the harness that took it lives, as
+	// lux's shim drops a repeat (dropQueued): a retry is answered, not queued.
 	if run.taken[in.RequestID] && in.RequestID != "" {
 		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 		return

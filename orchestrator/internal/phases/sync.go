@@ -658,9 +658,15 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool
 }
 
 // unsendUnread makes what lux took for a stopped Run and its agent never
-// read unsent again: a harness that stopped lost its queue, so the resume
-// sends it again, under the same request id (lux answers one it kept
-// once). An interrupt is left alone: the turn it stopped is over.
+// read unsent again, so the resume sends it under the same request id. lux
+// dedupes input ids only in the container's shim memory
+// (internal/shim/shim.go, Shim.delivered); luxd's postInput and the
+// runner's MsgInput do not, and host_messages are per host and epoch, so a
+// new placement replays nothing: the queue and the ids die together, and
+// the re-send is new input. A harness that had already written the message
+// to its own transcript before dying may show it to the resumed agent
+// twice; a duplicate is preferred to a lost message. An interrupt is left
+// alone: the turn it stopped is over.
 func unsendUnread(ctx context.Context, tx pgx.Tx, runID string) error {
 	_, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
 		WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL AND NOT interrupt`, runID)
