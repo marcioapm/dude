@@ -1,11 +1,12 @@
 # The welcome page
 
-**Status: chosen direction (Márcio, 2026-10-10): option A with a short list
-of recent sessions, as dude's initial page.** Not built yet. Mockup:
-`docs/design/mockups/welcome/index.html` (opens from disk, interactive;
-source in `apps/web/mockups/welcome`, built with
+**Status: built (2026-10-10).** Chosen by Márcio: option A with a short
+list of recent sessions, as dude's initial page, and a sidebar that
+collapses. Mockup: `docs/design/mockups/welcome/index.html` (opens from
+disk, interactive; source in `apps/web/mockups/welcome`, built with
 `MOCKUP=welcome bunx vite build --config mockups/vite.config.ts`).
-Screens in `docs/design/mockups/welcome/screens/`.
+Screens in `docs/design/mockups/welcome/screens/`. The decisions taken
+while building it are under *Built* at the end.
 
 ## The problem
 
@@ -99,10 +100,13 @@ back; under 1000px it stays the drawer it is today.
 
 ## What changes outside the web app
 
-- **API**: `POST /sessions` takes the first message and the projects to
-  link (`{ message, attachments?, links? }`) and does create + link + chat
-  in one transaction, so a failed send leaves no empty session. The old
-  bare create stays only if something else uses it.
+- **API**: `POST /v1/brainstorms` (orchestrator `POST /internal/sessions`)
+  takes an optional `message` (the first message: 1 to 16 384 characters
+  after trimming, the same bounds as a message in Chat) beside `projects`.
+  Given one, it does create + link + start the agent in one transaction,
+  so a failed send leaves no empty session, and answers with `runId` as
+  well as `id`. Without one it is the bare create it was: the API is
+  additive. Image attachments on the first message are not taken yet.
 - **Recent sessions** is the existing `GET /sessions` (newest activity
   first); it already carries title, filed count, shared and owner.
 
@@ -117,15 +121,18 @@ with the build):
 - **`StarterPills`** — the starters: `raised` pills with a full radius,
   their glyph in the brainstorm's role colour (these are the brainstorm's).
   No border: shade in dark, `shadow-1` in light, a `secondary-hover` wash on
-  hover. Each takes `{ id, icon, title, detail, prompt }`; `onPick(prompt)`.
+  hover. Each takes `{ id, icon, title, detail, prompt }`; `onPick(starter)`.
 - **`ComposerLinks`** — the link chips for `ChatComposer leading`: neutral
   wash chips with the project's face and a 12px close, a quiet "+ Link"
   opening a float menu (`float` radius, `overlay`, `shadow-3`); read only
   without `onLink`/`onUnlink`.
 - **`Sidebar collapsed` / `onCollapsedChange`** — the rail, drawn by the
-  sidebar itself from what it already has (projects, counts, sessions
-  slot, footer), so the app passes one flag; a `SidebarCollapse` button for
-  the header. `SIDEBAR_DRAWER_QUERY` still decides drawer vs rail.
+  sidebar itself from what it already has (projects, counts), plus three
+  small props for what only the app knows: `railMark` (with `onHome`,
+  `homeSelected`), `railSessions` (New session and Sessions) and
+  `railFooter` (the band's `SidebarRailItem`s). The collapse chevron is the
+  sidebar's own, shown when `onCollapsedChange` is given.
+  `SIDEBAR_DRAWER_QUERY` still decides drawer vs rail.
 - **`RecentSessions`** — the short list: rows of `row-comfortable` height
   told apart by space, a `row-hover` wash, the age tabular.
 
@@ -151,3 +158,34 @@ Nothing here adds a token, a tone or a radius; `borders.test.ts` and
 ## Open
 
 - The greeting's line: plain, or one of dude's ("The Dude abides.")?
+
+## Built
+
+What the build decided where this page left it open:
+
+- **Linking from the welcome links the whole project**: every repository
+  it has, read with `getProject` as soon as the project is picked (and
+  again at send time if that read had not come back). The rail's Link
+  dialog narrows it afterwards.
+- **The link menu is `RowMenu`** (Radix: arrows, Enter, Escape, portaled
+  over the raised composer), whose items gained a `leading` face; no
+  hand-rolled menu. Its float takes `shadow-3` here.
+- **`RecentSessions` is its own one-line row**, not `SessionRow`: the
+  list's row has two lines, project chips and a state column that the
+  welcome's short list leaves out. It reuses `SharedMark`.
+- **How many recent sessions** is the app's choice, by the density in force
+  (`RECENT_SESSIONS_SHOWN`: 4 comfortable, 6 compact); `RecentSessions`
+  draws what it is given.
+- **The composer is raised by the stage, not by a second stylesheet**:
+  `ChatComposer` reads `--cc-raise`, `--cc-field-min` and `--cc-inset`,
+  which `Welcome` sets.
+- **An organisation with no projects** still sees "No projects yet" and
+  New project at `#/`: the welcome follows once there is a project.
+- **The tab reads "dude"** on the welcome, as with nothing selected before.
+- **`[`** is ignored in an input, textarea, select or contenteditable,
+  with any modifier, and under 1000px, where there is no rail. Nothing
+  else bound it.
+- **A session made before this change can still be empty**; its writers
+  keep the "Write to start…" line and a focused composer, its readers
+  "Nobody has written here yet."
+- No token, tone, radius or border exception was added.
