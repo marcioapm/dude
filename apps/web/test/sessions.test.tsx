@@ -981,6 +981,35 @@ describe("a session's model", () => {
     expect(document.getElementById(chip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(why);
   });
 
+  test("while a pick on a pair that no longer fits is out, the chip shows the pick with no misfit; once answered, the detail's", async () => {
+    const why = "Codex takes an OpenAI model, but the tier Thinker requests claude-fable-5-1. Choose another harness or tier in the session's Model.";
+    class Held extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Held(detail("owner", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" }, misfit: why },
+      session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const chip = await openRailMenu(page);
+    const misfitMark = () => page.querySelector("[data-testid=session-model] [data-testid=model-picker-misfit]");
+    expect(misfitMark()).not.toBeNull();
+    await click(await menuItem("Organisation default (OpenCode)"));
+    expect(client.release.length).toBe(1);
+    expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on OpenCode (organisation default)");
+    expect(chip.hasAttribute("aria-describedby")).toBe(false);
+    expect(misfitMark()).toBeNull();
+    // The server's misfit still names the old pair: it stays off until the detail is read again.
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(chipName(page)).toBe("Model: Thinker on OpenCode (organisation default)");
+    expect(page.querySelector("[data-testid=session-model] [data-testid=model-picker]")!.hasAttribute("aria-describedby")).toBe(false);
+    expect(misfitMark()).toBeNull();
+  });
+
   test("a member who is not the owner reads it, with nothing to open, and the tiers are never read", async () => {
     const client = new Reading(detail("chat", { model: { ...MODEL, tier: { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null },
       effective: { tierName: "Coder", model: "claude-opus-5-5", harness: "opencode" } } }));
