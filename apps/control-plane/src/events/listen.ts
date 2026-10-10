@@ -41,7 +41,8 @@ const SETTLE_MS = 150;
 const PAGE = 1000;
 
 export async function listenForEvents(databaseUrl: string): Promise<() => Promise<void>> {
-  const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  // In UTC like the pool (openPool), so a time a notification ever carries says "+00:00".
+  const sql = postgres(databaseUrl, { max: 1, onnotice: () => {}, connection: { TimeZone: "UTC" } });
   // Per organization: the lowest cursor notified and not yet published.
   const waiting = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | null = null;

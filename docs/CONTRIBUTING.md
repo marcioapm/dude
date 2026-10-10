@@ -394,9 +394,12 @@ Each of these cost real time.
   changes what the next run sees.
 - **Every time the API sends is UTC.** The browser merges times from
   different sources (a proposal card's, the ledger's), and on a host outside
-  UTC pgx scans a `timestamptz` in the process's zone (`+01:00`). Both pools
-  set the session `TimeZone` to UTC and the orchestrator's scans into UTC
-  (`db.Open`, `openPool`); the web app still compares instants, never the
+  UTC pgx scans a `timestamptz` in the process's zone (`+01:00`). Both pools,
+  the control plane's `LISTEN` connection and the migration runner set the
+  session `TimeZone` to UTC, the orchestrator's scans into UTC (`db.Open`,
+  `openPool`, `listen.ts`, `migrate.ts`), and a time decoded from lux's JSON
+  is passed on in UTC (`servers.previewProgress`, `servers.moved`); the web
+  app still compares instants, never the
   text (`apps/web/src/instant.ts`). CI and production are UTC, so only a
   test that sets `time.Local` or the database's zone sees a slip.
 
