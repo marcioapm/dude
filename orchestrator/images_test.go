@@ -432,7 +432,7 @@ func TestAResumedRunKeepsItsImage(t *testing.T) {
 		w.pump()
 		time.Sleep(10 * time.Millisecond)
 	}
-	if r.Resumed != 1 {
+	if w.luxCalls(r.ID, "resume") != 1 {
 		t.Fatalf("not resumed\n%s", w.describeRuns())
 	}
 	if got := submitted(t, r).Image.Ref; got != finalRef {
