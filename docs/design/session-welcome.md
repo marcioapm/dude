@@ -218,20 +218,35 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   following the organisation when its setting changes.
 - **An invalid pair is never offered.** An item whose harness cannot run
   the tier's model is disabled with the reason ("Claude Code takes an
-  Anthropic model; Sol requests gpt-6-sol"), judged by `harnessMisfit`
-  against the other half as it stands. The orchestrator checks the same
-  rule (`HarnessFits`) on the pair the next start would use, and refuses a
-  misfit with a 400, on create and on `/model`.
+  Anthropic model (claude-…); Sol requests gpt-6-sol"), judged by
+  `harnessMisfit` against the other half as it stands, and worded with
+  `harnessWants` (the orchestrator's `harnessWants` says the same). A tier
+  naming no model is disabled too ("names no model yet"). The orchestrator
+  checks the pair the next start would use and refuses a misfit, or a tier
+  with no model, with a 400, on create and on `/model`. A session that
+  chooses neither half is not checked: a misfit there is the
+  organisation's, and its Run fails saying so, in the admin's words.
 - **A change applies at the agent's next start, never mid-turn.** The
   rail's **Model** block carries the same picker for the owner (everyone
   else reads it); a change records `session.model.changed`, which the Chat
   shows ("Ana set the model to Opus (High) · Claude Code; it applies the
   next time the agent starts"). A live or parked agent resumes on what it
-  was submitted with.
-- **A tier removed falls back.** `ON DELETE SET NULL` sends a session that
-  chose it back to the organisation's tier, and a trigger on `model_tiers`
-  records `session.model.fallback` on it, so its members are told.
-- **The header** names what a live agent runs on; with none live, what the
-  next start would use, "(organisation default)" when it follows.
+  was submitted with. The owner's chip is a button at once; its menu reads
+  the organisation's tiers when it first opens, and says "Could not load
+  the tiers" when it cannot. A pick shows at once and the detail takes
+  over once the last pick is answered; a failed pick cancels the picks
+  queued behind it, which carried its half.
+- **A tier removed falls back.** A trigger on `model_tiers` sets each
+  session that chose it back to the organisation's tier, under the row's
+  lock, and records `session.model.fallback` on each one it changed, so
+  its members are told (`ON DELETE SET NULL` stays as the net).
+- **A pair that stops fitting later** (its tier removed, or the
+  organisation's half changed) is said where it is seen: the detail's
+  `model.misfit`, under the chip with a danger mark, and the Run's failure,
+  both in the session's words ("…Choose another harness or tier in the
+  session's Model.").
+- **The header** says "Brainstorm · <tier> · <harness>": a live agent's as
+  its Run records them; with none live, what the next start would use,
+  "(organisation default)" when it follows.
 - Out of scope: a session's own effort (a tier carries it), machine size or
   image.
