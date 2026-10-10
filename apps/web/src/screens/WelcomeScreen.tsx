@@ -96,7 +96,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
   };
 
   const shown = (sessions ?? []).slice(0, RECENT_SESSIONS_SHOWN[density]);
-  const clock = (now ?? (() => new Date()))();
+  const clock = now ? now() : new Date();
   const options: LinkableProject[] = projects.map((p) => ({ id: p.id, name: p.name, imageUrl: p.imageUrl, colorSlot: p.colorSlot }));
   return (
     <div className="screen welcomeScreen" data-testid="welcome">
