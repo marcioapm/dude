@@ -19,7 +19,9 @@ import (
 // message creates the task's conductor, briefed by dude; with one, it is
 // the conductor's next input, delivered as a steer is (a directive), which
 // resumes it when it is parked. A question it is waiting on is answered by
-// it, as through the question's own route.
+// it, as through the question's own route — unless the person writes
+// aside (to the agent, leaving the question open), or the question is
+// several, answered only through its form.
 //
 // The first message on a task whose delivery is in progress hands its
 // decisions to the conductor (taking over): the step running finishes, and
@@ -28,7 +30,8 @@ import (
 // first decision. A merged or closed task's conductor stays read-only.
 func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error {
 	var body struct {
-		Text string `json:"text"`
+		Text  string `json:"text"`
+		Aside bool   `json:"aside"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -39,7 +42,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 	if len(body.Text) > delivery.ChatMessageMax {
 		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
 	}
-	return s.converse(w, r, org, body.Text, false)
+	return s.converse(w, r, org, body.Text, false, body.Aside)
 }
 
 // TalkItThrough is what a person who pressed Talk it through says to the
@@ -51,12 +54,12 @@ const TalkItThrough = "Let's talk this task through before anything is built. Re
 // by the conductor and waiting on its first decision, and its conductor,
 // asked to plan it with the person.
 func (s *Server) talk(w http.ResponseWriter, r *http.Request, org string) error {
-	return s.converse(w, r, org, TalkItThrough, true)
+	return s.converse(w, r, org, TalkItThrough, true, false)
 }
 
 // converse takes a person's message in a task's Chat (see chat); with
 // talk, only on a task not started.
-func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text string, talk bool) error {
+func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text string, talk, aside bool) error {
 	taskID := r.PathValue("id")
 	p := principalOf(r)
 	writer := delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person}
@@ -122,25 +125,35 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org, text stri
 
 		// Waiting on its question: this is the answer.
 		var questionID, prompt string
-		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt
+		var rawItems []byte
+		qerr := tx.QueryRow(r.Context(), `SELECT q.id, q.prompt, q.items
 			FROM questions q WHERE q.run_id = $1 AND q.status = 'open' ORDER BY q.asked_at DESC LIMIT 1 FOR UPDATE`, runID).
-			Scan(&questionID, &prompt)
+			Scan(&questionID, &prompt, &rawItems)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
+		var items []delivery.QuestionItem
 		if qerr == nil {
+			if items, err = delivery.ReadItems(rawItems); err != nil {
+				return err
+			}
+		}
+		if qerr == nil && !aside && len(items) == 1 {
 			ri := runInfo{ProjectID: projectID, TaskID: taskID, Role: delivery.RoleConductor}
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, text, p)
+			answered, err := answerBody{Text: text}.check(items)
+			if err != nil {
+				return err
+			}
+			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, "", p)
 			if err != nil {
 				return err
 			}
 			out = map[string]any{"runId": runID, "taskId": taskID, "created": false, "questionId": questionID,
 				"directiveId": directiveID, "decider": decider}
-			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p,
-				map[string]any{"questionId": questionID, "answer": text, "directiveId": directiveID})
+			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p, answeredPayload(questionID, directiveID, answered))
 		}
 
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: text, Scope: "run"})
