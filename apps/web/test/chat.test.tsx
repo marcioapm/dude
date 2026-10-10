@@ -497,13 +497,13 @@ describe("the Chat tab", () => {
     expect(tabs()[0]!.dataset.done).toBe("true");
   });
 
-  /** A two-question q_7 on a page whose person is known only once `known()` is called. */
-  async function personLater() {
+  /** A two-question q_7 (after what `earlier` adds) on a page whose person is known only once `known()` is called. */
+  async function personLater(earlier: () => PersistedEvent[] = () => []) {
     const items = [
       { header: "Scope", question: "Which failures?", multiple: false, choices: [{ label: "5xx", description: "", recommended: false }, { label: "All", description: "", recommended: false }] },
       { header: "Button", question: "Its words?", multiple: false, choices: [] },
     ];
-    const asking = [...conductorEvents(),
+    const asking = [...conductorEvents(), ...earlier(),
       ev("question.asked", { kind: "agent", questionId: "q_7", prompt: "2 questions: Scope, Button", options: [], items }, { type: "agent", id: CONDUCTOR })];
     const client = new ChatClient({ status: "running" }, asking);
     let known!: () => void;
@@ -555,6 +555,20 @@ describe("the Chat tab", () => {
     await act(async () => tabs()[0]!.click());
     const radios = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")];
     expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+  });
+
+  test("an answered question's card is not mounted again when the page learns who the person is", async () => {
+    localStorage.clear();
+    const { page, known } = await personLater(() => [
+      ev("question.asked", { kind: "agent", questionId: "q_3", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR }),
+      ev("question.answered", { questionId: "q_3", answer: "Yes", directiveId: "dir_3", answers: [{ choices: [0], text: "" }] }, MARCIO),
+    ]);
+    const card = () => page.querySelector("[data-question=q_3]");
+    const before = card();
+    expect(before?.getAttribute("data-state")).toBe("answered");
+    await act(async () => known());
+    await settle();
+    expect(card() === before).toBe(true);
   });
 
   test("answered through the form, the question's turn is the record, and the note is the person's own turn", async () => {
