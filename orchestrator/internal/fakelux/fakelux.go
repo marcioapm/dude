@@ -966,6 +966,7 @@ func (s *Server) Lose(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
+		run.busy = false
 		s.setStateWith(run, "lost", "host lost")
 	}
 }
@@ -990,11 +991,13 @@ func (s *Server) Place(id string) {
 	}
 }
 
-// Crash ends a Run's agent as a dead container would.
+// Crash ends a Run's agent as a dead container would: a resume finds it
+// idle, as lux restarts the harness.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
+		run.busy = false
 		s.setState(run, "failed")
 	}
 }
@@ -1006,6 +1009,17 @@ func (s *Server) Succeed(id string) {
 	if run := s.runs[id]; run != nil {
 		run.busy = false
 		s.setState(run, "succeeded")
+	}
+}
+
+// StopOnItsOwn stops a Run nobody asked to stop, with no reason, as lux
+// reports a container stopped from outside it: resumable.
+func (s *Server) StopOnItsOwn(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.busy = false
+		s.setState(run, "stopped")
 	}
 }
 
