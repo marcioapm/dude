@@ -35,6 +35,17 @@ export function modelProvider(model: string): "anthropic" | "openai" {
 }
 
 /**
+ * The models `harness` takes, in words, for a sentence saying why a pair
+ * does not fit; null for one that takes both (OpenCode). The orchestrator's
+ * delivery.harnessWants says the same.
+ */
+export function harnessWants(harness: Harness): string | null {
+  if (harness === "claude-code") return "an Anthropic model (claude-…)";
+  if (harness === "codex") return "an OpenAI model";
+  return null;
+}
+
+/**
  * Why `harness` cannot run `model`, in a sentence; null when it can, or
  * when there is no model to check. The scripted agent stands in for any.
  */

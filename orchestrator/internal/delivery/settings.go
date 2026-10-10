@@ -105,17 +105,27 @@ func (rs RoleSettings) HarnessName() string {
 // only OpenAI's; OpenCode speaks both (llm.Provider decides which a model
 // goes through). who names the role, as RoleName does.
 func HarnessFits(harness, model, tier, who string, anthropic bool) string {
-	var wants string
-	switch {
-	case harness == HarnessClaudeCode && !anthropic:
-		wants = "an Anthropic model (claude-…)"
-	case harness == HarnessCodex && anthropic:
-		wants = "an OpenAI model"
-	default:
+	if harnessRuns(harness, anthropic) {
 		return ""
 	}
 	return fmt.Sprintf("The %s runs on %s, which takes %s, but its tier %s requests %s. An admin picks another harness or tier in Agents.",
-		who, harnessLabel[harness], wants, tier, model)
+		who, harnessLabel[harness], harnessWants(harness), tier, model)
+}
+
+// harnessWants is the models harness takes, in words; "" for one that
+// takes both providers' (OpenCode). packages/domain harnessWants says the same.
+func harnessWants(harness string) string {
+	switch harness {
+	case HarnessClaudeCode:
+		return "an Anthropic model (claude-…)"
+	case HarnessCodex:
+		return "an OpenAI model"
+	}
+	return ""
+}
+
+func harnessRuns(harness string, anthropic bool) bool {
+	return !(harness == HarnessClaudeCode && !anthropic) && !(harness == HarnessCodex && anthropic)
 }
 
 // The no-progress limit: a role's default, and the least a stored one is
