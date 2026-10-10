@@ -301,6 +301,8 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
   [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
+  // The summary it kept stays in the event, for the ledger; it can run to pages.
+  [EventTypes.ContextCompacted]: { notice: "notice", text: () => "The agent compacted its context." },
 };
 
 /** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
@@ -869,7 +871,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.parked":
       case "run.unparked":
       case "run.idle_nudged":
-      case EventTypes.SessionReplaced: {
+      case EventTypes.SessionReplaced:
+      case EventTypes.ContextCompacted: {
         const { notice, text } = NOTICES[event.eventType]!;
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
         if (notice === "unparked" && typeof payload.epoch === "number") {

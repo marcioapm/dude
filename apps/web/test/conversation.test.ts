@@ -1032,6 +1032,15 @@ describe("what happened to a talker's agent", () => {
     expect(html).toContain('data-kind="notice"');
   });
 
+  test("a compaction is a quiet notice that never shows the summary it kept", () => {
+    const summary = "SECRET-LONG-SUMMARY ".repeat(500);
+    const turns = notes([ev(EventTypes.ContextCompacted, { trigger: "auto", preTokens: 167012, postTokens: 9120, summary })]);
+    expect(turns).toEqual([expect.objectContaining({ kind: "notice", notice: "notice", text: "The agent compacted its context." })]);
+    const html = renderToStaticMarkup(createElement("div", null, renderTurn(turns[0]!, "conductor", 0, false, people, "El Duderino")));
+    expect(html).toContain("The agent compacted its context.");
+    expect(html).not.toContain("SECRET-LONG-SUMMARY");
+  });
+
   test("a park after a stopped container or a failed turn says so, not that nobody wrote", () => {
     expect(notes([
       ev("run.parked", { reason: "session", stopped: "lost" }),
