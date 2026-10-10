@@ -53,10 +53,11 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type SteerWait, type ToolTurn, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
-import type { ComposerSubmission } from "@dude/design-system/components";
+import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
+import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, formatTimestamp, Icon } from "@dude/design-system";
@@ -64,7 +65,7 @@ import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
-import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
+import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
@@ -97,7 +98,10 @@ export interface RunScreenProps {
 
 export interface ChatVariant {
   head: ReactNode;
-  send: (text: string) => Promise<unknown>;
+  /** A message to the conductor; `aside` while it waits on a question: written beside it, not answering it. */
+  send: (text: string, aside?: boolean) => Promise<unknown>;
+  /** The conductor's question answered through its form. */
+  answer: (questionId: string, answers: ReadonlyArray<QuestionAnswer>, note: string) => Promise<unknown>;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
@@ -344,16 +348,29 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const send = useCallback(
     async (submission: ComposerSubmission) => {
-      const ok = await (chat ? intervene(() => chat.send(submission.text), "send the message")
-        : submission.mode === "answer"
-        ? intervene(() => client.answer(submission.questionId, submission.text, submission.attachmentIds), "answer the agent")
+      // While the agent waits on its question, the composer is open only
+      // for a message beside it ("Write to the agent instead"): aside,
+      // never the answer.
+      const ok = await (chat ? intervene(() => chat.send(submission.text, conversation.openQuestion !== null), "send the message")
         : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt,
           attachmentIds: submission.attachmentIds }), "steer this run"));
       // Sent: the images are the message's now, not the tray's.
       if (ok) tray.clear(submission.attachmentIds);
       else throw new Error("not sent");
     },
-    [client, runId, intervene, tray, chat],
+    [client, runId, intervene, tray, chat, conversation.openQuestion],
+  );
+
+  // The question's form: its answers, sent; in a task's Chat, through Chat.
+  const answerQuestion = useCallback(
+    async (turn: QuestionTurn, s: QuestionSubmission): Promise<boolean> => {
+      const ok = await intervene(() => chat
+        ? chat.answer(turn.questionId, s.answers, s.note)
+        : client.answerQuestions(turn.questionId, s.answers, s.note, s.attachmentIds), "answer the agent");
+      if (ok) tray.clear(s.attachmentIds);
+      return ok;
+    },
+    [client, intervene, tray, chat],
   );
 
   // Interrupt now (a queued steer) and Retry (a failed one) send the same
@@ -438,8 +455,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const restartedText = runRestartedText(run, events, people);
+  // The question's form, while the Run can still hear it.
+  const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
-    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote);
+    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
+  // The agent waits on the reader's answer: the composer steps back to one line.
+  const asked = conversation.openQuestion;
+  const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
+    ? (chat ? "The conductor" : runLabel(run)) : undefined;
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -461,11 +484,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 <>
                 {chat.above}
                 <ChatComposer
-                  mode={asking ? "answer" : "chat"}
-                  question={asking ? {
-                    id: asking.questionId, text: asking.text, askedBy: "the conductor", askedAt: asking.at,
-                    options: waitingOn ? [] : asking.options,
-                  } : undefined}
+                  mode="chat"
+                  waitingFor={waitingForYou}
                   disabled={asking !== null && waitingOn !== undefined}
                   disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
                   onSubmit={send}
@@ -582,10 +602,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   return (
     <div className="runScreen" data-view={view} data-testid="run-screen">
-      {/* The whole session takes a dropped image, header and rail included, on the conversation. */}
-      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || !composerOpen} disabledReason={tray.disabledReason}
-        detail={<>They go with your next {conversation.openQuestion ? "answer" : "steer"} to <b>{runLabel(run)}</b>.{" "}
-          {conversation.openQuestion ? "It reads them with your answer." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
+      {/* The whole session takes a dropped image, header and rail included, on the conversation:
+          into the composer's tray, or, while several questions wait on you, their note's. */}
+      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || !composerOpen || (waitingForYou !== undefined && (asked?.items.length ?? 0) < 2)}
+        disabledReason={tray.disabledReason}
+        detail={<>They go with your next {waitingForYou ? "answers, with the note" : "steer"} to <b>{runLabel(run)}</b>.{" "}
+          {waitingForYou ? "It reads them with your answers." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
       <SessionHeader session={session} actions={actions} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
           focus; Changes draws its own controls into the slot after it. */}
@@ -623,21 +645,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 <PreviewRunNote openServers={onOpenServers ?? (onOpenTask && read ? () => onOpenTask(run.taskId, "servers") : undefined)} />
               ) : (
                 <ChatComposer
-                  // The agent waiting on a question takes an answer; otherwise
-                  // anything said steers it.
-                  mode={conversation.openQuestion ? "answer" : "steer"}
-                  question={
-                    conversation.openQuestion
-                      ? {
-                          id: conversation.openQuestion.questionId,
-                          text: conversation.openQuestion.text,
-                          askedBy: runLabel(run),
-                          askedAt: conversation.openQuestion.at,
-                          // Choices only for whoever may choose.
-                          options: waitingOn ? [] : conversation.openQuestion.options,
-                        }
-                      : undefined
-                  }
+                  // The agent waiting on your answer: the composer steps back,
+                  // the form is the question's turn; otherwise anything said steers it.
+                  mode="steer"
+                  waitingFor={waitingForYou}
                   // A paused Run takes an answer (a parked one is resumed by it),
                   // not a steer; a question is its owner's to answer.
                   disabled={(run.status === "paused" && !conversation.openQuestion) ||
@@ -991,7 +1002,7 @@ function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: st
 
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
-  toolNote?: (turn: ToolTurn) => ReactNode) {
+  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions) {
   switch (turn.kind) {
     case "repositoryRequest": {
       // Asked of a person, like a question: approve brings it into the Run.
@@ -1037,20 +1048,7 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       return <ChatEvent key={turn.id} data-testid="chat-event" role={role} type={turn.type} data={turn.data} at={turn.at} />;
     case "question":
       // A Run that ended on an unanswered question will never hear back.
-      return (
-        <QuestionCard
-          key={turn.id}
-          role={role}
-          text={turn.text}
-          options={turn.options}
-          askedAt={turn.at}
-          answeredAt={turn.answeredAt}
-          dismissed={ended && turn.answeredAt === null}
-          settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
-          waitingOn={turn.to ? questionFor(turn.to, people) : waitingOn}
-          onlyThey={turn.to !== null}
-        />
-      );
+      return <AskTurn key={turn.id} turn={turn} role={role} ended={ended} people={people} waitingOn={waitingOn} ask={ask} />;
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
       // A conductor's is dude's briefing of it, tagged so.
@@ -1141,6 +1139,58 @@ function questionFor(to: { id: string; name: string | null }, people: People): s
   if (to.id === people.you) return undefined;
   const name = actorName(to, people.names);
   return name ? firstName(name) : "someone else";
+}
+
+/** How a question waiting on the reader is answered: its form's Send, and the note's image tray. */
+export interface AskActions {
+  answer: (turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>;
+  tray?: Pick<ImageTray, "attachments" | "add" | "remove" | "disabledReason" | "limits"> | undefined;
+}
+
+/**
+ * An agent's question as its turn: the answer form while it waits on the
+ * reader (its draft kept in this browser until sent), the record once
+ * answered, as it was otherwise.
+ */
+function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
+  turn: QuestionTurn; role: AgentRole; ended: boolean; people: People; waitingOn: string | undefined; ask: AskActions | undefined;
+}) {
+  const { draft, keep, forget } = useAnswerDraft(people.you, ask && !ended ? turn : null);
+  const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
+  const by = actorName(turn.answeredBy, people.names);
+  const open = !ended && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
+  // The note's images are for several questions; one question has no note.
+  const tray = open && turn.items.length > 1 ? ask.tray : undefined;
+  return (
+    <QuestionCard
+      data-testid="question-turn"
+      data-question={turn.questionId}
+      role={role}
+      text={turn.text}
+      items={turn.items}
+      askedAt={turn.at}
+      answeredAt={turn.answeredAt}
+      answers={turn.answers}
+      answeredBy={by ? firstName(by) : undefined}
+      dismissed={ended && turn.answeredAt === null}
+      settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
+      waitingOn={whom}
+      onlyThey={turn.to !== null}
+      {...(open ? {
+        onSubmit: async (s: QuestionSubmission) => {
+          const ok = await ask.answer(turn, s);
+          if (ok) forget();
+          return ok;
+        },
+        draft,
+        onDraftChange: keep,
+      } : {})}
+      {...(tray ? {
+        attachments: tray.attachments, onAttachFiles: tray.add, onRemoveAttachment: tray.remove,
+        attachAccept: "image/png,image/jpeg,image/webp,image/gif", attachHint: limitsHint(tray.limits), attachDisabledReason: tray.disabledReason,
+      } : {})}
+    />
+  );
 }
 
 /** "Aborted by Ana: wrong task" — who stopped it, and why, when known. */

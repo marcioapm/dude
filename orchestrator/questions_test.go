@@ -182,6 +182,54 @@ func TestASessionsFourQuestionsAreTheNamedMembersToAnswer(t *testing.T) {
 	})
 }
 
+// A task's conductor asking four questions: a Chat message is not their
+// answer (aside or not, it waits beside them), and its form's answers
+// through Chat, naming the question, are.
+func TestAConductorsFourQuestionsAreAnsweredThroughChat(t *testing.T) {
+	w := conductorWorld(t)
+	w.withTools()
+	scripted := w.lux.Decide
+	asked := false
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.role"] == "conductor" && !asked {
+			asked = true
+			return fakelux.Behaviour{Ask: fourAsked, Reply: "Thanks."}
+		}
+		return scripted(spec)
+	}
+	task, _ := w.delivered()
+	_, out := w.chat(task, "can you change it?")
+	runID, _ := out["runId"].(string)
+	w.until("its questions", func() bool { return w.conductorQuestion(task) != "" })
+	qid := w.conductorQuestion(task)
+
+	// A message is never the answer to four: it goes beside them, as an aside does.
+	if status, body := w.chat(task, "Yes"); status != 200 || body["questionId"] != nil {
+		t.Errorf("a message while four questions wait: %d %v", status, body)
+	}
+	// Aside: a message beside them, the questions still open.
+	if status, body := w.call("/internal/tasks/"+task+"/chat", map[string]any{"text": "what does it touch?", "aside": true}); status != 200 || body["questionId"] != nil {
+		t.Errorf("aside: %d %v", status, body)
+	}
+	if q := w.conductorQuestion(task); q != qid {
+		t.Fatalf("an aside settled the questions")
+	}
+	full := []map[string]any{{"choices": []int{0}}, {"choices": []int{1}}, {"choices": []int{0}}, {"choices": []int{1}}}
+	if status, body := w.call("/internal/tasks/"+task+"/chat", map[string]any{"questionId": "qst_other", "answers": full}); status != 409 {
+		t.Errorf("answers to another question: %d %v", status, body)
+	}
+	status, body := w.call("/internal/tasks/"+task+"/chat", map[string]any{"questionId": qid, "answers": full, "note": "Small, please."})
+	if status != 200 || body["questionId"] != qid {
+		t.Fatalf("answers through Chat: %d %v", status, body)
+	}
+	var told string
+	_ = w.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, runID).Scan(&told)
+	if !strings.HasPrefix(told, "Answers to your 4 questions:\n\n1. Retry scope") || !strings.HasSuffix(told, ":\nSmall, please.") {
+		t.Errorf("the conductor is told %q", told)
+	}
+}
+
 // 104 gives every question already asked its one item, from its prompt and
 // options, and a question written without items gets the same.
 func TestEveryQuestionHasItsItemsAfterTheUpgrade(t *testing.T) {

@@ -206,7 +206,17 @@ async function decideTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
-const chatInput = z.object({ text: z.string().trim().min(1).max(16_384), aside: z.boolean().optional() }).strict();
+// Words; or, through the conductor's question's form, the answers to it
+// (the orchestrator checks them against what was asked).
+const chatInput = z.union([
+  z.object({ text: z.string().trim().min(1).max(16_384), aside: z.boolean().optional() }).strict(),
+  z.object({
+    questionId: z.string().min(1),
+    answers: z.array(z.object({ choices: z.array(z.number().int().min(0)).max(6).default([]), text: z.string().max(16_384).optional() }).strict())
+      .min(1).max(4),
+    note: z.string().max(16_384).optional(),
+  }).strict(),
+]);
 
 /**
  * A message in a task's Chat: it starts the task's conductor, or is its
