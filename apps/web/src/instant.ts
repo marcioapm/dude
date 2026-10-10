@@ -13,7 +13,9 @@ export function byInstant<T>(at: (x: T) => string): (a: T, b: T) => number {
   return (a, b) => {
     const x = instant(at(a));
     const y = instant(at(b));
-    if (Number.isNaN(x) || Number.isNaN(y)) return Number(Number.isNaN(x)) - Number(Number.isNaN(y));
+    const xUnknown = Number.isNaN(x);
+    const yUnknown = Number.isNaN(y);
+    if (xUnknown || yUnknown) return Number(xUnknown) - Number(yUnknown);
     return x - y;
   };
 }
