@@ -179,6 +179,8 @@ function answerWords(item: QuestionItem, a: QuestionAnswer): { picked: string; o
 }
 
 const isField = (el: EventTarget | null) => el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+// A focused control the browser activates itself (Enter on Change, Back, a tab, the paperclip).
+const isControl = (el: EventTarget | null) => el instanceof HTMLElement && el.closest('button, a[href], [role="tab"]') !== null;
 
 /**
  * An agent's question to a person, as a turn in the transcript — and, while
@@ -384,8 +386,9 @@ interface AnswerFormProps {
  * The form inside the waiting turn. One question: a choice answers in one
  * click; own words (or a `multiple` question) answer with Answer. Several:
  * a tab each and a last one to review and Send, which is off until every
- * question is answered. Keys, outside a field: 1–9 pick, ←/→ move between
- * questions, Enter is Next / Send.
+ * question is answered. Keys, outside a field and off the form's buttons:
+ * 1–9 pick, ←/→ move between questions, Enter is Next / Send; ↑/↓ move
+ * within a radio group, which is one tab stop.
  */
 function AnswerForm({ items, onSubmit, draft, onDraftChange, attachments, onAttachFiles, onRemoveAttachment, attachAccept, attachHint, attachDisabledReason }: AnswerFormProps) {
   const n = items.length;
@@ -395,7 +398,7 @@ function AnswerForm({ items, onSubmit, draft, onDraftChange, attachments, onAtta
   const id = useId();
   const root = useRef<HTMLFormElement>(null);
   // Where focus goes after a render that moved it: the field just opened, or the new tab's first choice.
-  const focusNext = useRef<"own" | "tab" | null>(null);
+  const focusNext = useRef<"own" | "tab" | "tabButton" | null>(null);
   const picker = useRef<HTMLInputElement>(null);
 
   const update = (next: Draft) => {
@@ -407,6 +410,7 @@ function AnswerForm({ items, onSubmit, draft, onDraftChange, attachments, onAtta
     const el = root.current;
     if (!el || !focusNext.current) return;
     const target = focusNext.current === "own" ? el.querySelector<HTMLElement>("[data-own-field]")
+      : focusNext.current === "tabButton" ? el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       : (el.querySelector<HTMLElement>('[role="radio"][aria-checked="true"], [role="checkbox"]') ?? el.querySelector<HTMLElement>('[role="radio"], [data-own-field], textarea')
         ?? el.querySelector<HTMLElement>("[data-panel]"));
     focusNext.current = null;
@@ -472,6 +476,15 @@ function AnswerForm({ items, onSubmit, draft, onDraftChange, attachments, onAtta
   const onKey = (e: KeyboardEvent<HTMLFormElement>) => {
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
     if (isField(e.target)) return;
+    if (e.target instanceof HTMLElement && e.target.getAttribute("role") === "tab" && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      // On the tab list, the arrows move between tabs and focus stays on the tabs.
+      e.preventDefault();
+      const to = Math.max(0, Math.min(n, st.tab + (e.key === "ArrowRight" ? 1 : -1)));
+      update({ ...st, tab: to });
+      focusNext.current = "tabButton";
+      return;
+    }
+    if (isControl(e.target)) return;
     if (/^[1-9]$/.test(e.key) && st.tab < n) {
       const k = Number(e.key) - 1;
       if (k <= (items[st.tab]!.choices?.length ?? 0)) {
@@ -578,6 +591,18 @@ function ItemPanel({ item, answer, questionId, single, busy, onPick, onOwn, onOw
   const multiple = item.multiple === true;
   const role = multiple ? "checkbox" : "radio";
   const ownOpen = answer.own !== null;
+  // A radio group is one tab stop: the picked row, or the first. Checkboxes are a stop each.
+  const stop = ownOpen ? choices.length : (answer.choices[0] ?? 0);
+  const tabIndexOf = (k: number) => (multiple || k === stop ? 0 : -1);
+  // ↑/↓ move focus between the rows without picking: a pick on one question sends it.
+  const onArrows = (e: KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || isField(e.target)) return;
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-choice]")];
+    const at = rows.findIndex((r) => r.contains(e.target as Node));
+    if (at < 0) return;
+    e.preventDefault();
+    rows[(at + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length]!.focus();
+  };
   const field = (
     <input data-own-field className={styles["ownField"]} value={answer.own ?? ""} maxLength={4000} disabled={busy}
       aria-label={choices.length > 0 ? "Something else, in your own words" : "Your answer"}
@@ -597,11 +622,11 @@ function ItemPanel({ item, answer, questionId, single, busy, onPick, onOwn, onOw
       {choices.length === 0 ? (
         <div className={styles["ownAlone"]}>{field}</div>
       ) : (
-        <div role={multiple ? "group" : "radiogroup"} aria-labelledby={questionId} className={styles["choices"]}>
+        <div role={multiple ? "group" : "radiogroup"} aria-labelledby={questionId} className={styles["choices"]} onKeyDown={onArrows}>
           {choices.map((c, k) => {
             const on = answer.choices.includes(k);
             return (
-              <div key={k} role={role} aria-checked={on} tabIndex={0} aria-disabled={busy || undefined}
+              <div key={k} role={role} aria-checked={on} tabIndex={tabIndexOf(k)} aria-disabled={busy || undefined}
                 className={cx(styles["choice"], on && styles["choiceOn"])} data-choice={k}
                 onClick={() => !busy && onPick(k)}
                 onKeyDown={(e) => {
@@ -619,7 +644,7 @@ function ItemPanel({ item, answer, questionId, single, busy, onPick, onOwn, onOw
               </div>
             );
           })}
-          <div role={role} aria-checked={ownOpen} tabIndex={0} className={cx(styles["choice"], styles["choiceOwn"], ownOpen && styles["choiceOn"])}
+          <div role={role} aria-checked={ownOpen} tabIndex={tabIndexOf(choices.length)} className={cx(styles["choice"], styles["choiceOwn"], ownOpen && styles["choiceOn"])}
             data-choice="own" aria-disabled={busy || undefined}
             onClick={(e) => {
               if (isField(e.target) || busy) return;
