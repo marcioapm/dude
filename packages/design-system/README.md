@@ -372,7 +372,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
     pick; for a `multiple` one they add to the ticks.
   - **Keys**, outside a field: 1–9 pick the choice with that number (the
     number shows on hover or while the form has focus), ←/→ move between
-    questions, Enter is Next / Send. Typing in a field never triggers them.
+    questions, Enter is Next / Send. Typing in a field never triggers them,
+    and on a focused button or tab (Change, Back, Send, a question's tab)
+    Enter is that button. A one-answer question's choices are a radio group
+    with one tab stop (the pick, else the first row); ↑/↓ move focus within
+    it without picking, Space picks. ←/→ are not the group's arrows: they
+    stay the question tabs'. Several-answer choices are a stop each.
   - Answer and Send take the attention fill (the hue of needs-you: they
     close it); Next is secondary until its question is answered.
   - The form's state is the app's to keep (`draft` in, `onDraftChange`

@@ -34,6 +34,14 @@ const q = <T extends Element = HTMLElement>(sel: string) => document.querySelect
 const all = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 const click = (el: Element | null) => act(async () => void (el as HTMLElement).click());
 const key = (el: Element, k: string) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+// Enter on a focused button as a browser does it: the keydown first, then — unless a handler took it — the button's click.
+async function pressEnter(el: HTMLElement) {
+  await act(async () => {
+    el.focus();
+    const ev = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    if (el.dispatchEvent(ev)) el.click();
+  });
+}
 async function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   await act(async () => {
@@ -183,6 +191,60 @@ test("answered, the turn is the record: each question with its answer, own words
   expect(q("header")!.textContent).toContain("by marcio, after");
   expect(all('[data-testid="record-answer"]').map((a) => a.textContent)).toEqual(["5xx only", "Leave it", "Unit; API", "“Pay with two cards”in marcio's words"]);
   expect(q('[data-testid="question-form"]')).toBeNull();
+});
+
+test("Enter on the form's own buttons is that button: Change opens its tab, Back goes back, a tab opens it; nothing is sent", async () => {
+  const sent: QuestionSubmission[] = [];
+  const allAnswered: QuestionDraft = { tab: 4, answers: [{ choices: [0], own: null }, { choices: [1], own: null }, { choices: [0], own: null }, { choices: [1], own: null }], note: "" };
+  await render(form(FOUR, sent, { draft: allAnswered }));
+  const tabs = () => all('[role="tab"]');
+  const change = all("button").filter((b) => b.textContent === "Change");
+  expect(change).toHaveLength(4);
+  await pressEnter(change[1]!);
+  expect(sent).toEqual([]);
+  expect(tabs()[1]!.getAttribute("aria-selected")).toBe("true");
+  await pressEnter(q('[data-testid="question-back"]')!);
+  expect(tabs()[0]!.getAttribute("aria-selected")).toBe("true");
+  await pressEnter(tabs()[2]!);
+  expect(tabs()[2]!.getAttribute("aria-selected")).toBe("true");
+  expect(sent).toEqual([]);
+});
+
+test("Enter on the review with one unanswered sends nothing", async () => {
+  const sent: QuestionSubmission[] = [];
+  await render(form(FOUR, sent, { draft: { tab: 4, answers: [{ choices: [0], own: null }, { choices: [1], own: null }, { choices: [0], own: null }, { choices: [], own: null }], note: "" } }));
+  await key(q('[data-testid="question-form"]')!, "Enter");
+  await key(q('[data-testid="question-review"]')!, "Enter");
+  expect(sent).toEqual([]);
+});
+
+test("each radio group is one tab stop; ↑/↓ move within it without picking; ←/→ on the tabs move between questions", async () => {
+  const sent: QuestionSubmission[] = [];
+  await render(form(FOUR, sent));
+  const radios = () => all('[role="radio"]');
+  expect(radios().map((r) => r.tabIndex)).toEqual([0, -1, -1]);
+  await act(async () => radios()[0]!.focus());
+  await key(radios()[0]!, "ArrowDown");
+  expect(document.activeElement).toBe(radios()[1]!);
+  await key(radios()[1]!, "ArrowDown");
+  expect(document.activeElement).toBe(radios()[2]!);
+  await key(radios()[2]!, "ArrowDown");
+  expect(document.activeElement).toBe(radios()[0]!);
+  await key(radios()[0]!, "ArrowUp");
+  expect(document.activeElement).toBe(radios()[2]!);
+  expect(radios().every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+  // Picked, the stop is the pick.
+  await click(radios()[1]!);
+  expect(radios().map((r) => r.tabIndex)).toEqual([-1, 0, -1]);
+  // Checkboxes stay a stop each.
+  await click(all('[role="tab"]')[2]!);
+  expect(all('[role="checkbox"]').map((r) => r.tabIndex)).toEqual([0, 0, 0, 0]);
+  const tab = all('[role="tab"]')[2]!;
+  await act(async () => tab.focus());
+  await key(tab, "ArrowRight");
+  expect(all('[role="tab"]')[3]!.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(all('[role="tab"]')[3]!);
+  expect(sent).toEqual([]);
 });
 
 test("someone else's: no form, the choices muted, how to take it over", async () => {
