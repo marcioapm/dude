@@ -249,6 +249,8 @@ export interface NoticeTurn {
  * the orchestrator recorded it), or a person aborted it. A finished Run
  * needs no line of its own — its header says so — but these explain the
  * silence after the last turn, which may otherwise say it was waiting.
+ * A conductor's or session agent's failed turn that parked it (`run.failed`
+ * with `kept`) is one too, though its transcript goes on after it.
  */
 export interface EndedTurn {
   kind: "ended";
@@ -294,7 +296,7 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
     notice: "parked",
     // A conductor or session agent parked because its container stopped,
     // or its turn failed, rather than because nobody wrote.
-    text: (p) => typeof p.stopped === "string" ? "Its container stopped. Nothing is lost: your next message resumes it."
+    text: (p) => typeof p.stopped === "string" ? "Its container stopped: your next message resumes it."
       : typeof p.failedTurns === "number" ? "Parked after its turn failed: your next message resumes it."
       : PAUSE_WORDS[p.reason as DudePause]?.parked ?? "Parked.",
   },

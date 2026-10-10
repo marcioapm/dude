@@ -1047,7 +1047,7 @@ describe("what happened to a talker's agent", () => {
       ev("run.parked", { reason: "conductor", failedTurns: 1 }),
       ev("run.parked", { reason: "conductor" }),
     ]).map((t) => t.text)).toEqual([
-      "Its container stopped. Nothing is lost: your next message resumes it.",
+      "Its container stopped: your next message resumes it.",
       "Parked after its turn failed: your next message resumes it.",
       expect.stringContaining("Parked while nobody is writing"),
     ]);
