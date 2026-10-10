@@ -101,8 +101,9 @@ back; under 1000px it stays the drawer it is today.
 ## What changes outside the web app
 
 - **API**: `POST /v1/brainstorms` (orchestrator `POST /internal/sessions`)
-  takes an optional `message` (the first message: 1 to 16 384 characters
-  after trimming, the same bounds as a message in Chat) beside `projects`.
+  takes an optional `message` (the first message: 1 to 16 384 bytes in
+  UTF-8 after trimming, the orchestrator's limit and the same bounds as a
+  message in Chat; the backend checks the same byte length) beside `projects`.
   Given one, it does create + link + start the agent in one transaction,
   so a failed send leaves no empty session, and answers with `runId` as
   well as `id`. Without one it is the bare create it was: the API is

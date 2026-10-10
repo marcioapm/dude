@@ -17,7 +17,13 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-const text = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+// The orchestrator's bound (delivery.ChatMessageMax) is UTF-8 bytes, not characters.
+const CHAT_MESSAGE_MAX_BYTES = 16_384;
+const encoder = new TextEncoder();
+const chatText = () => z.string().trim().min(1)
+  .refine((s) => encoder.encode(s).length <= CHAT_MESSAGE_MAX_BYTES, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`);
+
+const text = z.object({ text: chatText() }).strict();
 const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
@@ -26,7 +32,7 @@ const link = z.object({
 const create = z.object({
   title: z.string().trim().max(200).optional(),
   projects: z.array(link).max(50).default([]),
-  message: z.string().trim().min(1).max(16_384).optional(),
+  message: chatText().optional(),
 }).strict();
 const rename = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const links = z.object({ projects: z.array(link).max(50) }).strict();
