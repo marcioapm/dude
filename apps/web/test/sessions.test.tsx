@@ -690,6 +690,33 @@ describe("a session made from the welcome", () => {
     await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
     expect(client.reads).toBe(2);
   });
+
+  test("a mounted welcome reads the tiers and the organisation's setting again once forgotten: a moved harness and a removed tier show", async () => {
+    class Moving extends Making {
+      harness: Harness = "opencode";
+      removed = new Set<string>();
+      override async organizationSettings() {
+        const settings = await super.organizationSettings();
+        const brainstorm = settings.roles.brainstorm;
+        return { ...settings, roles: { ...settings.roles, brainstorm: { ...brainstorm, harness: { ...brainstorm.harness, value: this.harness } } } };
+      }
+      override async modelTiers() {
+        const read = await super.modelTiers();
+        return { ...read, tiers: read.tiers.filter((t) => !this.removed.has(t.id)) };
+      }
+    }
+    const client = new Moving(detail("owner"));
+    const page = await welcome(client, []);
+    const chip = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    await until(() => chip()?.getAttribute("aria-label") === "Model: Thinker on OpenCode (organisation default)" || null, "the organisation's pair");
+    client.harness = "claude-code";
+    client.removed.add("mtr_coder");
+    await act(async () => forgetModelOptions(client));
+    await until(() => chip()?.getAttribute("aria-label") === "Model: Thinker on Claude Code (organisation default)" || null, "the moved harness");
+    await act(async () => void chip()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await menuItem("Thinker");
+    expect(allByRole(document, "menuitemradio").some((r) => accessibleName(r).startsWith("Coder"))).toBe(false);
+  });
 });
 
 describe("a session's model", () => {
@@ -862,11 +889,21 @@ describe("a session's model", () => {
   class Reading extends Choosing {
     tiersRead = 0;
     tiersFail = false;
+    /** While set, each read waits for its release. */
+    holdTiers = false;
+    releaseTiers: Array<() => void> = [];
+    removed = new Set<string>();
     override modelTiers() {
       this.tiersRead++;
-      return this.tiersFail ? Promise.reject(new ApiError(503, "unavailable", "down")) as never : super.modelTiers();
+      if (this.tiersFail) return Promise.reject(new ApiError(503, "unavailable", "down")) as never;
+      const read = super.modelTiers().then((r) => ({ ...r, tiers: r.tiers.filter((t) => !this.removed.has(t.id)) }));
+      if (!this.holdTiers) return read;
+      return new Promise<Awaited<typeof read>>((resolve) => this.releaseTiers.push(() => void read.then(resolve)));
     }
   }
+  const closeMenu = () => act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  const tierItems = () => allByRole(document, "menuitemradio").filter((r) => r.closest("[role=group]")?.getAttribute("data-testid") === "rowmenu-group-tier")
+    .map((r) => accessibleName(r));
 
   test("the owner's chip is a button from the start; the tiers are read when its menu first opens", async () => {
     const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
@@ -887,6 +924,52 @@ describe("a session's model", () => {
     await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Could not load the tiers") || null, "the note");
     await click(await menuItem("Claude Code"));
     expect(client.chosen).toEqual([{ tier: null, harness: "claude-code" }]);
+  });
+
+  test("tiers that could not be read are read again at the menu's next opening, and listed", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    client.tiersFail = true;
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Could not load the tiers") || null, "the note");
+    await closeMenu();
+    client.tiersFail = false;
+    client.holdTiers = true;
+    await openRailMenu(page);
+    // The new read is out: the old failure is not what the menu says.
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Loading the tiers…") || null, "the loading note");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Could not load the tiers");
+    await act(async () => client.releaseTiers[0]!());
+    await menuItem("Coder");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Could not load the tiers");
+    expect(client.tiersRead).toBe(2);
+  });
+
+  test("while the tiers are read, the open menu says they are coming; then lists them", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    client.holdTiers = true;
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Loading the tiers…") || null, "the loading note");
+    // Only the organisation's default is listed under Model tier until the read is in.
+    expect(tierItems().map((name) => name.split("(")[0]!.trim())).toEqual(["Organisation default"]);
+    await act(async () => client.releaseTiers[0]!());
+    await menuItem("Coder");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Loading the tiers…");
+  });
+
+  test("a rail that read the tiers reads them again when the organisation's settings change: a removed tier is no longer offered", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await menuItem("Coder");
+    await closeMenu();
+    client.removed.add("mtr_coder");
+    await act(async () => forgetModelOptions(client));
+    await until(() => client.tiersRead === 2 || null, "the second read");
+    await openRailMenu(page);
+    await menuItem("Thinker");
+    expect(tierItems().some((name) => name.startsWith("Coder"))).toBe(false);
   });
 
   test("a pair that no longer fits: the chip says why, under it", async () => {
