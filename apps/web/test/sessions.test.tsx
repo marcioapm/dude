@@ -303,6 +303,26 @@ describe("a brainstorm session's page", () => {
     expect(client.filed).toEqual([[1]]);
   });
 
+  test("a card stamped in a local offset sits at its instant, before a later message stamped in UTC", async () => {
+    // 11:20:20Z as the orchestrator encodes it on a host in Europe/Lisbon (WEST).
+    const lisbon = (s: number) => new Date(Date.parse(at(s)) + 3_600_000).toISOString().replace("Z", "+01:00");
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: lisbon(20), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }],
+        status: [{ canFile: true }] }],
+    }), [
+      { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
+      { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
+    ]);
+    const page = await sessionPage(client);
+    await until(() => page.querySelectorAll("[data-testid=human-turn]").length === 2 || null, "both messages");
+    const card = await until(() => page.querySelector("[data-testid=proposal]"), "the card");
+    const [before, after] = [...page.querySelectorAll("[data-testid=human-turn]")];
+    expect(before!.textContent).toContain("before the card");
+    expect(after!.textContent).toContain("after the card");
+    expect(Boolean(before!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(Boolean(card.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
   test("a question withdrawn when its one recipient left says so, and asks for nothing", async () => {
     const client = new SessionClient(detail("owner"), [
       ev("question.asked", { kind: "agent", questionId: "q_w", prompt: "Grow the window?", options: ["Yes", "No"], to: ANA.id, toName: ANA.name },
