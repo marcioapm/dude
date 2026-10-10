@@ -877,8 +877,9 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * What woke a step, when the record says: a fix for the review's findings,
  * for a pull request's feedback (and whose), a re-review of a fix. Only
  * what can be read from the runs, findings and events; nothing guessed.
+ * Exported for its unit test: the step row is its only caller.
  */
-function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
+export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
     if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
