@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -442,5 +444,67 @@ func TestATiersRemovalReachesOnlyItsOwnSessions(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM model_tiers WHERE organization_id = $1`, other); n != 0 {
 		t.Errorf("the removed organisation's tiers are still there")
+	}
+}
+
+// A session moved off a tier while that tier's removal waits on its row is
+// not told the tier was removed: the removal reads the row as committed
+// after the wait, finds it on its new tier, and records nothing for it.
+func TestATierRemovedWhileTheSessionMovesOffItTellsItNothing(t *testing.T) {
+	s := newSessionWorld(t)
+	ctx := context.Background()
+	opus := s.tierOn("Opus", "fake/scripted")
+	other := s.tierOn("Other", "fake/scripted")
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": opus, "harness": nil})
+
+	// The owner's change, not yet committed: the session's row locked on its new tier.
+	holder, err := pgx.Connect(ctx, s.owner.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close(ctx)
+	tx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE sessions SET tier = $2 WHERE id = $1`, id, other); err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := s.owner.Exec(ctx, `DELETE FROM model_tiers WHERE id = $1`, opus)
+		removed <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+			AND wait_event_type = 'Lock' AND pg_backend_pid() = ANY(pg_blocking_pids(pid))`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == 1 {
+			break
+		}
+		select {
+		case err := <-removed:
+			t.Fatalf("the removal finished (%v) without waiting on the session's row", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the removal never waited on the session's row")
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	if n := s.count(`SELECT count(*) FROM sessions WHERE id = $1 AND tier = $2`, id, other); n != 1 {
+		t.Errorf("the session lost the tier it moved to")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.fallback'`, id); n != 0 {
+		t.Errorf("the session was told a tier it had left was removed")
 	}
 }
