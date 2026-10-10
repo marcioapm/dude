@@ -19,8 +19,8 @@ func checkSessionModel(ctx context.Context, tx pgx.Tx, m delivery.SessionModel) 
 	if !m.Chose() {
 		return nil
 	}
-	var orgModels json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = current_organization_id()`).Scan(&orgModels); err != nil {
+	orgModels, err := organizationModels(ctx, tx)
+	if err != nil {
 		return err
 	}
 	problem, err := delivery.SessionModelProblem(ctx, tx, orgModels, m)
@@ -93,6 +93,13 @@ func (s *Server) setSessionModel(w http.ResponseWriter, r *http.Request, org str
 
 func sameChoice(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 
+// organizationModels is the current organisation's agent settings, each role's tier and harness.
+func organizationModels(ctx context.Context, tx pgx.Tx) (json.RawMessage, error) {
+	var orgModels json.RawMessage
+	err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = current_organization_id()`).Scan(&orgModels)
+	return orgModels, err
+}
+
 // sessionModelView is a session's model as its detail shows it: what it
 // chose (tier, harness; null follows the organisation), what the
 // organisation's Brainstorm setting is, and what the agent's next start
@@ -101,8 +108,8 @@ func sameChoice(a, b *string) bool { return (a == nil) == (b == nil) && (a == ni
 // tier that names no model, or no tier at all, leaves the effective
 // tierName or model null.
 func sessionModelView(ctx context.Context, tx pgx.Tx, sessionID string) (map[string]any, error) {
-	var orgModels json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = current_organization_id()`).Scan(&orgModels); err != nil {
+	orgModels, err := organizationModels(ctx, tx)
+	if err != nil {
 		return nil, err
 	}
 	chosen, err := delivery.LoadSessionModel(ctx, tx, sessionID)
