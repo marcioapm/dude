@@ -62,7 +62,14 @@ export interface RowMenuRadioGroup {
   readonly keepOpen?: boolean | undefined;
 }
 
-export type RowMenuItem = RowMenuAction | RowMenuSeparator | RowMenuSubmenu | RowMenuRadioGroup;
+/** A muted line that is not an item: what the menu could not show ("Could not load the tiers"). */
+export interface RowMenuNote {
+  readonly kind: "note";
+  readonly id: string;
+  readonly text: string;
+}
+
+export type RowMenuItem = RowMenuAction | RowMenuSeparator | RowMenuSubmenu | RowMenuRadioGroup | RowMenuNote;
 
 export interface RowMenuProps {
   readonly items: ReadonlyArray<RowMenuItem>;
@@ -168,6 +175,7 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
       {items.map((it, i) => {
         if (it.kind === "separator") return <RadixMenu.Separator key={`sep-${i}`} className={styles["separator"]} />;
         if (it.kind === "radio") return <RadioGroup key={it.id} group={it} />;
+        if (it.kind === "note") return <RadixMenu.Label key={it.id} className={styles["note"]} data-testid={`rowmenu-${it.id}`}>{it.text}</RadixMenu.Label>;
         if (it.kind === "submenu") {
           const disabled = it.disabled === true;
           return (
