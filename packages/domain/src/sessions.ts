@@ -3,6 +3,7 @@
  * conversation with an agent that belongs to its members, not a task.
  */
 
+import type { Harness } from "./harnesses.ts";
 import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
 
@@ -131,6 +132,28 @@ export interface SessionDetail {
   you: { id: string; role: SessionRole };
   proposals: Proposal[] | null;
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
+  /** The model its agent runs on; absent from an older orchestrator. */
+  model?: SessionModel;
+}
+
+/** A tier as a session's model names it. */
+export interface SessionModelTier {
+  id: string;
+  name: string;
+  model: string | null;
+  effort: string | null;
+}
+
+/**
+ * A session's model: what it chose (each null follows the organisation's
+ * Brainstorm setting), the organisation's setting, and what its agent's
+ * next start would use. A change applies at that start.
+ */
+export interface SessionModel {
+  tier: SessionModelTier | null;
+  harness: Harness | null;
+  effective: { tierName: string | null; model: string | null; harness: Harness };
+  organization: { tier: SessionModelTier | null; harness: Harness };
 }
 
 export interface SessionLink {
