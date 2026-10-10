@@ -33,6 +33,8 @@ async function render(el: React.ReactElement) {
 
 const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
 const all = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
+// Focus compared by attribute or ===: under bun with happy-dom, toBe on two rendered nodes can pass when they differ.
+const focusedChoice = () => (document.activeElement as HTMLElement | null)?.dataset["choice"];
 const click = (el: Element | null) => act(async () => void (el as HTMLElement).click());
 const key = (el: Element, k: string) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
 // Enter on a focused button as a browser does it: the keydown first, then — unless a handler took it — the button's click.
@@ -82,7 +84,7 @@ test("one question: Something else… opens a field in place, focused; Enter sen
   await render(form(ONE, sent));
   await click(q('[data-choice="own"]'));
   const field = q<HTMLInputElement>("[data-own-field]")!;
-  expect(document.activeElement).toBe(field);
+  expect(document.activeElement === field).toBe(true);
   expect(q<HTMLButtonElement>('[data-testid="question-answer"]')!.disabled).toBe(true);
   await type(field, "Retry 409 once");
   // Typing a digit in the field is words, not a pick.
@@ -172,7 +174,7 @@ test("the keys: a number picks, arrows move between questions, Enter is Next", a
   expect(all('[role="tab"]')[1]!.getAttribute("aria-selected")).toBe("true");
   // 3 on a question of two choices is Something else…, opened and focused.
   await key(f, "3");
-  expect(document.activeElement).toBe(q("[data-own-field]"));
+  expect(document.activeElement === q("[data-own-field]")).toBe(true);
   expect(sent).toEqual([]);
 });
 
@@ -226,13 +228,13 @@ test("each radio group is one tab stop; ↑/↓ move within it without picking; 
   expect(radios().map((r) => r.tabIndex)).toEqual([0, -1, -1]);
   await act(async () => radios()[0]!.focus());
   await key(radios()[0]!, "ArrowDown");
-  expect(document.activeElement).toBe(radios()[1]!);
+  expect(focusedChoice()).toBe("1");
   await key(radios()[1]!, "ArrowDown");
-  expect(document.activeElement).toBe(radios()[2]!);
+  expect(focusedChoice()).toBe("own");
   await key(radios()[2]!, "ArrowDown");
-  expect(document.activeElement).toBe(radios()[0]!);
+  expect(focusedChoice()).toBe("0");
   await key(radios()[0]!, "ArrowUp");
-  expect(document.activeElement).toBe(radios()[2]!);
+  expect(focusedChoice()).toBe("own");
   expect(radios().every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
   // Picked, the stop is the pick.
   await click(radios()[1]!);
@@ -244,7 +246,7 @@ test("each radio group is one tab stop; ↑/↓ move within it without picking; 
   await act(async () => tab.focus());
   await key(tab, "ArrowRight");
   expect(all('[role="tab"]')[3]!.getAttribute("aria-selected")).toBe("true");
-  expect(document.activeElement).toBe(all('[role="tab"]')[3]!);
+  expect(document.activeElement === all('[role="tab"]')[3]).toBe(true);
   expect(sent).toEqual([]);
 });
 
