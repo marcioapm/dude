@@ -47,3 +47,11 @@ ALTER TABLE questions
     CHECK (jsonb_typeof(items) = 'array' AND jsonb_array_length(items) BETWEEN 1 AND 4),
   ADD CONSTRAINT questions_answers_check
     CHECK (answers IS NULL OR (jsonb_typeof(answers) = 'array' AND jsonb_array_length(answers) = jsonb_array_length(items)));
+
+-- The scripted agent's fake/ask-several (its implementer asks several
+-- questions in one ask_person) is a test model a tier may request.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',
+                   'fake/command', 'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));
