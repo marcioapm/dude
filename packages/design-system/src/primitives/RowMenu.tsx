@@ -12,6 +12,8 @@ export interface RowMenuAction {
   readonly id: string;
   readonly label: string;
   readonly icon?: IconName | undefined;
+  /** A face in the glyph's place (a project's, a person's), for a menu of things rather than actions. */
+  readonly leading?: ReactNode;
   /** Display only — the menu does not bind it. "⌘E", "Del". */
   readonly shortcut?: string | undefined;
   /** A second, quieter line under the label: what the item is. */
@@ -68,6 +70,8 @@ export interface RowMenuProps {
   readonly triggerClassName?: string | undefined;
   /** Rendered with the menu open for a static preview (gallery). Never in the product. */
   readonly forceMount?: true | undefined;
+  /** Where the menu is portaled; the body by default. A preview inside a themed pane passes the pane. */
+  readonly container?: HTMLElement | null | undefined;
 }
 
 /**
@@ -79,13 +83,13 @@ export interface RowMenuProps {
  * Opens on click, on Shift+F10 / the context-menu key and, if the row
  * spreads `rowMenuOpeners`, on right-click. Portaled above dialogs.
  */
-export function RowMenu({ items, label = "More actions", size = "sm", trigger, open, defaultOpen, onOpenChange, onSelect, align = "end", side = "bottom", onCloseAutoFocus, className, triggerClassName, forceMount }: RowMenuProps) {
+export function RowMenu({ items, label = "More actions", size = "sm", trigger, open, defaultOpen, onOpenChange, onSelect, align = "end", side = "bottom", onCloseAutoFocus, className, triggerClassName, forceMount, container }: RowMenuProps) {
   return (
     <RadixMenu.Root modal={false} {...compact({ open, defaultOpen, onOpenChange })}>
       <RadixMenu.Trigger asChild>
         {trigger ?? <IconButton icon="more" label={label} size={size} className={cx(styles["trigger"], triggerClassName)} onClick={stop} onKeyDown={stopIfActivation} />}
       </RadixMenu.Trigger>
-      <RadixMenu.Portal {...(forceMount ? { forceMount } : {})}>
+      <RadixMenu.Portal {...(forceMount ? { forceMount } : {})} {...(container ? { container } : {})}>
         <RadixMenu.Content
           className={cx(styles["content"], className)}
           align={align}
@@ -173,7 +177,7 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
                 onSelect?.(it.id);
               }}
             >
-              <ItemBody icon={it.icon} label={it.label} reason={disabled ? it.disabledReason : undefined} description={it.description} mono={it.mono} />
+              <ItemBody icon={it.icon} leading={it.leading} label={it.label} reason={disabled ? it.disabledReason : undefined} description={it.description} mono={it.mono} />
               {it.shortcut ? (
                 <kbd className={styles["shortcut"]} aria-hidden>
                   {it.shortcut}
@@ -187,8 +191,9 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
   );
 }
 
-function ItemBody({ icon, label, reason, description, mono }: {
+function ItemBody({ icon, leading, label, reason, description, mono }: {
   readonly icon: IconName | undefined;
+  readonly leading?: ReactNode;
   readonly label: string;
   readonly reason: string | undefined;
   readonly description?: string | undefined;
@@ -196,9 +201,11 @@ function ItemBody({ icon, label, reason, description, mono }: {
 }) {
   return (
     <>
-      <span className={styles["icon"]} aria-hidden>
-        {icon ? <Icon name={icon} size={12} /> : null}
-      </span>
+      {leading ? <span className={styles["leading"]} aria-hidden>{leading}</span> : (
+        <span className={styles["icon"]} aria-hidden>
+          {icon ? <Icon name={icon} size={12} /> : null}
+        </span>
+      )}
       {description ? (
         <span className={styles["label"]}>
           <span className={cx(styles["name"], mono && styles["mono"])}>{label}</span>

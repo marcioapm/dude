@@ -14,8 +14,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
+import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
+import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
@@ -36,7 +37,8 @@ import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
-import { SessionsScreen, useNewSession } from "./screens/SessionsScreen.tsx";
+import { SessionsScreen } from "./screens/SessionsScreen.tsx";
+import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
 import { DudeMark } from "./DudeMark.tsx";
@@ -103,6 +105,7 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 }
 
 const MINE = "dude.tree.mine";
+const SIDEBAR = "dude.sidebar";
 
 /**
  * An agent at work, and its plan and heartbeat: none of it is in the tree.
@@ -128,6 +131,27 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");
   // The sidebar drawer, on a narrow screen.
   const [navOpen, setNavOpen] = useState(false);
+  // Folded to its rail on a wide screen: the person's choice, kept as the density is.
+  const [railed, setRailed] = useState(() => localStorage.getItem(SIDEBAR) === "rail");
+  const setCollapsed = useCallback((rail: boolean) => {
+    localStorage.setItem(SIDEBAR, rail ? "rail" : "full");
+    setRailed(rail);
+  }, []);
+  // `[` outside a field folds or unfolds it (the rail's own `/` is the Sidebar's).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isBareKey(e, "[")) return;
+      // Under the drawer breakpoint there is no rail to fold to.
+      if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
+      e.preventDefault();
+      setRailed((rail) => {
+        localStorage.setItem(SIDEBAR, rail ? "full" : "rail");
+        return !rail;
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
@@ -207,16 +231,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       }
       return QUIET_EVENTS.has(e.eventType);
     });
-
-  // First load with nothing selected: open the first project's board rather
-  // than an empty pane. Unless the URL has named a place since `place` was
-  // read: its hashchange may not have reached `place` yet, and replacing
-  // the hash here would lose it.
-  useEffect(() => {
-    if (!place && projects && projects[0] && !parsePlace(window.location.hash)) {
-      go(inTree({ kind: "project", id: projects[0].id }), true);
-    }
-  }, [projects, place, go]);
 
   const selected = treeSelection(place);
 
@@ -316,24 +330,35 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   let flush = false;
   let main;
   const openSession = (id: string) => go({ view: "brainstorm", id });
-  const newSession = useNewSession(client, (id) => {
+  // Reads the sessions list again as it opens one: a session just made is not in it yet.
+  const openListedSession = (id: string) => {
     void loadSessions();
     openSession(id);
-  });
+  };
+  // New session is the welcome: a session is made by its first message there.
+  const toWelcome = () => go({ view: "welcome" });
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
-  if (place?.view === "orgSettings") {
+  const newProject = () => setOpen({ kind: "newProject" });
+  if (place?.view === "welcome") {
+    flush = true;
+    // A session needs no project, so the welcome is always the welcome; an
+    // organisation with none (known, not still loading) is also offered one.
+    main = <WelcomeScreen client={client} projects={projects ?? []} sessions={sessionsList?.sessions ?? null} name={people.me?.name ?? null}
+      onOpenSession={openSession} onAllSessions={() => go({ view: "sessions" })}
+      offer={projects?.length === 0 && isAdmin ? (
+        <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">New project</Button>
+      ) : null}
+      onCreated={openListedSession} />;
+  } else if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
       projects={projects ?? []} page={place.page} sub={place.sub} onOpenRun={openRun}
       onPage={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page }, !sub)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "sessions") {
-    main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onOpen={(id) => {
-      void loadSessions();
-      openSession(id);
-    }} />;
+    main = <SessionsScreen sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
@@ -346,7 +371,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         title="No projects yet"
         description="A project is where work for a codebase lives: its repositories, its agents, its tasks."
         action={isAdmin ? (
-          <Button variant="primary" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project-empty">
+          <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">
             New project
           </Button>
         ) : undefined}
@@ -509,6 +534,29 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         collapsible
         open={navOpen}
         onOpenChange={setNavOpen}
+        collapsed={railed}
+        onCollapsedChange={setCollapsed}
+        railMark={<DudeMark size={28} />}
+        onHome={toWelcome}
+        homeSelected={place?.view === "welcome"}
+        railSessions={{
+          onNew: toWelcome,
+          onOpenList: () => go({ view: "sessions" }),
+          current: place?.view === "sessions" || place?.view === "brainstorm",
+          recent: (sessionsList?.sessions ?? []).map(sessionTitle),
+        }}
+        railFooter={
+          <>
+            <SidebarRailItem label="Organisation settings" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
+              data-testid="rail-org-settings">
+              <Icon name="building" size={16} />
+            </SidebarRailItem>
+            <SidebarRailItem label="Your settings" current={place?.view === "mySettings"} onClick={() => go({ view: "mySettings" })}
+              data-testid="rail-my-settings">
+              {you ? <PersonAvatar person={you} size={28} aria-hidden title="" /> : <Icon name="human" size={16} />}
+            </SidebarRailItem>
+          </>
+        }
         projects={projects ?? []}
         loading={!projects}
         selected={selected}
@@ -526,7 +574,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             selected={place?.view === "brainstorm" ? place.id : null}
             onSelect={openSession}
             onOpenList={() => go({ view: "sessions" })}
-            onNew={newSession.start}
+            onNew={toWelcome}
           />
         }
         mine={mine}
@@ -535,7 +583,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           setMine(m);
         }}
         menuItems={menuItems}
-        title={<span className="brand"><DudeMark size={30} />El Duderino</span>}
+        title={<button type="button" className="brandHome" aria-label="El Duderino, home" onClick={toWelcome} data-testid="brand-home">
+          <span className="brand"><DudeMark size={30} />El Duderino</span>
+        </button>}
         treeActions={isAdmin ? (
           <IconButton size="sm" icon="plus" label="New project" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project" />
         ) : undefined}
@@ -620,6 +670,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
 function placeTitle(place: Place | null, projects: readonly NavProject[] | null): string {
   switch (place?.view) {
     case undefined:
+    case "welcome":
       return "";
     case "orgSettings":
       return "Organization settings";

@@ -17,12 +17,34 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-const text = z.object({ text: z.string().trim().min(1).max(16_384) }).strict();
+// The orchestrator's bound (delivery.ChatMessageMax) is UTF-8 bytes, not characters.
+// A UTF-16 code unit is 1 to 3 UTF-8 bytes, so the length alone settles most strings.
+const CHAT_MESSAGE_MAX_BYTES = 16_384;
+const encoder = new TextEncoder();
+const withinChatBytes = (s: string) =>
+  s.length <= CHAT_MESSAGE_MAX_BYTES && (s.length * 3 <= CHAT_MESSAGE_MAX_BYTES || encoder.encode(s).length <= CHAT_MESSAGE_MAX_BYTES);
+const chatText = () => z.string().trim().min(1)
+  .refine(withinChatBytes, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`);
+
+export const text = z.object({ text: chatText(), aside: z.boolean().optional() }).strict();
+// The question's form: one answer per question (picks and/or own words), a
+// note; the orchestrator checks them against what was asked. A task's Chat
+// takes them too.
+export const answers = z.object({
+  answers: z.array(z.object({ choices: z.array(z.number().int().min(0)).max(6).default([]), text: z.string().max(16_384).optional() }).strict())
+    .min(1).max(4),
+  note: z.string().max(16_384).optional(),
+}).strict();
 const link = z.object({
   projectId: z.string().min(1),
   repositoryIds: z.array(z.string().min(1)).max(100).default([]),
 }).strict();
-const create = z.object({ title: z.string().trim().max(200).optional(), projects: z.array(link).max(50).default([]) }).strict();
+// A first message makes the session and starts its agent in one call.
+const create = z.object({
+  title: z.string().trim().max(200).optional(),
+  projects: z.array(link).max(50).default([]),
+  message: chatText().optional(),
+}).strict();
 const rename = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const links = z.object({ projects: z.array(link).max(50) }).strict();
 const invite = z.object({ people: z.array(z.string().min(1)).min(1).max(50), role: z.enum(["chat", "read"]).default("chat") }).strict();
@@ -73,6 +95,8 @@ export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms/:id", forward("GET", at()));
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
+  router.post("/v1/brainstorms/:id/questions/:question/answer",
+    forward("POST", (ctx) => `${at()(ctx)}/questions/${encodeURIComponent(ctx.params.question!)}/answer`, answers));
   router.post("/v1/brainstorms/:id/link", forward("POST", at("/link"), links));
   router.post("/v1/brainstorms/:id/people", forward("POST", at("/people"), invite));
   router.post("/v1/brainstorms/:id/people/:person/role",

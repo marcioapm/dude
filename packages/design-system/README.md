@@ -327,12 +327,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 ### Human intervention
 
-- The two ways a person acts on an agent session are distinct on four channels in
+- The ways a person acts on an agent session are distinct on four channels in
   `ChatComposer`: focus tint, context line, button label, button colour.
-  **Answer** (agent session blocked on a question) has an attention-filled button —
-  the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
-  Orchestrator: …") and the offered choices are neutral at rest; a choice
-  chip takes the attention tint only on hover. **Steer** (agent session running) is
+  **Steer** (agent session running) is
   accent-toned. A steer lands at the agent's next step — the harness takes
   it while a tool runs and the model reads it before its next call, in the
   same turn, nothing cancelled — so sending one costs nothing and plain
@@ -344,22 +341,65 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   both. The action row says who it is sent as (`sentAs`). Narrower than
   640px (a panel open beside the transcript) the row wraps, the button
   stays at its end, and the key hints go before where a steer lands does.
+- **An answer is given in the question's own turn**, never in the
+  composer. While the agent waits on the reader (`waitingFor`) the composer
+  steps back to one quiet line on the hover wash — "Implement is waiting
+  for your answer above" — with **Write to the agent instead** (accent
+  link), which brings the composer back for a message that does not answer;
+  the question stays open. It lasts for that question: `waitingKey` (the
+  question's id) says which, and the next question steps the composer back
+  again, even when it is asked in the same breath as the answer.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
-  wash and 2px bar. Inside it the ink is neutral — the transcript header's
-  Needs-you badge already names the state, the wait clock is muted, and the
-  avatar is marked live. In grayscale it is still the only barred, tinted
-  turn. The offered choices are shown once, as one-click chips in the
-  composer; the card lists them only with `onChoose` (then they are its own
-  buttons) or once it has settled, as the record of what was offered.
-  `answeredAt` settles it: no wash, "Answered · after 4m 12s", and the answer follows as
-  its own `intent="answer"` turn — the card never quotes it, so nothing is
-  said twice. `dismissed` is for a question the agent session died on: "Not
-  answered", settled, and it never rings. The waiting card is a polite live
-  region announced once; the clock sits outside it.
+  wash and 2px bar. In grayscale it is still the only barred, tinted turn.
+  With `onSubmit` the turn **is the answer form**, laid on the turn's own
+  grid — no card, no box:
+  - **One question** (`text` + `options`, or one `items` entry): no tabs.
+    Choices are rows whose mark (a radio dot) carries the pick, the label
+    in prose and a one-line `description` under it in secondary ink. A
+    click on a choice answers it at once. **Something else…** is always the
+    last row — the design system adds it, the agent never lists it — and
+    opens a field in place, focused; Enter or Answer sends. A question with
+    no choices is the field alone. `multiple` ticks boxes, then Answer.
+  - **Several** (`items`, 2–4): tabs as plain words under a rule tinted
+    toward attention (a real `tablist`), a filled success check on each
+    answered tab, and a last **Send · n/N** tab. Picking does not send;
+    Next (or Enter) moves on, Back goes back, tabs are clickable. The last
+    tab reviews every answer with **Change**, takes an optional note — with
+    images, in the composer's tray and paperclip — and **Send answers**,
+    off until every question is answered. Focus goes to the new tab's
+    choices on Next/Back, into the field when it opens.
+  - A choice the agent `recommended` says "agent suggests" in muted ink; it
+    is never preselected. For a one-answer question own words replace the
+    pick; for a `multiple` one they add to the ticks.
+  - **Keys**, outside a field: 1–9 pick the choice with that number (the
+    number shows on hover or while the form has focus), ←/→ move between
+    questions, Enter is Next / Send. Typing in a field never triggers them,
+    and none of them act on a focused button or tab (Change, Back, Send, a
+    question's tab), except ←/→ on a tab, which move between tabs, and
+    Enter, which is that button. A one-answer question's choices are a radio group
+    with one tab stop (the pick, else the first row); ↑/↓ move focus within
+    it without picking, Space picks. ←/→ are not the group's arrows: they
+    stay the question tabs'. Several-answer choices are a stop each.
+  - Answer and Send take the attention fill (the hue of needs-you: they
+    close it); Next is secondary until its question is answered.
+  - The form's state is the app's to keep (`draft` in, `onDraftChange`
+    out), so a reload does not lose picks; nothing reaches the agent before
+    Send. `onSubmit` resolving `false` or rejecting leaves the form as it was.
+  `answeredAt` settles it: no wash, "✓ Answered · by Ana, after 4m 12s"
+  (`answeredBy`), and with `answers` the turn **is the record** — each
+  question in secondary ink with its answer under it after a short dash,
+  own words in quotes marked "in Ana's words". No separate answer turn: a
+  note sent with several answers is the person's own message after it.
+  `dismissed` is for a question the agent session died on: "No longer
+  needed", settled, and it never rings. `waitingOn` (someone else's) shows
+  the questions with their choices muted and how to take it over — no form.
+  The waiting turn is a polite live region announced once; the clock sits
+  outside it.
 - The same tints mark the human turns in the transcript (`ChatMessage
   intent="answer" | "steer"`), so interventions are scannable in a long
-  conversation.
+  conversation. `intent="answer"` remains for answers kept before the
+  question's turn became their record.
 - A steer the agent has not read yet is queued. `ChatMessage
   deliveredAt={null}` shows it on three channels — a dashed bar, a
   "Queued" chip with a clock, and one line under the body saying where it
@@ -429,8 +469,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
-  where "Sent as" would be. While the conductor asks, it is the answer
-  composer, as in an agent session.
+  where "Sent as" would be. While the conductor asks, it steps back to the
+  waiting line, as in an agent session; the answer is given in its
+  question's turn.
 
 ### Brainstorm sessions
 
@@ -446,8 +487,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Its transcript is a task's Chat's (`ChatTranscript`, `ChatMessage
   role="brainstorm"`, `ChatComposer mode="chat"`); what is new is around it.
   A session has no task, so its composer's placeholder is its own,
-  "Message the brainstorm…", never the task Chat's "Ask about this task…";
-  an answer keeps "Type your answer…".
+  "Message the brainstorm…", never the task Chat's "Ask about this task…".
+  A question put to you is answered in its turn, the whole ask at once.
 - **The same bar as an agent session**, under the header: a `Segmented`
   switch between **Conversation** and **Events** (with its count), from
   the same parts as the Run screen's. There is no Changes: a session
@@ -456,13 +497,39 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   of `EventRow`s an agent session's Events uses, each opening onto its
   payload. Its members' alone: anyone else is told the session does not
   exist.
-- **A session starts untitled and names itself.** New session (the list's,
-  the sidebar's) makes one at once — no dialog, no title, nothing linked —
-  and opens it with the composer focused; its owner links projects from the
-  rail. Until it is named it reads **"New session"** everywhere it is
-  listed or headed (`sessionTitle` in `@dude/domain`). Its agent names it
-  once the subject is clear (`name_session`, one line of at most 60
-  characters), and again only if the subject clearly changes.
+- **A session starts untitled and names itself.** Until it is named it
+  reads **"New session"** everywhere it is listed or headed (`sessionTitle`
+  in `@dude/domain`). Its agent names it once the subject is clear
+  (`name_session`, one line of at most 60 characters), and again only if
+  the subject clearly changes.
+- **dude opens on the welcome** (`Welcome`), and **New session opens it**
+  too, the list's and the sidebar's. **A session is made by its first
+  message, never empty**: nothing exists until the person sends, and the
+  send makes the session with that message and what it reads, in one call,
+  and opens it. Opening the page and leaving makes nothing.
+- **What a session will read is said in its composer before it starts**:
+  `ComposerLinks` in the composer's `leading`, each linked project's face
+  and name with a close, then "+ Link"; "Reads memory only" and "+ Link a
+  project" when nothing is linked. After the first send, the rail's
+  Linked block carries it, and its owner links from there.
+- **A starter fills the composer; it never sends.** `StarterPills` write
+  the start of a sentence ("I want to plan an epic for ") with the caret at
+  its end, for the person to finish.
+- The welcome's column is 720px, a little above the middle: dude's face,
+  the greeting (the time of day on the reader's clock and their first
+  name), one line, the composer **raised** (`ChatComposer variant="stage"`:
+  `shadow-2`, the one place a composer is) with a taller field, the
+  starters, then `RecentSessions` —
+  or, with none yet, one muted line saying what a session does
+  (`WelcomeNote`). In an organisation with no projects the footer also
+  offers New project, to those who may make one; a session needs no
+  project, so the composer works as ever. Compact takes its air in: 6vh above where comfortable
+  has 12vh, a 48px face (64), a 52px field (72), and six recent sessions
+  where comfortable has four (`RECENT_SESSIONS_SHOWN`; the app picks by
+  density). Under 640px the greeting takes `3xl`, the stage less padding,
+  and the recent rows drop their summary. The face is dude's mark, the
+  brand, not an illustration: the welcome is a landing page, and its
+  first-time line is the only empty-state text in it.
 - **`SessionTitle`** is the name in the session's header: untitled, "New
   session" in muted ink. For a member who can chat it is a button that
   edits the name in place — Enter saves, Escape cancels, and either gives
@@ -682,6 +749,21 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
   opens or steps in, ← closes or steps out, Home/End, Enter selects, `/`
   jumps to the search and ↓ from the search enters the tree.
+- **Collapsed** (`Sidebar collapsed`, 1000px and up; narrower, it is the
+  drawer either way), the sidebar is a 56px rail on the same chrome shade: its rows
+  with their words folded into tooltips to the right, each a
+  `row-comfortable` square with the nav row's washes, `aria-current` on the
+  one open. **The rail keeps the one loud count** — Waiting on you is the
+  `NeedsYouCount` pill itself when something waits, and its name carries
+  the count ("Waiting on you: 2"); the inbox glyph when not — **and marks
+  each project that waits on you** with the needs-you
+  diamond on its face's corner, cut out of the chrome; its tooltip gives
+  its counts in words ("1 needs you · 4 running · 1 failed").
+  **Nothing else in it takes a tone.** The tree is not in it: a project's
+  face opens its board, and expanding gives the tree back. Its search
+  expands the sidebar with the field focused, and so does `/` outside a
+  field while it is the rail (only ⌘ or Ctrl, not Shift, Option or AltGr,
+  make `/` something else).
 
 ### Board (the overview)
 
@@ -828,7 +910,10 @@ here.
   also opens it on right-click and Shift+F10 / the context-menu key. Focus
   returns to the row on close (`onCloseAutoFocus`) so arrow keys keep
   working. A danger item is still just a request: the destructive action
-  itself goes behind a `Dialog tone="danger"`.
+  itself goes behind a `Dialog tone="danger"`. An item's `leading` puts a
+  face (project, person) in the glyph's place, for a menu of things;
+  `container` portals it into a themed pane, gallery previews only, like
+  `forceMount`.
 - `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
@@ -1433,8 +1518,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ChatMessage contextTokens={n} contextWindowTokens={w} costUsd={null} />` | `$0.00` for a cost nobody reported |
 | `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
 | `<ChatMessage intent="steer" deliveredAt={null} pendingReason={<>Lands after <b>Bash</b> finishes.</>} onInterrupt={…} />` until the agent reads it, then `read readAfter="Bash"` where it was read | a steer that looks read before the agent has it, a fixed "waiting for the turn" line whatever the harness does, or an interrupt taken for the person |
-| `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
-| `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
+| `<ChatComposer waitingFor="Implement" waitingKey={questionId} />` while the agent waits on you | an answer box in the composer, apart from the question it answers |
+| `<QuestionCard items={items} onSubmit={…} draft={…} onDraftChange={…} />` until `answeredAt`, then `answers={…} answeredBy="Ana"` | the question only in the composer, an "other" choice the agent wrote, or a second turn quoting the question to say its answer |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 | `<PersonAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
@@ -1461,6 +1546,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
 | `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a card whose unfiled items are all someone else's kept full size, or placed by the text of its time; a "Nothing to file" button; an item nobody can file folded away as "for others" |
+| New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
+| `<StarterPills onPick={(s) => setText(s.prompt)} />`, the caret at the end | a starter that sends its words, or opens a dialog |
+| `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
 
 ## Components
 
@@ -1535,24 +1623,32 @@ MarkdownCheatsheet.
   so the plan lines up with the turns).
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
-- **QuestionCard** — an agent's question to a person as a turn. Waiting it
-  is the loudest turn in the transcript (attention wash and bar, live
-  avatar, a muted ticking wait clock; no badge of its own); answered or
-  dismissed it becomes a plain row with an "Answered" / "Not answered" tag
-  and how long it waited. While waiting, choices are chips only with
-  `onChoose`; otherwise they live in the composer. Settled, they are listed.
+- **QuestionCard** — an agent's question (or up to four, `items`) to a
+  person as a turn. Waiting it is the loudest turn in the transcript
+  (attention wash and bar, live avatar, a muted ticking wait clock; no badge
+  of its own), and with `onSubmit` it is the answer form (see Human
+  intervention): one question's choice answers in a click, "Something
+  else…" is always offered, several are tabs with a review and Send.
+  Answered it becomes a plain row, "Answered · by Ana, after 4m 12s", and
+  the record of each question and its answer (`answers`); dismissed, "No
+  longer needed". `kind="request"` keeps its one-click choices (`onChoose`).
   Waiting on someone else (`waitingOn`), the note says so and how to make
   it yours, in words everyone sees: "Waiting for Ana to answer · Take over
   this task to answer" (`kind="request"`: "…to decide"). The
   choices are shown muted and do nothing; with a mouse, hovering them says
   it again (`Tooltip keepOnPress`: a press leaves it up). The note is what
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
-- **ChatComposer** — answer (blocked on a question, with one-click options)
-  vs steer (lands at the agent's next step; `landsHint` says where;
-  interrupt now is a tick) vs prompt vs chat (a task's conductor; `to`),
-  visibly different. The words leave the field only once `onSubmit`
+- **ChatComposer** — steer (lands at the agent's next step; `landsHint`
+  says where; interrupt now is a tick) vs prompt vs chat (a task's
+  conductor; `to`), visibly different; while the agent waits on the reader
+  (`waitingFor`), one line pointing to the question above, with "Write to
+  the agent instead". The words leave the field only once `onSubmit`
   confirms them: resolving `false`, or rejecting, keeps them to send again
   (the caller shows why). A person's draft is never lost to a failed send.
+  `variant="stage"` is for the page's one thing (the welcome): raised
+  (`shadow-2`), a 72px field (52 compact) in `text-prose`, and no inset of
+  its own, since its host is the frame. A host never restyles a composer
+  from outside.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **ChatRunLine** — a Run the conductor started, one line in its Chat on
@@ -1571,7 +1667,14 @@ MarkdownCheatsheet.
 - **Sidebar** — header, search (`/`), four triage chips with global counts,
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
-  controlled or uncontrolled.
+  controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
+  the rail (a chevron in the header collapses it, `[` in the app); the rail
+  takes `railMark` (home, `onHome`, `homeSelected`), `railSessions` (New
+  session and Sessions, so the sidebar still knows nothing of sessions) and
+  `railFooter` (the band's `SidebarRailItem`s). `projectCountWords(counts)`
+  is a project's `projectCounts` in words.
+- **SidebarRailItem** — one square of the rail, named, its words in a
+  tooltip to the right.
 - **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
@@ -1754,6 +1857,23 @@ sessions*):
 - **SidebarSessions** — your brainstorm sessions above the projects, in
   `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
   questions in Waiting on you.
+- **Welcome** — the first screen's stage: `mark` (the app's face; the
+  design system has none), `greeting`, `line`, `composer` (a `ChatComposer
+  variant="stage"`), `starters`, `footer`. **WelcomeNote** is the first-time
+  line. `WELCOME_STARTERS` and `WELCOME_FIRST_TIME` are the words, one copy
+  for the app and the gallery.
+- **StarterPills** — ways to start, `{ id, icon, title, detail, prompt }`,
+  `onPick(starter)`; `detail` is the tooltip. The glyph takes the label's
+  ink (secondary, brightening with it on hover): these are actions, not
+  the brainstorm's role glyph.
+- **ComposerLinks** — what a new session will read, for `ChatComposer`'s
+  `leading`: chips with a close, and "+ Link" opening `RowMenu` (whose
+  items take a `leading` face); read only without `onLink` / `onUnlink`.
+- **RecentSessions** — the welcome's short list: one line each at
+  `row-default` height, the bulb (the role glyph, in the brainstorm's role
+  colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,
+  not `SessionRow`'s, whose two lines, chips and state column are the
+  list page's. `RECENT_SESSIONS_SHOWN` is how many per density.
 
 ## What is deliberately not here
 

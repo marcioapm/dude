@@ -277,7 +277,9 @@ func (in PromptInput) ask() []string {
 
 const askToolNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
 	"in a way that changes what you build, or two reasonable readings conflict — ask with the dude tool " +
-	"ask_person, then end your turn. The answer comes back as your next message, even if the person takes " +
+	"ask_person, then end your turn. Several such decisions go in one call (up to 4 questions, each with a short " +
+	"header and choices); dude always lets the person answer in their own words. The answers come back as your next " +
+	"message, even if the person takes " +
 	"hours to answer: your work is kept meanwhile. Do not ask about anything you can decide or find out " +
 	"yourself; most tasks need no question at all."
 
@@ -454,7 +456,7 @@ func (in PromptInput) instructions(role string) (lead, tail []string) {
 const conductorToolsNote = "The dude tools read what dude knows about this task: run_diff (what a Run changed: " +
 	"the files, then the lines of those you name), findings (the review findings and how each was settled; " +
 	"name ids for their text), pull_requests (state, checks, reviews and feedback), list_tasks, " +
-	"list_repositories, search_memory and get_memory. ask_person asks the person a question and waits for " +
+	"list_repositories, search_memory and get_memory. ask_person asks the person up to 4 questions at once and waits for " +
 	"the answer; end your turn after it. create_task records a change as a new task, for a person to " +
 	"deliver. While you take the decisions: update_task writes an agreed goal or acceptance criteria into the " +
 	"task, before the implementer; start_phase starts implement, review (some or all categories), fix (some or " +
@@ -468,7 +470,8 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
 	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
-	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A`, " +
+	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A` (one question; several at once: " +
+	"`dude ask --questions-json '[{\"header\":H,\"question\":Q,\"choices\":[{\"label\":L}]},...]'`), " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the

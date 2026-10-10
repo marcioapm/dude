@@ -14,7 +14,7 @@ import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, Dec
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
-import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/client.ts";
+import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
@@ -105,11 +105,13 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     <TaskHistory data-testid="chat-history" lead={line.lead} steps={line.steps} facts={line.facts} />
   ), [lineKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the line, by its words
 
-  const send = useMemo(() => async (text: string) => {
-    const sent = await client.chat(task.id, text);
+  const send = useMemo(() => async (text: string, aside?: boolean) => {
+    const sent = await client.chat(task.id, text, { aside: aside === true });
     if (sent.runId !== conductorId) onSent();
     return sent;
   }, [client, task.id, conductorId, onSent]);
+  const answer = useMemo(() => async (questionId: string, answers: ReadonlyArray<SentAnswer>, note: string) =>
+    client.chatAnswer(task.id, questionId, answers, note), [client, task.id]);
 
   const feedback = events.filter((e) => e.eventType === "pull_request.commented").length;
   const open = findings.filter((f) => f.status === "open").length;
@@ -179,8 +181,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       action={setAside ? undefined
         : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
   }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
-    [head, send, briefedWith, before, conductorCost, lines, above, gateHeld]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
+    [head, send, answer, briefedWith, before, conductorCost, lines, above, gateHeld]);
 
   if (conductorId) {
     return (

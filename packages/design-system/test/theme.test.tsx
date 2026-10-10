@@ -1,12 +1,12 @@
 /**
  * ThemeProvider's initial density, rendered on the server with a stubbed
- * `localStorage`. The effect that stamps `data-density` and the setter need
- * a DOM and are not covered here.
+ * `localStorage`, and `useDensity` reading it. The effect that stamps
+ * `data-density` and the setter need a DOM and are not covered here.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ThemeProvider, useTheme, type ThemeProviderProps } from "../src/theme.tsx";
+import { ThemeProvider, useDensity, useTheme, type ThemeProviderProps } from "../src/theme.tsx";
 
 function stubStorage(entries: Record<string, string>): string[] {
   const reads: string[] = [];
@@ -39,6 +39,20 @@ const densityOf = (props: Omit<ThemeProviderProps, "children"> = {}) =>
       <Probe />
     </ThemeProvider>,
   ).replace(/<\/?output>/g, "");
+
+describe("useDensity", () => {
+  test("reads the provider's density, not the root's attribute, which is left unstamped", () => {
+    stubStorage({});
+    document.documentElement.removeAttribute("data-density");
+    function DensityProbe() {
+      return <output>{useDensity()}</output>;
+    }
+    // Static rendering runs no effects, so <html> never gets data-density.
+    const out = renderToStaticMarkup(<ThemeProvider defaultDensity="compact"><DensityProbe /></ThemeProvider>);
+    expect(document.documentElement.hasAttribute("data-density")).toBe(false);
+    expect(out).toBe("<output>compact</output>");
+  });
+});
 
 describe("ThemeProvider initial density", () => {
   test("reads a stored compact", () => {

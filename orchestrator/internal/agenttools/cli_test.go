@@ -2,6 +2,7 @@ package agenttools_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -134,6 +135,67 @@ func TestTheCLIWorksThroughLuxsSocketWithoutTheToken(t *testing.T) {
 	if out, err = dude("ask", "Keep hyphenated words whole?", "--choice", "yes", "--choice", "no"); err != nil ||
 		!strings.Contains(out, "End your turn") {
 		t.Errorf("ask: %v\n%s", err, out)
+	}
+}
+
+// dude ask --questions-json asks several questions through the same
+// ask_person, held to the same limits; a bad array is refused before
+// anything is sent, and the tool's refusals come back plainly.
+func TestTheCLIAsksSeveralQuestions(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_cliask", "implementer", "running")
+	bin := cli(t)
+	env := append(os.Environ(), "LUX_SERVICE_DUDE="+luxService(t, f.url, token), "DUDE_TOOLS_TOKEN=", "DUDE_TOOLS_URL=")
+	dude := func(args ...string) (string, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = env
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err := cmd.Run()
+		return out.String(), err
+	}
+	asked := func() int {
+		var n int
+		_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM questions WHERE run_id = 'run_cliask'`).Scan(&n)
+		return n
+	}
+	for _, args := range [][]string{
+		{"ask", "--questions-json", `{"header":"x"}`},
+		{"ask", "--questions-json", `[{"header":"x"`},
+		{"ask", "Also this?", "--questions-json", `[{"header":"A","question":"a?"}]`},
+		{"ask", "--questions-json", `[{"header":"A","question":"a?"}]`, "--choice", "x"},
+		{"ask", "--questions-json", `[{"header":"A","question":"a?"}]`, "--action", "retry"},
+	} {
+		if out, err := dude(args...); err == nil || !strings.Contains(out, "usage: dude ask") {
+			t.Errorf("%v: %v\n%s", args, err, out)
+		}
+	}
+	five := `[{"header":"1","question":"a?"},{"header":"2","question":"b?"},{"header":"3","question":"c?"},{"header":"4","question":"d?"},{"header":"5","question":"e?"}]`
+	if out, err := dude("ask", "--questions-json", five); err == nil || !strings.Contains(out, "ask 1 to 4 questions in one call; you asked 5") {
+		t.Errorf("five questions: %v\n%s", err, out)
+	}
+	if n := asked(); n != 0 {
+		t.Fatalf("a refused ask recorded %d questions", n)
+	}
+	out, err := dude("ask", "--questions-json", `[{"header":"Scope","question":"Retry 4xx?","choices":[{"label":"No","description":"our bug","recommended":true},{"label":"Yes"}]},
+		{"header":"Tests","question":"Which layers?","multiple":true,"choices":[{"label":"Unit"},{"label":"API"}]}]`)
+	if err != nil || !strings.Contains(out, "End your turn") {
+		t.Fatalf("ask --questions-json: %v\n%s", err, out)
+	}
+	var prompt string
+	var raw []byte
+	_ = f.owner.QueryRow(context.Background(), `SELECT prompt, items FROM questions WHERE run_id = 'run_cliask'`).Scan(&prompt, &raw)
+	var items []struct {
+		Header   string
+		Multiple bool
+		Choices  []struct {
+			Label       string
+			Recommended bool
+		}
+	}
+	_ = json.Unmarshal(raw, &items)
+	if prompt != "2 questions: Scope, Tests" || len(items) != 2 || !items[0].Choices[0].Recommended || !items[1].Multiple {
+		t.Errorf("asked %q %s", prompt, raw)
 	}
 }
 

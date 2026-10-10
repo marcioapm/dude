@@ -147,6 +147,11 @@ test("every session route goes to the orchestrator as the person, and a bad body
     ["POST", `/v1/brainstorms/${SESSION}/accept`, undefined, `/internal/sessions/${SESSION}/accept`],
     ["POST", `/v1/brainstorms/${SESSION}/decline`, undefined, `/internal/sessions/${SESSION}/decline`],
     ["POST", `/v1/brainstorms/${SESSION}/file`, { proposalId: "prp_1", items: [0, 2] }, `/internal/sessions/${SESSION}/file`],
+    ["POST", `/v1/brainstorms/${SESSION}/chat`, { text: "one sec", aside: true }, `/internal/sessions/${SESSION}/chat`],
+    ["POST", `/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" },
+      `/internal/sessions/${SESSION}/questions/q_1/answer`],
+    // Made by its first message, with what it reads.
+    ["POST", "/v1/brainstorms", { message: " where does metering go? ", projects: [{ projectId: "prj_1" }] }, "/internal/sessions"],
   ] as const;
   for (const [method, path, body] of ok) expect((await call(marcio, method, path, body)).status).toBe(200);
   expect(forwarded.map((f) => [f.method, f.path])).toEqual(ok.map(([m, , , to]) => [m, to]));
@@ -154,16 +159,26 @@ test("every session route goes to the orchestrator as the person, and a bad body
   expect(forwarded[1]!.body).toEqual({ title: "Ideas", projects: [{ projectId: "prj_1", repositoryIds: ["repo_1"] }] });
   expect(forwarded[2]!.body).toEqual({ projects: [] });
   expect(forwarded[4]!.body).toEqual({ title: "Billing v2" });
+  expect(forwarded.at(-3)!.body).toEqual({ text: "one sec", aside: true });
+  expect(forwarded.at(-2)!.body).toEqual({ answers: [{ choices: [0] }, { choices: [], text: "Later" }], note: "n" });
+  expect(forwarded.at(-1)!.body).toEqual({ message: "where does metering go?", projects: [{ projectId: "prj_1", repositoryIds: [] }] });
 
   forwarded.length = 0;
   for (const [path, body] of [
     ["/v1/brainstorms", { title: "x".repeat(201) }],
+    ["/v1/brainstorms", { message: "  " }],
+    ["/v1/brainstorms", { message: "x".repeat(16_385) }],
+    // 9 000 characters, 18 000 bytes in UTF-8: over the orchestrator's byte bound.
+    ["/v1/brainstorms", { message: "é".repeat(9_000) }],
+    [`/v1/brainstorms/${SESSION}/chat`, { text: "é".repeat(9_000) }],
     [`/v1/brainstorms/${SESSION}/title`, { title: "  " }],
     [`/v1/brainstorms/${SESSION}/title`, {}],
     [`/v1/brainstorms/${SESSION}/chat`, { text: "" }],
     [`/v1/brainstorms/${SESSION}/people`, { people: ["per_x"], role: "owner" }],
     [`/v1/brainstorms/${SESSION}/people/per_x/role`, { role: "owner" }],
     [`/v1/brainstorms/${SESSION}/file`, { proposalId: "prp_1", items: [] }],
+    [`/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: Array.from({ length: 5 }, () => ({ choices: [0] })) }],
+    [`/v1/brainstorms/${SESSION}/questions/q_1/answer`, { answers: [{ choices: [0] }], attachmentIds: ["att_1"] }],
   ] as const) expect((await call(marcio, "POST", path, body)).status).toBe(400);
   expect(forwarded).toEqual([]);
 });

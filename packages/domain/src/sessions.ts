@@ -4,6 +4,7 @@
  */
 
 import type { PersonRef } from "./hierarchy.ts";
+import type { AskItem } from "./questions.ts";
 
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
@@ -59,6 +60,8 @@ export interface SessionQuestionLine {
   id: string;
   prompt: string;
   options: string[];
+  /** What it asks, one to four questions (their headers name a line for several). */
+  items?: AskItem[];
   askedAt: string;
   sessionId: string;
   title: string | null;
@@ -134,7 +137,7 @@ export interface SessionDetail {
   };
   you: { id: string; role: SessionRole };
   proposals: Proposal[] | null;
-  question: { id: string; prompt: string; options: string[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
+  question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
 }
 
 export interface SessionLink {

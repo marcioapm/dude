@@ -13,73 +13,54 @@
   padding: var(--ds-space-composer-y) var(--ds-space-chat-pad-x);
   min-width: 0;
 }
-.answer {
-  --cc-tint: var(--ds-tone-attention-solid);
+/* The page's one thing (the welcome): its host is the frame, so no inset. */
+.stage {
+  padding: 0;
 }
 .disabled {
   --cc-tint: var(--ds-color-border-subtle);
 }
 
-/* "Answering Orchestrator: <question>" — one line in neutral ink; the
-   transcript has the rest, and its highlight is the amber signal. */
-.question {
+/* While the agent waits on the reader: one quiet line on the hover wash.
+   The question's own turn above is the form; this only points to it. */
+.waitBar {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-8);
   min-width: 0;
-  padding: 0 var(--ds-space-2);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-hover-wash);
   font-size: var(--ds-text-sm);
-  /* Fixed: text-sm holds in both densities, so its line box does too. */
-  line-height: 20px;
+  color: var(--ds-color-text-secondary);
 }
-.questionIcon {
+.waitIcon {
   flex-shrink: 0;
   color: var(--ds-color-text-muted);
 }
-.questionLabel {
+.waitText {
+  min-width: 0;
+}
+.waitText b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.writeInstead {
   flex-shrink: 0;
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
-}
-.questionText {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--ds-color-text-secondary);
-}
-.options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ds-space-4);
-  min-width: 0;
-}
-.option {
-  composes: choiceChip from "./turn.module.css";
-  display: inline-flex;
-  align-items: center;
-  max-width: 260px;
-  height: var(--ds-size-chip);
-  padding: 0 var(--ds-space-8);
+  padding: 0;
   border: 0;
-  border-radius: var(--ds-radius-full);
-  /* Neutral at rest, with a hairline so the chip holds on a white surface;
-     the attention tone arrives only on hover and focus. */
-  background: var(--ds-color-active-wash);
-  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
-  color: var(--ds-color-text-primary);
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-medium);
-  line-height: 1;
+  background: none;
+  font: inherit;
+  color: var(--ds-color-accent-text);
+  white-space: nowrap;
 }
-.option:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+.writeInstead:hover {
+  text-decoration: underline;
 }
-.option:disabled {
-  opacity: 0.5;
+.writeInstead:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
 }
-
 .field {
   display: flex;
   min-width: 0;
@@ -96,6 +77,13 @@
 .field:focus-within {
   border-color: var(--cc-tint);
   box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent);
+}
+/* On the stage the field is raised off the page, and keeps it under the focus ring. */
+.stage .field {
+  box-shadow: var(--ds-shadow-2);
+}
+.stage .field:focus-within {
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent), var(--ds-shadow-2);
 }
 .disabled .field {
   opacity: 0.6;
@@ -120,6 +108,12 @@
   line-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
   color: var(--ds-color-text-primary);
   font-family: inherit;
+}
+.stage .textarea {
+  min-height: 72px;
+}
+:global([data-density="compact"]) .stage .textarea {
+  min-height: 52px;
 }
 .textarea::placeholder {
   color: var(--ds-color-text-muted);
@@ -183,13 +177,6 @@
 }
 .submit {
   min-width: 88px;
-}
-/* Answer is attention (the same hue as needs-you); steer is the accent. */
-.submit-answer {
-  --btn-bg: var(--ds-tone-attention-solid);
-  --btn-fg: var(--ds-tone-attention-on-solid);
-  --btn-bg-hover: color-mix(in srgb, var(--ds-tone-attention-solid) 88%, black);
-  --btn-bg-active: color-mix(in srgb, var(--ds-tone-attention-solid) 78%, black);
 }
 
 /* Who it goes out as, and whether it interrupts: quiet, at the start of the action row. */

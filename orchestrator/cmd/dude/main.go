@@ -7,6 +7,7 @@
 //	dude repo list | request NAME --reason R [--write]
 //	dude task create --title T --goal G [--epic E] [--criterion C]...
 //	dude ask "question" [--choice C]... [--action A]...
+//	dude ask --questions-json '[{"header":H,"question":Q,"choices":[...]},...]'
 //	                                      ask a person; end your turn after
 //	dude memory search QUERY [--type T]... [--limit N]
 //	dude memory show ID                   one memory in full
@@ -207,12 +208,21 @@ func run(args []string, out io.Writer) error {
 		var choices, actions many
 		fs.Var(&choices, "choice", "an answer to offer (repeatable)")
 		fs.Var(&actions, "action", "a conductor's, at an escalation: the action each choice stands for, in order (repeatable)")
+		questions := fs.String("questions-json", "", "several questions at once: ask_person's questions, a JSON array")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
+		if *questions != "" {
+			// The array goes to ask_person as given: it holds it to the tool's limits.
+			if len(args) != 0 || len(choices) > 0 || len(actions) > 0 || !json.Valid([]byte(*questions)) ||
+				!strings.HasPrefix(strings.TrimSpace(*questions), "[") {
+				return errors.New(askUsage)
+			}
+			return show(out, *asJSON, call("ask_person", map[string]any{"questions": json.RawMessage(*questions)}))
+		}
 		if len(args) != 1 {
-			return errors.New(`usage: dude ask "question" [--choice C]... [--action A]...`)
+			return errors.New(askUsage)
 		}
 		body := map[string]any{"question": args[0], "choices": []string(choices)}
 		if len(actions) > 0 {
@@ -408,6 +418,8 @@ func run(args []string, out io.Writer) error {
 	}
 	return fmt.Errorf("unknown command %q (dude help)", cmd)
 }
+
+const askUsage = `usage: dude ask "question" [--choice C]... [--action A]..., or dude ask --questions-json '[{"header":…,"question":…,"choices":[{"label":…}]},…]'`
 
 // list is a repeatable flag's values as JSON reads them: [] for none.
 func list(m many) []string {
@@ -620,6 +632,12 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              ask a person for another of them
   dude ask "question" [--choice C]...        ask a person; then end your turn —
                                              the answer is your next message
+  dude ask --questions-json '[...]'          several decisions at once (up to 4), answered together:
+                                             ask_person's questions, e.g.
+                                             '[{"header":"Scope","question":"Retry 4xx?","choices":
+                                             [{"label":"No","description":"why","recommended":true},
+                                             {"label":"Yes"}]},{"header":"Button","question":"Its words?"}]'
+                                             ("multiple":true lets a question take several picks)
   dude memory search QUERY [--type T]... [--limit N]
                                              what is known here: memories, tasks, epics
                                              and projects, by words and meaning, best first

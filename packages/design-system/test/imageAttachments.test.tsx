@@ -62,7 +62,7 @@ test("an image that cannot be sent keeps Send off and says why, on the chip and 
 test("Enter during an upload sends once the images are up, with them", async () => {
   const sent: ComposerSubmission[] = [];
   const el = (attachments: ComposerAttachment[]) => (
-    <ChatComposer mode="answer" question={{ id: "q1", text: "?" }} defaultValue="it overflows" attachments={attachments}
+    <ChatComposer mode="steer" defaultValue="it overflows" attachments={attachments}
       onAttachFiles={() => undefined} onSubmit={(s) => void sent.push(s)} />
   );
   await render(el([uploading]));
@@ -70,7 +70,7 @@ test("Enter during an upload sends once the images are up, with them", async () 
   await act(async () => void field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   expect(sent).toEqual([]);
   await render(el([{ ...uploading, state: "ready", attachmentId: "att_2" }]));
-  expect(sent).toEqual([{ mode: "answer", questionId: "q1", text: "it overflows", attachmentIds: ["att_2"] }]);
+  expect(sent).toEqual([{ mode: "steer", text: "it overflows", interrupt: false, attachmentIds: ["att_2"] }]);
 });
 
 test("pasting an image attaches it; pasting text does not", async () => {
