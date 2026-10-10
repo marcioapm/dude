@@ -1,0 +1,474 @@
+{
+  "claude-sonnet-5 effort=": {
+    "refused": "The Implementer runs on Codex, which takes an OpenAI model, but its tier Coder requests claude-sonnet-5. An admin picks another harness or tier in Agents."
+  },
+  "claude-sonnet-5 effort=high": {
+    "refused": "The Implementer runs on Codex, which takes an OpenAI model, but its tier Coder requests claude-sonnet-5. An admin picks another harness or tier in Agents."
+  },
+  "claude-sonnet-5 effort=none": {
+    "refused": "The Implementer runs on Codex, which takes an OpenAI model, but its tier Coder requests claude-sonnet-5. An admin picks another harness or tier in Agents."
+  },
+  "gpt-6-sol effort=": {
+    "name": "implement wi_1",
+    "labels": {
+      "app": "dude",
+      "dude.harness": "codex",
+      "dude.model": "gpt-6-sol",
+      "dude.model_tier": "Coder",
+      "dude.org": "org_1",
+      "dude.phase": "implement",
+      "dude.role": "implementer",
+      "dude.run": "run_1",
+      "dude.task": "wi_1"
+    },
+    "image": {
+      "ref": "registry.example/dude/agent:1"
+    },
+    "workload": {
+      "adapter": "codex",
+      "command": [
+        "codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"danger-full-access\"",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        "model=\"gpt-6-sol\"",
+        "-c",
+        "model_provider=\"dude\"",
+        "-c",
+        "model_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}",
+        "-c",
+        "model_reasoning_summary=\"detailed\"",
+        "-c",
+        "model_supports_reasoning_summaries=true",
+        "-c",
+        "model_verbosity=\"low\""
+      ],
+      "prompt": "Do the thing.",
+      "workdir": "/workspace",
+      "mcpServers": [
+        {
+          "name": "dude",
+          "service": "dude"
+        }
+      ],
+      "services": [
+        {
+          "name": "dude",
+          "url": "http://10.9.8.7:3120/mcp",
+          "headers": [
+            {
+              "name": "Authorization",
+              "secret": "DUDE_TOOLS_AUTH"
+            }
+          ],
+          "loopback": true
+        }
+      ],
+      "beforeStop": {
+        "command": [
+          "sh",
+          "-c",
+          "set -u\ndest=$1; shift\nbase_of() {\n  if first=$(git -C \"$1\" reflog show --format=%H \"refs/heads/$2\" -- 2\u003e/dev/null | tail -n 1) \u0026\u0026 [ -n \"$first\" ]; then\n    echo \"$first\"\n  else\n    git -C \"$1\" rev-parse -q --verify \"$2^{commit}\" 2\u003e/dev/null || git -C \"$1\" rev-parse -q --verify \"origin/$2^{commit}\"\n  fi\n}\ndiffs() {\n  while [ $# -ge 3 ]; do\n    name=$1 dir=$2 ref=$3; shift 3\n    [ -d \"$dir\" ] || continue\n    base=$(base_of \"$dir\" \"$ref\") || continue\n    echo \"# dude-diff $name $base\"\n    idx=$(mktemp) || exit 3\n    real=$(git -C \"$dir\" rev-parse --git-path index)\n    case $real in /*) ;; *) real=$dir/$real ;; esac\n    if [ -f \"$real\" ]; then cp \"$real\" \"$idx\"; else rm -f \"$idx\"; fi\n    GIT_INDEX_FILE=$idx git -C \"$dir\" add -A -N . 2\u003e/dev/null\n    GIT_INDEX_FILE=$idx git -C \"$dir\" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames \"$base\" --\n    rm -f \"$idx\"\n  done\n}\nif [ \"$dest\" = - ]; then\n  diffs \"$@\" | head -c 8388608\nelif [ -n \"${LUX_ARTIFACTS:-}\" ]; then\n  out=$LUX_ARTIFACTS/.dude-final-diff\n  mkdir -p \"$out\" || exit 3\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$out/.$1.tmp\" \u0026\u0026 mv \"$out/.$1.tmp\" \"$out/$1.patch\"\n    shift 3\n  done\nelse\n  tmp=$(mktemp -d) || exit 3\n  status=0\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$tmp/$1.patch\" \u0026\u0026\n      /.lux/bin/lux-shim publish \"$tmp/$1.patch\" --name \".dude-final-diff/$1.patch\" \u003e /dev/null || status=3\n    shift 3\n  done\n  rm -rf \"$tmp\"\n  exit $status\nfi",
+          "dude-diff",
+          "artifacts",
+          "api",
+          "/workspace/repos/api",
+          "main",
+          "web",
+          "/workspace/repos/web",
+          "abc123"
+        ],
+        "timeout": "10s"
+      }
+    },
+    "env": {
+      "CLICOLOR_FORCE": "1",
+      "FORCE_COLOR": "1",
+      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_VALUE_0": "always",
+      "PY_COLORS": "1",
+      "TERM": "xterm-256color"
+    },
+    "secrets": [
+      {
+        "name": "GIT_TOKEN",
+        "value": "ghp_golden"
+      },
+      {
+        "name": "DUDE_TOOLS_AUTH",
+        "value": "Bearer tok_golden"
+      },
+      {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
+      },
+      {
+        "name": "OPENAI_API_KEY",
+        "value": "sk-golden",
+        "as": "env"
+      }
+    ],
+    "git": {
+      "repositories": [
+        {
+          "name": "api",
+          "url": "https://github.com/acme/api.git",
+          "ref": "main",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/api"
+        },
+        {
+          "name": "web",
+          "url": "https://github.com/acme/web.git",
+          "ref": "abc123",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/web",
+          "push": false
+        }
+      ],
+      "push": {
+        "branch": "dude/wi_1/run-run_1"
+      }
+    },
+    "volumes": [
+      {
+        "name": "workspace",
+        "path": "/workspace",
+        "kind": "state"
+      },
+      {
+        "name": "home",
+        "path": "/home/agent",
+        "kind": "state"
+      }
+    ],
+    "timeout": "4h",
+    "network": {
+      "egress": [
+        {
+          "host": "llm.example"
+        },
+        {
+          "cidr": "10.9.8.7/32"
+        }
+      ]
+    }
+  },
+  "gpt-6-sol effort=high": {
+    "name": "implement wi_1",
+    "labels": {
+      "app": "dude",
+      "dude.effort": "high",
+      "dude.harness": "codex",
+      "dude.model": "gpt-6-sol",
+      "dude.model_tier": "Coder",
+      "dude.org": "org_1",
+      "dude.phase": "implement",
+      "dude.role": "implementer",
+      "dude.run": "run_1",
+      "dude.task": "wi_1"
+    },
+    "image": {
+      "ref": "registry.example/dude/agent:1"
+    },
+    "workload": {
+      "adapter": "codex",
+      "command": [
+        "codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"danger-full-access\"",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        "model=\"gpt-6-sol\"",
+        "-c",
+        "model_provider=\"dude\"",
+        "-c",
+        "model_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}",
+        "-c",
+        "model_reasoning_summary=\"detailed\"",
+        "-c",
+        "model_supports_reasoning_summaries=true",
+        "-c",
+        "model_reasoning_effort=\"high\"",
+        "-c",
+        "model_verbosity=\"low\""
+      ],
+      "prompt": "Do the thing.",
+      "workdir": "/workspace",
+      "mcpServers": [
+        {
+          "name": "dude",
+          "service": "dude"
+        }
+      ],
+      "services": [
+        {
+          "name": "dude",
+          "url": "http://10.9.8.7:3120/mcp",
+          "headers": [
+            {
+              "name": "Authorization",
+              "secret": "DUDE_TOOLS_AUTH"
+            }
+          ],
+          "loopback": true
+        }
+      ],
+      "beforeStop": {
+        "command": [
+          "sh",
+          "-c",
+          "set -u\ndest=$1; shift\nbase_of() {\n  if first=$(git -C \"$1\" reflog show --format=%H \"refs/heads/$2\" -- 2\u003e/dev/null | tail -n 1) \u0026\u0026 [ -n \"$first\" ]; then\n    echo \"$first\"\n  else\n    git -C \"$1\" rev-parse -q --verify \"$2^{commit}\" 2\u003e/dev/null || git -C \"$1\" rev-parse -q --verify \"origin/$2^{commit}\"\n  fi\n}\ndiffs() {\n  while [ $# -ge 3 ]; do\n    name=$1 dir=$2 ref=$3; shift 3\n    [ -d \"$dir\" ] || continue\n    base=$(base_of \"$dir\" \"$ref\") || continue\n    echo \"# dude-diff $name $base\"\n    idx=$(mktemp) || exit 3\n    real=$(git -C \"$dir\" rev-parse --git-path index)\n    case $real in /*) ;; *) real=$dir/$real ;; esac\n    if [ -f \"$real\" ]; then cp \"$real\" \"$idx\"; else rm -f \"$idx\"; fi\n    GIT_INDEX_FILE=$idx git -C \"$dir\" add -A -N . 2\u003e/dev/null\n    GIT_INDEX_FILE=$idx git -C \"$dir\" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames \"$base\" --\n    rm -f \"$idx\"\n  done\n}\nif [ \"$dest\" = - ]; then\n  diffs \"$@\" | head -c 8388608\nelif [ -n \"${LUX_ARTIFACTS:-}\" ]; then\n  out=$LUX_ARTIFACTS/.dude-final-diff\n  mkdir -p \"$out\" || exit 3\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$out/.$1.tmp\" \u0026\u0026 mv \"$out/.$1.tmp\" \"$out/$1.patch\"\n    shift 3\n  done\nelse\n  tmp=$(mktemp -d) || exit 3\n  status=0\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$tmp/$1.patch\" \u0026\u0026\n      /.lux/bin/lux-shim publish \"$tmp/$1.patch\" --name \".dude-final-diff/$1.patch\" \u003e /dev/null || status=3\n    shift 3\n  done\n  rm -rf \"$tmp\"\n  exit $status\nfi",
+          "dude-diff",
+          "artifacts",
+          "api",
+          "/workspace/repos/api",
+          "main",
+          "web",
+          "/workspace/repos/web",
+          "abc123"
+        ],
+        "timeout": "10s"
+      }
+    },
+    "env": {
+      "CLICOLOR_FORCE": "1",
+      "FORCE_COLOR": "1",
+      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_VALUE_0": "always",
+      "PY_COLORS": "1",
+      "TERM": "xterm-256color"
+    },
+    "secrets": [
+      {
+        "name": "GIT_TOKEN",
+        "value": "ghp_golden"
+      },
+      {
+        "name": "DUDE_TOOLS_AUTH",
+        "value": "Bearer tok_golden"
+      },
+      {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\nmodel_verbosity=\"low\"\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
+      },
+      {
+        "name": "OPENAI_API_KEY",
+        "value": "sk-golden",
+        "as": "env"
+      }
+    ],
+    "git": {
+      "repositories": [
+        {
+          "name": "api",
+          "url": "https://github.com/acme/api.git",
+          "ref": "main",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/api"
+        },
+        {
+          "name": "web",
+          "url": "https://github.com/acme/web.git",
+          "ref": "abc123",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/web",
+          "push": false
+        }
+      ],
+      "push": {
+        "branch": "dude/wi_1/run-run_1"
+      }
+    },
+    "volumes": [
+      {
+        "name": "workspace",
+        "path": "/workspace",
+        "kind": "state"
+      },
+      {
+        "name": "home",
+        "path": "/home/agent",
+        "kind": "state"
+      }
+    ],
+    "timeout": "4h",
+    "network": {
+      "egress": [
+        {
+          "host": "llm.example"
+        },
+        {
+          "cidr": "10.9.8.7/32"
+        }
+      ]
+    }
+  },
+  "gpt-6-sol effort=none": {
+    "name": "implement wi_1",
+    "labels": {
+      "app": "dude",
+      "dude.effort": "none",
+      "dude.harness": "codex",
+      "dude.model": "gpt-6-sol",
+      "dude.model_tier": "Coder",
+      "dude.org": "org_1",
+      "dude.phase": "implement",
+      "dude.role": "implementer",
+      "dude.run": "run_1",
+      "dude.task": "wi_1"
+    },
+    "image": {
+      "ref": "registry.example/dude/agent:1"
+    },
+    "workload": {
+      "adapter": "codex",
+      "command": [
+        "codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"danger-full-access\"",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        "model=\"gpt-6-sol\"",
+        "-c",
+        "model_provider=\"dude\"",
+        "-c",
+        "model_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}",
+        "-c",
+        "model_reasoning_summary=\"detailed\"",
+        "-c",
+        "model_supports_reasoning_summaries=true",
+        "-c",
+        "model_verbosity=\"low\""
+      ],
+      "prompt": "Do the thing.",
+      "workdir": "/workspace",
+      "mcpServers": [
+        {
+          "name": "dude",
+          "service": "dude"
+        }
+      ],
+      "services": [
+        {
+          "name": "dude",
+          "url": "http://10.9.8.7:3120/mcp",
+          "headers": [
+            {
+              "name": "Authorization",
+              "secret": "DUDE_TOOLS_AUTH"
+            }
+          ],
+          "loopback": true
+        }
+      ],
+      "beforeStop": {
+        "command": [
+          "sh",
+          "-c",
+          "set -u\ndest=$1; shift\nbase_of() {\n  if first=$(git -C \"$1\" reflog show --format=%H \"refs/heads/$2\" -- 2\u003e/dev/null | tail -n 1) \u0026\u0026 [ -n \"$first\" ]; then\n    echo \"$first\"\n  else\n    git -C \"$1\" rev-parse -q --verify \"$2^{commit}\" 2\u003e/dev/null || git -C \"$1\" rev-parse -q --verify \"origin/$2^{commit}\"\n  fi\n}\ndiffs() {\n  while [ $# -ge 3 ]; do\n    name=$1 dir=$2 ref=$3; shift 3\n    [ -d \"$dir\" ] || continue\n    base=$(base_of \"$dir\" \"$ref\") || continue\n    echo \"# dude-diff $name $base\"\n    idx=$(mktemp) || exit 3\n    real=$(git -C \"$dir\" rev-parse --git-path index)\n    case $real in /*) ;; *) real=$dir/$real ;; esac\n    if [ -f \"$real\" ]; then cp \"$real\" \"$idx\"; else rm -f \"$idx\"; fi\n    GIT_INDEX_FILE=$idx git -C \"$dir\" add -A -N . 2\u003e/dev/null\n    GIT_INDEX_FILE=$idx git -C \"$dir\" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames \"$base\" --\n    rm -f \"$idx\"\n  done\n}\nif [ \"$dest\" = - ]; then\n  diffs \"$@\" | head -c 8388608\nelif [ -n \"${LUX_ARTIFACTS:-}\" ]; then\n  out=$LUX_ARTIFACTS/.dude-final-diff\n  mkdir -p \"$out\" || exit 3\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$out/.$1.tmp\" \u0026\u0026 mv \"$out/.$1.tmp\" \"$out/$1.patch\"\n    shift 3\n  done\nelse\n  tmp=$(mktemp -d) || exit 3\n  status=0\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$tmp/$1.patch\" \u0026\u0026\n      /.lux/bin/lux-shim publish \"$tmp/$1.patch\" --name \".dude-final-diff/$1.patch\" \u003e /dev/null || status=3\n    shift 3\n  done\n  rm -rf \"$tmp\"\n  exit $status\nfi",
+          "dude-diff",
+          "artifacts",
+          "api",
+          "/workspace/repos/api",
+          "main",
+          "web",
+          "/workspace/repos/web",
+          "abc123"
+        ],
+        "timeout": "10s"
+      }
+    },
+    "env": {
+      "CLICOLOR_FORCE": "1",
+      "FORCE_COLOR": "1",
+      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_VALUE_0": "always",
+      "PY_COLORS": "1",
+      "TERM": "xterm-256color"
+    },
+    "secrets": [
+      {
+        "name": "GIT_TOKEN",
+        "value": "ghp_golden"
+      },
+      {
+        "name": "DUDE_TOOLS_AUTH",
+        "value": "Bearer tok_golden"
+      },
+      {
+        "name": "CODEX_CONFIG",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
+        "as": "file",
+        "path": "/home/agent/.codex/config.toml"
+      },
+      {
+        "name": "OPENAI_API_KEY",
+        "value": "sk-golden",
+        "as": "env"
+      }
+    ],
+    "git": {
+      "repositories": [
+        {
+          "name": "api",
+          "url": "https://github.com/acme/api.git",
+          "ref": "main",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/api"
+        },
+        {
+          "name": "web",
+          "url": "https://github.com/acme/web.git",
+          "ref": "abc123",
+          "credential": "GIT_TOKEN",
+          "path": "/workspace/repos/web",
+          "push": false
+        }
+      ],
+      "push": {
+        "branch": "dude/wi_1/run-run_1"
+      }
+    },
+    "volumes": [
+      {
+        "name": "workspace",
+        "path": "/workspace",
+        "kind": "state"
+      },
+      {
+        "name": "home",
+        "path": "/home/agent",
+        "kind": "state"
+      }
+    ],
+    "timeout": "4h",
+    "network": {
+      "egress": [
+        {
+          "host": "llm.example"
+        },
+        {
+          "cidr": "10.9.8.7/32"
+        }
+      ]
+    }
+  }
+}

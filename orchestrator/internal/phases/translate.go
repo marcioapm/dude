@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -84,6 +85,83 @@ type translator struct {
 	resumes map[int]bool
 	// A session's refused names said so far (refused).
 	sessionRefused map[string]bool
+	// What a Claude Code or Codex turn needs remembered between batches,
+	// saved as runs.harness_state.
+	harnessState
+}
+
+// harnessState is runs.harness_state: Claude Code's running cost for its
+// process, the last of it recorded, and its plan as TaskCreate and
+// TaskUpdate built it, with the number the next task gets; the half of a
+// Claude turn's end that has arrived (claudeTurnEnd), and the idle held
+// until the other half; the tokens of the Codex turn in progress; and why
+// the turn in progress failed, from a harness line that said so, which its
+// end fails the Run with.
+type harnessState struct {
+	claudeCost     float64
+	claudeCostSeen float64
+	claudeTasks    []map[string]any
+	claudeTaskNext int
+	claudeHalf     string
+	claudeUsage    *claudeUsage
+	claudeIdle     bool
+	codexTurn      codexTokens
+	turnError      string
+}
+
+type codexTokens struct {
+	Input, Cached, Output int64
+}
+
+type harnessStateJSON struct {
+	ClaudeCost     float64          `json:"claudeCost,omitempty"`
+	ClaudeCostSeen float64          `json:"claudeCostSeen,omitempty"`
+	ClaudeTasks    []map[string]any `json:"claudeTasks,omitempty"`
+	ClaudeTaskNext int              `json:"claudeTaskNext,omitempty"`
+	ClaudeHalf     string           `json:"claudeHalf,omitempty"`
+	ClaudeUsage    *claudeUsage     `json:"claudeUsage,omitempty"`
+	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
+	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
+	TurnError      string           `json:"turnError,omitempty"`
+}
+
+func (h harnessState) MarshalJSON() ([]byte, error) {
+	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
+		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
+	if h.codexTurn != (codexTokens{}) {
+		j.CodexTurn = &h.codexTurn
+	}
+	return json.Marshal(j)
+}
+
+func (h *harnessState) UnmarshalJSON(b []byte) error {
+	var j harnessStateJSON
+	if err := json.Unmarshal(b, &j); err != nil {
+		return err
+	}
+	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
+		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
+	// Legacy tasks used their original one-based position as identity.
+	for i, task := range h.claudeTasks {
+		id, _ := task["id"].(string)
+		if id == "" {
+			id = strconv.Itoa(i + 1)
+			task["id"] = id
+		}
+		if n, err := strconv.Atoi(id); err == nil {
+			h.claudeTaskNext = max(h.claudeTaskNext, n)
+		}
+	}
+	if j.CodexTurn != nil {
+		h.codexTurn = *j.CodexTurn
+	}
+	return nil
+}
+
+// replaying: a resumed agent loading its session replays the conversation,
+// which is already recorded.
+func (t *translator) replaying(epoch int) bool {
+	return epoch > t.sessionEpoch && t.sessionEpoch != 0
 }
 
 // runUsage is the Run's usage as the agent reported it. Context is the
@@ -107,11 +185,15 @@ const promptRequestID = "prompt"
 func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	var message, thought string
 	var open []string
+	var state []byte
 	u := &t.usage
 	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, open_tool_calls,
-		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state
 		FROM runs WHERE id = $1`, t.run.ID).
-		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite); err != nil {
+		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite, &state); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(state, &t.harnessState); err != nil {
 		return err
 	}
 	t.message.WriteString(message)
@@ -147,19 +229,24 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEvent int64) error {
 	u := t.usage
 	open := slices.Sorted(maps.Keys(t.openCalls))
+	state, err := json.Marshal(t.harnessState)
+	if err != nil {
+		return err
+	}
 	// Each open call keeps the time it was first seen open
 	// (open_tool_calls_at): what "open for how long" is measured from.
-	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
+	_, err = tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
 		open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, COALESCE(open_tool_calls_at->c, to_jsonb(now())))
 			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
-		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13)
+		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
+		harness_state = $14::jsonb
 		WHERE id = $1`,
 		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
-		db.NonNil(open), t.active, cursor, afterEvent)
+		db.NonNil(open), t.active, cursor, afterEvent, state)
 	t.active = false
 	t.unsettled = nil
 	return err
@@ -623,6 +710,14 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		return err
 	}
 	if !first {
+		// A new process: a Claude turn whose result never came ends with
+		// what it had, before the process's totals start again.
+		if t.claudeHalf != "" {
+			if err := t.claudeTurnEnd(ctx, tx, s); err != nil {
+				return err
+			}
+		}
+		t.claudeProcessStarted()
 		// The resumed agent has its session back: lux reports it running.
 		// Its state event says so too, but trails the agent's records on
 		// the stream, the first busy included.
@@ -643,6 +738,8 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string, epoch int) error {
 	switch activity {
 	case "busy":
+		// A new turn: an idle held for a Claude turn's end is past.
+		t.claudeIdle = false
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -653,24 +750,34 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 			waiting_since = NULL, agent_active_at = now() WHERE id = $1`, t.run.ID)
 		return err
 	case "idle":
-		if err := t.flush(ctx, tx, s); err != nil {
-			return err
+		// Between the halves of a Claude turn's end: held for the second.
+		if t.claudeHalf != "" {
+			t.claudeIdle = true
+			return nil
 		}
-		clear(t.openCalls)
-		// A turn's end is when an agent's edits settle.
-		s.pokeDiff(t.run.ID)
-		// A turn that ended with something open for a person — a question, a
-		// repository it asked for — is not done: the agent waits, and the
-		// answer starts its next turn. The syncer parks it if the wait is
-		// long.
-		tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
-			WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
-		if err != nil || tag.RowsAffected() > 0 {
-			return err
-		}
-		return t.turnDone(ctx, tx, s, false)
+		return t.idle(ctx, tx, s)
 	}
 	return nil
+}
+
+// idle: the agent's turn is over.
+func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
+	if err := t.flush(ctx, tx, s); err != nil {
+		return err
+	}
+	clear(t.openCalls)
+	// A turn's end is when an agent's edits settle.
+	s.pokeDiff(t.run.ID)
+	// A turn that ended with something open for a person — a question, a
+	// repository it asked for — is not done: the agent waits, and the
+	// answer starts its next turn. The syncer parks it if the wait is
+	// long.
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
+		WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
+	if err != nil || tag.RowsAffected() > 0 {
+		return err
+	}
+	return t.turnDone(ctx, tx, s, false)
 }
 
 // turnDone marks the agent's turn done, once. settling: only a turn that
@@ -725,14 +832,22 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		map[string]any{"repository": repo, "error": cloneErr})
 }
 
-// agentEvent translates the agent's own protocol messages. Only ACP is
-// spoken (the adapter dude configures for OpenCode and the scripted agent);
-// an unknown event type is ignored rather than guessed at.
+// agentEvent translates the agent's own protocol messages: ACP (OpenCode
+// and the scripted agent), Claude Code's stream-json (claude.*,
+// translate_claude.go) and Codex's app-server (codex.*,
+// translate_codex.go). An unknown event type is ignored rather than
+// guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
 		_ = json.Unmarshal(f.Event.Data, &d)
 		return t.shimEvent(ctx, tx, s, f.Event.Type, d, f.Epoch)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "claude."); ok {
+		return t.claudeEvent(ctx, tx, s, typ, f)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "codex."); ok {
+		return t.codexEvent(ctx, tx, s, typ, f)
 	}
 	typ, ok := strings.CutPrefix(f.Event.Type, "acp.")
 	if !ok {
@@ -740,7 +855,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	}
 	// While a resumed agent loads its session it replays the conversation;
 	// that replay is already recorded.
-	if f.Epoch > t.sessionEpoch && t.sessionEpoch != 0 {
+	if t.replaying(f.Epoch) {
 		return nil
 	}
 	var u map[string]any
@@ -905,6 +1020,16 @@ func (t *translator) flushText(ctx context.Context, tx pgx.Tx, s *Syncer, buf *s
 		payload["contextTokens"] = t.usage.context
 	}
 	return s.event(ctx, tx, t.run, event, ledger.ActorAgent, payload)
+}
+
+// flushWhole records text a harness sent whole (Claude Code's and Codex's
+// messages and thoughts) into buf's event, ending whatever was before.
+func (t *translator) flushWhole(ctx context.Context, tx pgx.Tx, s *Syncer, buf *strings.Builder, event, text string) error {
+	if err := t.flush(ctx, tx, s); err != nil {
+		return err
+	}
+	buf.WriteString(text)
+	return t.flushText(ctx, tx, s, buf, event)
 }
 
 // usageUpdate: ACP's running report of the conversation's size, and of cost

@@ -30,6 +30,11 @@ import {
 import { formatTimestamp, plural } from "@dude/design-system";
 import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
+  DEFAULT_HARNESS,
+  HARNESSES,
+  HARNESS_DESCRIPTION,
+  HARNESS_LABEL,
+  harnessMisfit,
   PROMPT_VARIABLES,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
@@ -37,6 +42,7 @@ import {
   SETTINGS_ROLE_DESCRIPTION,
   SETTINGS_ROLE_LABEL,
   type FullDeliveryPolicy,
+  type Harness,
   type MachineSizeWithUse,
   type ModelTier,
   type ProjectPromptMode,
@@ -140,6 +146,7 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
         <Source scope={scope} setting={r.enabled} reset={() => void set({ enabled: null }, "Back to " + orgName + "’s")} />
       ) : null}
       <SettingFields>
+        <HarnessField scope={scope} role={role} tiers={tiers} />
         <TierField scope={scope} role={role} tiers={tiers} tiersProblem={tiersProblem ?? null} onManageTiers={onManageTiers} />
         {role === "conductor" ? null : (
           <SettingField
@@ -160,7 +167,7 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
       </SettingFields>
       {images ? <RoleImageField scope={scope} role={role} images={images} onManageImages={onManageImages} /> : null}
       {role === "fixer" ? (
-        <SettingsNote icon="info">The fixer runs on the implementer’s tier, time limit, machine and image unless you give it its own.</SettingsNote>
+        <SettingsNote icon="info">The fixer runs on the implementer’s harness, tier, time limit, machine and image unless you give it its own.</SettingsNote>
       ) : null}
       <PromptSection scope={scope} role={role} onHistory={() => setHistory(true)} />
       {history ? (
@@ -169,6 +176,49 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
     </>
   );
 }
+
+/**
+ * The harness a role's sessions run on: OpenCode, Claude Code or Codex,
+ * apart from the tier it asks for. Layered as the machine is. A harness
+ * that cannot run the tier's model is warned of here and still saved: the
+ * Run fails saying so when it is built.
+ */
+function HarnessField({ scope, role, tiers }: { scope: SettingsScope; role: SettingsRole; tiers: readonly ModelTier[] | null }) {
+  const { settings } = scope;
+  const h = settings.roles[role].harness;
+  const project = isProject(settings);
+  const orgName = settings.organization.name;
+  const fixer = role === "fixer";
+  const own = project ? (h.source === "project" ? h.value : null) : h.followsImplementer ? null : h.value;
+  const inherited: Harness = h.followsImplementer ? h.value : project ? (h.organization ?? DEFAULT_HARNESS) : DEFAULT_HARNESS;
+  const offersInherit = project || fixer;
+  const inheritLabel = fixer ? "The implementer’s" : `From ${orgName}`;
+  const set = (harness: Harness | null, done: string) => void scope.patch({ roles: { [role]: { harness } } }, done);
+  const model = tiers?.find((t) => t.id === settings.roles[role].tier.value)?.model ?? null;
+  const misfit = harnessMisfit(h.value, model);
+  const options = [
+    ...(offersInherit ? [{ value: INHERIT_HARNESS, label: `${inheritLabel} · ${HARNESS_LABEL[inherited]}` }] : []),
+    ...HARNESSES.map((x) => ({ value: x, label: HARNESS_LABEL[x], description: HARNESS_DESCRIPTION[x] })),
+  ];
+  return (
+    <SettingField
+      label="Harness"
+      htmlFor={`harness-${role}`}
+      source={project ? (
+        <SettingSource source={h.source} from={orgName} inherited={h.source === "project" ? HARNESS_LABEL[h.organization ?? DEFAULT_HARNESS] : undefined}
+          onReset={settings.canEdit ? () => set(null, "Harness reset") : undefined} />
+      ) : null}
+    >
+      <Select id={`harness-${role}`} aria-label="Harness" data-testid="role-harness" disabled={!settings.canEdit}
+        value={own ?? (offersInherit ? INHERIT_HARNESS : DEFAULT_HARNESS)} options={options}
+        hint="The coding agent that runs it. The model tier below says which model it asks for."
+        onValueChange={(v) => set(v === INHERIT_HARNESS ? null : (v as Harness), v === INHERIT_HARNESS ? "Harness reset" : "Harness saved")} />
+      {misfit ? <Callout tone="attention" data-testid="role-harness-misfit">{misfit}</Callout> : null}
+    </SettingField>
+  );
+}
+
+const INHERIT_HARNESS = "__inherit__";
 
 /**
  * The model tier a role's sessions run on. A project stores only its

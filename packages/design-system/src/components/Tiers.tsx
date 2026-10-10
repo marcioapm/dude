@@ -89,21 +89,24 @@ export interface TierChipProps {
   readonly model: string;
   /** The reasoning effort asked for, after the model; none at the model's default. */
   readonly effort?: string | null | undefined;
+  /** The harness that ran it, before the tier (as a person reads it: "Claude Code"). */
+  readonly harness?: string | null | undefined;
   readonly tooltip?: ReactNode;
   readonly "data-testid"?: string | undefined;
 }
 
 /**
- * What a session asked for, in its header: the tier, then the model it
- * requested, then its effort when it asked for one. A button only so the
- * tooltip opens on focus.
+ * What a session asked for, in its header: the harness that ran it, the
+ * tier, then the model it requested, then its effort when it asked for
+ * one. A button only so the tooltip opens on focus.
  */
-export function TierChip({ tier, model, effort, tooltip, "data-testid": testId }: TierChipProps) {
+export function TierChip({ tier, model, effort, harness, tooltip, "data-testid": testId }: TierChipProps) {
   const requests = effort ? `${model} at effort ${effort}` : model;
   const chip = (
     <button type="button" className={styles["chip"]} data-testid={testId}
-      aria-label={tier ? `Model: ${tier}, requests ${requests}` : `Model: ${requests}`}>
+      aria-label={`${harness ? `${harness}, ` : ""}${tier ? `Model: ${tier}, requests ${requests}` : `Model: ${requests}`}`}>
       <Icon name="sparkle" size={12} className={styles["chipIcon"]} />
+      {harness ? <span className={cx(styles["chipTier"], "ds-cap")} data-testid={testId ? `${testId}-harness` : undefined}>{harness} ·</span> : null}
       {tier ? <span className={cx(styles["chipTier"], "ds-cap")}>{tier} ·</span> : null}
       <span className={cx(styles["chipModel"], "ds-mono")}>{model}</span>
       {effort ? <span className={styles["chipEffort"]}>· {effort}</span> : null}
