@@ -330,6 +330,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   let flush = false;
   let main;
   const openSession = (id: string) => go({ view: "brainstorm", id });
+  // Reads the sessions list again as it opens one: a session just made is not in it yet.
+  const openListedSession = (id: string) => {
+    void loadSessions();
+    openSession(id);
+  };
   // New session is the welcome: a session is made by its first message there.
   const toWelcome = () => go({ view: "welcome" });
   // Settings that are not a project's come first: a new organization with
@@ -345,10 +350,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       offer={projects?.length === 0 && isAdmin ? (
         <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">New project</Button>
       ) : null}
-      onCreated={(id) => {
-        void loadSessions();
-        openSession(id);
-      }} />;
+      onCreated={openListedSession} />;
   } else if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
       projects={projects ?? []} page={place.page} sub={place.sub} onOpenRun={openRun}
@@ -356,10 +358,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "sessions") {
-    main = <SessionsScreen sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={(id) => {
-      void loadSessions();
-      openSession(id);
-    }} />;
+    main = <SessionsScreen sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
