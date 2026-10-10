@@ -312,15 +312,20 @@ describe("a brainstorm session's page", () => {
     }), [
       { ...ev("chat.message", { text: "before the card" }, { type: "human", id: YOU }), occurredAt: at(10) },
       { ...ev("chat.message", { text: "after the card" }, { type: "human", id: YOU }), occurredAt: at(30) },
+      // A notice is a line beside the card, so this pair is ordered by the page's own sort, not by the turn merge.
+      { ...ev("session.renamed", { title: "Billing v2", by: ANA.id }, { type: "human", id: ANA.id }), occurredAt: at(30) },
     ]);
     const page = await sessionPage(client);
     await until(() => page.querySelectorAll("[data-testid=human-turn]").length === 2 || null, "both messages");
     const card = await until(() => page.querySelector("[data-testid=proposal]"), "the card");
+    const notice = await until(() => page.querySelector("[data-testid=session-notice]"), "the notice");
     const [before, after] = [...page.querySelectorAll("[data-testid=human-turn]")];
     expect(before!.textContent).toContain("before the card");
     expect(after!.textContent).toContain("after the card");
+    expect(notice.textContent).toContain("Billing v2");
     expect(Boolean(before!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(Boolean(card.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(Boolean(card.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
   test("a card filed here folds to its line at once, in its place, and opens read only", async () => {
