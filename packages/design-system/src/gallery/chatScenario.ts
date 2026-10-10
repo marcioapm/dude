@@ -54,6 +54,8 @@ export interface ScenarioTurn {
   // question-only
   readonly options?: ReadonlyArray<string> | undefined;
   readonly answeredAt?: number | null | undefined;
+  /** The answer, once given: the question's record shows it under the question. */
+  readonly answer?: string | undefined;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
   readonly costUsd?: number | undefined;
@@ -437,8 +439,8 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
       apply: (s) => {
         s.question = null;
         s.status = "running";
-        upd(s.turns, "q1", { answeredAt: T(0) });
-        s.turns.push({ id: "h1", kind: "human", role: "human", name: "marcio", intent: "answer", inReplyTo: QUESTION, text: answer, shown: 999, startedAt: T(0), tools: [] });
+        // The question's turn is the record now: the answer is under it, not a turn of its own.
+        upd(s.turns, "q1", { answeredAt: T(0), answer });
         s.turns.push({ id: "o4", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
       },
     },

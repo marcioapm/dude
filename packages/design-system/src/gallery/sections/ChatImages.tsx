@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Block, Col, Label, Panes, type PaneMode } from "../Frame.tsx";
 import { ChatComposer } from "../../components/ChatComposer.tsx";
 import { ChatMessage } from "../../components/ChatMessage.tsx";
+import { QuestionCard } from "../../components/QuestionCard.tsx";
 import { AttachDropZone, ImageViewer, MessageImages, type ComposerAttachment, type SentImage } from "../../components/ImageAttachments.tsx";
 import { at } from "../fixtures.tsx";
 
@@ -79,13 +80,13 @@ export function ImagesBlock({ mode }: { readonly mode: PaneMode }) {
               ]}
               onAttachFiles={() => undefined} onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
           </div>
-          <Label>answer with a screenshot</Label>
-          <div style={frame}>
-            <ChatComposer question={{ id: "q1", askedBy: "Orchestrator", text: "Does the summary card overflow on a phone?" }}
-              defaultValue="It overflows — VAT amount is cut off on the right."
-              attachments={[{ id: "p1", name: "phone.png", previewUrl: PHONE, state: "ready", badge: "96 KB", attachmentId: "att_4" }]}
-              onAttachFiles={() => undefined} onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
-          </div>
+          <Label>answers with a screenshot — the note of several questions takes images as the composer does</Label>
+          <QuestionCard role="implementer" askedAt={Date.now() - 60_000} text="2 questions: Overflow, Fix"
+            items={[{ header: "Overflow", question: "Does the summary card overflow on a phone?", choices: [{ label: "Yes" }, { label: "No" }] },
+              { header: "Fix", question: "Wrap or truncate the VAT line?", choices: [{ label: "Wrap" }, { label: "Truncate" }] }]}
+            draft={{ tab: 2, answers: [{ choices: [0], own: null }, { choices: [0], own: null }], note: "The VAT amount is cut off on the right." }}
+            attachments={[{ id: "p1", name: "phone.png", previewUrl: PHONE, state: "ready", badge: "96 KB", attachmentId: "att_4" }]}
+            onAttachFiles={() => undefined} onRemoveAttachment={() => undefined} onSubmit={() => undefined} />
           <Label>no storage — the paperclip is off and says why</Label>
           <div style={frame}>
             <ChatComposer running onAttachFiles={() => undefined} attachDisabledReason="Image storage isn't set up" onSubmit={() => undefined} />

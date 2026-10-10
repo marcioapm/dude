@@ -407,6 +407,112 @@ func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
 	}
 }
 
+const fourQuestions = `{"questions":[
+	{"header":"Retry scope","question":"Which failures should the payment call retry?","choices":[
+		{"label":"5xx and network errors only","description":"A 4xx means our request is wrong.","recommended":true},
+		{"label":"Everything (current behaviour)"}]},
+	{"header":"Old route","question":"The legacy /pay route has its own retry. What should happen to it?",
+		"choices":[{"label":"Fold it in"},{"label":"Leave it; file a task"}]},
+	{"header":"Tests","question":"Which layers should cover the split?","multiple":true,
+		"choices":[{"label":"Unit"},{"label":"API contract"}]},
+	{"header":"Button","question":"What should the split button say?"}]}`
+
+// ask_person takes up to four questions in one call, each with its own
+// choices, kept whole for the form and summed up in prompt for every
+// reader of it.
+func TestAnAgentAsksSeveralQuestionsInOneCall(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_many", "implementer", "running")
+	status, out := f.post(t, token, "ask_person", fourQuestions)
+	if status != 200 || out["questionId"] == nil {
+		t.Fatalf("ask: %d %v", status, out)
+	}
+	var prompt, options string
+	var items []map[string]any
+	if err := f.owner.QueryRow(context.Background(), `SELECT prompt, options::text, items FROM questions WHERE id = $1`,
+		out["questionId"]).Scan(&prompt, &options, &items); err != nil {
+		t.Fatal(err)
+	}
+	if prompt != "4 questions: Retry scope, Old route, Tests, Button" || options != "[]" {
+		t.Errorf("prompt %q options %s", prompt, options)
+	}
+	if len(items) != 4 || items[2]["multiple"] != true || items[3]["header"] != "Button" {
+		t.Fatalf("items %v", items)
+	}
+	first := items[0]["choices"].([]any)[0].(map[string]any)
+	if first["recommended"] != true || first["description"] != "A 4xx means our request is wrong." {
+		t.Errorf("first choice %v", first)
+	}
+	var asked []any
+	_ = f.owner.QueryRow(context.Background(), `SELECT payload->'items' FROM events WHERE run_id = 'run_many'
+		AND event_type = 'question.asked'`).Scan(&asked)
+	if len(asked) != 4 {
+		t.Errorf("question.asked carries %d items", len(asked))
+	}
+}
+
+// Exactly one of question and questions; the limits are dude's.
+func TestAskPersonRefusesBothShapesNeitherAndOverTheLimits(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_bad", "implementer", "running")
+	five := strings.TrimSuffix(strings.TrimSpace(fourQuestions), "]}") + `,{"header":"Fifth","question":"And?"}]}`
+	for _, c := range []struct{ body, want string }{
+		{`{"question":"Q?","questions":[{"header":"H","question":"Q?"}]}`, "not both"},
+		{`{}`, "a question is required"},
+		{`{"choices":["a"]}`, "a question is required"},
+		{five, "1 to 4"},
+		{`{"questions":[{"header":"A","question":"Q?"},{"question":"Q2?"}]}`, "header is required"},
+		{`{"questions":[{"header":"` + strings.Repeat("h", 25) + `","question":"Q?"}]}`, "at most 24"},
+		{`{"question":"Q?","choices":["a","b","c","d","e","f","g"]}`, "at most 6 choices"},
+		{`{"questions":[{"header":"H","question":"Q?","choices":[{"label":"a","recommended":true},{"label":"b","recommended":true}]}]}`, "at most one"},
+		{`{"questions":[{"header":"H","question":"Q?"}],"choices":["a"]}`, "own choices"},
+		{`{"questions":[{"header":"A","question":"Q?"},{"header":"B","question":"Q?"}],"actions":["retry"]}`, "actions go with one question"},
+	} {
+		status, out := f.post(t, token, "ask_person", c.body)
+		if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {
+			t.Errorf("%.60s: %d %v, want 422 saying %q", c.body, status, out, c.want)
+		}
+	}
+	var n int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM questions WHERE run_id = 'run_bad'`).Scan(&n)
+	if n != 0 {
+		t.Errorf("%d questions recorded from refused calls", n)
+	}
+}
+
+// Through MCP, whose server holds arguments to the schema a model reads:
+// questions alone is a valid call, and so is today's question alone.
+func TestAskPersonTakesEitherShapeThroughMCP(t *testing.T) {
+	f := setup(t)
+	for i, args := range []map[string]any{
+		{"questions": []any{map[string]any{"header": "Scope", "question": "Which?", "choices": []any{
+			map[string]any{"label": "This", "description": "Why this", "recommended": true}, map[string]any{"label": "That"}}}}},
+		{"question": "Proceed?", "choices": []any{"Yes", "No"}},
+	} {
+		cs, err := f.connect(t, f.run(t, fmt.Sprintf("run_mcp_ask%d", i), "implementer", "running"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			list, err := cs.ListTools(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range list.Tools {
+				if tool.Name == "ask_person" {
+					raw, _ := json.MarshalIndent(tool.InputSchema, "", "  ")
+					t.Logf("ask_person as the model sees it:\n%s\n\n%s", tool.Description, raw)
+				}
+			}
+		}
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ask_person", Arguments: args})
+		if err != nil || res.IsError {
+			t.Errorf("shape %d: %v %+v", i, err, res)
+		}
+		cs.Close()
+	}
+}
+
 func TestACustomEventIsRecordedInItsOwnNamespace(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_ev", "reviewer", "running")

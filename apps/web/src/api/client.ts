@@ -9,6 +9,9 @@
 
 import type { NavProject, NavTask } from "@dude/design-system";
 import { escalationWords } from "../escalation.ts";
+// One question's answer as the form sends it: the choices picked, by index, and the person's own words.
+export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
+import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type {
   AgentRole,
   FileResult,
@@ -965,9 +968,11 @@ export class ApiClient {
 
   // -- intervention (plan §24) --------------------------------------------
 
-  /** Answer the question an agent stopped on; the answer starts its next turn. */
-  answer(questionId: string, text: string, attachmentIds: ReadonlyArray<string> = []): Promise<{ id: string; status: "answered" }> {
-    return this.#request("POST", `/v1/questions/${questionId}/answer`, { text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
+  /** Answer an agent's question through its form: one answer per question, a note (several only), the note's images. */
+  answerQuestions(questionId: string, answers: ReadonlyArray<SentAnswer>, note = "", attachmentIds: ReadonlyArray<string> = []): Promise<{ id: string; status: "answered" }> {
+    return this.#request("POST", `/v1/questions/${questionId}/answer`, {
+      answers, ...(note ? { note } : {}), ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+    });
   }
 
   // -- images a person sends an agent -------------------------------------
@@ -1027,8 +1032,13 @@ export class ApiClient {
    * A message in a task's Chat: it starts the task's conductor, or is its
    * next input (or the answer to its question). Says which Run heard it.
    */
-  chat(taskId: string, text: string): Promise<ChatSent> {
-    return this.#request("POST", `/v1/tasks/${taskId}/chat`, { text });
+  chat(taskId: string, text: string, opts: { aside?: boolean } = {}): Promise<ChatSent> {
+    return this.#request("POST", `/v1/tasks/${taskId}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
+  }
+
+  /** The conductor's question answered through its form, in the task's Chat. */
+  chatAnswer(taskId: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = ""): Promise<ChatSent> {
+    return this.#request("POST", `/v1/tasks/${taskId}/chat`, { questionId, answers, ...(note ? { note } : {}) });
   }
 
   /**
@@ -1061,8 +1071,14 @@ export class ApiClient {
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
-  sessionChat(id: string, text: string): Promise<{ runId: string; created: boolean; questionId?: string }> {
-    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text });
+  sessionChat(id: string, text: string, opts: { aside?: boolean } = {}): Promise<{ runId: string; created: boolean; questionId?: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
+  }
+
+  /** The session agent's question answered through its form. */
+  sessionAnswer(id: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = ""): Promise<{ id: string; status: "answered" }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/answer`,
+      { answers, ...(note ? { note } : {}) });
   }
 
   linkSession(id: string, projects: SessionLink[]): Promise<{ id: string }> {

@@ -48,9 +48,8 @@ var brainstormTools = []tool{
 		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task. "+
 		"You never create, edit or comment yourself. A new proposal replaces the card.",
 		brainstorms, propose).limit(createsPerRun),
-	define("ask_person", "Ask the session's members something only they can decide, then end your turn: the answer is "+
-		"your next message. With to (a member's name), only that member can answer; what others say meanwhile reaches "+
-		"you with the answer.", brainstorms, sessionAsk),
+	define("ask_person", askDescription+" Then end your turn: the answers are your next message. With to (a member's "+
+		"name), only that member can answer; what others say meanwhile reaches you with the answer.", brainstorms, sessionAsk),
 	define("name_session", "Name this session: one line of plain words, at most 60 characters, once its subject is "+
 		"clear. Name it again only if the subject clearly changes. Refused once a member has named it.",
 		brainstorms, nameSession).limit(namesPerRun),
@@ -482,20 +481,19 @@ func checkTaskText(goal *string, criteria *[]string, goalGiven bool) error {
 }
 
 type sessionAskIn struct {
-	Question string   `json:"question" jsonschema:"what you need decided, with enough context to answer it"`
-	Choices  []string `json:"choices,omitempty" jsonschema:"answers to offer"`
-	To       string   `json:"to,omitempty" jsonschema:"a member's name: only they answer; others' messages meanwhile come with the answer"`
+	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
+	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer"`
+	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; answered all at once"`
+	To        string      `json:"to,omitempty" jsonschema:"a member's name: only they answer; others' messages meanwhile come with the answer"`
 }
 
-// sessionAsk records a question for the session's members, or one member
-// who can chat. The turn ends; the Run waits for the answer.
+// sessionAsk records a question — or up to four — for the session's
+// members, or one member who can chat. The turn ends; the Run waits for the
+// answer.
 func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askOut, error) {
-	q := strings.TrimSpace(in.Question)
-	switch {
-	case q == "":
-		return askOut{}, refuse("a question is required")
-	case len(q) > 4000 || len(in.Choices) > 10:
-		return askOut{}, refuse("too long: a question of at most 4000 characters, at most 10 choices")
+	items, err := askItems(in.Question, in.Choices, in.Questions)
+	if err != nil {
+		return askOut{}, err
 	}
 	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
 	if err != nil {
@@ -522,12 +520,14 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 		to, toName = found[0].ID, found[0].Name
 	}
 	id := ids.New(ids.Question)
-	opts, _ := json.Marshal(db.NonNil(in.Choices))
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, run_id, prompt, options, to_person)
-		VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''))`, id, c.Org, c.RunID, q, opts, to); err != nil {
+	prompt, options := delivery.AskPrompt(items), delivery.AskOptions(items)
+	opts, _ := json.Marshal(options)
+	rawItems, _ := json.Marshal(items)
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, run_id, prompt, options, items, to_person)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, NULLIF($7, ''))`, id, c.Org, c.RunID, prompt, opts, rawItems, to); err != nil {
 		return askOut{}, err
 	}
-	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": q, "options": db.NonNil(in.Choices)}
+	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": options, "items": items}
 	if to != "" {
 		payload["to"], payload["toName"] = to, toName
 	}

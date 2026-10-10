@@ -12,7 +12,7 @@ import { useMemo, useState } from "react";
 import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
 import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, WaitingGroup, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
-import { sessionTitle, type SessionsList } from "@dude/domain";
+import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
@@ -94,11 +94,13 @@ export function InboxScreen({ client, projects, sessions, onSelect, onOpenSessio
     }),
     ...questions.map((q) => {
       const since = toMs(q.askedAt);
+      const several = severalLine(q.items);
       return (
         <WaitingRow key={`q-${q.id}`} mine data-testid="session-question" data-session={q.sessionId}
           onOpen={() => openSession(q.sessionId)}
           face={null}
-          ask={<>The brainstorm asked you in <b>{sessionTitle(q)}</b>: “{q.prompt}”</>}
+          ask={several ? <>The brainstorm in <b>{sessionTitle(q)}</b> {several}</>
+            : <>The brainstorm asked you in <b>{sessionTitle(q)}</b>: “{q.prompt}”</>}
           where="A session"
           age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
           action={<Button size="sm" variant="primary" onClick={() => openSession(q.sessionId)}>Answer</Button>}
