@@ -471,7 +471,7 @@ describe("the welcome's first message", () => {
     expect(client.made).toEqual([]);
   });
 
-  test("a create that lands after the welcome was left removes the sent words and does not open the session", async () => {
+  test("a create that lands after the welcome was left removes the sent words and tells the app it was left", async () => {
     const client = new Welcoming();
     client.hold = Promise.withResolvers<void>();
     const created: Array<[string, boolean]> = [];
