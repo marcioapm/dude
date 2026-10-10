@@ -644,11 +644,12 @@ func TestARefusedFirstMessageMakesNoSession(t *testing.T) {
 // start, leaves nothing: the create and the start are one transaction.
 func TestAFirstMessageWhoseAgentFailsToStartMakesNoSession(t *testing.T) {
 	s := newSessionWorld(t)
-	// The trigger is database-wide; the org filter keeps it to this world.
+	// Each test has its own database (dbtest), so this trigger refuses only
+	// this world's brainstorm Runs.
 	mustExec(t, s.owner, `CREATE FUNCTION fail_brainstorm_run() RETURNS trigger AS $$
 		BEGIN RAISE EXCEPTION 'brainstorm runs refused by the test'; END $$ LANGUAGE plpgsql`)
-	mustExec(t, s.owner, fmt.Sprintf(`CREATE TRIGGER fail_brainstorm_run BEFORE INSERT ON runs FOR EACH ROW
-		WHEN (NEW.role = 'brainstorm' AND NEW.organization_id = '%s') EXECUTE FUNCTION fail_brainstorm_run()`, s.org))
+	mustExec(t, s.owner, `CREATE TRIGGER fail_brainstorm_run BEFORE INSERT ON runs FOR EACH ROW
+		WHEN (NEW.role = 'brainstorm') EXECUTE FUNCTION fail_brainstorm_run()`)
 	t.Cleanup(func() {
 		mustExec(t, s.owner, `DROP TRIGGER IF EXISTS fail_brainstorm_run ON runs`)
 		mustExec(t, s.owner, `DROP FUNCTION IF EXISTS fail_brainstorm_run()`)
