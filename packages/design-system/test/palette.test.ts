@@ -196,6 +196,15 @@ describe("text on tints", () => {
     }
   });
 
+  test("the question form's inks clear 4.5:1 on the waiting wash: a choice's why, an answer not given yet", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      const wash = mix(tones[mode].attention.solid, c.surface, tints.highlight);
+      expect(contrast(c.textSecondary, wash), `${mode} secondary`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(tones[mode].attention.fg, wash), `${mode} attention fg`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   test("the needs-you block's secondary ink (ask line, key, +N) clears 4.5:1 on its tint", () => {
     // Muted drops to ~4.3:1 on the light tint, so nothing inside the block uses it.
     for (const mode of MODES) {
