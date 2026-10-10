@@ -194,6 +194,14 @@ func (r phaseRun) brainstorm() bool { return r.Phase == "" && r.Role == delivery
 // talker is an agent people talk to: never finished at a turn's end.
 func (r phaseRun) talker() bool { return r.conductor() || r.brainstorm() }
 
+// parkKind is the dude_pause a talker is parked with.
+func (r phaseRun) parkKind() string {
+	if r.brainstorm() {
+		return "session"
+	}
+	return "conductor"
+}
+
 // sweptRuns (SQL, over runs r): the Runs the syncer drives — every phase
 // Run, each task's conductor and each session's agent. Not a branch
 // preview, nor a Run made by hand through the API.
@@ -596,18 +604,19 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // betweenTurns is a conductor whose turn has ended. It is never finished:
 // a person's next message is its next turn. It stays running for its warm
 // period, then is parked (dude_pause 'conductor') until someone writes.
-// One whose container stopped on its own ended there, and a new message
-// gets a new conductor.
+// One whose container stopped on its own is parked the same way while lux
+// can resume it (delivery.Parkable), and ended otherwise, when a new
+// message gets a new conductor.
 func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
 	if lux.Terminal(r.LuxState) && r.LuxStopReason == "" && r.Control == "none" {
+		parked, err := s.parkStopped(ctx, r)
+		if parked || err != nil {
+			return true, err
+		}
 		return true, s.endConductor(ctx, r, "its container stopped")
 	}
 	if r.Status != statusRunning || r.LuxState != "running" {
 		return false, nil
-	}
-	park := "conductor"
-	if r.brainstorm() {
-		park = "session"
 	}
 	switch {
 	case r.brainstorm() && r.RepoApproved && r.Control == "none" && !r.HasDirectives:
@@ -619,9 +628,64 @@ func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
 	case r.Unread:
 		return false, nil
 	case r.WarmOver && r.Control == "none":
-		return true, s.requestPause(ctx, r, park, "parked after its warm period")
+		return true, s.requestPause(ctx, r, r.parkKind(), "parked after its warm period")
 	}
 	return false, nil
+}
+
+// parkStopped parks a talker whose container stopped without dude asking,
+// when lux keeps it to resume (delivery.Parkable): paused as its warm
+// period's end parks it, so the next message resumes the same lux Run,
+// under the lock its Chat takes. Says whether it parked it.
+func (s *Syncer) parkStopped(ctx context.Context, r phaseRun) (bool, error) {
+	parked := false
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := s.lockChatOf(ctx, tx, r); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
+			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		parked = true
+		if err := unsendUnread(ctx, tx, r.ID); err != nil {
+			return err
+		}
+		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
+			map[string]any{"reason": r.parkKind(), "message": "its container stopped (lux: " + r.LuxState + ")", "stopped": r.LuxState})
+	})
+	if parked {
+		s.unfollow(r.ID)
+	}
+	return parked, err
+}
+
+// unsendUnread makes what lux took for a stopped Run and its agent never
+// read unsent again, so the resume sends it under the same request id. lux
+// dedupes input ids only in the container's shim memory
+// (internal/shim/shim.go, Shim.delivered); luxd's postInput and the
+// runner's MsgInput do not, and host_messages are per host and epoch, so a
+// new placement replays nothing: the queue and the ids die together, and
+// the re-send is new input. A harness that had already written the message
+// to its own transcript before dying may show it to the resumed agent
+// twice; a duplicate is preferred to a lost message. An interrupt alone
+// (interrupt_only) is left: the turn it stopped is over, and it carries no
+// words.
+func unsendUnread(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
+		WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL
+		  AND interrupt_only IS NOT TRUE`, runID)
+	return err
+}
+
+// lockChatOf takes the lock a talker's Chat takes: its session's, or its
+// task's.
+func (s *Syncer) lockChatOf(ctx context.Context, tx pgx.Tx, r phaseRun) error {
+	if r.brainstorm() {
+		return delivery.LockSession(ctx, tx, r.SessionID)
+	}
+	return delivery.LockChat(ctx, tx, r.TaskID)
 }
 
 // endConductor completes a conductor that can no longer be resumed, under
@@ -964,7 +1028,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
 	var recorded *delivery.Machine
-	var briefing, conductorNote, restartNote, tierOverride, ranOn string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -994,6 +1058,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// The images the prompt numbers, as submit sends them.
 		if taskImages, err = delivery.PromptAttachments(ctx, tx, r.ID); err != nil {
 			return err
+		}
+		// A resume sends no prompt: lux keeps the submitted one.
+		if r.conductor() && stored == nil {
+			if conductorPrompt, err = s.talkerPrompt(ctx, tx, r, briefing, delivery.PromptImages(taskImages)); err != nil {
+				return err
+			}
 		}
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
@@ -1060,18 +1130,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 
 	var promptRepos []delivery.PromptRepo
 	for _, repo := range repos {
-		ref := repo.DefaultBranch
-		if base := r.BaseRefs[repo.Name]; base != "" {
-			ref = base
-		}
-		// A conductor may change what the task may change: it commits in its
-		// own checkout and publishes like a phase (edits.go).
-		readOnly := repo.Access == "read"
-		if r.conductor() && !readOnly && r.BaseRefs[repo.Name] != "" {
-			// On the task branch by name, where lux's fast-forward sync can
-			// move it: lux never switches a checkout's branch.
-			ref = delivery.BranchFor(r.TaskID, r.Attempt)
-		}
+		ref, readOnly := checkoutOf(r, repo)
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
@@ -1107,8 +1166,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
-		promptIn.TaskBranch = delivery.BranchFor(r.TaskID, r.Attempt)
-		in.Prompt = delivery.ConductorPrompt(briefing, promptIn)
+		in.Prompt = conductorPrompt
 	}
 	// Pushed only by a phase that publishes, or a conductor, which
 	// publishes when it asks to. Even with nowhere to change
@@ -1145,6 +1203,90 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 	}
 	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
+}
+
+// checkoutOf is where a task's Run checks repo out, and whether read only.
+func checkoutOf(r phaseRun, repo delivery.Repository) (ref string, readOnly bool) {
+	ref = repo.DefaultBranch
+	if base := r.BaseRefs[repo.Name]; base != "" {
+		ref = base
+	}
+	// A conductor may change what the task may change: it commits in its
+	// own checkout and publishes like a phase (edits.go).
+	readOnly = repo.Access == "read"
+	if r.conductor() && !readOnly && r.BaseRefs[repo.Name] != "" {
+		// On the task branch by name, where lux's fast-forward sync can
+		// move it: lux never switches a checkout's branch.
+		ref = delivery.BranchFor(r.TaskID, r.Attempt)
+	}
+	return ref, readOnly
+}
+
+// talkerPrompt is a conductor's or session agent's prompt around a
+// briefing: how it works (its role's prompts as recorded on the Run),
+// its checkouts, its tools and notes. Its first prompt (spec), and the
+// briefing again of one whose harness lost the conversation
+// (sessionKept). images are those given with it, which the briefing's
+// image references are numbered against; the rest read as unavailable.
+func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefing string, images []delivery.PromptImage) (string, error) {
+	role := delivery.RoleConductor
+	if r.brainstorm() {
+		role = delivery.RoleBrainstorm
+	}
+	in := delivery.PromptInput{Tools: s.Agent.ToolsURL != "", Images: images}
+	var models []json.RawMessage
+	if r.brainstorm() {
+		var orgModels json.RawMessage
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
+			return "", fmt.Errorf("load the session's organization: %w", err)
+		}
+		models = []json.RawMessage{orgModels}
+		repos, err := delivery.SessionRepositories(ctx, tx, r.SessionID)
+		if err != nil {
+			return "", err
+		}
+		for _, repo := range repos {
+			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Key + "/" + repo.Name,
+				Path: delivery.SessionRepoPath(repo.Key, repo.Name), ReadOnly: true})
+		}
+	} else {
+		var criteria, projectModels, orgModels json.RawMessage
+		if err := tx.QueryRow(ctx, `SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models
+			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
+			WHERE w.id = $1`, r.TaskID).Scan(&in.Title, &in.Goal, &criteria, &projectModels, &orgModels); err != nil {
+			return "", fmt.Errorf("load task: %w", err)
+		}
+		_ = json.Unmarshal(criteria, &in.AcceptanceCriteria)
+		models = []json.RawMessage{projectModels, orgModels}
+		repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
+		if err != nil {
+			return "", fmt.Errorf("load repositories: %w", err)
+		}
+		for i, repo := range repos {
+			ref, readOnly := checkoutOf(r, repo)
+			if i == 0 {
+				in.BaseRef = ref
+			}
+			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
+		}
+		in.CLI = in.Tools && s.Agent.ToolsService
+		in.Branch, in.TaskBranch = runBranch(r), delivery.BranchFor(r.TaskID, r.Attempt)
+	}
+	in.Context = delivery.ResolveRole(role, models...).Context
+	// A session spans projects: its organisation's prompt alone.
+	project := r.ProjectID
+	if r.brainstorm() {
+		project = ""
+	}
+	prompts, err := delivery.LoadPrompts(ctx, tx, r.ID, project, role)
+	if err != nil {
+		return "", err
+	}
+	in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = prompts.Org, prompts.Project, prompts.ProjectMode
+	if r.brainstorm() {
+		return delivery.BrainstormPrompt(briefing, in), nil
+	}
+	return delivery.ConductorPrompt(briefing, in), nil
 }
 
 // toolsToken is the token for this start of the Run: the same however

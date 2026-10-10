@@ -1,0 +1,385 @@
+package orchestrator_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+)
+
+// talking is one agent people talk to — a session's brainstorm or a task's
+// conductor — and how a person writes to it.
+type talking struct {
+	*world
+	kind string
+	// write sends a message, returning the HTTP status and the Run it reached.
+	write func(text string) (int, string)
+	// latest is the newest Run of its session or task.
+	latest func() string
+	// park is the dude_pause its warm period's end parks it with.
+	park string
+}
+
+// talkers are a brainstorm and a conductor, each having answered a first
+// message, warm for an hour so only a stop can park them.
+func talkers(t *testing.T) map[string]func(t *testing.T) (*talking, string) {
+	start := func(kind string) func(t *testing.T) (*talking, string) {
+		return func(t *testing.T) (*talking, string) {
+			tk := newTalking(t, kind, nil)
+			var run string
+			// A brainstorm has finished its first turn; a conductor has answered.
+			tk.until("the first message answered", func() bool {
+				run = tk.latest()
+				if run == "" {
+					return false
+				}
+				if kind == "brainstorm" {
+					return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, run) == 1
+				}
+				return len(tk.said(run)) == 1
+			})
+			return tk, run
+		}
+	}
+	return map[string]func(t *testing.T) (*talking, string){"brainstorm": start("brainstorm"), "conductor": start("conductor")}
+}
+
+// newTalking is a brainstorm or conductor, warm for an hour, with its first
+// message written; decide, when set, wraps the fake lux's Decide.
+func newTalking(t *testing.T, kind string, decide func(func(map[string]any) fakelux.Behaviour) func(map[string]any) fakelux.Behaviour) *talking {
+	var tk *talking
+	if kind == "brainstorm" {
+		s := newSessionWorld(t)
+		tk = &talking{world: s.world, kind: kind, park: "session"}
+		if decide != nil {
+			s.lux.Decide = decide(s.lux.Decide)
+		}
+		id := s.session()
+		tk.write = func(text string) (int, string) {
+			status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+			run, _ := out["runId"].(string)
+			return status, run
+		}
+		tk.latest = func() string { run, _ := s.brainstorm(id); return run }
+		tk.syncer.ConductorWarm = time.Hour
+		tk.write("where would metering live?")
+		return tk
+	}
+	w := conductorWorld(t)
+	tk = &talking{world: w, kind: kind, park: "conductor"}
+	if decide != nil {
+		w.lux.Decide = decide(w.lux.Decide)
+	}
+	task := w.task()
+	tk.write = func(text string) (int, string) {
+		status, out := w.chat(task, text)
+		run, _ := out["runId"].(string)
+		return status, run
+	}
+	tk.latest = func() string { run, _, _ := w.conductor(task); return run }
+	tk.syncer.ConductorWarm = time.Hour
+	tk.write("what changed?")
+	return tk
+}
+
+// stopOnItsOwn has lux report the Run's container gone, as state says,
+// with no reason and without dude asking.
+func (tk *talking) stopOnItsOwn(run, state string) {
+	tk.t.Helper()
+	id := tk.luxRunOf(run)
+	switch state {
+	case "stopped":
+		tk.lux.StopOnItsOwn(id)
+	case "succeeded":
+		tk.lux.Succeed(id)
+	case "failed":
+		tk.lux.Crash(id)
+	case "lost":
+		tk.lux.Lose(id)
+	case "terminated":
+		tk.lux.CancelInLux(id)
+	default:
+		tk.t.Fatalf("no way to stop a Run as %s", state)
+	}
+}
+
+// parked waits for the Run to be parked as its warm period's end parks it.
+func (tk *talking) parked(run string) {
+	tk.t.Helper()
+	tk.until("the Run parked", func() bool {
+		return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = $2`, run, tk.park) == 1
+	})
+}
+
+// releaseInput lets through the input held on the fake lux's InputGate,
+// and holds none after.
+func (tk *talking) releaseInput() {
+	close(tk.lux.InputGate)
+	tk.lux.InputGate = nil
+}
+
+// sessionIDs are the harness sessions the Run's agent.session.started events name.
+func (tk *talking) sessionIDs(run string) []string {
+	tk.t.Helper()
+	rows, err := tk.owner.Query(context.Background(), `SELECT payload->>'externalSessionId' FROM events
+		WHERE run_id = $1 AND event_type = 'agent.session.started' ORDER BY cursor`, run)
+	if err != nil {
+		tk.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		tk.t.Fatal(err)
+	}
+	return out
+}
+
+// resumedAnswering waits for the same Run, resumed in the same lux Run, to
+// answer text.
+func (tk *talking) resumedAnswering(run, text string) {
+	tk.t.Helper()
+	tk.until("the same Run to answer after its resume", func() bool {
+		said := tk.said(run)
+		return len(said) >= 2 && strings.Contains(said[len(said)-1], text)
+	})
+	luxRuns := 0
+	for _, r := range tk.lux.Runs() {
+		if strings.Contains(string(r.Spec), `"dude.run":"`+run+`"`) {
+			luxRuns++
+			if r.Resumed < 1 {
+				tk.t.Errorf("lux Run %s was never resumed", r.ID)
+			}
+		}
+	}
+	if luxRuns != 1 {
+		tk.t.Errorf("%d lux Runs for %s, want the one", luxRuns, run)
+	}
+	if latest := tk.latest(); latest != run {
+		tk.t.Errorf("a new Run %s, want %s kept", latest, run)
+	}
+}
+
+// A brainstorm or conductor whose container stops on its own, in any state
+// lux can resume (stopped, succeeded, failed, lost), is parked as its warm
+// period's end parks it, not ended: the next message resumes the same lux
+// Run, whose harness reloads the same session.
+func TestATalkerWhoseContainerStopsIsParkedAndResumed(t *testing.T) {
+	for kind, start := range talkers(t) {
+		for _, state := range []string{"stopped", "succeeded", "failed", "lost"} {
+			t.Run(kind+"/"+state, func(t *testing.T) {
+				tk, run := start(t)
+				before := tk.sessionIDs(run)
+				tk.stopOnItsOwn(run, state)
+				tk.parked(run)
+				if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+					AND payload->>'reason' = $2 AND payload->>'stopped' = $3`, run, tk.park, state); n != 1 {
+					t.Errorf("%d run.parked saying its container stopped (%s), want 1", n, state)
+				}
+				if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type IN ('run.completed', 'run.failed')`, run); n != 0 {
+					t.Errorf("the stopped Run was ended:\n%s", tk.describeRuns())
+				}
+				status, reached := tk.write("and the tests?")
+				if status != 200 || reached != run {
+					t.Fatalf("the message after the stop: %d reached %q, want %s", status, reached, run)
+				}
+				tk.resumedAnswering(run, "and the tests?")
+				if after := tk.sessionIDs(run); len(before) != 1 || len(after) != 1 || after[0] != before[0] {
+					t.Errorf("harness sessions %v, then %v: want the one", before, after)
+				}
+			})
+		}
+	}
+}
+
+// A message that reaches a talker whose stop lux reported and the sweep has
+// not parked yet is queued on that Run, which resumes for it.
+func TestAMessageBeforeTheStopIsSweptQueuesOnTheSameRun(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			tk.stopOnItsOwn(run, "failed")
+			tk.luxStateRecorded(run, "failed")
+			status, reached := tk.write("are you there?")
+			if status != 200 || reached != run {
+				t.Fatalf("the message: %d reached %q, want it queued for %s", status, reached, run)
+			}
+			tk.resumedAnswering(run, "are you there?")
+		})
+	}
+}
+
+// A talker whose container stops mid-turn, with its session reported, is
+// not failed by the stream's report of the stop (the sweep has not run
+// yet): the sweep parks it, and the next message resumes it.
+func TestATalkerStoppedMidTurnIsParkedNotFailed(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := hangingTalker(t, kind)
+			tk.stopOnItsOwn(run, "failed")
+			tk.luxStateRecorded(run, "failed")
+			if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, run); n != 0 {
+				t.Fatalf("the stream's report of the stop failed the talker:\n%s", tk.describeRuns())
+			}
+			tk.parked(run)
+			if status, reached := tk.write("and now?"); status != 200 || reached != run {
+				t.Fatalf("after the stop: %d reached %q", status, reached)
+			}
+			tk.until("the resumed Run to answer", func() bool {
+				said := tk.said(run)
+				return len(said) > 0 && strings.Contains(said[len(said)-1], "and now?")
+			})
+		})
+	}
+}
+
+// hangingTalker is a brainstorm or conductor whose agent took its first
+// message and is still working on it: its session reported, its turn
+// begun and not ended. A resumed agent finishes its turns.
+func hangingTalker(t *testing.T, kind string) (*talking, string) {
+	tk := newTalking(t, kind, func(scripted func(map[string]any) fakelux.Behaviour) func(map[string]any) fakelux.Behaviour {
+		return func(spec map[string]any) fakelux.Behaviour {
+			b := scripted(spec)
+			if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == kind {
+				b.Hang = true
+			}
+			return b
+		}
+	})
+	var run string
+	tk.until("the agent at work on its first message", func() bool {
+		run = tk.latest()
+		return run != "" && tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'
+			AND agent_session_epoch > 0 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, run) == 1
+	})
+	return tk, run
+}
+
+// A talker whose container stops before its agent reported any session
+// (agent_session_epoch 0: a lux whose shim reported none) cannot be
+// resumed with its briefing: it is ended as before, and the next message
+// starts a new Run that answers it.
+func TestATalkerStoppedWithNoSessionIsEndedAndReplaced(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			mustExec(t, tk.owner, `UPDATE runs SET agent_session_epoch = 0 WHERE id = $1`, run)
+			tk.stopOnItsOwn(run, "stopped")
+			tk.until("the Run ended", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, run) == 1
+			})
+			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, run); n != 0 {
+				t.Errorf("a talker with no session was parked")
+			}
+			status, next := tk.write("and the tests?")
+			if status != 201 || next == run {
+				t.Fatalf("the message after the end: %d reached %q, want a new Run", status, next)
+			}
+			tk.until("the new Run's answer", func() bool {
+				said := tk.said(next)
+				return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+			})
+		})
+	}
+}
+
+// A message lux accepted and the agent never read is gone with a crashed
+// harness: once the Run is parked it is sent again, and the Run resumes on
+// its own to answer it.
+func TestAMessageUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			tk.lux.InputGate = make(chan struct{})
+			status, reached := tk.write("did the build pass?")
+			if status != 200 || reached != run {
+				t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
+			}
+			tk.until("the message sent to lux", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL
+					AND delivered_at IS NULL`, run) == 1
+			})
+			tk.stopOnItsOwn(run, "failed")
+			tk.releaseInput()
+			tk.resumedAnswering(run, "did the build pass?")
+		})
+	}
+}
+
+// An "Interrupt now" that carries the words (its message failed before it
+// went) and was taken and unread when the container stopped is sent again
+// too: the conductor resumes on its own and answers it.
+func TestAnInterruptCarryingTheWordsUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.T) {
+	tk, run := talkers(t)["conductor"](t)
+	tk.lux.InputGate = make(chan struct{})
+	if status, reached := tk.write("did the build pass?"); status != 200 || reached != run {
+		t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
+	}
+	var first string
+	tk.until("the message sent to lux", func() bool {
+		_ = tk.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL
+			AND delivered_at IS NULL`, run).Scan(&first)
+		return first != ""
+	})
+	tk.lux.FailInput(tk.luxRunOf(run), first, "the agent exited")
+	tk.until("the message failed", func() bool {
+		return tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, first) == 1
+	})
+	code, out := tk.call("/internal/runs/"+run+"/steer", map[string]any{
+		"text": "did the build pass?", "supersedes": first, "interrupt": true})
+	if code != 201 {
+		t.Fatalf("interrupt now: %d %v", code, out)
+	}
+	interrupt, _ := out["id"].(string)
+	tk.until("the interrupt sent with the words", func() bool {
+		return tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only = false
+			AND sent_at IS NOT NULL AND delivered_at IS NULL`, interrupt) == 1
+	})
+	tk.stopOnItsOwn(run, "failed")
+	tk.releaseInput()
+	tk.resumedAnswering(run, "did the build pass?")
+}
+
+// One lux ended for good (terminated), or no longer has, is ended as
+// before: the next message starts a new Run, which answers it.
+func TestATalkerLuxCannotResumeIsEndedAndReplaced(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind+"/terminated", func(t *testing.T) {
+			tk, run := start(t)
+			tk.stopOnItsOwn(run, "terminated")
+			tk.until("the Run ended", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, run) == 1
+			})
+			status, next := tk.write("and the tests?")
+			if status != 201 || next == run {
+				t.Fatalf("the message after the end: %d reached %q, want a new Run", status, next)
+			}
+			tk.until("the new Run's answer", func() bool {
+				said := tk.said(next)
+				return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+			})
+		})
+		t.Run(kind+"/404", func(t *testing.T) {
+			tk, run := start(t)
+			tk.stopOnItsOwn(run, "stopped")
+			tk.parked(run)
+			tk.lux.Forget()
+			if status, reached := tk.write("and the tests?"); status != 200 || reached != run {
+				t.Fatalf("the message to the parked Run: %d reached %q", status, reached)
+			}
+			tk.until("a new Run to answer the message", func() bool {
+				next := tk.latest()
+				if next == run {
+					return false
+				}
+				said := tk.said(next)
+				return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+			})
+			if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, run); n != 1 {
+				t.Errorf("the forgotten Run:\n%s", tk.describeRuns())
+			}
+		})
+	}
+}

@@ -221,7 +221,7 @@ func TestASupersededConductorRepliesNowhere(t *testing.T) {
 		done <- fmt.Sprint(status, " ", body)
 	}()
 	<-paused
-	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, first)
 	if status, out := w.chat(task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}
@@ -345,7 +345,7 @@ func TestAConductorReplacedWhileItsReplyPostsStillRecordsIt(t *testing.T) {
 	spec := w.conductorSpecOf(task)
 	first, _, _ := w.conductor(task)
 	replied, release := w.replyHeldOnGitHub(spec, `{"pr":"1","text":"Hi."}`)
-	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, first)
 	if status, out := w.chat(task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}

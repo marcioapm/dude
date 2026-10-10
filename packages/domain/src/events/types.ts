@@ -156,11 +156,16 @@ export const EventTypes = {
   RunPaused: "run.paused",
   /**
    * dude parked a Run itself: it waits on a person, went quiet, or its
-   * preview is unused. Payload: `{ reason, message, taskStatus?, parkedAt? }`:
-   * `parkedAt` is when the park began, as the database stored it in the
-   * park's own transaction — the boundary an answer or decision ending it
-   * is compared with, on the same clock. Absent from older parks and from
-   * a preview's.
+   * preview is unused; or a conductor's or session agent's container
+   * stopped on its own, or its turn failed, and lux keeps it to resume.
+   * Payload: `{ reason, message, taskStatus?, parkedAt?, stopped?,
+   * failedTurns? }`: `parkedAt` is when the park began, as the database
+   * stored it in the park's own transaction — the boundary an answer or
+   * decision ending it is compared with, on the same clock. Absent from
+   * older parks and from a preview's. `stopped` is lux's state of a
+   * container that stopped on its own (`stopped`, `succeeded`, `failed`,
+   * `lost`); `failedTurns` how many turns in a row failed, for a park
+   * after a failed turn.
    */
   RunParked: "run.parked",
   /**
@@ -194,6 +199,13 @@ export const EventTypes = {
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
+  /**
+   * The Run failed. Payload: `{ status, error, kept?, failedTurns? }`.
+   * `kept`: only a conductor's or session agent's turn failed, and the Run
+   * goes on (parked, or stopped by a control already pending), so it reads
+   * as the turn's failure, not the Run's; `failedTurns`, how many turns in
+   * a row failed, when that failure parked it.
+   */
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
   /**
@@ -269,6 +281,24 @@ export const EventTypes = {
 
   // Agent sessions
   SessionStarted: "agent.session.started",
+  /**
+   * A resumed agent is in a new harness session, not the one it had: lux
+   * could not reload it (session/load, thread/resume failed) and started a
+   * blank one. Payload: `{ from, to, reason, directiveId? }`: the harness
+   * session ids, lux's warning (`""` for none), and for a conductor or a
+   * session's agent the directive that briefs it again.
+   */
+  SessionReplaced: "agent.session.replaced",
+  /** What lux warned about the Run's agent, in its words. Payload: `{ message }`. */
+  AgentWarning: "agent.warning",
+  /**
+   * The agent's harness compacted its conversation, as lux recorded it
+   * (`lux.compacted`; a lux from before it records none). Payload:
+   * `{ trigger?, preTokens?, postTokens?, summary?, summaryTruncated? }`,
+   * each only when known: the summary is the one the harness kept (whole,
+   * up to lux's 64 KiB cap; `summaryTruncated` when cut).
+   */
+  ContextCompacted: "agent.context.compacted",
   SessionStopped: "agent.session.stopped",
   SubagentStarted: "agent.subagent.started",
   SubagentStopped: "agent.subagent.stopped",
