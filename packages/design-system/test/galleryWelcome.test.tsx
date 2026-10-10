@@ -86,9 +86,10 @@ test("ModelPicker: default, chosen, read only, a misfit, and one menu open in it
     const misfit = pane.querySelector("[data-testid=model-misfit] [data-testid=model-picker]")!;
     expect(misfit.getAttribute("aria-label")).toBe("Model: Coder on Codex");
     expect(document.getElementById(misfit.getAttribute("aria-describedby") ?? "")?.textContent).toBe(GALLERY_MISFIT);
-    // One menu per pane, under its own chip.
-    const menus = [...pane.querySelectorAll("[role=menu]")];
+    // One menu per frame, under its own chip.
+    const menus = [...pane.querySelectorAll("[data-testid=model-menu] [role=menu]")];
     expect(menus.length).toBe(1);
+    expect(pane.querySelectorAll("[role=menu]").length).toBe(2);
     const item = (name: string) => allByRole(menus[0]!, "menuitemradio").find((r) => accessibleName(r).startsWith(name))!;
     expect(item("Sol").getAttribute("aria-disabled")).toBe("true");
     expect(item("Sol").textContent).toContain("Claude Code takes an Anthropic model");
@@ -98,4 +99,17 @@ test("ModelPicker: default, chosen, read only, a misfit, and one menu open in it
   // The welcome's own composer carries the picker after "To Brainstorm".
   const shell = el.querySelector("#wl-shell [data-shot]")!;
   expect(shell.querySelector("[data-testid=composer-to] + [data-testid=model-picker]")).not.toBeNull();
+});
+
+test("ModelPicker's menu when the tiers could not be read: the note atop it, as the menu's description, in every frame", async () => {
+  const el = await mount();
+  const panes = [...el.querySelectorAll("#wl-model [data-theme][data-density]")];
+  for (const pane of panes) {
+    const menus = [...pane.querySelectorAll("[data-testid=model-menu-note] [role=menu]")];
+    expect(menus.length).toBe(1);
+    const described = (menus[0]!.getAttribute("aria-describedby") ?? "").split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(" ");
+    expect(described).toBe("Could not load the tiers");
+    // No tier but the organisation's default is listed: the note says why.
+    expect(allByRole(menus[0]!, "menuitemradio").filter((r) => r.closest("[role=group]")?.getAttribute("data-testid") === "rowmenu-group-tier").length).toBe(1);
+  }
 });

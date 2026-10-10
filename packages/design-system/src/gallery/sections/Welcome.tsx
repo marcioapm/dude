@@ -134,14 +134,14 @@ function OpenMenu() {
   );
 }
 
-/** The model menu drawn open inside its pane, on a pair whose harness refuses a tier. */
-function OpenModelMenu() {
+/** The model menu drawn open inside its pane, on a pair whose harness refuses a tier; with a note, the tiers it could not read. */
+function OpenModelMenu({ note, "data-testid": testId }: { readonly note?: string; readonly "data-testid": string }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
   return (
-    <div ref={setHost} className={styles["composerFrame"]} style={{ minHeight: 0, paddingBottom: 620 }}>
+    <div ref={setHost} className={styles["composerFrame"]} style={{ minHeight: 0, paddingBottom: note ? 300 : 620 }} data-testid={testId}>
       <ChatComposer mode="chat" placeholder="Start a session…" to={<>To <b>Brainstorm</b></>} onSubmit={() => false}
-        toAside={<ModelPicker tiers={GALLERY_MENU_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }}
-          onChange={() => undefined} previewMenu={host} />} />
+        toAside={<ModelPicker tiers={note ? [] : GALLERY_MENU_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }}
+          onChange={() => undefined} previewMenu={host} menuNote={note} />} />
     </div>
   );
 }
@@ -188,7 +188,7 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="wl-model" title="ModelPicker"
-        note={`The model and harness a session's agent runs on, in ChatComposer's toAside (right after "To Brainstorm") and in the session's rail. A quiet chip reading the effective pair, a muted "default" while both follow the organisation. Its menu is RowMenu's float with two radio groups, each led by "Organisation default (…)"; a pair the harness cannot run, or a tier naming no model, is disabled and says why. A value that stopped fitting after it was chosen takes the attention mark and says why under the chip. Read only for a member who is not the owner: the chip on the hover wash, nothing to open.`}>
+        note={`The model and harness a session's agent runs on, in ChatComposer's toAside (right after "To Brainstorm") and in the session's rail. A quiet chip reading the effective pair, a muted "default" while both follow the organisation. Its menu is RowMenu's float with two radio groups, each led by "Organisation default (…)"; a pair the harness cannot run, or a tier naming no model, is disabled and says why; when the tiers cannot be read, a muted note atop the menu says so. A value that stopped fitting after it was chosen takes the attention mark and says why under the chip. Read only for a member who is not the owner: the chip on the hover wash, nothing to open.`}>
         <Panes mode={mode} surface>
           <Label>default</Label>
           <div data-testid="model-default"><Picking /></div>
@@ -204,7 +204,9 @@ export function WelcomeSection({ mode }: { readonly mode: PaneMode }) {
               misfit={GALLERY_MISFIT} onChange={() => undefined} />
           </div>
           <Label>the menu open: on Claude Code, Sol and Codex are refused; Fast names no model</Label>
-          <OpenModelMenu />
+          <OpenModelMenu data-testid="model-menu" />
+          <Label>the menu open when the tiers could not be read: a muted note atop it, the menu's description</Label>
+          <OpenModelMenu note="Could not load the tiers" data-testid="model-menu-note" />
         </Panes>
       </Block>
       <Block id="wl-recent" title="RecentSessions"
