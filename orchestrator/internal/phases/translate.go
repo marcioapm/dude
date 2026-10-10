@@ -109,17 +109,24 @@ type harnessState struct {
 	claudeIdle     bool
 	codexTurn      codexTokens
 	turnError      string
-	// A talker's turns failed in a row (turnFailed), and whether the turn
-	// that ended last was one: a turn that did not fail resets the count.
-	failedTurns int
-	lastFailed  bool
+	talkerState
+}
+
+// talkerState is the part of harness_state a conductor or session agent
+// keeps across its parks and resumes, stored under these JSON names as they
+// are (harnessStateJSON embeds it).
+type talkerState struct {
+	// Its turns failed in a row (turnFailed), and whether the turn that
+	// ended last was one: a turn that did not fail resets the count.
+	FailedTurns int  `json:"failedTurns,omitempty"`
+	LastFailed  bool `json:"lastFailed,omitempty"`
 	// What lux last warned about the agent (lux.warning), and in which
 	// placement: the reason for a session replaced in that placement only.
-	warning      string
-	warningEpoch int
+	Warning      string `json:"warning,omitempty"`
+	WarningEpoch int    `json:"warningEpoch,omitempty"`
 	// The agent's current harness session (session), "" on a Run from
 	// before it was kept here.
-	sessionID string
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type codexTokens struct {
@@ -136,17 +143,13 @@ type harnessStateJSON struct {
 	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
 	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
 	TurnError      string           `json:"turnError,omitempty"`
-	FailedTurns    int              `json:"failedTurns,omitempty"`
-	LastFailed     bool             `json:"lastFailed,omitempty"`
-	Warning        string           `json:"warning,omitempty"`
-	WarningEpoch   int              `json:"warningEpoch,omitempty"`
-	SessionID      string           `json:"sessionId,omitempty"`
+	talkerState
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		FailedTurns: h.failedTurns, LastFailed: h.lastFailed, Warning: h.warning, WarningEpoch: h.warningEpoch, SessionID: h.sessionID}
+		talkerState: h.talkerState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -160,7 +163,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		failedTurns: j.FailedTurns, lastFailed: j.LastFailed, warning: j.Warning, warningEpoch: j.WarningEpoch, sessionID: j.SessionID}
+		talkerState: j.talkerState}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -530,8 +533,8 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	case "lux.warning":
 		// What lux says went wrong around the agent, as it says it: a
 		// session it could not reload among them (session).
-		t.warning, t.warningEpoch = str("message"), epoch
-		return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem, map[string]any{"message": t.warning})
+		t.Warning, t.WarningEpoch = str("message"), epoch
+		return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem, map[string]any{"message": t.Warning})
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"), epoch)
 	case recordCompacted:
@@ -756,7 +759,7 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		t.resumeRunning(ctx, tx, s, epoch)
 		return t.sessionKept(ctx, tx, s, id, epoch)
 	}
-	t.warning, t.sessionID = "", id
+	t.Warning, t.SessionID = "", id
 	role := t.run.Phase
 	if t.run.talker() {
 		role = t.run.Role
@@ -775,11 +778,11 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 // placement, if it gave one.
 func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id string, epoch int) error {
 	reason := ""
-	if t.warningEpoch == epoch {
-		reason = t.warning
+	if t.WarningEpoch == epoch {
+		reason = t.Warning
 	}
-	t.warning = ""
-	had := t.sessionID
+	t.Warning = ""
+	had := t.SessionID
 	// A Run from before the session was kept: the last one its events name.
 	if had == "" {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
@@ -788,7 +791,7 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 			return err
 		}
 	}
-	t.sessionID = id
+	t.SessionID = id
 	if had == "" || had == id {
 		return nil
 	}
@@ -831,7 +834,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 	case "busy":
 		// A new turn: an idle held for a Claude turn's end is past.
 		t.claudeIdle = false
-		t.lastFailed = false
+		t.LastFailed = false
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -861,10 +864,10 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
 	// A failed turn's idle: the turn is over, not done (turnFailed).
-	if t.lastFailed {
+	if t.LastFailed {
 		return nil
 	}
-	t.failedTurns = 0
+	t.FailedTurns = 0
 	// A turn that ended with something open for a person — a question, a
 	// repository it asked for — is not done: the agent waits, and the
 	// answer starts its next turn. The syncer parks it if the wait is
@@ -1071,11 +1074,11 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
 	if t.run.talker() {
-		t.lastFailed = true
-		if t.failedTurns < maxFailedTurnResumes {
+		t.LastFailed = true
+		if t.FailedTurns < maxFailedTurnResumes {
 			return t.parkFailed(ctx, tx, s, reason)
 		}
-		t.failedTurns++
+		t.FailedTurns++
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
@@ -1100,33 +1103,28 @@ const maxFailedTurnResumes = 2
 // failure is still said, and that control stops the Run: not parked for
 // the failure, it is not counted towards maxFailedTurnResumes.
 func (t *translator) parkFailed(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
-	kind := "conductor"
-	if t.run.brainstorm() {
-		kind = "session"
-	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
 			dude_pause = $3, turn_done_at = NULL
-		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL AND control = 'none'`,
-		t.run.ID, "parked after its turn failed", kind)
+		WHERE r.id = $1 AND `+delivery.Unasked, t.run.ID, "parked after its turn failed", t.run.parkKind())
 	if err != nil {
 		return err
 	}
+	failed := map[string]any{"status": "failed", "error": reason, "kept": true}
 	if tag.RowsAffected() == 0 {
 		var pending bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1
 			AND status IN ('scheduled', 'starting', 'running') AND control <> 'none')`, t.run.ID).Scan(&pending); err != nil || !pending {
 			return err
 		}
-		return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem,
-			map[string]any{"status": "failed", "error": reason, "kept": true})
+		return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, failed)
 	}
-	t.failedTurns++
-	if err := s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem,
-		map[string]any{"status": "failed", "error": reason, "kept": true, "failedTurns": t.failedTurns}); err != nil {
+	t.FailedTurns++
+	failed["failedTurns"] = t.FailedTurns
+	if err := s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, failed); err != nil {
 		return err
 	}
 	return s.event(ctx, tx, t.run, evParked, ledger.ActorSystem,
-		map[string]any{"reason": kind, "message": "its turn failed", "failedTurns": t.failedTurns})
+		map[string]any{"reason": t.run.parkKind(), "message": "its turn failed", "failedTurns": t.FailedTurns})
 }
 
 // turnFailure says why a turn failed, for a person. OpenCode answers a

@@ -146,6 +146,13 @@ func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map
 	return err
 }
 
+// Unasked (SQL, over runs r): a live Run dude has asked neither to stop nor
+// to take a control.
+const Unasked = `r.status IN ('scheduled', 'starting', 'running') AND r.lux_stop_reason IS NULL AND r.control = 'none'`
+
+// luxResumable (SQL, over runs r): lux states a resume starts again from.
+const luxResumable = `r.lux_state IN ('stopped', 'succeeded', 'failed', 'lost')`
+
 // Ending (SQL, over runs r): a live conductor (or session agent) whose
 // container stopped without dude asking and that nothing can resume: lux
 // ended it for good, or it stopped before its agent ever had a session, so
@@ -153,16 +160,14 @@ func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map
 // (EndConductor), by the syncer or by the next message in Chat, and nothing
 // more is queued for it. One lux can still resume is parked instead
 // (Parkable).
-const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_stop_reason IS NULL AND r.control = 'none'
-	AND (r.lux_state IN ('cancelled', 'terminated')
-	     OR (r.lux_state IN ('stopped', 'succeeded', 'failed', 'lost') AND r.agent_session_epoch = 0)))`
+const Ending = `(` + Unasked + ` AND (r.lux_state IN ('cancelled', 'terminated')
+	OR (` + luxResumable + ` AND r.agent_session_epoch = 0)))`
 
 // Parkable (SQL, over runs r): a live conductor or session agent whose
 // container stopped without dude asking, which lux keeps to resume and
 // whose agent has a session to reload: parked by the syncer, so the next
 // message resumes the same lux Run.
-const Parkable = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_stop_reason IS NULL AND r.control = 'none'
-	AND r.lux_state IN ('stopped', 'succeeded', 'failed', 'lost') AND r.agent_session_epoch > 0)`
+const Parkable = `(` + Unasked + ` AND ` + luxResumable + ` AND r.agent_session_epoch > 0)`
 
 // EndConductor completes a conductor that can no longer be resumed, and
 // hands what it was sent and never read to the next (HandOver); its

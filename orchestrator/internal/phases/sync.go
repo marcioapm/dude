@@ -194,6 +194,14 @@ func (r phaseRun) brainstorm() bool { return r.Phase == "" && r.Role == delivery
 // talker is an agent people talk to: never finished at a turn's end.
 func (r phaseRun) talker() bool { return r.conductor() || r.brainstorm() }
 
+// parkKind is the dude_pause a talker is parked with.
+func (r phaseRun) parkKind() string {
+	if r.brainstorm() {
+		return "session"
+	}
+	return "conductor"
+}
+
 // sweptRuns (SQL, over runs r): the Runs the syncer drives — every phase
 // Run, each task's conductor and each session's agent. Not a branch
 // preview, nor a Run made by hand through the API.
@@ -600,12 +608,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // can resume it (delivery.Parkable), and ended otherwise, when a new
 // message gets a new conductor.
 func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
-	park := "conductor"
-	if r.brainstorm() {
-		park = "session"
-	}
 	if lux.Terminal(r.LuxState) && r.LuxStopReason == "" && r.Control == "none" {
-		parked, err := s.parkStopped(ctx, r, park)
+		parked, err := s.parkStopped(ctx, r)
 		if parked || err != nil {
 			return true, err
 		}
@@ -624,23 +628,23 @@ func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
 	case r.Unread:
 		return false, nil
 	case r.WarmOver && r.Control == "none":
-		return true, s.requestPause(ctx, r, park, "parked after its warm period")
+		return true, s.requestPause(ctx, r, r.parkKind(), "parked after its warm period")
 	}
 	return false, nil
 }
 
 // parkStopped parks a talker whose container stopped without dude asking,
 // when lux keeps it to resume (delivery.Parkable): paused as its warm
-// period's end parks it (kind), so the next message resumes the same lux
-// Run, under the lock its Chat takes. Says whether it parked it.
-func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool, error) {
+// period's end parks it, so the next message resumes the same lux Run,
+// under the lock its Chat takes. Says whether it parked it.
+func (s *Syncer) parkStopped(ctx context.Context, r phaseRun) (bool, error) {
 	parked := false
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := s.lockChatOf(ctx, tx, r); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
-			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, kind, stopPause)
+			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -649,7 +653,7 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun, kind string) (bool
 			return err
 		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
-			map[string]any{"reason": kind, "message": "its container stopped (lux: " + r.LuxState + ")", "stopped": r.LuxState})
+			map[string]any{"reason": r.parkKind(), "message": "its container stopped (lux: " + r.LuxState + ")", "stopped": r.LuxState})
 	})
 	if parked {
 		s.unfollow(r.ID)
