@@ -1,9 +1,6 @@
 /*
- * The mockup's world: Márcio, the gallery's projects, and what the app
- * already knows when he presses New session — a question waiting on him, a
- * task that failed twice, an epic in review, yesterday's session. Nothing
- * here is new data: every line is something the sidebar or the board
- * already reads.
+ * The mockup's world: Márcio, the gallery's projects, and his sessions.
+ * Deterministic but for "now", so the greeting reads naturally.
  */
 
 import type { Person } from "../../../../packages/design-system/src/components/PersonAvatar.tsx";
@@ -18,6 +15,7 @@ export const PROJECTS = [
   { key: "CP", id: "p_control", name: "control-plane", repositories: [{ name: "control-plane", defaultBranch: "main" }] },
   { key: "WEB", id: "p_web", name: "web", repositories: [{ name: "web", defaultBranch: "main" }] },
   { key: "RUN", id: "p_runner", name: "runner", repositories: [{ name: "runner", defaultBranch: "main" }] },
+  { key: "DOC", id: "p_docs", name: "docs", repositories: [{ name: "docs", defaultBranch: "main" }] },
 ] as const;
 
 export type Project = (typeof PROJECTS)[number];
@@ -49,35 +47,36 @@ export const STARTERS: readonly Starter[] = [
   { id: "code", icon: "search", title: "Ask the code", detail: "How something works, where it lives, what it touches.",
     prompt: "How does " },
   { id: "triage", icon: "list-check", title: "Triage what's open", detail: "Findings, failed tasks and stale PRs, with what to do.",
-    prompt: "Go through what's open in control-plane and tell me what to do first." },
+    prompt: "Go through what's open and tell me what to do first." },
 ];
 
-/** What dude already knows that is worth talking through: each a real thing, and the words it would start with. */
-export interface Lead {
+/** A session in the welcome's short list: its name, what came of it, how long ago. */
+export interface Recent {
   readonly id: string;
-  readonly kind: "waiting" | "failed" | "epic" | "session";
-  readonly project?: Project;
-  readonly heading: string;
   readonly title: string;
-  readonly detail: string;
-  readonly prompt: string;
+  readonly summary: string;
+  readonly age: string;
+  readonly shared?: boolean;
+  readonly owner?: Person;
+  /** For the mockup: what opening it shows. */
+  readonly first: string;
+  readonly reply: string;
+  readonly linked: readonly Project[];
 }
 
-export const LEADS: readonly Lead[] = [
-  { id: "l1", kind: "waiting", project: PROJECTS[0], heading: "Waiting on you · 12m",
-    title: "WI-2401 asks: should 4xx responses be retried?",
-    detail: "Think it through before you answer the conductor.",
-    prompt: "WI-2401's conductor asks whether 4xx responses should be retried. Help me think it through." },
-  { id: "l2", kind: "failed", project: PROJECTS[0], heading: "Failed twice",
-    title: "WI-2408 · Pause graceful vs hard",
-    detail: "Work out why it keeps failing, and what to change.",
-    prompt: "WI-2408 has failed twice. Read both attempts and tell me what is going wrong." },
-  { id: "l3", kind: "epic", project: PROJECTS[1], heading: "Epic · 2 in review, 1 queued",
-    title: "Chat interface",
-    detail: "Plan what comes after the open reviews.",
-    prompt: "Look at the Chat interface epic in web and propose what comes next." },
-  { id: "l4", kind: "session", heading: "Your session · yesterday",
-    title: "Usage-based billing",
-    detail: "Filed 1 epic and 4 tasks. Pick it back up.",
-    prompt: "" },
+export const RECENT: readonly Recent[] = [
+  { id: "s1", title: "Usage-based billing", summary: "Filed 1 epic, 4 tasks", age: "yesterday",
+    first: "I want to plan an epic for usage-based billing: watch-only first, charge later.",
+    reply: "Here is how I'd split it: a **watch-only meter** first (count experiment runs per org per day, charge nothing), then a usage panel with an estimate, then pricing. I've proposed the epic and four tasks below.",
+    linked: [PROJECTS[0], PROJECTS[1]] },
+  { id: "s2", title: "Q4 cleanup ideas", summary: "Nothing filed yet", age: "3 days ago", shared: true, owner: P["ana"],
+    first: "What should we clean up before Q4? Start with the flaky tests.",
+    reply: "Three tests fail more than 1 in 20 runs on main; all three wait on a fixed sleep. Want tasks for them?",
+    linked: [PROJECTS[0]] },
+  { id: "s3", title: "Runner sandbox egress", summary: "Filed 2 tasks · edited RUN-31", age: "last week",
+    first: "How does the runner decide what an agent can reach?",
+    reply: "Per trust class: `egress.allow` in the runner's config, enforced by the sandbox's network namespace.",
+    linked: [PROJECTS[2]] },
+  { id: "s4", title: "Docs IA", summary: "Filed 1 epic", age: "2 weeks ago",
+    first: "Help me restructure the docs navigation.", reply: "Proposed: Concepts, Guides, Reference, Operations.", linked: [PROJECTS[3]] },
 ];
