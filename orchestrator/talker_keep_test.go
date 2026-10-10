@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // talking is one agent people talk to — a session's brainstorm or a task's
@@ -180,6 +182,110 @@ func TestAMessageBeforeTheStopIsSweptQueuesOnTheSameRun(t *testing.T) {
 				t.Fatalf("the message: %d reached %q, want it queued for %s", status, reached, run)
 			}
 			tk.resumedAnswering(run, "are you there?")
+		})
+	}
+}
+
+// A talker whose container stops mid-turn, with its session reported, is
+// not failed by the stream's report of the stop (the sweep has not run
+// yet): the sweep parks it, and the next message resumes it.
+func TestATalkerStoppedMidTurnIsParkedNotFailed(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := hangingTalker(t, kind)
+			tk.stopOnItsOwn(run, "failed")
+			tk.recorded(run, "failed")
+			if n := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, run); n != 0 {
+				t.Fatalf("the stream's report of the stop failed the talker:\n%s", tk.describeRuns())
+			}
+			tk.until("the Run parked", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = $2`, run, tk.park) == 1
+			})
+			if status, reached := tk.write("and now?"); status != 200 || reached != run {
+				t.Fatalf("after the stop: %d reached %q", status, reached)
+			}
+			tk.until("the resumed Run to answer", func() bool {
+				said := tk.said(run)
+				return len(said) > 0 && strings.Contains(said[len(said)-1], "and now?")
+			})
+		})
+	}
+}
+
+// hangingTalker is a brainstorm or conductor whose agent took its first
+// message and is still working on it: its session reported, its turn
+// begun and not ended. A resumed agent finishes its turns.
+func hangingTalker(t *testing.T, kind string) (*talking, string) {
+	hang := func(scripted func(map[string]any) fakelux.Behaviour) func(map[string]any) fakelux.Behaviour {
+		return func(spec map[string]any) fakelux.Behaviour {
+			b := scripted(spec)
+			if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == kind {
+				b.Hang = true
+			}
+			return b
+		}
+	}
+	var tk *talking
+	var run string
+	if kind == "brainstorm" {
+		s := newSessionWorld(t)
+		s.syncer.ConductorWarm = time.Hour
+		s.lux.Decide = hang(s.lux.Decide)
+		id := s.session()
+		tk = &talking{world: s.world, kind: kind, park: "session"}
+		tk.write = func(text string) (int, string) {
+			status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+			r, _ := out["runId"].(string)
+			return status, r
+		}
+		tk.latest = func() string { r, _ := s.brainstorm(id); return r }
+		tk.write("where would metering live?")
+	} else {
+		w := conductorWorld(t)
+		w.syncer.ConductorWarm = time.Hour
+		w.lux.Decide = hang(w.lux.Decide)
+		task := w.task()
+		tk = &talking{world: w, kind: kind, park: "conductor"}
+		tk.write = func(text string) (int, string) {
+			status, out := w.chat(task, text)
+			r, _ := out["runId"].(string)
+			return status, r
+		}
+		tk.latest = func() string { r, _, _ := w.conductor(task); return r }
+		tk.write("what changed?")
+	}
+	tk.until("the agent at work on its first message", func() bool {
+		run = tk.latest()
+		return run != "" && tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'
+			AND agent_session_epoch > 0 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, run) == 1
+	})
+	return tk, run
+}
+
+// A talker whose container stops before its agent reported any session
+// (agent_session_epoch 0: a lux whose shim reported none) cannot be
+// resumed with its briefing: it is ended as before, and the next message
+// starts a new Run that answers it.
+func TestATalkerStoppedWithNoSessionIsEndedAndReplaced(t *testing.T) {
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := start(t)
+			mustExec(t, tk.owner, `UPDATE runs SET agent_session_epoch = 0 WHERE id = $1`, run)
+			tk.stopOnItsOwn(run, "stopped")
+			tk.until("the Run ended", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, run) == 1
+			})
+			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, run); n != 0 {
+				t.Errorf("a talker with no session was parked")
+			}
+			status, next := tk.write("and the tests?")
+			if status != 201 || next == run {
+				t.Fatalf("the message after the end: %d reached %q, want a new Run", status, next)
+			}
+			tk.until("the new Run's answer", func() bool {
+				said := tk.said(next)
+				return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+			})
 		})
 	}
 }

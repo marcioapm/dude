@@ -49,6 +49,16 @@ func TestATalkersFailedTurnParksItBoundedByTwoResumes(t *testing.T) {
 				t.Errorf("%d run.failed carrying the agent's error, want 1", n)
 			}
 			tk.parkedAfterFailure(run)
+			// What the person reads (run.failed kept: "Its turn failed";
+			// run.parked failedTurns: "Parked after its turn failed").
+			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
+				AND payload->'kept' = 'true' AND payload->'failedTurns' = '1'`, run); n != 1 {
+				t.Errorf("%d run.failed kept with failedTurns 1, want 1", n)
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+				AND payload->'failedTurns' = '1' AND payload->>'reason' = $2`, run, tk.park); n != 1 {
+				t.Errorf("%d run.parked with failedTurns 1, want 1", n)
+			}
 			if status, reached := tk.write("try again"); status != 200 || reached != run {
 				t.Fatalf("after the failure: %d reached %q", status, reached)
 			}
@@ -60,6 +70,10 @@ func TestATalkersFailedTurnParksItBoundedByTwoResumes(t *testing.T) {
 			tk.parkedAfterFailure(run)
 			tk.failedTurn(run, "two")
 			tk.parkedAfterFailure(run)
+			if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+				AND payload->'failedTurns' = '2'`, run); n != 1 {
+				t.Errorf("%d run.parked with failedTurns 2, want 1", n)
+			}
 			tk.failedTurn(run, "three")
 			tk.until("the third failure to end it", func() bool {
 				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND lux_stop_reason = 'cancel'`, run) == 1
