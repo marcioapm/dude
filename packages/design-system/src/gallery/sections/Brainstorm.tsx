@@ -101,10 +101,12 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <div style={{ width: "100%" }} data-testid="title-in-header">
               <ScreenHeader fillTitle title={<TitleDemo initial="Billing v2" />}
                 meta={<><SharedMark owner={P["marcio"]} label="Shared with 2" /><span>Brainstorm · claude-opus-5-5</span></>}
-                actions={<><Button size="sm" variant="quiet">Archive</Button><Button size="sm" variant="secondary">Share</Button></>} />
+                actions={<Button size="sm" variant="secondary">Share</Button>} />
               <ScreenHeader fillTitle title={<TitleDemo initial={null} />} meta={<span>Brainstorm</span>} />
               <ScreenHeader fillTitle title={<TitleDemo initial={"Usage-based billing for experiment runs, with a dedupe on run id ".repeat(4).trim()} />}
                 meta={<span>Brainstorm</span>} />
+              <ScreenHeader fillTitle title={<TitleDemo initial="Pricing page copy" />} meta={<span>Brainstorm</span>}
+                actions={<Button size="sm" variant="quiet">Archive</Button>} />
               <ScreenHeader fillTitle title={<TitleDemo initial="Q4 cleanup ideas" />}
                 meta={<><span>Brainstorm</span><Badge size="sm" icon="archive">Archived</Badge></>}
                 actions={<Button size="sm" variant="quiet">Unarchive</Button>} />
