@@ -129,6 +129,9 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, pr
   );
 }
 
+// A refused item says why on its second line, in place of its model (the reason names it), so the
+// words are read with the item and seen without hovering.
 function item(id: string, label: string, model: string | undefined, reason: string | null): RowMenuAction {
-  return { id, label, ...(model ? { description: model, descriptionMono: true } : {}), ...(reason ? { disabled: true, disabledReason: reason } : {}) };
+  if (reason) return { id, label, description: reason, descriptionWraps: true, disabled: true };
+  return { id, label, ...(model ? { description: model, descriptionMono: true } : {}) };
 }

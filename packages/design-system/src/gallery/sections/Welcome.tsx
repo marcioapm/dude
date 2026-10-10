@@ -134,7 +134,7 @@ function OpenMenu() {
 function OpenModelMenu() {
   const [host, setHost] = useState<HTMLElement | null>(null);
   return (
-    <div ref={setHost} className={styles["composerFrame"]} style={{ minHeight: 420 }}>
+    <div ref={setHost} className={styles["composerFrame"]} style={{ minHeight: 0, paddingBottom: 560 }}>
       <ChatComposer mode="chat" placeholder="Start a session…" to={<>To <b>Brainstorm</b></>} onSubmit={() => false}
         toAside={<ModelPicker tiers={GALLERY_TIERS} organization={GALLERY_ORG_MODEL} value={{ tier: null, harness: null }}
           onChange={() => undefined} previewMenu={host} />} />

@@ -63,7 +63,7 @@ describe("ModelPicker", () => {
     expect(radios().map((r) => r.textContent)).toEqual([
       "Organisation default (Claude (High))claude-opus-5", "Claude (High)claude-opus-5", "Solgpt-6-sol",
       "Organisation default (OpenCode)", "OpenCode", "Claude Code",
-      "Codex. Codex takes an OpenAI model; Claude (High) requests claude-opus-5",
+      "CodexCodex takes an OpenAI model; Claude (High) requests claude-opus-5",
     ]);
     // The current choice is checked in each group.
     expect(radios().filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.dataset["testid"]))

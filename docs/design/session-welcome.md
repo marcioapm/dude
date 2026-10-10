@@ -201,3 +201,37 @@ What the build decided where this page left it open:
   writers keep the "Write to start…" line and a focused composer, its
   readers "Nobody has written here yet."
 - No token, tone, radius or border exception was added.
+
+## Model and harness
+
+A session's agent runs on the organisation's **Brainstorm** setting
+(Settings → Agents) unless the session chooses otherwise. The welcome's
+composer says which, after "To **Brainstorm**": `ModelPicker` in
+`ChatComposer`'s `toAside`, a quiet chip reading the effective pair
+("Thinker · Claude Code", "default" while both follow the organisation).
+Its menu has two groups, **Model tier** and **Harness**, each led by
+"Organisation default (…)".
+
+- **Each half is the session's own or the organisation's**, independently
+  (`sessions.tier`, `sessions.harness`, migration 105; NULL follows). The
+  welcome sends only what was chosen, so a session left alone keeps
+  following the organisation when its setting changes.
+- **An invalid pair is never offered.** An item whose harness cannot run
+  the tier's model is disabled with the reason ("Claude Code takes an
+  Anthropic model; Sol requests gpt-6-sol"), judged by `harnessMisfit`
+  against the other half as it stands. The orchestrator checks the same
+  rule (`HarnessFits`) on the pair the next start would use, and refuses a
+  misfit with a 400, on create and on `/model`.
+- **A change applies at the agent's next start, never mid-turn.** The
+  rail's **Model** block carries the same picker for the owner (everyone
+  else reads it); a change records `session.model.changed`, which the Chat
+  shows ("Ana set the model to Opus (High) · Claude Code; it applies the
+  next time the agent starts"). A live or parked agent resumes on what it
+  was submitted with.
+- **A tier removed falls back.** `ON DELETE SET NULL` sends a session that
+  chose it back to the organisation's tier, and a trigger on `model_tiers`
+  records `session.model.fallback` on it, so its members are told.
+- **The header** names what a live agent runs on; with none live, what the
+  next start would use, "(organisation default)" when it follows.
+- Out of scope: a session's own effort (a tier carries it), machine size or
+  image.

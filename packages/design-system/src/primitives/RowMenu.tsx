@@ -22,6 +22,8 @@ export interface RowMenuAction {
   readonly mono?: boolean | undefined;
   /** Set the description in mono: the model a tier requests. */
   readonly descriptionMono?: boolean | undefined;
+  /** Let the description wrap instead of being cut: a sentence that must be read whole (why it is refused). */
+  readonly descriptionWraps?: boolean | undefined;
   /** Danger: the action loses work. Rendered in danger ink; still needs a confirm dialog behind it. */
   readonly tone?: "default" | "danger" | undefined;
   readonly disabled?: boolean | undefined;
@@ -234,7 +236,7 @@ function RadioGroup({ group }: { readonly group: RowMenuRadioGroup }) {
                 {it.description ? (
                   <span className={styles["label"]}>
                     <span className={styles["name"]}>{it.label}</span>
-                    <span className={cx(styles["description"], it.descriptionMono && styles["mono"])}>{it.description}</span>
+                    <span className={cx(styles["description"], it.descriptionMono && styles["mono"], it.descriptionWraps && styles["wraps"])}>{it.description}</span>
                   </span>
                 ) : <span className={styles["label"]}>{it.label}</span>}
                 {reason ? <span className="ds-sr-only">. {reason}</span> : null}
