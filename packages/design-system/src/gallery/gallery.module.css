@@ -397,6 +397,25 @@
   padding: var(--ds-space-main-pad);
   overflow: hidden;
 }
+/* The welcome fills the main pane edge to edge, as apps/web's `.main.flush`. */
+.shellMainFlush {
+  padding: 0;
+  gap: 0;
+}
+/* Stand-in for the app's face in the Welcome's mark slot: the design system has no dude asset. */
+.standInMark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-raised);
+  color: var(--ds-role-brainstorm-fg);
+}
+.composerFrame {
+  max-width: 720px;
+  min-height: 280px;
+}
 
 /* Servers section: the task's tab as apps/web lays it out. */
 .serversTab {

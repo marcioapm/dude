@@ -497,13 +497,39 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   of `EventRow`s an agent session's Events uses, each opening onto its
   payload. Its members' alone: anyone else is told the session does not
   exist.
-- **A session starts untitled and names itself.** New session (the list's,
-  the sidebar's) makes one at once — no dialog, no title, nothing linked —
-  and opens it with the composer focused; its owner links projects from the
-  rail. Until it is named it reads **"New session"** everywhere it is
-  listed or headed (`sessionTitle` in `@dude/domain`). Its agent names it
-  once the subject is clear (`name_session`, one line of at most 60
-  characters), and again only if the subject clearly changes.
+- **A session starts untitled and names itself.** Until it is named it
+  reads **"New session"** everywhere it is listed or headed (`sessionTitle`
+  in `@dude/domain`). Its agent names it once the subject is clear
+  (`name_session`, one line of at most 60 characters), and again only if
+  the subject clearly changes.
+- **dude opens on the welcome** (`Welcome`), and **New session opens it**
+  too, the list's and the sidebar's. **A session is made by its first
+  message, never empty**: nothing exists until the person sends, and the
+  send makes the session with that message and what it reads, in one call,
+  and opens it. Opening the page and leaving makes nothing.
+- **What a session will read is said in its composer before it starts**:
+  `ComposerLinks` in the composer's `leading`, each linked project's face
+  and name with a close, then "+ Link"; "Reads memory only" and "+ Link a
+  project" when nothing is linked. After the first send, the rail's
+  Linked block carries it, and its owner links from there.
+- **A starter fills the composer; it never sends.** `StarterPills` write
+  the start of a sentence ("I want to plan an epic for ") with the caret at
+  its end, for the person to finish.
+- The welcome's column is 720px, a little above the middle: dude's face,
+  the greeting (the time of day on the reader's clock and their first
+  name), one line, the composer **raised** (`ChatComposer variant="stage"`:
+  `shadow-2`, the one place a composer is) with a taller field, the
+  starters, then `RecentSessions` —
+  or, with none yet, one muted line saying what a session does
+  (`WelcomeNote`). In an organisation with no projects the footer also
+  offers New project, to those who may make one; a session needs no
+  project, so the composer works as ever. Compact takes its air in: 6vh above where comfortable
+  has 12vh, a 48px face (64), a 52px field (72), and six recent sessions
+  where comfortable has four (`RECENT_SESSIONS_SHOWN`; the app picks by
+  density). Under 640px the greeting takes `3xl`, the stage less padding,
+  and the recent rows drop their summary. The face is dude's mark, the
+  brand, not an illustration: the welcome is a landing page, and its
+  first-time line is the only empty-state text in it.
 - **`SessionTitle`** is the name in the session's header: untitled, "New
   session" in muted ink. For a member who can chat it is a button that
   edits the name in place — Enter saves, Escape cancels, and either gives
@@ -692,6 +718,21 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
   opens or steps in, ← closes or steps out, Home/End, Enter selects, `/`
   jumps to the search and ↓ from the search enters the tree.
+- **Collapsed** (`Sidebar collapsed`, 1000px and up; narrower, it is the
+  drawer either way), the sidebar is a 56px rail on the same chrome shade: its rows
+  with their words folded into tooltips to the right, each a
+  `row-comfortable` square with the nav row's washes, `aria-current` on the
+  one open. **The rail keeps the one loud count** — Waiting on you is the
+  `NeedsYouCount` pill itself when something waits, and its name carries
+  the count ("Waiting on you: 2"); the inbox glyph when not — **and marks
+  each project that waits on you** with the needs-you
+  diamond on its face's corner, cut out of the chrome; its tooltip gives
+  its counts in words ("1 needs you · 4 running · 1 failed").
+  **Nothing else in it takes a tone.** The tree is not in it: a project's
+  face opens its board, and expanding gives the tree back. Its search
+  expands the sidebar with the field focused, and so does `/` outside a
+  field while it is the rail (only ⌘ or Ctrl, not Shift, Option or AltGr,
+  make `/` something else).
 
 ### Board (the overview)
 
@@ -838,7 +879,10 @@ here.
   also opens it on right-click and Shift+F10 / the context-menu key. Focus
   returns to the row on close (`onCloseAutoFocus`) so arrow keys keep
   working. A danger item is still just a request: the destructive action
-  itself goes behind a `Dialog tone="danger"`.
+  itself goes behind a `Dialog tone="danger"`. An item's `leading` puts a
+  face (project, person) in the glyph's place, for a menu of things;
+  `container` portals it into a themed pane, gallery previews only, like
+  `forceMount`.
 - `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
@@ -1470,6 +1514,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
+| New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
+| `<StarterPills onPick={(s) => setText(s.prompt)} />`, the caret at the end | a starter that sends its words, or opens a dialog |
+| `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
 
 ## Components
 
@@ -1566,6 +1613,10 @@ MarkdownCheatsheet.
   the agent instead". The words leave the field only once `onSubmit`
   confirms them: resolving `false`, or rejecting, keeps them to send again
   (the caller shows why). A person's draft is never lost to a failed send.
+  `variant="stage"` is for the page's one thing (the welcome): raised
+  (`shadow-2`), a 72px field (52 compact) in `text-prose`, and no inset of
+  its own, since its host is the frame. A host never restyles a composer
+  from outside.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **ChatRunLine** — a Run the conductor started, one line in its Chat on
@@ -1584,7 +1635,14 @@ MarkdownCheatsheet.
 - **Sidebar** — header, search (`/`), four triage chips with global counts,
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
-  controlled or uncontrolled.
+  controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
+  the rail (a chevron in the header collapses it, `[` in the app); the rail
+  takes `railMark` (home, `onHome`, `homeSelected`), `railSessions` (New
+  session and Sessions, so the sidebar still knows nothing of sessions) and
+  `railFooter` (the band's `SidebarRailItem`s). `projectCountWords(counts)`
+  is a project's `projectCounts` in words.
+- **SidebarRailItem** — one square of the rail, named, its words in a
+  tooltip to the right.
 - **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
@@ -1764,6 +1822,23 @@ sessions*):
 - **SidebarSessions** — your brainstorm sessions above the projects, in
   `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
   questions in Waiting on you.
+- **Welcome** — the first screen's stage: `mark` (the app's face; the
+  design system has none), `greeting`, `line`, `composer` (a `ChatComposer
+  variant="stage"`), `starters`, `footer`. **WelcomeNote** is the first-time
+  line. `WELCOME_STARTERS` and `WELCOME_FIRST_TIME` are the words, one copy
+  for the app and the gallery.
+- **StarterPills** — ways to start, `{ id, icon, title, detail, prompt }`,
+  `onPick(starter)`; `detail` is the tooltip. The glyph takes the label's
+  ink (secondary, brightening with it on hover): these are actions, not
+  the brainstorm's role glyph.
+- **ComposerLinks** — what a new session will read, for `ChatComposer`'s
+  `leading`: chips with a close, and "+ Link" opening `RowMenu` (whose
+  items take a `leading` face); read only without `onLink` / `onUnlink`.
+- **RecentSessions** — the welcome's short list: one line each at
+  `row-default` height, the bulb (the role glyph, in the brainstorm's role
+  colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,
+  not `SessionRow`'s, whose two lines, chips and state column are the
+  list page's. `RECENT_SESSIONS_SHOWN` is how many per density.
 
 ## What is deliberately not here
 

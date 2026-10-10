@@ -1,7 +1,7 @@
 /**
  * Where the app is, and its URL.
  *
- * A place is something in the tree (a project's board, an epic's, a work
+ * A place is the welcome, something in the tree (a project's board, an epic's, a work
  * item, an agent's conversation), a project's settings, the organization's,
  * or your own (this browser's: how dude looks, what it tells you). The URL hash is written from it and read back into it by
  * one pair of inverse functions, so a reload lands where you were.
@@ -10,6 +10,8 @@
 import type { NavRef } from "@dude/design-system";
 
 export type Place =
+  // The welcome (`#/`): what dude opens on, and where New session goes.
+  | { view: "welcome" }
   // A task's page may name the tab it opens on, and the attempt it shows
   // when that is not the current one (`?attempt=1`).
   | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number }
@@ -34,6 +36,8 @@ const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "r
 
 export function parsePlace(hash: string): Place | null {
   const [path = "", query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  // Nothing in the URL is the welcome.
+  if (path === "" || path === " ") return { view: "welcome" };
   const [given, id, view, page, ...rest] = path.split("/");
   // Links from before "work item" became "task": bookmarks, and
   // notifications already delivered.
@@ -63,6 +67,8 @@ export function parsePlace(hash: string): Place | null {
 export function formatPlace(place: Place | null): string {
   if (!place) return "";
   switch (place.view) {
+    case "welcome":
+      return "#/";
     case "orgSettings":
       return place.page
         ? `#/org/settings/${place.page}${place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`

@@ -248,14 +248,14 @@ from playwright.sync_api import Page, expect  # noqa: E402
 from helpers import sign_in, toast  # noqa: E402
 
 
-def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    sign_in(page, web_url, api_key)
+def _sign_in(page: Page, web_url: str, api_key: str, board: bool = True) -> None:
+    sign_in(page, web_url, api_key, board=board)
 
 
 @pytest.mark.ui
 def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: str, client: ApiClient, org: dict,
                                                         console_errors: list):
-    _sign_in(page, web_url, org["api_key"])
+    _sign_in(page, web_url, org["api_key"], board=False)
     page.goto(f"{web_url}#/org/settings/implementer")
     doc = page.get_by_test_id("prompt-document")
     # It reads rendered: dude's own prompt, never edited.
@@ -423,7 +423,7 @@ def _pick(page: Page, trigger, label: str, meta: str = "") -> None:
 def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refused(
     page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    _sign_in(page, web_url, org["api_key"], board=False)
     page.goto(f"{web_url}#/org/settings/machines")
     machines = page.get_by_test_id("machines-page")
     # Every organisation starts with lux's own default, and sees lux's pools.
@@ -566,7 +566,7 @@ def test_removing_a_size_in_use_moves_what_named_it(
 @pytest.mark.ui
 def test_a_member_sees_machines_read_only(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
     _, key = _invite_member(client, env, "Bo")
-    _sign_in(page, web_url, key)
+    _sign_in(page, web_url, key, board=False)
     page.goto(f"{web_url}#/org/settings/machines")
     machines = page.get_by_test_id("machines-page")
     expect(machines.locator("[data-size='Standard']")).to_be_visible()
@@ -618,7 +618,7 @@ def test_a_size_whose_pool_vanished_from_lux_says_so_and_asks_for_another(
     assert _fake_lux(env, "DELETE", f"/v1/pools/{scratch}").status_code == 204
     assert _sizes(client)["Scratch"]["poolName"] is None
 
-    _sign_in(page, web_url, org["api_key"])
+    _sign_in(page, web_url, org["api_key"], board=False)
     page.goto(f"{web_url}#/org/settings/machines")
     machines = page.get_by_test_id("machines-page")
     row = machines.locator("[data-size='Scratch']")
@@ -657,7 +657,7 @@ def _tiers(client: ApiClient) -> dict:
 def test_an_admin_adds_a_tier_and_changes_one_and_the_role_page_follows(
     page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    _sign_in(page, web_url, org["api_key"], board=False)
     page.goto(f"{web_url}#/org/settings/models")
     models = page.get_by_test_id("models-page")
     # Every organisation starts with three tiers; Fast names no model yet.
@@ -856,7 +856,7 @@ def test_removing_a_tier_in_use_moves_what_named_it(
 @pytest.mark.ui
 def test_a_member_sees_models_read_only(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
     _, key = _invite_member(client, env, "Bo")
-    _sign_in(page, web_url, key)
+    _sign_in(page, web_url, key, board=False)
     page.goto(f"{web_url}#/org/settings/models")
     models = page.get_by_test_id("models-page")
     expect(models.locator("[data-tier='Coder']")).to_be_visible()

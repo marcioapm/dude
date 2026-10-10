@@ -29,7 +29,7 @@ def test_the_board_shows_projects_and_opens_tasks(
     client.create_task(forge_project["id"], "Already queued up")
     sign_in(page, web_url, org["api_key"])
 
-    # With nothing selected, the first project's board is what opens.
+    # The first project's board, opened from the tree.
     expect(page.get_by_text("Greeter").first).to_be_visible()
     card = page.get_by_text("Already queued up").last
     expect(card).to_be_visible()
@@ -37,6 +37,64 @@ def test_the_board_shows_projects_and_opens_tasks(
     card.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
     expect(page.get_by_test_id("deliver")).to_be_visible()
+    assert console_errors == []
+
+
+def test_the_first_load_is_the_welcome_with_its_composer_focused_and_the_brand_goes_home(
+    page: Page, web_url: str, forge_project: dict, org: dict, console_errors: list
+):
+    """Nothing in the URL opens the welcome, not a board; the brand comes back to it."""
+    sign_in(page, web_url, org["api_key"], at="")
+    welcome = page.get_by_test_id("welcome")
+    expect(welcome).to_be_visible()
+    expect(welcome.get_by_role("heading", level=1)).to_have_text(re.compile(r"^(Late one|Morning|Afternoon|Evening)"))
+    expect(welcome.locator("textarea")).to_be_focused()
+    expect(page.get_by_role("region", name=re.compile(r" board$"))).to_have_count(0)
+    expect(page).to_have_title("dude")
+    assert "#/project/" not in page.url
+    page.get_by_role("treeitem").filter(has_text="Greeter").first.click()
+    expect(page).to_have_url(re.compile(r"#/project/"))
+    page.get_by_role("button", name="El Duderino, home").click()
+    expect(page).to_have_url(re.compile(r"#/$"))
+    expect(welcome).to_be_visible()
+    assert console_errors == []
+
+
+def test_the_sidebar_folds_to_a_rail_with_its_key_and_its_chevron_and_stays_folded(
+    page: Page, web_url: str, forge_project: dict, org: dict, console_errors: list
+):
+    """[ and the chevron fold it; a reload keeps it; a project's face opens its board; under
+    1000px there is no rail, only the drawer."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"], at="#/")
+    rail = page.get_by_test_id("sidebar-rail")
+    expect(rail).to_have_count(0)
+    # A [ typed in the composer is a character.
+    composer = page.get_by_test_id("welcome").locator("textarea")
+    composer.press("[")
+    expect(composer).to_have_value("[")
+    expect(rail).to_have_count(0)
+    composer.fill("")
+    page.evaluate("document.activeElement.blur()")
+    page.keyboard.press("[")
+    expect(rail).to_be_visible()
+    assert page.evaluate("localStorage.getItem('dude.sidebar')") == "rail"
+    page.keyboard.press("[")
+    expect(rail).to_have_count(0)
+    page.get_by_test_id("sidebar-collapse").click()
+    expect(rail).to_be_visible()
+    page.reload()
+    expect(rail).to_be_visible()
+    rail.locator(f"[data-testid=rail-project][data-project='{forge_project['id']}']").click()
+    expect(page).to_have_url(re.compile(rf"#/project/{forge_project['id']}$"))
+    expect(rail.locator(f"[data-project='{forge_project['id']}']")).to_have_attribute("aria-current", "page")
+    # Under 1000px it is the drawer, kept rail or not: the rail is not drawn.
+    page.set_viewport_size({"width": 900, "height": 900})
+    expect(rail).to_have_count(0)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.get_by_test_id("rail-expand").click()
+    expect(rail).to_have_count(0)
+    assert page.evaluate("localStorage.getItem('dude.sidebar')") == "full"
     assert console_errors == []
 
 
@@ -974,9 +1032,13 @@ def test_project_settings_manage_repositories_and_delivery(
 
 
 def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
-    """An organization with nothing yet is offered a project, not told to use the API."""
-    sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("new-project-empty").click()
+    """An organization with nothing yet is offered a project in the welcome, not told to use the API."""
+    sign_in(page, web_url, org["api_key"], at="#/")
+    welcome = page.get_by_test_id("welcome")
+    expect(welcome).to_be_visible()
+    # A session needs no project: the composer is there.
+    expect(welcome.locator("textarea")).to_be_visible()
+    welcome.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")
     # Prefilled as dude would derive it from the slug.
     expect(page.get_by_test_id("project-key")).to_have_value("PAYM")
@@ -1343,7 +1405,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
 def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
     """You choose how dude looks; it stays so after a reload."""
-    sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"], board=False)
     page.get_by_test_id("my-settings-button").click()
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     html = page.locator("html")
@@ -1381,7 +1443,7 @@ def test_a_browser_turns_notifications_on_and_off(
       PushManager.prototype.getSubscription = async function () { return sub; };
       PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
-    sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"], board=False)
     page.get_by_test_id("my-settings-button").click()
     state = page.get_by_test_id("push-state")
     expect(state).to_have_attribute("data-state", "off")

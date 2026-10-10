@@ -123,3 +123,11 @@ export function useTheme(): ThemeContextValue {
   if (!v) throw new Error("useTheme must be used inside <ThemeProvider>");
   return v;
 }
+
+/** The density in force: the provider's, or the document root's attribute where there is none (a test, a static page). */
+export function useDensity(): Density {
+  const v = useContext(ThemeContext);
+  if (v) return v.density;
+  const attr = typeof document !== "undefined" ? document.documentElement.getAttribute("data-density") : null;
+  return isDensity(attr) ? attr : DEFAULT_DENSITY;
+}

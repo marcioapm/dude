@@ -59,6 +59,10 @@
 .item[data-disabled] .icon {
   color: var(--ds-color-text-disabled);
 }
+.leading {
+  display: inline-flex;
+  flex-shrink: 0;
+}
 .label {
   flex: 1;
   min-width: 0;

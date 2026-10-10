@@ -239,7 +239,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
                   waitingFor={yours ? "The brainstorm" : undefined}
                   waitingKey={yours?.id}
                   disabled={reader}
-                  // A session nobody has written to yet (a new one, opened at once) is for writing in.
+                  // An empty session (made through the API without a message) is for writing in.
                   autoFocus={!reader && session.messages === 0}
                   disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
                   // A session has no task: the chat composer's own words would say "this task".
