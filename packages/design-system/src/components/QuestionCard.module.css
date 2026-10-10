@@ -199,6 +199,21 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  container-type: inline-size;
+}
+/* A phone: the tabs keep their marks and the current one's name; the key
+   numbers and hints, which a touch screen has no use for, go. */
+@container (max-width: 420px) {
+  .tabs {
+    gap: var(--ds-space-12);
+  }
+  .tab:not(.tabOn) .tabName {
+    display: none;
+  }
+  .key,
+  .hint {
+    display: none;
+  }
 }
 /* Tabs: plain words in the turn's own column, no box; the tinted rule
    under them is drawn as a shadow, the selected tab's underline too. */

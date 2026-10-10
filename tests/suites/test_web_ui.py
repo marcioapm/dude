@@ -1229,8 +1229,8 @@ def test_a_parked_agent_is_answered_from_its_chat(
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
-    # Paused, yet the composer takes the answer: that is what resumes it.
-    page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
+    # Paused, yet its question's turn takes the answer: that is what resumes it.
+    page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the answer did not resume the parked agent")
     # Once timed, its return says how long it took, its phases on hover:
@@ -1469,7 +1469,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     page.goto(f"{web_url}#/session/{question['runId']}")
     expect(page.get_by_test_id("waiting-on")).to_contain_text("Waiting for e2e user to answer")
     expect(page.get_by_test_id("take-over")).to_have_text("· Take over this task to answer")
-    expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
+    expect(page.get_by_test_id("question-form")).to_have_count(0)
     expect(page.get_by_placeholder("Waiting for e2e user to answer.")).to_be_disabled()
     # The choices shown are not buttons for Bo; hovering says how to make
     # them his, and clicking one leaves that said rather than closing it.
@@ -1499,10 +1499,10 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     tasks = [t for p in client.get("/v1/navigation").json()["projects"] for t in p["tasks"]]
     assert next(t for t in tasks if t["id"] == item["id"])["people"][0]["name"] == "Bo"
 
-    # Now it is Bo's to answer, from the chat.
+    # Now it is Bo's to answer, in its question's turn.
     page.goto(f"{web_url}#/session/{question['runId']}")
     expect(page.get_by_test_id("waiting-on")).to_have_count(0)
-    page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
+    page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
     wait_until(lambda: client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"][0]["status"] == "answered",
                timeout=30, message="Bo's answer was not taken")
     assert console_errors == []
