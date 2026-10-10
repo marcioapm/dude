@@ -39,6 +39,8 @@ export interface SessionSummary {
   dudePause: string | null;
   filed: number;
   lastActivityAt: string;
+  /** You archived it: listed only when archived ones are asked for (`?archived=1`). Yours alone. */
+  archived: boolean;
 }
 
 /** An invitation waiting on you: what an inbox line shows, never a word said. */
@@ -135,7 +137,7 @@ export interface SessionDetail {
     costUsd: number;
     messages: number;
   };
-  you: { id: string; role: SessionRole };
+  you: { id: string; role: SessionRole; archived: boolean };
   proposals: Proposal[] | null;
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
 }
