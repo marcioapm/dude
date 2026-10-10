@@ -849,9 +849,9 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 		}
-		// The question's own: their message answers one question; several
-		// are answered through the form (sessionAnswer), and a message
-		// meanwhile goes after the answers, as anyone's does.
+		// The question's own: their message answers one question. Several
+		// are answered through the form (sessionAnswer); a message beside
+		// them is an aside, as in a task's Chat, and reaches the agent now.
 		if qerr == nil && !body.Aside && len(items) == 1 && (to == "" || to == p.Person) {
 			answered, err := answerBody{Text: body.Text}.check(items)
 			if err != nil {
@@ -871,7 +871,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		payload := map[string]any{"text": body.Text, "directiveId": directiveID}
 		if qerr == nil && to != "" && to != p.Person {
 			// Waiting on another member's answer: held until it comes. The
-			// question's own person writing aside is heard at once.
+			// question's own person, or anyone when it names nobody, is
+			// heard at once.
 			if _, err := tx.Exec(r.Context(), `UPDATE directives SET held_for = $2 WHERE id = $1`, directiveID, questionID); err != nil {
 				return err
 			}
