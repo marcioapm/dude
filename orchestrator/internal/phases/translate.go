@@ -781,7 +781,14 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 	payload := map[string]any{"from": had, "to": id, "reason": reason}
 	if t.run.talker() {
 		ref := t.run.ref()
-		text, err := delivery.Rebriefing(ctx, tx, ref, reason)
+		briefing, err := delivery.Rebriefing(ctx, tx, ref, reason)
+		if err != nil {
+			return err
+		}
+		// A blank session has no other prompt: the briefing goes as the
+		// first did, with how it works, its checkouts and tools. The
+		// task's images are not sent again; their references read as such.
+		text, err := s.talkerPrompt(ctx, tx, t.run, briefing, nil)
 		if err != nil {
 			return err
 		}
