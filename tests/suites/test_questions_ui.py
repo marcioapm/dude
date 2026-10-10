@@ -8,7 +8,7 @@ question answered with one click on a choice still works the same way, and
 its answer is told exactly as before.
 
 Screenshots of each screen the mockup has, light and dark, go to
-$DUDE_TEST_SHOTS (default /var/tmp/mqa-shots/).
+$DUDE_TEST_SHOTS when it is set; none are taken otherwise.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from playwright.sync_api import Page, expect
 
 from helpers import ApiClient, query, sign_in, wait_until
 
-SHOTS = Path(os.environ.get("DUDE_TEST_SHOTS", "/var/tmp/mqa-shots"))
+SHOTS = Path(os.environ["DUDE_TEST_SHOTS"]) if os.environ.get("DUDE_TEST_SHOTS") else None
 
 FOUR = {"questions": [
     {"header": "Retry scope", "question": "Which failures should the payment call retry?", "choices": [
@@ -46,6 +46,8 @@ ONE = {"question": "Should 4xx responses be retried? The existing code retries e
 
 
 def _shoot(page: Page, name: str) -> None:
+    if SHOTS is None:
+        return
     SHOTS.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
         page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
@@ -90,7 +92,7 @@ def test_four_questions_are_answered_in_the_agents_turn_and_told_as_one_message(
 
     # A pick does not send; Next moves on.
     turn.get_by_role("radio", name="5xx and network errors only").click()
-    turn.get_by_test_id("question-next").click()
+    turn.get_by_role("button", name="Next").click()
     expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")
     # Keys: 2 picks the second, Enter is Next.
     page.keyboard.press("2")
@@ -118,7 +120,7 @@ def test_four_questions_are_answered_in_the_agents_turn_and_told_as_one_message(
     tabs.nth(4).click()
     expect(turn.get_by_test_id("review-answer")).to_have_text(
         ["5xx and network errors only", "Leave it; file a task", "Unit (PaymentSplitter); API contract", "Not answered yet"])
-    expect(turn.get_by_test_id("question-send")).to_be_disabled()
+    expect(turn.get_by_role("button", name="Send answers")).to_be_disabled()
     _shoot(page, "5-review")
 
     # Their own words for the last, then the note, and Send.
@@ -129,8 +131,8 @@ def test_four_questions_are_answered_in_the_agents_turn_and_told_as_one_message(
     field.fill("Pay with two cards")
     field.press("Enter")
     expect(tabs.nth(4)).to_have_text("Send · 4/4")
-    turn.get_by_test_id("question-note").fill("Keep the retry budget under 10s total — checkout times out at 15.")
-    turn.get_by_test_id("question-send").click()
+    turn.get_by_label("A note for the agent (optional)").fill("Keep the retry budget under 10s total — checkout times out at 15.")
+    turn.get_by_role("button", name="Send answers").click()
 
     record = page.get_by_test_id("question-record").last
     answers = record.get_by_test_id("record-answer")
@@ -138,8 +140,7 @@ def test_four_questions_are_answered_in_the_agents_turn_and_told_as_one_message(
     expect(answers.nth(0)).to_have_text("5xx and network errors only")
     expect(answers.nth(1)).to_have_text("Leave it; file a task")
     expect(answers.nth(2)).to_have_text("Unit (PaymentSplitter); API contract")
-    expect(answers.nth(3)).to_contain_text("“Pay with two cards”")
-    expect(answers.nth(3)).to_contain_text("words")
+    expect(answers.nth(3)).to_have_text("“Pay with two cards”in e2e's words")
     expect(page.get_by_test_id("composer-waiting")).to_have_count(0)
     told = wait_until(lambda: _directive(owner_dsn, run).startswith("Answers to your 4 questions") and _directive(owner_dsn, run),
                       timeout=30, message="the conductor was never told the answers")
