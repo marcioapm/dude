@@ -165,21 +165,41 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged }
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
   // The owner's picker lists the organisation's tiers; anyone else reads the detail's words alone.
   const tierOptions = useModelOptions(client, detail?.you.role === "owner" && detail.model !== undefined, false);
-  // What the owner picked, shown at once: a second pick before the first is answered builds on it,
-  // and the posts go one after another so the last pick is the one kept.
+  // What the owner picked, shown at once while its posts are out: a second pick before the first
+  // is answered builds on it, and the posts go one after another so the last pick is the one kept.
+  // Once the last one settles the detail drives the chip again. A failure cancels the picks queued
+  // behind it, since each carries the failed one's half; a result for another session is dropped.
   const [picked, setPicked] = useState<ModelChoice | null>(null);
   const posting = useRef<Promise<unknown>>(Promise.resolve());
-  useEffect(() => setPicked(null), [sessionId]);
+  const pending = useRef(0);
+  const failures = useRef(0);
+  const shownSession = useRef(sessionId);
+  useEffect(() => {
+    shownSession.current = sessionId;
+    pending.current = 0;
+    failures.current += 1;
+    setPicked(null);
+  }, [sessionId]);
   const chooseModel = useCallback((choice: ModelChoice) => {
     setProblem(null);
     setPicked(choice);
+    pending.current += 1;
+    const failuresBefore = failures.current;
+    const mine = () => shownSession.current === sessionId;
     posting.current = posting.current.then(async () => {
       try {
+        if (!mine() || failures.current !== failuresBefore) return;
         const { model } = await client.setSessionModel(sessionId, choice);
-        setDetail((d) => (d ? { ...d, model } : d));
+        if (mine()) setDetail((d) => (d ? { ...d, model } : d));
       } catch (err) {
-        setPicked(null);
+        if (!mine()) return;
+        failures.current += 1;
         setProblem(`Could not change the model: ${errorText(err)}`);
+      } finally {
+        if (mine()) {
+          pending.current -= 1;
+          if (pending.current === 0) setPicked(null);
+        }
       }
     });
   }, [client, sessionId]);

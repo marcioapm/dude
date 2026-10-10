@@ -16,7 +16,8 @@ import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider } from "@dude/design-system/primitives";
-import type { Artifact, SentAnswer } from "../src/api/client.ts";
+import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { useState } from "react";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -697,6 +698,107 @@ describe("a session's model", () => {
     await settle();
     expect(client.chosen).toEqual([{ tier: "mtr_coder", harness: null }, { tier: "mtr_coder", harness: "claude-code" }]);
     expect(chip.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+  });
+
+  const chipName = (page: HTMLElement) => page.querySelector("[data-testid=session-model] [data-testid=model-picker]")?.getAttribute("aria-label")
+    ?? page.querySelector("[data-testid=session-model] [data-testid=model-picker]")?.textContent ?? null;
+  async function openRailMenu(page: HTMLElement) {
+    const chip = await until(() => page.querySelector("[data-testid=session-model] button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    return chip;
+  }
+
+  test("once its post is answered, the chip follows the detail: a removed tier re-read puts it back on the organisation's", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(document.querySelector("[data-testid=rowmenu-mtr_coder]")!);
+    await until(() => chipName(page) === "Model: Coder on OpenCode" || null, "the pick answered");
+    // The tier is removed: the orchestrator sets the session back, and records it.
+    client.detail = { ...client.detail, model: MODEL };
+    client.ledger.push(ev("session.model.fallback", { tier: { id: "mtr_coder", name: "Coder" } }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => chipName(page) === "Model: Thinker on OpenCode (organisation default)" || null, "the chip follows the detail");
+  });
+
+  test("a failed post says why, puts the chip back on the detail, and the pick queued behind it is not sent", async () => {
+    class Failing extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(_id: string, choice: { tier: string | null; harness: Harness | null }) {
+        this.chosen.push(choice);
+        return new Promise<{ id: string; model: SessionModel }>((_resolve, reject) => {
+          this.release.push(() => reject(new ApiError(400, "bad_model", "there is no model tier mtr_coder")));
+        });
+      }
+    }
+    const client = new Failing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(document.querySelector("[data-testid=rowmenu-mtr_coder]")!);
+    await click(document.querySelector("[data-testid=rowmenu-claude-code]")!);
+    expect(chipName(page)).toBe("Model: Coder on Claude Code");
+    await act(async () => client.release[0]!());
+    await until(() => page.querySelector("[data-testid=session-problem]"), "the problem");
+    expect(page.querySelector("[data-testid=session-problem]")!.textContent).toBe("Could not change the model: there is no model tier mtr_coder");
+    await settle();
+    // Only the failed pick was posted: the second carried its tier.
+    expect(client.chosen).toEqual([{ tier: "mtr_coder", harness: null }]);
+    expect(chipName(page)).toBe("Model: Thinker on OpenCode (organisation default)");
+  });
+
+  test("a post answered after the page moved to another session changes nothing there", async () => {
+    const OTHER = "ssn_other";
+    class Two extends Choosing {
+      release: Array<() => void> = [];
+      posted: string[] = [];
+      override getSession(id: string): Promise<SessionDetail> {
+        return Promise.resolve(id === OTHER ? { ...this.detail, session: { ...this.detail.session, id: OTHER }, model: { ...MODEL, harness: "codex",
+          effective: { ...MODEL.effective, harness: "codex" } } } : this.detail);
+      }
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        this.posted.push(id);
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Two(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    let show: (id: string) => void = () => undefined;
+    function Switching() {
+      const [id, setId] = useState(SESSION);
+      show = setId;
+      return <SessionScreen client={client} sessionId={id} projects={[]} onBack={() => {}} onChanged={() => {}} />;
+    }
+    const { container: page, unmount } = await mount(<PeopleProvider client={client}><ToastProvider><Switching /></ToastProvider></PeopleProvider>);
+    mounted.push(unmount);
+    await openRailMenu(page);
+    await click(document.querySelector("[data-testid=rowmenu-mtr_coder]")!);
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => show(OTHER));
+    await until(() => chipName(page) === "Model: Thinker on Codex" || null, "the other session's chip");
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(client.posted).toEqual([SESSION]);
+    expect(chipName(page)).toBe("Model: Thinker on Codex");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Codex");
+  });
+
+  test("handed over after a pick, the former owner's read-only chip says the detail's model", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(document.querySelector("[data-testid=rowmenu-mtr_coder]")!);
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await until(() => chipName(page) === "Model: Coder on OpenCode" || null, "the pick answered");
+    // Ana takes it over and sets it back to the organisation's.
+    client.detail = detail("chat", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" } },
+      session: { ...detail("chat").session, run: null } });
+    client.ledger.push(ev("session.owner_changed", { from: YOU, to: ANA.id, keep: "chat", fromName: ME.name, toName: ANA.name }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => page.querySelector("[data-testid=session-screen][data-role=chat]"), "the handover re-read");
+    const rail = page.querySelector("[data-testid=session-model]")!;
+    expect(rail.querySelectorAll("button").length).toBe(0);
+    expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Thinker on Codex");
   });
 
   test("a member who is not the owner reads it, with nothing to open", async () => {
