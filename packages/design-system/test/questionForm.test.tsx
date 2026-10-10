@@ -247,6 +247,21 @@ test("each radio group is one tab stop; ↑/↓ move within it without picking; 
   expect(sent).toEqual([]);
 });
 
+test("the note's images: Send waits while one uploads, and sends the uploaded ids", async () => {
+  const sent: QuestionSubmission[] = [];
+  const done: QuestionDraft = { tab: 4, answers: [{ choices: [0], own: null }, { choices: [1], own: null }, { choices: [0], own: null }, { choices: [1], own: null }], note: "See this" };
+  const uploading = [{ id: "c1", name: "shot.png", state: "uploading" as const, progress: 0.4 }];
+  await render(form(FOUR, sent, { draft: done, attachments: uploading, onAttachFiles: () => {} }));
+  expect(q<HTMLButtonElement>('[data-testid="question-send"]')!.disabled).toBe(true);
+  await key(q('[data-testid="question-form"]')!, "Enter");
+  expect(sent).toEqual([]);
+  await render(form(FOUR, sent, { draft: done, attachments: [{ id: "c1", name: "shot.png", state: "ready", attachmentId: "att_1" }], onAttachFiles: () => {} }));
+  expect(q<HTMLButtonElement>('[data-testid="question-send"]')!.disabled).toBe(false);
+  await click(q('[data-testid="question-send"]'));
+  expect(sent).toEqual([{ answers: [{ choices: [0], text: "" }, { choices: [1], text: "" }, { choices: [0], text: "" }, { choices: [1], text: "" }],
+    note: "See this", attachmentIds: ["att_1"] }]);
+});
+
 test("someone else's: no form, the choices muted, how to take it over", async () => {
   await render(form(FOUR, [], { waitingOn: "Ana" }));
   expect(q('[data-testid="question-form"]')).toBeNull();
