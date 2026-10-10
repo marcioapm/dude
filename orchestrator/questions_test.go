@@ -238,6 +238,13 @@ func TestAnAnswerQueuedBeforeLuxReportsTheRunRunningReachesTheAgent(t *testing.T
 	for range 5 {
 		w.pump()
 	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state <> 'running' AND push_request_id IS NULL
+		AND status <> 'completed'`, runID); n != 1 {
+		t.Fatalf("the Run did not wait for lux to say running\nruns:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL`, runID); n != 1 {
+		t.Fatalf("the answer was not still queued while lux was held")
+	}
 	close(release)
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
