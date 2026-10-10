@@ -231,13 +231,14 @@ export interface RepositoryRequestTurn {
 /**
  * Something dude did to the session: parked it while it waits on a person
  * (its container stopped, nothing held), took it back up, or nudged it
- * after it went quiet. A resume, once timed, says how long it took, its
- * phases in `title`, one per line.
+ * after it went quiet; or something that happened to its agent (`notice`):
+ * it restarted without its conversation, or compacted it. A resume, once
+ * timed, says how long it took, its phases in `title`, one per line.
  */
 export interface NoticeTurn {
   kind: "notice";
   id: string;
-  notice: "parked" | "unparked" | "nudged";
+  notice: "parked" | "unparked" | "nudged" | "notice";
   text: string;
   at: string;
   title?: string;
@@ -291,10 +292,15 @@ export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }
 const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Record<string, unknown>) => string }> = {
   "run.parked": {
     notice: "parked",
-    text: (p) => PAUSE_WORDS[p.reason as DudePause]?.parked ?? "Parked.",
+    // A conductor or session agent parked because its container stopped,
+    // or its turn failed, rather than because nobody wrote.
+    text: (p) => typeof p.stopped === "string" ? "Its container stopped. Nothing is lost: your next message resumes it."
+      : typeof p.failedTurns === "number" ? "Parked after its turn failed: your next message resumes it."
+      : PAUSE_WORDS[p.reason as DudePause]?.parked ?? "Parked.",
   },
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
+  [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
 };
 
 /** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
@@ -862,7 +868,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case "run.parked":
       case "run.unparked":
-      case "run.idle_nudged": {
+      case "run.idle_nudged":
+      case EventTypes.SessionReplaced: {
         const { notice, text } = NOTICES[event.eventType]!;
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
         if (notice === "unparked" && typeof payload.epoch === "number") {
@@ -923,9 +930,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.RunAborted: {
         const failed = event.eventType === EventTypes.RunFailed;
         const why = String((failed ? payload.error : payload.reason) ?? "").trim();
+        // A conductor's or session agent's failed turn that parked it (kept): its turn failed, not the Run.
+        const failedText = payload.kept === true ? "Its turn failed" : "Failed";
         turns.push({
           kind: "ended", id: event.eventId, outcome: failed ? "failed" : "aborted",
-          text: failed ? (why ? `Failed: ${why}` : "Failed.") : why ? `Aborted: ${why}` : "Aborted.",
+          text: failed ? (why ? `${failedText}: ${why}` : `${failedText}.`) : why ? `Aborted: ${why}` : "Aborted.",
           at: event.occurredAt,
           by: failed ? null : humanActor(event),
           why: why || null,

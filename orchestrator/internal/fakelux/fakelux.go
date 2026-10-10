@@ -216,6 +216,8 @@ type Run struct {
 	// Its next failTurns turns fail at once with failWith (FailTurns).
 	failTurns int
 	failWith  string
+	// Its next resume cannot reload the agent's session (LoseSession).
+	loseSession bool
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
 	openTools []string
 	queued    []queuedInput
@@ -1015,6 +1017,17 @@ func (s *Server) Succeed(id string) {
 	}
 }
 
+// LoseSession has the Run's next resume start the agent in a new session,
+// as lux does when session/load or thread/resume fails: a lux.warning,
+// then a lux.session with another id.
+func (s *Server) LoseSession(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.loseSession = true
+	}
+}
+
 // FailTurns has the Run's next n turns fail at once with err, as
 // TurnError does for every turn.
 func (s *Server) FailTurns(id string, n int, err string) {
@@ -1339,7 +1352,13 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		return
 	}
 	// As lux's shim does: in the record stream, in order with the agent's
-	// own messages.
+	// own messages. A harness that cannot reload its session gets a new
+	// one, and lux says why first.
+	if resumed && run.loseSession {
+		run.loseSession = false
+		run.SessionID = fmt.Sprintf("ses_%s_%d", run.ID, epoch)
+		s.recordEvent(run, "lux.warning", map[string]any{"message": "session/load failed, starting a new session: session not found"})
+	}
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	if !resumed {

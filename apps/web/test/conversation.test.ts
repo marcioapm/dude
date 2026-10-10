@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EventRow } from "@dude/design-system/components";
-import { summarize } from "../src/screens/RunScreen.tsx";
+import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn } from "../src/api/conversation.ts";
@@ -1017,5 +1017,35 @@ describe("images in the conversation", () => {
     expect(human.map((t) => t.attachments.map((a) => a.id))).toEqual([["att_b", "att_a"], ["att_q"], ["att_only"]]);
     // The retry folded into the first turn, which keeps its images.
     expect(human[0]!.directiveId).toBe("dir_2");
+  });
+});
+
+describe("what happened to a talker's agent", () => {
+  const people = { you: null, me: null, all: [], byId: new Map(), names: new Map(), refresh: async () => people, seen: () => false } as unknown as Parameters<typeof renderTurn>[4];
+  const notes = (events: PersistedEvent[]) => project(events).turns.filter((t) => t.kind === "notice");
+
+  test("a session replaced is a notice, rendered as dude's margin note", () => {
+    const turns = notes([ev(EventTypes.SessionReplaced, { from: "ses_a", to: "ses_b", reason: "session/load failed" })]);
+    expect(turns).toEqual([expect.objectContaining({ kind: "notice", notice: "notice", text: "The agent restarted without its earlier conversation." })]);
+    const html = renderToStaticMarkup(createElement("div", null, renderTurn(turns[0]!, "brainstorm", 0, false, people, "El Duderino")));
+    expect(html).toContain("The agent restarted without its earlier conversation.");
+    expect(html).toContain('data-kind="notice"');
+  });
+
+  test("a park after a stopped container or a failed turn says so, not that nobody wrote", () => {
+    expect(notes([
+      ev("run.parked", { reason: "session", stopped: "lost" }),
+      ev("run.parked", { reason: "conductor", failedTurns: 1 }),
+      ev("run.parked", { reason: "conductor" }),
+    ]).map((t) => t.text)).toEqual([
+      "Its container stopped. Nothing is lost: your next message resumes it.",
+      "Parked after its turn failed: your next message resumes it.",
+      expect.stringContaining("Parked while nobody is writing"),
+    ]);
+  });
+
+  test("a failed turn that kept the agent says its turn failed, not the Run", () => {
+    const { turns } = project([ev(EventTypes.RunFailed, { status: "failed", error: "the agent's turn failed: overloaded", kept: true })]);
+    expect(turns).toEqual([expect.objectContaining({ kind: "ended", outcome: "failed", text: "Its turn failed: the agent's turn failed: overloaded" })]);
   });
 });

@@ -269,6 +269,16 @@ export const EventTypes = {
 
   // Agent sessions
   SessionStarted: "agent.session.started",
+  /**
+   * A resumed agent is in a new harness session, not the one it had: lux
+   * could not reload it (session/load, thread/resume failed) and started a
+   * blank one. Payload: `{ from, to, reason, directiveId? }`: the harness
+   * session ids, lux's warning (`""` for none), and for a conductor or a
+   * session's agent the directive that briefs it again.
+   */
+  SessionReplaced: "agent.session.replaced",
+  /** What lux warned about the Run's agent, in its words. Payload: `{ message }`. */
+  AgentWarning: "agent.warning",
   SessionStopped: "agent.session.stopped",
   SubagentStarted: "agent.subagent.started",
   SubagentStopped: "agent.subagent.stopped",
