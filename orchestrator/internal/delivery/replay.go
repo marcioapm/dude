@@ -121,13 +121,12 @@ func renderReplayFrom(start replayStart, events []replayEvent) string {
 	return fitReplay(start, replayEntries(events), replayBudgetTokens)
 }
 
-// replayBudgetTokens bounds a replay, estimated by replayTokens.
-const replayBudgetTokens = 100_000
+// A replay's budget, in tokens estimated at charsPerToken runes each.
+const (
+	replayBudgetTokens = 100_000
+	charsPerToken      = 4
+)
 
-// charsPerToken is the estimate's ratio of characters to tokens.
-const charsPerToken = 4
-
-// replayTokens estimates the tokens of s.
 func replayTokens(s string) int {
 	return (utf8.RuneCountInString(s) + charsPerToken - 1) / charsPerToken
 }
