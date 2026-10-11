@@ -145,6 +145,13 @@ func (tk *talking) resumedAnswering(run, text string) {
 		said := tk.said(run)
 		return len(said) >= 2 && strings.Contains(said[len(said)-1], text)
 	})
+	tk.keptAndResumed(run)
+}
+
+// keptAndResumed checks that run is still the talker's latest Run and has
+// one lux Run, resumed.
+func (tk *talking) keptAndResumed(run string) {
+	tk.t.Helper()
 	luxRuns := 0
 	for _, r := range tk.lux.Runs() {
 		if strings.Contains(string(r.Spec), `"dude.run":"`+run+`"`) {
@@ -315,15 +322,7 @@ func TestAMessageUnreadWhenTheAgentCrashesIsAnsweredAfterTheResume(t *testing.T)
 	for _, kind := range []string{"brainstorm", "conductor"} {
 		t.Run(kind, func(t *testing.T) {
 			tk, run := hangingTalker(t, kind)
-			if status, reached := tk.write("did the build pass?"); status != 200 || reached != run {
-				t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
-			}
-			var id string
-			tk.until("the message accepted by the harness", func() bool {
-				_ = tk.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1
-					AND accepted_at IS NOT NULL AND delivered_at IS NULL`, run).Scan(&id)
-				return id != ""
-			})
+			id := tk.acceptedUnread(run, "did the build pass?")
 			tk.stopOnItsOwn(run, "failed")
 			tk.until("lux to fail it as the agent exited", func() bool {
 				for _, r := range tk.lux.Records(tk.luxRunOf(run)) {
@@ -337,6 +336,14 @@ func TestAMessageUnreadWhenTheAgentCrashesIsAnsweredAfterTheResume(t *testing.T)
 				said := tk.said(run)
 				return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
 			})
+			tk.keptAndResumed(run)
+			answered := 0
+			for _, s := range tk.said(run) {
+				answered += strings.Count(s, "did the build pass?")
+			}
+			if answered != 1 {
+				t.Errorf("the message answered %d times, want once: %q", answered, tk.said(run))
+			}
 			if n := tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NULL AND delivered_at IS NOT NULL`, id); n != 1 {
 				t.Errorf("the message was not delivered unfailed:\n%s", tk.describeRuns())
 			}
