@@ -71,30 +71,34 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 }
 
 // fromCompaction is where the replay starts: the newest compaction summary
-// the agent's harness kept (agent.context.compacted), and the events after
-// it; with none, "" and every event. A summary covers whatever the
-// conversation before it held, a replay a Run was given included, so the
-// newest is enough.
+// the agent's harness kept (agent.context.compacted), with the Run whose
+// agent wrote it, and the events after it; with none, a zero start and
+// every event. A summary covers whatever the conversation before it held,
+// a replay a Run was given included, so the newest is enough.
 // Another source of summaries (a harness's own record) would be read here.
-func fromCompaction(events []replayEvent) (string, []replayEvent) {
+func fromCompaction(events []replayEvent) (replayStart, []replayEvent) {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Type != evContextCompacted {
 			continue
 		}
 		if s, _ := events[i].Payload["summary"].(string); strings.TrimSpace(s) != "" {
-			return s, events[i+1:]
+			return replayStart{summary: s, run: events[i].RunID}, events[i+1:]
 		}
 	}
-	return "", events
+	return replayStart{}, events
 }
+
+// replayStart is the compaction summary a replay starts from ("" for
+// none) and the Run whose agent wrote it.
+type replayStart struct{ summary, run string }
 
 // evContextCompacted is the phase syncer's record of a compaction.
 const evContextCompacted = "agent.context.compacted"
 
 // renderReplayFrom is the summary under its heading, if any, then the
 // events rendered, within the budget.
-func renderReplayFrom(summary string, events []replayEvent) string {
-	return fitReplay(summary, replayEntries(events), replayBudgetTokens)
+func renderReplayFrom(start replayStart, events []replayEvent) string {
+	return fitReplay(start, replayEntries(events), replayBudgetTokens)
 }
 
 // replayBudgetTokens bounds a replay, estimated by replayTokens.
@@ -109,16 +113,16 @@ const outputDropped = "[output dropped]"
 // tool outputs, oldest first, keeping the call; then tool calls whole,
 // oldest first; then the oldest turns whole, said in one line. Words are
 // never cut, and the summary is never dropped.
-func fitReplay(summary string, entries []replayEntry, budget int) string {
+func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 	entries = slices.Clone(entries)
 	limit := budget * 4
 	// Sizes are kept by difference, not re-rendered at each step: a
 	// dropped entry takes its text and the blank line before it.
-	chars := utf8.RuneCountInString(joinReplay(summary, entries, 0))
+	chars := utf8.RuneCountInString(joinReplay(start, entries, 0))
 	// A dropped entry takes its text, its blank line, and the take-over
 	// line before it when it begins a Run's turn.
 	takeOver := make([]int, len(entries))
-	last := ""
+	last := start.run
 	for i, e := range entries {
 		if last != "" && e.run != "" && e.run != last {
 			takeOver[i] = utf8.RuneCountInString(tookOver) + 2
@@ -170,10 +174,10 @@ func fitReplay(summary string, entries []replayEntry, budget int) string {
 	}
 	// The estimate cannot know which take-over lines survive the drops: the
 	// oldest turns go until the rendering itself fits.
-	out := joinReplay(summary, kept, omitted)
+	out := joinReplay(start, kept, omitted)
 	for len(kept) > 0 && utf8.RuneCountInString(out) > limit {
 		kept, omitted = kept[1:], omitted+1
-		out = joinReplay(summary, kept, omitted)
+		out = joinReplay(start, kept, omitted)
 	}
 	return out
 }
@@ -184,13 +188,14 @@ const tookOver = "[A new agent took over here.]"
 func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
 
 // joinReplay renders the summary under its heading, then the entries,
-// after a line saying how many earlier ones were omitted.
-func joinReplay(summary string, entries []replayEntry, omitted int) string {
+// after a line saying how many earlier ones were omitted; a take-over line
+// goes wherever the Run changes, from the summary's Run on.
+func joinReplay(start replayStart, entries []replayEntry, omitted int) string {
 	var b strings.Builder
 	if omitted > 0 {
 		b.WriteString(omittedLine(omitted))
 	}
-	last := ""
+	last := start.run
 	for _, e := range entries {
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
@@ -204,10 +209,10 @@ func joinReplay(summary string, entries []replayEntry, omitted int) string {
 		b.WriteString(e.text())
 	}
 	body := b.String()
-	if summary == "" {
+	if start.summary == "" {
 		return body
 	}
-	out := "## Earlier, as the agent summarised it\n\n" + strings.TrimSpace(summary)
+	out := "## Earlier, as the agent summarised it\n\n" + strings.TrimSpace(start.summary)
 	if body != "" {
 		out += "\n\n## Since then\n\n" + body
 	}
@@ -263,7 +268,7 @@ func (e replayEntry) text() string {
 }
 
 // renderReplay renders the events, in their order, as the agent reads them.
-func renderReplay(events []replayEvent) string { return joinReplay("", replayEntries(events), 0) }
+func renderReplay(events []replayEvent) string { return joinReplay(replayStart{}, replayEntries(events), 0) }
 
 func replayEntries(events []replayEvent) []replayEntry {
 	// A proposal's line says what became of it: its filings come later.

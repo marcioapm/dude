@@ -160,4 +160,23 @@ func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {
 	if strings.Join(types, " ") != "agent.context.compacted chat.message" {
 		t.Errorf("read %v, want the summary and the message after it", types)
 	}
+	// Another Run's agent after the summary's: it took over.
+	w.run("run_s2", "brainstorm")
+	w.event("agent.message", "run_s2", "", `{"text":"NEXT"}`)
+	if got := w.replay(delivery.Talker{SessionID: "ses_r"}); !strings.HasSuffix(got, "## Since then\n\nBo: LATER\n\n[A new agent took over here.]\n\nYou: NEXT") {
+		t.Errorf("replay after another Run:\n%s", got)
+	}
+}
+
+// A summary by one Run's agent and only another Run's events after it: a
+// take-over line between them.
+func TestTheReplayAfterAnotherRunsSummarySaysANewAgentTookOver(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_s1", "brainstorm")
+	w.run("run_s2", "brainstorm")
+	w.event("agent.context.compacted", "run_s1", "", `{"trigger":"auto","summary":"SUM"}`)
+	w.event("chat.message", "run_s2", "per_bo", `{"text":"LATER"}`)
+	if got := w.replay(delivery.Talker{SessionID: "ses_r"}); !strings.HasSuffix(got, "SUM\n\n## Since then\n\n[A new agent took over here.]\n\nBo: LATER") {
+		t.Errorf("replay:\n%s", got)
+	}
 }
