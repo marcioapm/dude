@@ -137,6 +137,24 @@ func TestASessionsReplayCoversItsRuns(t *testing.T) {
 	}
 }
 
+// A person's Retry of a steer that failed is the words' only delivery: it
+// is replayed. A resend of a steer the agent heard repeats it: it is not.
+func TestARetriedSteerIsReplayedOnce(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_c1", "conductor")
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_f', $1, 'run_c1', 'x', now())`, w.org)
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, delivered_at) VALUES ('dir_r', $1, 'run_c1', 'x', now()),
+		('dir_h', $1, 'run_c1', 'x', now()), ('dir_h2', $1, 'run_c1', 'x', now())`, w.org)
+	w.event("run.steered", "run_c1", "per_ana", `{"text":"RETRIED","directiveId":"dir_f"}`)
+	w.event("run.steered", "run_c1", "per_ana", `{"text":"RETRIED","directiveId":"dir_r","supersedes":"dir_f"}`)
+	w.event("run.steered", "run_c1", "per_bo", `{"text":"HEARD","directiveId":"dir_h"}`)
+	w.event("run.steered", "run_c1", "per_bo", `{"text":"HEARD","directiveId":"dir_h2","supersedes":"dir_h","interrupt":true}`)
+	got := w.replay(delivery.Talker{TaskID: "wi_r"})
+	if !strings.HasSuffix(got, "Ana: RETRIED\n\nBo: HEARD") || strings.Count(got, "RETRIED") != 1 || strings.Count(got, "HEARD") != 1 {
+		t.Errorf("replay:\n%s", got)
+	}
+}
+
 // A replay read from the ledger starts at the newest compaction summary:
 // the summary under its heading, then only what came after it.
 func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {
