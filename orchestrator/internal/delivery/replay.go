@@ -69,6 +69,15 @@ const (
 	taskScope    = `(e.task_id = $1 AND e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent'))`
 )
 
+// heardDirective (SQL, over events e; key a literal payload key): the
+// directive the payload names, or a resend of it, reached e's Run. Two legs,
+// so the first is a primary-key probe.
+func heardDirective(key string) string {
+	id := `e.payload->>'` + key + `'`
+	return `(EXISTS (SELECT 1 FROM directives d WHERE d.id = ` + id + ` AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+		OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = ` + id + ` AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL))`
+}
+
 // Replay is the talker's conversation so far under its heading, "" for a
 // talker that has had no Run yet, or whose ledger says nothing worth
 // replaying.
@@ -254,12 +263,8 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
 				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
 			e.payload,
-			NOT (e.payload ? 'directiveId')
-				OR EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
-				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL),
-			e.payload ? 'supersedes' AND (EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'supersedes'
-				AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
-				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'supersedes' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL))
+			NOT (e.payload ? 'directiveId') OR `+heardDirective("directiveId")+`,
+			e.payload ? 'supersedes' AND `+heardDirective("supersedes")+`
 		FROM events e WHERE `+scope+` AND e.event_type = ANY($2)
 			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
 				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
