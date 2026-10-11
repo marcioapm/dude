@@ -499,7 +499,9 @@ func toolCall(tool string, input any) string {
 
 // toolOutput is what the ledger kept of a call's output (toolResult's
 // shape: output, or stdout and stderr, each a head and maybe a tail),
-// capped, with its failure and exit code.
+// with its failure and exit code. Each stored head and tail is capped on
+// its own: the writer keeps them within the cap already, and capping them
+// joined would cut the tail's end, where a command says how it ended.
 func toolOutput(p map[string]any) string {
 	var parts []string
 	for _, k := range []string{"output", "stdout", "stderr"} {
@@ -508,17 +510,17 @@ func toolOutput(p map[string]any) string {
 			continue
 		}
 		head, _ := m["head"].(string)
-		s := head
+		s := capReplay(head)
 		if tail, _ := m["tail"].(string); tail != "" {
 			n, _ := m["omittedBytes"].(float64)
-			s += fmt.Sprintf("\n[… %d bytes cut …]\n", int(n)) + tail
+			s += fmt.Sprintf("\n[… %d bytes cut …]\n", int(n)) + capReplay(tail)
 		}
 		if k == "stderr" {
 			s = "stderr: " + s
 		}
 		parts = append(parts, s)
 	}
-	out := capReplay(strings.Join(parts, "\n"))
+	out := strings.Join(parts, "\n")
 	if status, _ := p["status"].(string); status == "error" {
 		out = "error: " + out
 	}
