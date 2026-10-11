@@ -235,6 +235,38 @@ func TestTheReplayKeepsToItsBudget(t *testing.T) {
 	}
 }
 
+// A dropped tool call can bring two Runs' turns together, adding a
+// take-over line the estimate did not count: the rendering is then over
+// by less than a turn, and the oldest turn left goes whole, never cut.
+func TestTheReplayDropsAWholeTurnWhenItsRenderingIsStillOver(t *testing.T) {
+	a1 := replayEntry{run: "run_a", words: "Ana: " + strings.Repeat("a", 200)}
+	a2 := replayEntry{run: "run_a", words: "You: " + strings.Repeat("y", 200)}
+	tb := replayEntry{run: "run_b", tool: true, call: "t({})", output: strings.Repeat("o", 300)}
+	b1 := replayEntry{run: "run_b", words: "Bo: " + strings.Repeat("b", 200)}
+	b2 := replayEntry{run: "run_b", words: "You: " + strings.Repeat("z", 200)}
+	entries := []replayEntry{a1, a2, tb, b1, b2}
+	// With a1 and the call gone, the estimate leaves out the take-over line
+	// before b1: within budget by it, over by the rendering.
+	rendered := joinReplay("", []replayEntry{a2, b1, b2}, 1)
+	budget := (utf8.RuneCountInString(rendered) - 1) / 4
+	estimate := utf8.RuneCountInString(rendered) - utf8.RuneCountInString(tookOver) - 2
+	if estimate > budget*4 {
+		t.Fatalf("the budget %d is under the estimate %d", budget*4, estimate)
+	}
+	got := fitReplay("", entries, budget)
+	want := "[2 earlier messages omitted]\n\n" + b1.words + "\n\n" + b2.words
+	if got != want {
+		t.Errorf("fitted:\n%s\n\nwant:\n%s", got, want)
+	}
+	for _, p := range strings.Split(got, "\n\n") {
+		for _, e := range entries {
+			if len(p) < len(e.text()) && strings.HasPrefix(e.text(), p) {
+				t.Errorf("a turn cut: %q", p)
+			}
+		}
+	}
+}
+
 // A ledger longer than the budget is rendered within it: the oldest
 // messages said in a line, the newest whole.
 func TestTheRenderedReplayKeepsToTheBudget(t *testing.T) {
