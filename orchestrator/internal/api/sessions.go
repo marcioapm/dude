@@ -40,6 +40,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions/{id}/accept", s.auth(s.acceptSession))
 	mux.Handle("POST /internal/sessions/{id}/decline", s.auth(s.declineSession))
 	mux.Handle("POST /internal/sessions/{id}/file", s.auth(s.fileProposal))
+	mux.Handle("POST /internal/sessions/{id}/model", s.auth(s.setSessionModel))
 	mux.Handle("POST /internal/sessions/{id}/archive", s.auth(s.archiveSession(true)))
 	mux.Handle("POST /internal/sessions/{id}/unarchive", s.auth(s.archiveSession(false)))
 }
@@ -135,6 +136,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 		Title    string      `json:"title"`
 		Projects []linkInput `json:"projects"`
 		Message  *string     `json:"message"`
+		Tier     *string     `json:"tier"`
+		Harness  *string     `json:"harness"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -150,11 +153,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 	}
 	id := ids.New(ids.Session)
 	var runID string
+	chosen := delivery.SessionModel{Tier: body.Tier, Harness: body.Harness}
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := checkSessionModel(r.Context(), tx, chosen); err != nil {
+			return err
+		}
 		// Untitled until its agent or a member names it.
-		if _, err := tx.Exec(r.Context(), `INSERT INTO sessions (id, organization_id, title, titled_by, created_by)
-			VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $3 <> '' THEN 'person' END, $4)`,
-			id, org, title, p.Person); err != nil {
+		if _, err := tx.Exec(r.Context(), `INSERT INTO sessions (id, organization_id, title, titled_by, created_by, tier, harness)
+			VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $3 <> '' THEN 'person' END, $4, $5, $6)`,
+			id, org, title, p.Person, chosen.Tier, chosen.Harness); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by, accepted_at)
@@ -389,7 +396,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 					FROM session_people sp JOIN people pp ON pp.id = sp.person_id WHERE sp.session_id = s.id),
 				'projects', `+sessionProjectsJSON+`,
 				'run', (SELECT json_build_object('id', r.id, 'status', r.status, 'dudePause', r.dude_pause, 'model', r.model,
-					'modelTier', r.model_tier, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL)
+					'modelTier', r.model_tier, 'harness', r.harness, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL)
 					FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1),
 				'runs', (SELECT COALESCE(json_agg(r.id ORDER BY r.created_at), '[]') FROM runs r WHERE r.session_id = s.id),
 				'costUsd', (SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.session_id = s.id),
@@ -415,8 +422,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 			id, p.Person).Scan(&archived); err != nil {
 			return err
 		}
+		model, err := sessionModelView(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
 		out = map[string]any{"session": session, "you": map[string]any{"id": p.Person, "role": role, "archived": archived},
-			"proposals": proposals, "question": question}
+			"proposals": proposals, "question": question, "model": model}
 		return nil
 	})
 	if err != nil {

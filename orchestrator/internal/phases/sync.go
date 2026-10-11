@@ -1078,8 +1078,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, settings); err != nil || noTier != "" {
 			return err
-		} else if noTier = harnessMisfit(settings, tier, settingsRole); noTier != "" {
-			return nil
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err

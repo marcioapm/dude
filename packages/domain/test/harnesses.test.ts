@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { harnessMisfit, harnessSchema, modelProvider, resolveHarness } from "../src/harnesses.ts";
+import { harnessSchema, resolveHarness } from "../src/harnesses.ts";
 import { agentModelConfigSchema, storedAgentModelsSchema } from "../src/hierarchy.ts";
 import { settingsPatchSchema } from "../src/settings.ts";
 
@@ -24,20 +24,5 @@ describe("a role's harness", () => {
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "codex" } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: null } } }).success).toBe(true);
     expect(settingsPatchSchema.safeParse({ roles: { implementer: { harness: "Codex" } } }).success).toBe(false);
-  });
-
-  test("fits a model by its provider: Claude Code Anthropic's, Codex OpenAI's, OpenCode both", () => {
-    expect(modelProvider("claude-sonnet-5")).toBe("anthropic");
-    expect(modelProvider("gpt-6-sol")).toBe("openai");
-    expect(modelProvider("my-claude")).toBe("openai");
-    expect(harnessMisfit("claude-code", "claude-sonnet-5")).toBeNull();
-    expect(harnessMisfit("claude-code", "gpt-6-sol")).toContain("Claude Code runs only Anthropic models");
-    expect(harnessMisfit("codex", "gpt-6-sol")).toBeNull();
-    expect(harnessMisfit("codex", "claude-sonnet-5")).toContain("Codex runs only OpenAI models");
-    expect(harnessMisfit("opencode", "claude-sonnet-5")).toBeNull();
-    expect(harnessMisfit("opencode", "gpt-6-sol")).toBeNull();
-    // Nothing to check: no model yet, or the scripted agent, which plays any.
-    expect(harnessMisfit("codex", null)).toBeNull();
-    expect(harnessMisfit("codex", "fake/scripted")).toBeNull();
   });
 });

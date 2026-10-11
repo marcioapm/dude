@@ -21,7 +21,7 @@ import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
-import { AGENT_CHATTER, useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
@@ -39,6 +39,7 @@ import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { SessionsScreen } from "./screens/SessionsScreen.tsx";
 import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
+import { forgetModelOptions } from "./sessionModel.ts";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
 import { DudeMark } from "./DudeMark.tsx";
@@ -229,12 +230,20 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400,
     (e) => {
       if (people.seen(e)) return true;
+      // A tier added, edited or removed, or the Brainstorm setting changed: the model pickers read them again.
+      if (e.eventType === EventTypes.SettingsUpdated) forgetModelOptions(client);
       if (e.sessionId?.startsWith("ssn_") || e.eventType.startsWith("session.")) {
         if (SESSION_LIST_EVENTS.has(e.eventType)) void reloadSessions.current();
         return true;
       }
       return QUIET_EVENTS.has(e.eventType);
     });
+  // A settings change missed while the stream was down is never replayed: the model pickers read again.
+  const wasStream = useRef(stream);
+  useEffect(() => {
+    if (cameBack(wasStream.current, stream)) forgetModelOptions(client);
+    wasStream.current = stream;
+  }, [stream, client]);
 
   const selected = treeSelection(place);
 

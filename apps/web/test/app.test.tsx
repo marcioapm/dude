@@ -6,7 +6,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, mount, settle, until } from "./dom.ts";
+import { click, emitForTest, mount, settle, until } from "./dom.ts";
+import { EventTypes } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
@@ -285,6 +286,53 @@ describe("home", () => {
     await settle(50);
     expect(window.location.hash).toBe(away);
     expect(localStorage.getItem(draftKey(YOU, WELCOME_DRAFT))).toBeNull();
+  });
+});
+
+describe("the welcome's model picker", () => {
+  test("is read once across visits, and again after the organisation's settings or tiers change", async () => {
+    class Counting extends FixtureClient {
+      reads = 0;
+      override modelTiers() {
+        this.reads++;
+        return super.modelTiers();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app("#/", client);
+    const picker = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    const revisit = async () => {
+      await act(async () => {
+        window.location.hash = `#/project/${PROJECT.id}`;
+      });
+      await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+      await click(page.querySelector("[data-testid=brand-home]")!);
+      await until(picker, "the picker again");
+    };
+    await until(picker, "the picker");
+    await revisit();
+    expect(client.reads).toBe(1);
+    await emitForTest(EventTypes.SettingsUpdated, { scope: "organization", changed: { modelTiers: {} } });
+    await revisit();
+    expect(client.reads).toBe(2);
+  });
+
+  test("is read again after the stream comes back: a settings change it missed is never replayed", async () => {
+    class Counting extends FixtureClient {
+      reads = 0;
+      override modelTiers() {
+        this.reads++;
+        return super.modelTiers();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app("#/", client);
+    const picker = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    await until(picker, "the picker");
+    expect(client.reads).toBe(1);
+    // The network back: every stream reopens, reconnecting until it is live.
+    await act(async () => void window.dispatchEvent(new Event("online")));
+    await until(() => (client.reads === 2 ? true : null), "the tiers read again");
   });
 });
 

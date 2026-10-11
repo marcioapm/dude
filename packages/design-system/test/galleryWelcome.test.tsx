@@ -10,6 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
 import { WelcomeSection } from "../src/gallery/sections/Welcome.tsx";
+import { accessibleName, allByRole } from "./queries.ts";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -35,7 +36,7 @@ const FRAMES = ["comfortable dark", "comfortable light", "compact dark", "compac
 test("every Welcome block renders in dark and light, comfortable and compact", async () => {
   const el = await mount();
   const blocks = [...el.querySelectorAll("section#welcome [id^='wl-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["wl-shell", "wl-first", "wl-rail", "wl-starters", "wl-links", "wl-recent"]);
+  expect(blocks.map((b) => b.id)).toEqual(["wl-shell", "wl-first", "wl-rail", "wl-starters", "wl-links", "wl-model", "wl-recent"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll(":scope [data-theme][data-density]")].filter((p) => !p.parentElement!.closest("[data-theme]"));
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);
@@ -69,4 +70,46 @@ test("ComposerLinks: none, two, read only, and the menu drawn open inside its pa
   expect(links[1]!.querySelectorAll("[data-project]").length).toBe(2);
   expect(links[2]!.querySelectorAll("button").length).toBe(0);
   expect(pane.querySelector("[role=menu]")).not.toBeNull();
+});
+
+test("ModelPicker: default, chosen, read only, and one menu open in its pane offering every pair, only a tier with no model refused", async () => {
+  const el = await mount();
+  const panes = [...el.querySelectorAll("#wl-model [data-theme][data-density]")];
+  expect(panes.length).toBe(FRAMES.length);
+  for (const pane of panes) {
+    expect(pane.querySelector("[data-testid=model-default] [data-testid=model-picker]")!.getAttribute("aria-label"))
+      .toBe("Model: Claude (High) on Claude Code (organisation default)");
+    expect(pane.querySelector("[data-testid=model-chosen] [data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Sol on OpenCode");
+    const readOnly = pane.querySelector("[data-testid=model-readonly]")!;
+    expect(readOnly.querySelectorAll("button").length).toBe(0);
+    expect(readOnly.textContent).toContain("Coder· Claude Code");
+    // One menu per frame, under its own chip.
+    const menus = [...pane.querySelectorAll("[data-testid=model-menu] [role=menu]")];
+    expect(menus.length).toBe(1);
+    expect(pane.querySelectorAll("[role=menu]").length).toBe(2);
+    const items = allByRole(menus[0]!, "menuitemradio");
+    const item = (name: string) => items.find((r) => accessibleName(r).startsWith(name))!;
+    // On Claude Code, the GPT tier and Codex are offered as any other.
+    expect(item("Sol").getAttribute("aria-disabled")).not.toBe("true");
+    expect(item("Sol").textContent).toBe("Solgpt-6-sol");
+    expect(item("Codex").getAttribute("aria-disabled")).not.toBe("true");
+    expect(items.filter((r) => r.getAttribute("aria-disabled") === "true").map((r) => accessibleName(r))).toEqual([accessibleName(item("Fast"))]);
+    expect(item("Fast").textContent).toContain("names no model yet");
+  }
+  // The welcome's own composer carries the picker right after "To Brainstorm".
+  const shell = el.querySelector("#wl-shell [data-shot]")!;
+  expect(shell.querySelector("[data-testid=composer-to] + [data-testid=model-picker]")).not.toBeNull();
+});
+
+test("ModelPicker's menu when the tiers could not be read: the note atop it, as the menu's description, in every frame", async () => {
+  const el = await mount();
+  const panes = [...el.querySelectorAll("#wl-model [data-theme][data-density]")];
+  for (const pane of panes) {
+    const menus = [...pane.querySelectorAll("[data-testid=model-menu-note] [role=menu]")];
+    expect(menus.length).toBe(1);
+    const described = (menus[0]!.getAttribute("aria-describedby") ?? "").split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(" ");
+    expect(described).toBe("Could not load the tiers");
+    // No tier but the organisation's default is listed: the note says why.
+    expect(allByRole(menus[0]!, "menuitemradio").filter((r) => r.closest("[role=group]")?.getAttribute("data-testid") === "rowmenu-group-tier").length).toBe(1);
+  }
 });

@@ -1,5 +1,5 @@
 import * as RadixMenu from "@radix-ui/react-dropdown-menu";
-import { forwardRef, type KeyboardEvent, type MouseEvent, type ReactNode, type SyntheticEvent } from "react";
+import { forwardRef, useId, type KeyboardEvent, type MouseEvent, type ReactNode, type SyntheticEvent } from "react";
 import { cx } from "../util/cx.ts";
 import { compact } from "../util/compact.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
@@ -20,6 +20,10 @@ export interface RowMenuAction {
   readonly description?: string | undefined;
   /** Set the label in mono: a name, a path, a `{{variable}}`. */
   readonly mono?: boolean | undefined;
+  /** Set the description in mono: the model a tier requests. */
+  readonly descriptionMono?: boolean | undefined;
+  /** Let the description wrap instead of being cut: a sentence that must be read whole (why it is refused). */
+  readonly descriptionWraps?: boolean | undefined;
   /** Danger: the action loses work. Rendered in danger ink; still needs a confirm dialog behind it. */
   readonly tone?: "default" | "danger" | undefined;
   readonly disabled?: boolean | undefined;
@@ -42,7 +46,30 @@ export interface RowMenuSubmenu {
   readonly disabledReason?: string | undefined;
 }
 
-export type RowMenuItem = RowMenuAction | RowMenuSeparator | RowMenuSubmenu;
+/**
+ * One choice of several under a small caps heading ("Model tier"): its
+ * items are `menuitemradio`s, the chosen one ticked in the glyph's place.
+ * Each item's `id` is its value; picking one calls `onValueChange` with it.
+ */
+export interface RowMenuRadioGroup {
+  readonly kind: "radio";
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly items: ReadonlyArray<RowMenuAction>;
+  readonly onValueChange: (value: string) => void;
+  /** A pick leaves the menu open, for a menu of several groups chosen together. Escape or a click outside closes it. */
+  readonly keepOpen?: boolean | undefined;
+}
+
+/** A muted line that is not an item: what the menu could not show ("Could not load the tiers"). */
+export interface RowMenuNote {
+  readonly kind: "note";
+  readonly id: string;
+  readonly text: string;
+}
+
+export type RowMenuItem = RowMenuAction | RowMenuSeparator | RowMenuSubmenu | RowMenuRadioGroup | RowMenuNote;
 
 export interface RowMenuProps {
   readonly items: ReadonlyArray<RowMenuItem>;
@@ -84,6 +111,9 @@ export interface RowMenuProps {
  * spreads `rowMenuOpeners`, on right-click. Portaled above dialogs.
  */
 export function RowMenu({ items, label = "More actions", size = "sm", trigger, open, defaultOpen, onOpenChange, onSelect, align = "end", side = "bottom", onCloseAutoFocus, className, triggerClassName, forceMount, container }: RowMenuProps) {
+  // A note is no item, so a screen reader's menu mode skips it: the menu names it as its description.
+  const noteIds = useId();
+  const described = items.flatMap((it) => (it.kind === "note" ? [noteId(noteIds, it.id)] : [])).join(" ");
   return (
     <RadixMenu.Root modal={false} {...compact({ open, defaultOpen, onOpenChange })}>
       <RadixMenu.Trigger asChild>
@@ -96,14 +126,18 @@ export function RowMenu({ items, label = "More actions", size = "sm", trigger, o
           side={side}
           sideOffset={4}
           collisionPadding={8}
+          // A preview stays under its own trigger wherever the page is scrolled: flipped or shifted
+          // into the viewport it lands over the next pane's.
+          avoidCollisions={!forceMount}
           loop
           onClick={stop}
           onKeyDown={stopIfActivation}
           onContextMenu={swallow}
           {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}
           {...(forceMount ? { forceMount } : {})}
+          {...(described ? { "aria-describedby": described } : {})}
         >
-          <MenuItems items={items} onSelect={onSelect} />
+          <MenuItems items={items} onSelect={onSelect} noteIds={noteIds} />
         </RadixMenu.Content>
       </RadixMenu.Portal>
     </RadixMenu.Root>
@@ -142,11 +176,21 @@ export function focusIsFree(doc: { readonly activeElement: Element | null; reado
   return el === null || el === doc.body;
 }
 
-function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuItem>; readonly onSelect: ((id: string) => void) | undefined }) {
+const noteId = (noteIds: string, id: string) => `${noteIds}note-${id}`;
+
+function MenuItems({ items, onSelect, noteIds }: {
+  readonly items: ReadonlyArray<RowMenuItem>;
+  readonly onSelect: ((id: string) => void) | undefined;
+  readonly noteIds: string;
+}) {
   return (
     <>
       {items.map((it, i) => {
         if (it.kind === "separator") return <RadixMenu.Separator key={`sep-${i}`} className={styles["separator"]} />;
+        if (it.kind === "radio") return <RadioGroup key={it.id} group={it} />;
+        if (it.kind === "note") {
+          return <RadixMenu.Label key={it.id} id={noteId(noteIds, it.id)} className={styles["note"]} data-testid={`rowmenu-${it.id}`}>{it.text}</RadixMenu.Label>;
+        }
         if (it.kind === "submenu") {
           const disabled = it.disabled === true;
           return (
@@ -159,7 +203,7 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
               </WithReason>
               <RadixMenu.Portal>
                 <RadixMenu.SubContent className={styles["content"]} sideOffset={2} alignOffset={-4} collisionPadding={8} loop onClick={stop} onKeyDown={stopIfActivation} onContextMenu={swallow}>
-                  <MenuItems items={it.items} onSelect={onSelect} />
+                  <MenuItems items={it.items} onSelect={onSelect} noteIds={noteIds} />
                 </RadixMenu.SubContent>
               </RadixMenu.Portal>
             </RadixMenu.Sub>
@@ -187,6 +231,43 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
           </WithReason>
         );
       })}
+    </>
+  );
+}
+
+function RadioGroup({ group }: { readonly group: RowMenuRadioGroup }) {
+  const labelId = useId();
+  return (
+    <>
+      <RadixMenu.Label id={labelId} className={cx("ds-label", styles["groupLabel"])}>{group.label}</RadixMenu.Label>
+      <RadixMenu.RadioGroup value={group.value} onValueChange={group.onValueChange} aria-labelledby={labelId}
+        data-testid={`rowmenu-group-${group.id}`}>
+        {group.items.map((it) => {
+          const disabled = it.disabled === true;
+          const reason = disabled ? it.disabledReason : undefined;
+          return (
+            <WithReason key={it.id} reason={reason}>
+              <RadixMenu.RadioItem value={it.id} disabled={disabled} data-testid={`rowmenu-${it.id}`}
+                className={cx(styles["item"], it.description && styles["twoLine"])}
+                onSelect={(e) => {
+                  if (group.keepOpen) e.preventDefault();
+                  it.onSelect?.();
+                }}>
+                <span className={styles["icon"]} aria-hidden>
+                  <RadixMenu.ItemIndicator><Icon name="check" size={12} /></RadixMenu.ItemIndicator>
+                </span>
+                {it.description ? (
+                  <span className={styles["label"]}>
+                    <span className={styles["name"]}>{it.label}</span>
+                    <span className={cx(styles["description"], it.descriptionMono && styles["mono"], it.descriptionWraps && styles["wraps"])}>{it.description}</span>
+                  </span>
+                ) : <span className={styles["label"]}>{it.label}</span>}
+                {reason ? <span className="ds-sr-only">. {reason}</span> : null}
+              </RadixMenu.RadioItem>
+            </WithReason>
+          );
+        })}
+      </RadixMenu.RadioGroup>
     </>
   );
 }

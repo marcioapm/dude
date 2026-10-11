@@ -607,6 +607,52 @@ def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_p
     assert console_errors == []
 
 
+# For each composer width: every link chip's box against "To …" and its aside,
+# and what a press at the centre of each chip's close reaches.
+_COMPOSER_ROW_AT_WIDTHS = """(form, widths) => {
+    const box = (el) => el.getBoundingClientRect();
+    const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const to = form.querySelector('[data-testid="composer-to"]');
+    const header = [to, to.nextElementSibling];
+    const found = [];
+    for (const w of widths) {
+        form.style.width = w + 'px';
+        form.scrollIntoView({block: 'center'});
+        for (const chip of form.querySelectorAll('[data-testid="composer-links"] [data-project]')) {
+            const c = box(chip);
+            for (const h of header) if (meets(c, box(h))) found.push({w, chip: chip.textContent, covers: h.textContent});
+            const close = chip.querySelector('button');
+            const b = box(close);
+            const hit = document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2);
+            if (!close.contains(hit)) found.push({w, chip: chip.textContent, pressReaches: hit && hit.outerHTML.slice(0, 80)});
+        }
+    }
+    form.style.width = '';
+    return found;
+}"""
+
+
+def test_the_welcome_composers_header_never_covers_its_link_chips(gallery_page: Page, console_errors: list):
+    """With two projects linked, "To Brainstorm" and its model chip never lie over a link chip, and a
+    press on a chip's close reaches the close, at every width the welcome's composer takes (720 down
+    to a 320px phone)."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 1000})
+    gallery_page.get_by_role("link", name="Welcome + sidebar").click()
+    form = gallery_page.locator("#wl-shell [data-theme]").first.locator("form")
+    for _ in range(2):
+        trigger = form.get_by_test_id("composer-link")
+        trigger.click()
+        # The menu this press opened: the gallery also draws a link menu open for show.
+        menu = gallery_page.locator(f"[id='{trigger.get_attribute('aria-controls')}']")
+        menu.get_by_role("menuitem").first.click()
+        expect(menu).to_have_count(0)
+    expect(form.locator("[data-project]")).to_have_count(2)
+    expect(form.get_by_role("button", name="Model:")).to_be_visible()
+    found = form.evaluate(_COMPOSER_ROW_AT_WIDTHS, list(range(720, 319, -10)))
+    assert found == [], found
+    assert console_errors == []
+
+
 def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, console_errors: list):
     """PublishedFiles: the rail's Files, each by its own name with the folder in its tooltip, then N more."""
     gallery_page.get_by_role("link", name="PublishedFiles", exact=True).click()

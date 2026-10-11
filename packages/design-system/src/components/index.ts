@@ -136,6 +136,8 @@ export { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch, UsedBy 
 export type { FitBarProps, MachineChipProps, ProportionBarProps, ProportionSegment } from "./Machines.tsx";
 export { FlowSteps, NameChips, TierChip, TierLine, TierMark, TierTip } from "./Tiers.tsx";
 export type { FlowStep, TierChipProps, TierTone } from "./Tiers.tsx";
+export { ModelPicker, effectiveModel, modelWords } from "./ModelPicker.tsx";
+export type { ModelChoice, ModelPickerProps, PickerTier } from "./ModelPicker.tsx";
 export { CodeEditor } from "./CodeEditor.tsx";
 export type { CodeEditorProps, CodeDiagnostic, CodeCompletion, CodeCompletionContext } from "./CodeEditor.tsx";
 export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";

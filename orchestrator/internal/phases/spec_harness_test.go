@@ -17,9 +17,9 @@ import (
 
 // What dude sends lux for a role on each harness, byte for byte, for a
 // Claude and a GPT model at each kind of effort (unset, none, high), with
-// the tier's headers and extra args: one golden file per harness. A model
-// the harness cannot run is not built: the golden holds the reason its Run
-// fails with.
+// the tier's headers and extra args: one golden file per harness. Every
+// harness takes every model (the LLM proxy translates), so every pair is
+// built.
 func TestEachHarnessesSpecIsTheGoldenOne(t *testing.T) {
 	options := map[string]any{"args": []any{"--extra", "x y"}, "sendReasoning": true}
 	codexOptions := map[string]any{"args": []any{"--extra", "-c", `model_verbosity="low"`, "-c", "model_reasoning_summary=detailed"},
@@ -31,10 +31,6 @@ func TestEachHarnessesSpecIsTheGoldenOne(t *testing.T) {
 			for _, model := range []string{"claude-sonnet-5", "gpt-6-sol"} {
 				for _, effort := range []string{"", "none", "high"} {
 					key := model + " effort=" + effort
-					if why := harnessMisfit(delivery.RoleSettings{Harness: harness}, delivery.Tier{Name: "Coder", Model: model}, "implementer"); why != "" {
-						cases[key] = map[string]string{"refused": why}
-						continue
-					}
 					c, in := goldenInput(model)
 					in.Harness, in.Effort, in.Headers = harness, effort, headers
 					switch harness {
@@ -133,23 +129,32 @@ func TestClaudeCodeIsGivenTheProxysURLWithoutV1(t *testing.T) {
 	}
 }
 
-// A role on a harness that cannot run its tier's model fails its Run,
-// saying which and why; OpenCode runs both, and the scripted agent stands
-// in for any harness.
-func TestAHarnessThatCannotRunItsTiersModelIsSaidSo(t *testing.T) {
-	for _, tc := range []struct{ harness, model, want string }{
-		{delivery.HarnessClaudeCode, "gpt-6-sol", "The Implementer runs on Claude Code, which takes an Anthropic model (claude-…), but its tier Coder requests gpt-6-sol. An admin picks another harness or tier in Agents."},
-		{delivery.HarnessCodex, "claude-sonnet-5", "The Implementer runs on Codex, which takes an OpenAI model, but its tier Coder requests claude-sonnet-5. An admin picks another harness or tier in Agents."},
-		{delivery.HarnessClaudeCode, "claude-sonnet-5", ""},
-		{delivery.HarnessCodex, "gpt-6-sol", ""},
-		{delivery.HarnessOpenCode, "gpt-6-sol", ""},
-		{"", "claude-sonnet-5", ""},
-		{delivery.HarnessCodex, "fake/scripted", ""},
-	} {
-		got := harnessMisfit(delivery.RoleSettings{Harness: tc.harness}, delivery.Tier{Name: "Coder", Model: tc.model}, "implementer")
-		if got != tc.want {
-			t.Errorf("%s on %s: %q, want %q", tc.model, tc.harness, got, tc.want)
-		}
+// Claude Code on a GPT model and Codex on a Claude one are built for the
+// model the tier names: Claude Code's command carries it, Codex's
+// config.toml names it, and the proxy translates.
+func TestAnyHarnessIsBuiltForAnyModel(t *testing.T) {
+	c, in := goldenInput("gpt-6-sol")
+	in.Harness = delivery.HarnessClaudeCode
+	spec := buildSpec(c, in)
+	if spec.Workload.Adapter != delivery.HarnessClaudeCode {
+		t.Errorf("adapter = %s", spec.Workload.Adapter)
+	}
+	if i := slices.Index(spec.Workload.Command, "--model"); i < 0 || i+1 >= len(spec.Workload.Command) || spec.Workload.Command[i+1] != "gpt-6-sol" {
+		t.Errorf("Claude Code command = %v, want --model gpt-6-sol", spec.Workload.Command)
+	}
+
+	c, in = goldenInput("claude-sonnet-5")
+	in.Harness = delivery.HarnessCodex
+	spec = buildSpec(c, in)
+	if spec.Workload.Adapter != delivery.HarnessCodex {
+		t.Errorf("adapter = %s", spec.Workload.Adapter)
+	}
+	i := slices.IndexFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "CODEX_CONFIG" })
+	if i < 0 {
+		t.Fatal("no CODEX_CONFIG secret")
+	}
+	if got := parsedCodexTOML(t, spec.Secrets[i].Value)["model"]; got != "claude-sonnet-5" {
+		t.Errorf("Codex config model = %v, want claude-sonnet-5", got)
 	}
 }
 

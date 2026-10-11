@@ -113,6 +113,15 @@ describe("ComposerLinks", () => {
 });
 
 describe("ChatComposer variant", () => {
+  test("toAside sits right after to, and only with it", async () => {
+    const el = await mount(<>
+      <ChatComposer mode="chat" to={<>To <b>Brainstorm</b></>} toAside={<button type="button">aside</button>} onSubmit={() => undefined} data-testid="with" />
+      <ChatComposer mode="chat" toAside={<button type="button">aside</button>} onSubmit={() => undefined} data-testid="without" />
+    </>);
+    expect(el.querySelector("[data-testid=with] [data-testid=composer-to]")!.nextElementSibling!.textContent).toBe("aside");
+    expect(el.querySelector("[data-testid=without]")!.textContent).not.toContain("aside");
+  });
+
   test("stage marks the composer as the stage's; the default does not", async () => {
     const el = await mount(<>
       <ChatComposer mode="chat" variant="stage" onSubmit={() => undefined} data-testid="staged" />

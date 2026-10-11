@@ -201,3 +201,42 @@ What the build decided where this page left it open:
   writers keep the "Write to start…" line and a focused composer, its
   readers "Nobody has written here yet."
 - No token, tone, radius or border exception was added.
+
+## Model and harness
+
+A session's agent runs on the organisation's **Brainstorm** setting
+(Settings → Agents) unless the session chooses otherwise. The welcome's
+composer says which, after "To **Brainstorm**": `ModelPicker` in
+`ChatComposer`'s `toAside`, a quiet chip reading the effective pair
+("Thinker · Claude Code", "default" while both follow the organisation).
+Its menu has two groups, **Model tier** and **Harness**, each led by
+"Organisation default (…)".
+
+- **Each half is the session's own or the organisation's**, independently
+  (`sessions.tier`, `sessions.harness`, migration 106; NULL follows). The
+  welcome sends only what was chosen, so a session left alone keeps
+  following the organisation when its setting changes.
+- **Any harness takes any tier's model, and the LLM proxy translates.**
+  No pair is refused, disabled or annotated. Only a tier naming no model
+  is disabled ("names no model yet"), and the orchestrator refuses it, an
+  unknown tier or another organisation's, or an unknown harness, with a
+  400, on create and on `/model`.
+- **A change applies at the agent's next start, never mid-turn.** The
+  rail's **Model** block carries the same picker for the owner (everyone
+  else reads it); a change records `session.model.changed`, which the Chat
+  shows ("Ana set the model to Opus (High) · Claude Code; it applies the
+  next time the agent starts"). A live or parked agent resumes on what it
+  was submitted with. The owner's chip is a button at once; its menu reads
+  the organisation's tiers when it first opens, and says "Could not load
+  the tiers" when it cannot. A pick shows at once and the detail takes
+  over once the last pick is answered; a failed pick cancels the picks
+  queued behind it, which carried its half.
+- **A tier removed falls back.** A trigger on `model_tiers` sets each
+  session that chose it back to the organisation's tier, under the row's
+  lock, and records `session.model.fallback` on each one it changed, so
+  its members are told (`ON DELETE SET NULL` stays as the net).
+- **The header** says "Brainstorm · <tier> · <harness>": a live agent's as
+  its Run records them; with none live, what the next start would use,
+  "(organisation default)" when it follows.
+- Out of scope: a session's own effort (a tier carries it), machine size or
+  image.

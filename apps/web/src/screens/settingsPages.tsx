@@ -32,9 +32,7 @@ import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-s
 import {
   DEFAULT_HARNESS,
   HARNESSES,
-  HARNESS_DESCRIPTION,
   HARNESS_LABEL,
-  harnessMisfit,
   PROMPT_VARIABLES,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
@@ -146,7 +144,7 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
         <Source scope={scope} setting={r.enabled} reset={() => void set({ enabled: null }, "Back to " + orgName + "’s")} />
       ) : null}
       <SettingFields>
-        <HarnessField scope={scope} role={role} tiers={tiers} />
+        <HarnessField scope={scope} role={role} />
         <TierField scope={scope} role={role} tiers={tiers} tiersProblem={tiersProblem ?? null} onManageTiers={onManageTiers} />
         {role === "conductor" ? null : (
           <SettingField
@@ -179,11 +177,9 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
 
 /**
  * The harness a role's sessions run on: OpenCode, Claude Code or Codex,
- * apart from the tier it asks for. Layered as the machine is. A harness
- * that cannot run the tier's model is warned of here and still saved: the
- * Run fails saying so when it is built.
+ * apart from the tier it asks for. Layered as the machine is.
  */
-function HarnessField({ scope, role, tiers }: { scope: SettingsScope; role: SettingsRole; tiers: readonly ModelTier[] | null }) {
+function HarnessField({ scope, role }: { scope: SettingsScope; role: SettingsRole }) {
   const { settings } = scope;
   const h = settings.roles[role].harness;
   const project = isProject(settings);
@@ -194,11 +190,9 @@ function HarnessField({ scope, role, tiers }: { scope: SettingsScope; role: Sett
   const offersInherit = project || fixer;
   const inheritLabel = fixer ? "The implementer’s" : `From ${orgName}`;
   const set = (harness: Harness | null, done: string) => void scope.patch({ roles: { [role]: { harness } } }, done);
-  const model = tiers?.find((t) => t.id === settings.roles[role].tier.value)?.model ?? null;
-  const misfit = harnessMisfit(h.value, model);
   const options = [
     ...(offersInherit ? [{ value: INHERIT_HARNESS, label: `${inheritLabel} · ${HARNESS_LABEL[inherited]}` }] : []),
-    ...HARNESSES.map((x) => ({ value: x, label: HARNESS_LABEL[x], description: HARNESS_DESCRIPTION[x] })),
+    ...HARNESSES.map((x) => ({ value: x, label: HARNESS_LABEL[x] })),
   ];
   return (
     <SettingField
@@ -213,7 +207,6 @@ function HarnessField({ scope, role, tiers }: { scope: SettingsScope; role: Sett
         value={own ?? (offersInherit ? INHERIT_HARNESS : DEFAULT_HARNESS)} options={options}
         hint="The coding agent that runs it. The model tier below says which model it asks for."
         onValueChange={(v) => set(v === INHERIT_HARNESS ? null : (v as Harness), v === INHERIT_HARNESS ? "Harness reset" : "Harness saved")} />
-      {misfit ? <Callout tone="attention" data-testid="role-harness-misfit">{misfit}</Callout> : null}
     </SettingField>
   );
 }

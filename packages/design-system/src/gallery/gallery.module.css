@@ -402,6 +402,13 @@
   padding: 0;
   gap: 0;
 }
+/* The app's muted line under the rail's model picker (apps/web .sessionModelNote). */
+.railNote {
+  display: block;
+  margin-top: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
 /* Stand-in for the app's face in the Welcome's mark slot: the design system has no dude asset. */
 .standInMark {
   display: grid;

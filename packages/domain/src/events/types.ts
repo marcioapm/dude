@@ -93,6 +93,17 @@ export const EventTypes = {
    */
   BrainstormRenamed: "session.renamed",
   /**
+   * The owner chose the session's model tier and harness; each null follows
+   * the organisation's Brainstorm setting. It applies at the agent's next
+   * start. Payload: `{ by, tier: { id, name } | null, harness: Harness | null }`.
+   */
+  BrainstormModelChanged: "session.model.changed",
+  /**
+   * The tier the session chose was removed: it follows the organisation's
+   * again. Written by the database (migration 106). Payload: `{ tier: { id, name } }`.
+   */
+  BrainstormModelFallback: "session.model.fallback",
+  /**
    * A member has the session open, or no longer. Live only, never in the
    * ledger, and only to the session's members. Payload: `{ personId, open }`.
    */
