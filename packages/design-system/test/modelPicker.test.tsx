@@ -14,11 +14,12 @@ import { accessibleName, allByRole, byRole } from "./queries.ts";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
-afterEach(async () => {
+async function unmount(): Promise<void> {
   await act(async () => root?.unmount());
   host?.remove();
   root = host = null;
-});
+}
+afterEach(unmount);
 
 async function mount(el: React.ReactElement): Promise<HTMLElement> {
   host = document.createElement("div");
@@ -88,8 +89,7 @@ describe("ModelPicker", () => {
     await act(async () => radio("Codex").click());
     await act(async () => radio("Sol").click());
     expect(picked).toEqual([{ tier: null, harness: "codex" }, { tier: SOL.id, harness: null }]);
-    await act(async () => root?.unmount());
-    host?.remove();
+    await unmount();
 
     // The reverse: on Sol and Codex, the Claude tier and the organisation's Claude Code.
     const chosen = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={{ tier: SOL.id, harness: "codex" }} onChange={() => undefined} />);

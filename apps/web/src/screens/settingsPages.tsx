@@ -177,8 +177,7 @@ export function RolePage({ scope, role, sizes, tiers, tiersProblem, images, onOp
 
 /**
  * The harness a role's sessions run on: OpenCode, Claude Code or Codex,
- * apart from the tier it asks for. Layered as the machine is. Any harness
- * takes any tier's model; the LLM proxy translates.
+ * apart from the tier it asks for. Layered as the machine is.
  */
 function HarnessField({ scope, role }: { scope: SettingsScope; role: SettingsRole }) {
   const { settings } = scope;
