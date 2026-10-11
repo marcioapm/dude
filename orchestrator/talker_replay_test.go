@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // prompt is the briefing a Run was started with (runs.prompt), from which
@@ -120,24 +122,167 @@ func TestAHandedOverMessageIsBriefedOnce(t *testing.T) {
 
 			answer := tk.said(next)[0]
 			third := tk.replaced(next, "and the docs?")
-			p = tk.prompt(third)
-			replay := strings.Index(p, "## The conversation so far")
-			if replay < 0 {
-				t.Fatalf("the third Run has no replay:\n%s", p)
+			tk.replayedOnceBeforeItsAnswer(third, "did the build pass?", answer)
+		})
+	}
+}
+
+// replayedOnceBeforeItsAnswer checks that run's replay has a person saying
+// text once, before the agent's answer to it. The answer quotes the
+// message: only a person's lines count.
+func (tk *talking) replayedOnceBeforeItsAnswer(run, text, answer string) {
+	tk.t.Helper()
+	p := tk.prompt(run)
+	replay := strings.Index(p, "## The conversation so far")
+	if replay < 0 {
+		tk.t.Fatalf("Run %s has no replay:\n%s", run, p)
+	}
+	lines := strings.Split(p[replay:], "\n\n")
+	message, reply := -1, slices.Index(lines, "You: "+answer)
+	for i, l := range lines {
+		if strings.HasSuffix(l, ": "+text) && !strings.HasPrefix(l, "You") {
+			if message >= 0 {
+				tk.t.Errorf("%q is in the replay twice:\n%s", text, p[replay:])
 			}
-			// The answer quotes the message: only a person's lines count.
-			lines := strings.Split(p[replay:], "\n\n")
-			message, reply := -1, slices.Index(lines, "You: "+answer)
-			for i, l := range lines {
-				if strings.HasSuffix(l, ": did the build pass?") && !strings.HasPrefix(l, "You") {
-					if message >= 0 {
-						t.Errorf("the handed-over message is in the third Run's replay twice:\n%s", p[replay:])
-					}
-					message = i
-				}
+			message = i
+		}
+	}
+	if message < 0 || reply < message {
+		tk.t.Errorf("%q is not once before its answer in the replay:\n%s", text, p[replay:])
+	}
+}
+
+// hangingFirst is a brainstorm or conductor whose first Run took its first
+// message and is still working on it; the Runs after it answer at once.
+func hangingFirst(t *testing.T, kind string) (*talking, string) {
+	hung := false
+	tk := newTalking(t, kind, func(scripted func(map[string]any) fakelux.Behaviour) func(map[string]any) fakelux.Behaviour {
+		return func(spec map[string]any) fakelux.Behaviour {
+			b := scripted(spec)
+			if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == kind && !hung {
+				b.Hang, hung = true, true
 			}
-			if message < 0 || reply < message {
-				t.Errorf("the handed-over message is not once before its answer in the third Run's replay:\n%s", p[replay:])
+			return b
+		}
+	})
+	var run string
+	tk.until("the agent at work on its first message", func() bool {
+		run = tk.latest()
+		return run != "" && tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'
+			AND agent_session_epoch > 0 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, run) == 1
+	})
+	return tk, run
+}
+
+// acceptedUnread writes text to the talker mid-turn and waits for lux to
+// accept it: taken by the harness, not read. Returns its directive.
+func (tk *talking) acceptedUnread(run, text string) string {
+	tk.t.Helper()
+	if status, reached := tk.write(text); status != 200 || reached != run {
+		tk.t.Fatalf("%q: %d reached %q, want %s", text, status, reached, run)
+	}
+	var id string
+	tk.until("lux to accept the message", func() bool {
+		_ = tk.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1 AND accepted_at IS NOT NULL
+			AND delivered_at IS NULL AND failed_at IS NULL`, run).Scan(&id)
+		return id != ""
+	})
+	return id
+}
+
+// A message lux accepted mid-turn, then failed as unread when it
+// terminated the talker (lux.input.failed, as its adapters report every
+// accepted, unread input of a Run that stops), is handed to the next Run:
+// briefed once, then replayed once before its answer. Its one failure on
+// the ended Run names the Run that has it, not lux's cancellation.
+func TestAMessageLuxCancelledAtATerminateIsHandedOnAndBriefedOnce(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, first := hangingFirst(t, kind)
+			directive := tk.acceptedUnread(first, "did the build pass?")
+			tk.stopOnItsOwn(first, "terminated")
+			var next string
+			tk.until("the next Run to answer the message", func() bool {
+				next = tk.latest()
+				said := tk.said(next)
+				return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
+			})
+			if p := tk.prompt(next); strings.Count(p, "did the build pass?") != 1 || !strings.HasSuffix(p, "did the build pass?") {
+				t.Errorf("the next Run is not briefed with the message once, last:\n%s", p)
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`,
+				directive); n != 1 {
+				t.Errorf("%d run.directive.failed for the message, want 1", n)
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1
+				AND payload->>'nextRunId' = $2`, directive, next); n != 1 {
+				t.Errorf("the message's failure does not name %s as having it:\n%s", next, tk.describeRuns())
+			}
+			answer := tk.said(next)[0]
+			third := tk.replaced(next, "and the docs?")
+			tk.replayedOnceBeforeItsAnswer(third, "did the build pass?", answer)
+		})
+	}
+}
+
+// A message lux accepted mid-turn and cancelled when it stopped the
+// conductor for a person's pause is sent again when the conductor is
+// resumed, and answered there once; it was never failed.
+func TestAMessageLuxCancelledAtAPauseIsAnsweredOnceAfterTheResume(t *testing.T) {
+	tk, run := hangingFirst(t, "conductor")
+	directive := tk.acceptedUnread(run, "did the build pass?")
+	if status, out := tk.call("/internal/runs/"+run+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	tk.until("the conductor paused", func() bool {
+		return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
+	})
+	if status, out := tk.call("/internal/runs/"+run+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, out)
+	}
+	tk.until("the resumed conductor to answer the message", func() bool {
+		said := tk.said(run)
+		return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
+	})
+	answered := 0
+	for _, s := range tk.said(run) {
+		answered += strings.Count(s, "did the build pass?")
+	}
+	if answered != 1 {
+		t.Errorf("the message answered %d times, want once: %q", answered, tk.said(run))
+	}
+	if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, directive); n != 0 {
+		t.Errorf("the message was failed %d times", n)
+	}
+}
+
+// A message the harness refused stays failed when lux then stops the Run:
+// it is not handed to the next Run.
+func TestARefusedMessageStaysFailedAcrossATerminate(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, first := hangingFirst(t, kind)
+			directive := tk.acceptedUnread(first, "did the build pass?")
+			tk.lux.FailInput(tk.luxRunOf(first), directive, "claude: the message was refused")
+			tk.until("the message failed", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL
+					AND error = 'claude: the message was refused'`, directive) == 1
+			})
+			// Terminated mid-turn, the talker ends failed.
+			tk.stopOnItsOwn(first, "terminated")
+			tk.until("the Run ended", func() bool {
+				return tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, first) == 1
+			})
+			status, next := tk.write("and the docs?")
+			if status != 201 || next == first {
+				t.Fatalf("after the end: %d reached %q, want a new Run", status, next)
+			}
+			tk.until("the new Run's answer", func() bool { return len(tk.said(next)) == 1 })
+			if p := tk.prompt(next); strings.Contains(p, "did the build pass?") {
+				t.Errorf("a refused message was handed on:\n%s", p)
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, directive); n != 1 {
+				t.Errorf("%d run.directive.failed for the refused message, want 1", n)
 			}
 		})
 	}
