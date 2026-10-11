@@ -1,7 +1,10 @@
 package servers
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -251,7 +254,7 @@ func TestMovedIsSaidOnlyWhenTheMoveStoppedEveryServer(t *testing.T) {
 }
 
 // lux's times are decoded in lux's own offset; what the API passes on of
-// them (a preview's stage timer, when its Run moved) is UTC.
+// them (a preview's stage timer, when its Run moved, its servers) is UTC.
 func TestLuxsTimesAreSentInUTC(t *testing.T) {
 	var run lux.Run
 	if err := json.Unmarshal([]byte(`{"stage":"image","stageSince":"2026-10-09T17:30:00+05:30","epoch":4,"host":"lux-c9",
@@ -275,6 +278,28 @@ func TestLuxsTimesAreSentInUTC(t *testing.T) {
 	if m == nil || encoded(m.At) != `"2026-10-09T12:00:00Z"` {
 		t.Errorf("moved at %s, want %q", encoded(m), "2026-10-09T12:00:00Z")
 	}
+
+	s := &Service{Lux: serversAt{run: run, server: stopped}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	view := s.view(context.Background(), &runRow{ID: "run_1", Kind: "agent", Status: "running", LuxRunID: "lr_1"}, nil)
+	var sent struct {
+		Servers []struct {
+			Since string `json:"since"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal([]byte(encoded(view)), &sent); err != nil || len(sent.Servers) != 1 || sent.Servers[0].Since != "2026-10-09T12:00:00Z" {
+		t.Errorf("servers sent %s", encoded(view.Servers))
+	}
+}
+
+type serversAt struct {
+	lux.Client
+	run    lux.Run
+	server lux.Server
+}
+
+func (l serversAt) Get(context.Context, string) (lux.Run, error) { return l.run, nil }
+func (l serversAt) Servers(context.Context, string) ([]lux.Server, error) {
+	return []lux.Server{l.server}, nil
 }
 
 func TestLuxsServerIsPassedOnAsLuxSentIt(t *testing.T) {
