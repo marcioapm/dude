@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -258,5 +259,35 @@ func TestTheReplayCutsLongToolCallsAndSkipsWhatWasNeverHeard(t *testing.T) {
 		if i > replayToolCap+len("bash(") {
 			t.Errorf("%s kept %d bytes, want at most %d", name, i, replayToolCap)
 		}
+	}
+}
+
+// Dropping the oldest turns of many Runs keeps the newest that fit: each
+// dropped turn that began a Run's turn takes its take-over line with it,
+// so turns are not shed beyond what the budget needs.
+func TestTheReplayBudgetCountsTheTakeOverLinesItDrops(t *testing.T) {
+	var entries []replayEntry
+	for i := range 200 {
+		entries = append(entries, replayEntry{run: fmt.Sprintf("run_%03d", i), words: fmt.Sprintf("Ana: message number %03d here", i)})
+	}
+	budget := 2000
+	got := fitReplay("", entries, budget)
+	if replayTokens(got) > budget {
+		t.Fatalf("over budget: %d tokens", replayTokens(got))
+	}
+	kept := strings.Count(got, "Ana: message number")
+	// The fewest turns that fit, kept from the newest, at most one under.
+	best := 0
+	for n := 1; n <= len(entries); n++ {
+		if replayTokens(joinReplay("", entries[len(entries)-n:], len(entries)-n)) > budget {
+			break
+		}
+		best = n
+	}
+	if kept < best-1 {
+		t.Fatalf("kept %d turns, %d fit", kept, best)
+	}
+	if !strings.Contains(got, "Ana: message number 199 here") {
+		t.Fatalf("the newest turn is missing:\n%s", got)
 	}
 }
