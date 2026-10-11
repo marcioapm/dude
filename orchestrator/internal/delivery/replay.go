@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -91,9 +92,103 @@ func fromCompaction(events []replayEvent) (string, []replayEvent) {
 const evContextCompacted = "agent.context.compacted"
 
 // renderReplayFrom is the summary under its heading, if any, then the
-// events rendered.
+// events rendered, within the budget.
 func renderReplayFrom(summary string, events []replayEvent) string {
-	body := renderReplay(events)
+	return fitReplay(summary, replayEntries(events), replayBudgetTokens)
+}
+
+// replayBudgetTokens bounds a replay, estimated by replayTokens.
+const replayBudgetTokens = 100_000
+
+// replayTokens estimates the tokens of s: a token per four characters.
+func replayTokens(s string) int { return (utf8.RuneCountInString(s) + 3) / 4 }
+
+const outputDropped = "[output dropped]"
+
+// fitReplay renders the entries within budget tokens, shedding while over:
+// tool outputs, oldest first, keeping the call; then tool calls whole,
+// oldest first; then the oldest turns whole, said in one line. Words are
+// never cut, and the summary is never dropped.
+func fitReplay(summary string, entries []replayEntry, budget int) string {
+	entries = slices.Clone(entries)
+	limit := budget * 4
+	// Sizes are kept by difference, not re-rendered at each step: a
+	// dropped entry takes its text and the blank line before it.
+	chars := utf8.RuneCountInString(joinReplay(summary, entries, 0))
+	size := func(e replayEntry) int { return utf8.RuneCountInString(e.text()) + 2 }
+	for i := range entries {
+		if chars <= limit {
+			break
+		}
+		if entries[i].tool && entries[i].output != outputDropped {
+			chars -= utf8.RuneCountInString(entries[i].output) - utf8.RuneCountInString(outputDropped)
+			entries[i].output = outputDropped
+		}
+	}
+	keep := make([]bool, len(entries))
+	for i := range keep {
+		keep[i] = true
+	}
+	for i, e := range entries {
+		if chars <= limit {
+			break
+		}
+		if e.tool {
+			keep[i], chars = false, chars-size(e)
+		}
+	}
+	omitted := 0
+	if chars > limit {
+		chars += utf8.RuneCountInString(omittedLine(len(entries))) + 2
+	}
+	for i, e := range entries {
+		if chars <= limit {
+			break
+		}
+		if keep[i] {
+			keep[i], chars = false, chars-size(e)
+			omitted++
+		}
+	}
+	kept := entries[:0]
+	for i, e := range entries {
+		if keep[i] {
+			kept = append(kept, e)
+		}
+	}
+	// The estimate leaves out the take-over lines between Runs: the oldest
+	// turns go until the rendering itself fits.
+	out := joinReplay(summary, kept, omitted)
+	for len(kept) > 0 && utf8.RuneCountInString(out) > limit {
+		kept, omitted = kept[1:], omitted+1
+		out = joinReplay(summary, kept, omitted)
+	}
+	return out
+}
+
+func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
+
+// joinReplay renders the summary under its heading, then the entries,
+// after a line saying how many earlier ones were omitted.
+func joinReplay(summary string, entries []replayEntry, omitted int) string {
+	var b strings.Builder
+	if omitted > 0 {
+		b.WriteString(omittedLine(omitted))
+	}
+	last := ""
+	for _, e := range entries {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		if last != "" && e.run != "" && e.run != last {
+			b.WriteString("[A new agent took over here.]\n\n")
+		}
+		if e.run != "" {
+			last = e.run
+		}
+		b.WriteString(e.text())
+	}
+	body := b.String()
 	if summary == "" {
 		return body
 	}
@@ -149,24 +244,7 @@ func (e replayEntry) text() string {
 }
 
 // renderReplay renders the events, in their order, as the agent reads them.
-func renderReplay(events []replayEvent) string {
-	entries := replayEntries(events)
-	var b strings.Builder
-	last := ""
-	for _, e := range entries {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		if last != "" && e.run != "" && e.run != last {
-			b.WriteString("[A new agent took over here.]\n\n")
-		}
-		if e.run != "" {
-			last = e.run
-		}
-		b.WriteString(e.text())
-	}
-	return b.String()
-}
+func renderReplay(events []replayEvent) string { return joinReplay("", replayEntries(events), 0) }
 
 func replayEntries(events []replayEvent) []replayEntry {
 	// A proposal's line says what became of it: its filings come later.
