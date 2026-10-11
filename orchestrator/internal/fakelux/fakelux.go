@@ -872,6 +872,7 @@ func (s *Server) CancelInLux(id string) {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.Cancelled = true
+		s.stoppedUnread(run)
 		s.setState(run, s.ended())
 	}
 }
@@ -989,6 +990,31 @@ func (s *Server) dropQueued(run *Run) {
 		delete(run.taken, q.requestID)
 	}
 	run.queued = nil
+}
+
+// stoppedUnread is how lux's adapter for the Run's harness fails input it
+// accepted, with a receipt, and the agent never read, when lux stops the
+// Run (lux internal/adapter: claude.go lifecycleFrame, adapter.go
+// errStoppedUnread for Codex and OpenCode). Input not yet accepted stays
+// queued. Callers hold s.mu.
+func (s *Server) stoppedUnread(run *Run) {
+	if s.LegacyInput {
+		return
+	}
+	reason := "the Run stopped before the agent read it"
+	if run.dialect() == dialectClaude {
+		reason = "claude: the message was cancelled"
+	}
+	kept := run.queued[:0]
+	for _, q := range run.queued {
+		if !q.accepted {
+			kept = append(kept, q)
+			continue
+		}
+		delete(run.taken, q.requestID)
+		s.recordFailed(run, q, reason)
+	}
+	run.queued = kept
 }
 
 // Wait has a Run wait for a host with reason, as lux's scheduler does when
@@ -2295,6 +2321,7 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	run.busy = false
 	if run.State == "running" {
 		s.beforeStop(run)
+		s.stoppedUnread(run)
 		// As lux does: stopping at once, stopped once the container has
 		// gone — a moment later, on the stream.
 		s.setState(run, "stopping")
@@ -2340,6 +2367,7 @@ func (s *Server) end(w http.ResponseWriter, run *Run, call string) {
 	run.Cancelled = true
 	s.beforeStop(run)
 	if !lux.Terminated(run.State) {
+		s.stoppedUnread(run)
 		s.setState(run, s.ended())
 	}
 	writeJSON(w, 202, s.view(run))

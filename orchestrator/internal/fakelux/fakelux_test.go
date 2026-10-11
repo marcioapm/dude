@@ -182,6 +182,49 @@ func TestInputUnreadWhenTheContainerStopsIsGoneAndItsRequestIDIsNew(t *testing.T
 	}
 }
 
+// A Run lux stops or terminates fails each input its harness accepted and
+// the agent never read with lux.input.failed, in the words of lux's
+// adapter for that harness; input not yet accepted is not failed.
+func TestAStopFailsAcceptedUnreadInputAsLuxDoes(t *testing.T) {
+	for _, adapter := range []string{"opencode", "claude-code"} {
+		for name, stop := range map[string]func(*lux.HTTPClient, string) error{
+			"terminate": func(c *lux.HTTPClient, id string) error { return c.Cancel(context.Background(), id) },
+			"stop":      func(c *lux.HTTPClient, id string) error { return c.Stop(context.Background(), id) },
+		} {
+			t.Run(adapter+"/"+name, func(t *testing.T) {
+				fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+				srv := httptest.NewServer(fake.Handler())
+				t.Cleanup(srv.Close)
+				c := lux.New(srv.URL, "k")
+				run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: adapter, Prompt: "go"}}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				awaitRun(t, fake, run.ID, "the turn never started", func(r *Run) bool { return r.busy && r.State == "running" })
+				if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "did the build pass?", RequestID: "dir_a"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := stop(c, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				if got := inputReceipts(fake, run.ID, "dir_a"); !slices.Equal(got, []string{"accepted", "failed"}) {
+					t.Fatalf("receipts %v, want accepted then failed", got)
+				}
+				want := map[string]string{"opencode": "the Run stopped before the agent read it",
+					"claude-code": "claude: the message was cancelled"}[adapter]
+				fake.mu.Lock()
+				defer fake.mu.Unlock()
+				for _, r := range fake.runs[run.ID].records {
+					data, _ := r.Event["data"].(map[string]any)
+					if r.Event["type"] == lux.RecordInputFailed && data["error"] != want {
+						t.Errorf("failed with %q, want %q", data["error"], want)
+					}
+				}
+			})
+		}
+	}
+}
+
 // inputReceipts is each input record of the Run for requestID, in order:
 // lux.input's phase, "consumed" (lux.input.consumed) or "failed"
 // (lux.input.failed); an older lux's phase-less lux.input is "handoff", or

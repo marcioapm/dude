@@ -243,11 +243,20 @@ func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 }
 
 // sessionBriefing is the brainstorm's first prompt before its
-// instructions: the session, who is in it, what it reads, and the message.
+// instructions: the session, who is in it, what it reads, what was said
+// to the session's agents before (Replay; none for its first), and the
+// message. Called before the new Run exists.
 func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) (string, error) {
 	about, err := sessionAbout(ctx, tx, sessionID)
 	if err != nil {
 		return "", err
+	}
+	replay, err := Replay(ctx, tx, Talker{SessionID: sessionID})
+	if err != nil {
+		return "", err
+	}
+	if replay != "" {
+		about += "\n\n" + replay
 	}
 	return about + "\n\n## The first message\n\n" + message, nil
 }
@@ -426,7 +435,7 @@ func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error)
 				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
 				continue
 			}
-			if next, err = StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, ""); err != nil {
+			if next, err = StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown); err != nil {
 				return "", err
 			}
 			continue

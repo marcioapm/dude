@@ -1,0 +1,590 @@
+package delivery
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// The conversation so far: what a talker (a session's agent, a task's
+// conductor) said and was told, rendered from the ledger for an agent that
+// starts without its harness transcript — a new Run, or a resume lux could
+// only give a blank session. People's and the agent's words are verbatim;
+// tool calls are one line each from what the ledger keeps of them.
+
+// replayToolCap bounds a tool call's input, and its output, in bytes.
+const replayToolCap = 4096
+
+// Talker names whose conversation is replayed: a session, or a task.
+type Talker struct{ SessionID, TaskID string }
+
+// replayEvent is one ledger event as the renderer reads it. Who is the
+// actor's name when a person wrote it; Heard is false for a message whose
+// directive never reached the agent (it is handed on, or failed, and the
+// next agent gets it as its own input if at all). RepeatsHeard is true for
+// a resend (payload supersedes) of a directive the agent did hear.
+type replayEvent struct {
+	Cursor       int64
+	Type         string
+	RunID        string
+	ActorType    string
+	ActorID      string
+	Who          string
+	Payload      map[string]any
+	Heard        bool
+	RepeatsHeard bool
+}
+
+// replayTypes are the events the replay renders, or reads to render one.
+var replayTypes = []string{
+	EvChatMessage, EvRunSteered, evAgentMessage, EvQuestionAsked, evQuestionAnswered, EvQuestionClosed,
+	evSessionTold, EvConductorWoken, EvSessionProposed, EvSessionFiled, EvDecisionTaken, EvFindingResolved,
+	EvTaskUpdated, EvSessionRenamed, evToolCalled, evToolCompleted, evSessionReplaced, evContextCompacted,
+}
+
+// The events the replay reads that other packages write (the phase
+// syncer, the API), under the names they are written with.
+const (
+	evAgentMessage     = "agent.message"
+	evQuestionAnswered = "question.answered"
+	evSessionTold      = "session.told"
+	evToolCalled       = "agent.tool.called"
+	evToolCompleted    = "agent.tool.completed"
+	evSessionReplaced  = "agent.session.replaced"
+	evContextCompacted = "agent.context.compacted"
+)
+
+// talkerScope (SQL, over events e; $1 the session or task): the talker's
+// ledger. A session's: every event of the session (events_session_of_run
+// stamps the session on each event of its Runs). A task's: its conductor
+// Runs' events, never a phase Run's; every writer of a task's chat.message
+// puts it on a conductor Run.
+const (
+	sessionScope = `e.session_id = $1`
+	taskScope    = `(e.task_id = $1 AND e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent'))`
+)
+
+// heardDirective (SQL, over events e; key a literal payload key): the
+// directive the payload names, or a resend of it, reached e's Run. Two legs,
+// so the first is a primary-key probe.
+func heardDirective(key string) string {
+	id := `e.payload->>'` + key + `'`
+	return `(EXISTS (SELECT 1 FROM directives d WHERE d.id = ` + id + ` AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+		OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = ` + id + ` AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL))`
+}
+
+// Replay is the talker's conversation so far under its heading, "" for a
+// talker that has had no Run yet, or whose ledger says nothing worth
+// replaying.
+func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
+	events, err := replayEvents(ctx, tx, of)
+	if err != nil || len(events) == 0 {
+		return "", err
+	}
+	body := renderReplayFrom(fromCompaction(events))
+	if body == "" {
+		return "", nil
+	}
+	return "## The conversation so far\n\n" + replayLead + "\n\n" + body, nil
+}
+
+// fromCompaction is where the replay starts: the newest compaction summary
+// the agent's harness kept (agent.context.compacted), with the Run whose
+// agent wrote it, and the events after it; with none, a zero start and
+// every event. A summary covers whatever the conversation before it held,
+// a replay a Run was given included, so the newest is enough.
+// Another source of summaries (a harness's own record) would be read here.
+func fromCompaction(events []replayEvent) (replayStart, []replayEvent) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != evContextCompacted {
+			continue
+		}
+		if s, _ := events[i].Payload["summary"].(string); strings.TrimSpace(s) != "" {
+			return replayStart{summary: s, run: events[i].RunID}, events[i+1:]
+		}
+	}
+	return replayStart{}, events
+}
+
+// replayStart is the compaction summary a replay starts from ("" for
+// none) and the Run whose agent wrote it.
+type replayStart struct{ summary, run string }
+
+// renderReplayFrom is the summary under its heading, if any, then the
+// events rendered, within the budget.
+func renderReplayFrom(start replayStart, events []replayEvent) string {
+	return fitReplay(start, replayEntries(events), replayBudgetTokens)
+}
+
+// A replay's budget, in tokens estimated at charsPerToken runes each.
+const (
+	replayBudgetTokens = 100_000
+	charsPerToken      = 4
+)
+
+func replayTokens(s string) int {
+	return (utf8.RuneCountInString(s) + charsPerToken - 1) / charsPerToken
+}
+
+const outputDropped = "[output dropped]"
+
+// fitReplay renders the entries within budget tokens, shedding while over:
+// tool outputs, oldest first, keeping the call; then tool calls whole,
+// oldest first; then the oldest turns whole, said in one line. Words are
+// never cut, and the summary is never dropped.
+func fitReplay(start replayStart, entries []replayEntry, budget int) string {
+	entries = slices.Clone(entries)
+	limit := budget * charsPerToken
+	// Sizes are kept by difference, not re-rendered at each step: a dropped
+	// entry takes its text, its blank line, and the take-over line before it
+	// when it begins a Run's turn.
+	chars := utf8.RuneCountInString(joinReplay(start, entries, 0))
+	takeOver := takeOvers(start, entries)
+	keep := slices.Repeat([]bool{true}, len(entries))
+	drop := func(i int) {
+		keep[i], chars = false, chars-utf8.RuneCountInString(entries[i].text())-2
+		if takeOver[i] {
+			chars -= utf8.RuneCountInString(tookOver) + 2
+		}
+	}
+	// whileOver visits the entries oldest first until the size fits.
+	whileOver := func(step func(i int)) {
+		for i := 0; i < len(entries) && chars > limit; i++ {
+			step(i)
+		}
+	}
+	whileOver(func(i int) {
+		if entries[i].tool && entries[i].output != outputDropped {
+			chars -= utf8.RuneCountInString(entries[i].output) - utf8.RuneCountInString(outputDropped)
+			entries[i].output = outputDropped
+		}
+	})
+	whileOver(func(i int) {
+		if entries[i].tool {
+			drop(i)
+		}
+	})
+	omitted := 0
+	if chars > limit {
+		chars += utf8.RuneCountInString(omittedLine(len(entries))) + 2
+	}
+	whileOver(func(i int) {
+		if keep[i] {
+			drop(i)
+			omitted++
+		}
+	})
+	kept := entries[:0]
+	for i, e := range entries {
+		if keep[i] {
+			kept = append(kept, e)
+		}
+	}
+	// The estimate cannot know which take-over lines survive the drops: the
+	// oldest turns go until the rendering itself fits.
+	out := joinReplay(start, kept, omitted)
+	for len(kept) > 0 && utf8.RuneCountInString(out) > limit {
+		kept, omitted = kept[1:], omitted+1
+		out = joinReplay(start, kept, omitted)
+	}
+	return out
+}
+
+// tookOver marks where another Run's agent took the conversation on.
+const tookOver = "[A new agent took over here.]"
+
+// takeOvers is, per entry, whether a take-over line goes before it: its
+// Run differs from the last Run seen, counting from the summary's.
+func takeOvers(start replayStart, entries []replayEntry) []bool {
+	at := make([]bool, len(entries))
+	last := start.run
+	for i, e := range entries {
+		at[i] = last != "" && e.run != "" && e.run != last
+		if e.run != "" {
+			last = e.run
+		}
+	}
+	return at
+}
+
+func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
+
+// joinReplay renders the summary under its heading, then the entries,
+// after a line saying how many earlier ones were omitted; a take-over line
+// goes wherever the Run changes, from the summary's Run on.
+func joinReplay(start replayStart, entries []replayEntry, omitted int) string {
+	var b strings.Builder
+	if omitted > 0 {
+		b.WriteString(omittedLine(omitted))
+	}
+	takeOver := takeOvers(start, entries)
+	for i, e := range entries {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		if takeOver[i] {
+			b.WriteString(tookOver + "\n\n")
+		}
+		b.WriteString(e.text())
+	}
+	body := b.String()
+	if start.summary == "" {
+		return body
+	}
+	out := "## Earlier, as the agent summarised it\n\n" + strings.TrimSpace(start.summary)
+	if body != "" {
+		out += "\n\n## Since then\n\n" + body
+	}
+	return out
+}
+
+const replayLead = "What was said here before you, oldest first, from dude's record (\"You\" is this conversation's agent, " +
+	"before you). Tool calls show their input and output, cut where long; thoughts are not kept. Images are named, not attached."
+
+func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, error) {
+	// A session renamed before its first Run has events and nothing to
+	// replay; a task's scope already requires a conductor Run.
+	scope, id, hadRun := sessionScope, of.SessionID, `EXISTS (SELECT 1 FROM runs WHERE session_id = $1 AND role = 'brainstorm' AND kind = 'agent')`
+	if of.SessionID == "" {
+		scope, id, hadRun = taskScope, of.TaskID, `true`
+	}
+	// The start subquery's own "events e" shadows the outer e: scope filters the compactions it reads.
+	rows, err := tx.Query(ctx, `SELECT e.cursor, e.event_type, COALESCE(e.run_id, ''), e.actor_type, COALESCE(e.actor_id, ''),
+			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
+				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
+			e.payload,
+			NOT (e.payload ? 'directiveId') OR `+heardDirective("directiveId")+`,
+			e.payload ? 'supersedes' AND `+heardDirective("supersedes")+`
+		FROM events e WHERE `+hadRun+` AND `+scope+` AND e.event_type = ANY($2)
+			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
+				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
+		ORDER BY e.cursor`, id, replayTypes)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[replayEvent])
+}
+
+// replayEntry is one rendered thing: words (a message, a note, a line),
+// or a tool call with its output.
+type replayEntry struct {
+	run    string
+	words  string
+	tool   bool
+	call   string
+	output string
+}
+
+func (e replayEntry) text() string {
+	if !e.tool {
+		return e.words
+	}
+	return e.call + " → " + e.output
+}
+
+func replayEntries(events []replayEvent) []replayEntry {
+	// A proposal's line says what became of it: its filings come later.
+	// A filing of a proposal before the replay's start is said on its own.
+	filed := map[string][]string{}
+	proposed := map[string]bool{}
+	for _, ev := range events {
+		switch ev.Type {
+		case EvSessionProposed:
+			id, _ := ev.Payload["proposalId"].(string)
+			proposed[id] = true
+		case EvSessionFiled:
+			id, items := filings(ev.Payload)
+			filed[id] = append(filed[id], items...)
+		}
+	}
+	var out []replayEntry
+	calls := map[string]int{}
+	add := func(ev replayEvent, words string) {
+		if words != "" {
+			out = append(out, replayEntry{run: ev.RunID, words: words})
+		}
+	}
+	for _, ev := range events {
+		p := ev.Payload
+		str := func(k string) string { s, _ := p[k].(string); return s }
+		if !ev.Heard {
+			continue
+		}
+		switch ev.Type {
+		case EvChatMessage:
+			if str("by") == "conductor" {
+				gh, _ := p["github"].(map[string]any)
+				repo, _ := gh["repo"].(string)
+				n, _ := gh["number"].(float64)
+				add(ev, fmt.Sprintf("You (on pull request %s#%d): %s", repo, int(n), replayText(str("text"))))
+				continue
+			}
+			add(ev, said(personOf(ev), str("text"), p["attachments"]))
+		case EvRunSteered:
+			// A resend (Retry, Interrupt now) of words the agent heard
+			// repeats them; a Retry of a failed steer is their delivery.
+			if ev.RepeatsHeard || str("by") == "conductor" {
+				continue
+			}
+			add(ev, said(personOf(ev), str("text"), p["attachments"]))
+		case evAgentMessage:
+			if t := str("text"); strings.TrimSpace(t) != "" {
+				add(ev, "You: "+t)
+			}
+		case EvQuestionAsked:
+			add(ev, askedLine(p))
+		case evQuestionAnswered:
+			line := said(personOf(ev)+" answered", str("answer"), p["attachments"])
+			if note := str("note"); note != "" {
+				line += "\n" + personOf(ev) + ", also: " + replayText(note)
+			}
+			add(ev, line)
+		case EvQuestionClosed:
+			if str("by") == "withdrawn" {
+				add(ev, "dude: your question was withdrawn; nobody answered it.")
+			} else {
+				add(ev, "dude: your question was settled elsewhere, unanswered.")
+			}
+		case evSessionTold, EvConductorWoken:
+			add(ev, "dude: "+str("text"))
+		case EvSessionProposed:
+			add(ev, proposedLine(p, filed[str("proposalId")]))
+		case EvSessionFiled:
+			if id, items := filings(p); !proposed[id] && len(items) > 0 {
+				add(ev, "Your earlier proposal: "+strings.Join(items, ", ")+".")
+			}
+		case EvDecisionTaken:
+			line := fmt.Sprintf("You decided, at %s: %s", pointWords(str("point")), str("action"))
+			if ph := str("phase"); ph != "" {
+				line += " (" + ph + ")"
+			}
+			if note := str("note"); note != "" {
+				line += ": " + oneLine(note)
+			}
+			add(ev, line+".")
+		case EvFindingResolved:
+			if str("by") == "conductor" {
+				// In the words the briefing's findings use (AcceptedBy).
+				add(ev, fmt.Sprintf("Finding %s: %s.", str("findingId"), AcceptedBy(str("note"))))
+			}
+		case EvTaskUpdated:
+			if str("by") == "conductor" {
+				var what []string
+				if _, ok := p["goal"]; ok {
+					what = append(what, "goal")
+				}
+				if _, ok := p["acceptanceCriteria"]; ok {
+					what = append(what, "acceptance criteria")
+				}
+				add(ev, "You changed the task's "+strings.Join(what, " and ")+".")
+			}
+		case EvSessionRenamed:
+			who := personOf(ev)
+			if str("by") == ByAgent {
+				who = "You"
+			}
+			add(ev, fmt.Sprintf("%s named the session %q.", who, str("title")))
+		case evSessionReplaced:
+			add(ev, "[Here the agent's session restarted without its conversation.]")
+		case evToolCalled:
+			key := ev.RunID + "/" + str("callId")
+			calls[key] = len(out)
+			out = append(out, replayEntry{run: ev.RunID, tool: true, call: toolCall(str("tool"), p["input"]),
+				output: "[no output recorded]"})
+		case evToolCompleted:
+			key := ev.RunID + "/" + str("callId")
+			i, ok := calls[key]
+			if !ok || str("callId") == "" {
+				// Reported only once finished: its completion is the whole call.
+				i = len(out)
+				out = append(out, replayEntry{run: ev.RunID, tool: true, call: toolCall(str("tool"), p["input"])})
+			}
+			delete(calls, key)
+			out[i].output = toolOutput(p)
+		}
+	}
+	return out
+}
+
+// personOf is who wrote an event: the person, a GitHub login, or someone.
+func personOf(ev replayEvent) string {
+	if gh, ok := ev.Payload["github"].(map[string]any); ok {
+		if login, _ := gh["login"].(string); login != "" {
+			return login + " (GitHub)"
+		}
+	}
+	if ev.Who != "" {
+		return ev.Who
+	}
+	if login, ok := strings.CutPrefix(ev.ActorID, "github:"); ok {
+		return login + " (GitHub)"
+	}
+	return "Someone"
+}
+
+// said is "Name: words", the images it carried named after the words.
+func said(who, text string, attachments any) string {
+	line := who + ": " + replayText(text)
+	for _, a := range asList(attachments) {
+		m, _ := a.(map[string]any)
+		if name, _ := m["name"].(string); name != "" {
+			line += " [image: " + name + "]"
+		} else {
+			line += " [image]"
+		}
+	}
+	return line
+}
+
+// replayText is a message's words with each image it shows named.
+func replayText(s string) string {
+	return ReplaceImageRefs(s, func(r ImageRef) string { return "[image: " + r.name() + "]" })
+}
+
+func askedLine(p map[string]any) string {
+	var items []QuestionItem
+	raw, _ := json.Marshal(p["items"])
+	_ = json.Unmarshal(raw, &items)
+	who := "You asked"
+	if to, _ := p["toName"].(string); to != "" {
+		who += " " + to
+	}
+	if len(items) == 0 {
+		prompt, _ := p["prompt"].(string)
+		return who + ": " + prompt
+	}
+	item := func(it QuestionItem) string {
+		s := it.Question
+		if labels := it.Labels(); len(labels) > 0 {
+			s += " (choices: " + strings.Join(labels, "; ") + ")"
+		}
+		return s
+	}
+	if len(items) == 1 {
+		return who + ": " + item(items[0])
+	}
+	var b strings.Builder
+	b.WriteString(who + ":")
+	for i, it := range items {
+		fmt.Fprintf(&b, "\n%d. %s — %s", i+1, it.Header, item(it))
+	}
+	return b.String()
+}
+
+// filings are a session.filed's proposal and, per item filed, who filed
+// it as what ("item 1 filed by Ana as BL-9"; items are 0-based stored).
+func filings(p map[string]any) (string, []string) {
+	id, _ := p["proposalId"].(string)
+	by, _ := p["by"].(string)
+	if by == "" {
+		by = "someone"
+	}
+	var out []string
+	for _, f := range asList(p["filed"]) {
+		m, _ := f.(map[string]any)
+		n, _ := m["item"].(float64)
+		key, _ := m["key"].(string)
+		out = append(out, fmt.Sprintf("item %d filed by %s as %s", int(n)+1, by, key))
+	}
+	return id, out
+}
+
+func proposedLine(p map[string]any, filed []string) string {
+	var items []ProposalItem
+	raw, _ := json.Marshal(p["items"])
+	_ = json.Unmarshal(raw, &items)
+	parts := make([]string, len(items))
+	for i, it := range items {
+		switch it.Kind {
+		case "epic", "task":
+			parts[i] = fmt.Sprintf("%d. %s %q in %s", i+1, it.Kind, it.Title, it.Project)
+		case "edit":
+			parts[i] = fmt.Sprintf("%d. an edit to %s", i+1, it.Task)
+		case "comment":
+			parts[i] = fmt.Sprintf("%d. a comment on %s", i+1, it.Task)
+		default:
+			parts[i] = fmt.Sprintf("%d. %s", i+1, it.Kind)
+		}
+	}
+	outcome := "none filed"
+	if len(filed) > 0 {
+		outcome = strings.Join(filed, ", ")
+	}
+	return "You proposed: " + strings.Join(parts, "; ") + " — " + outcome + "."
+}
+
+func pointWords(point string) string {
+	if l := pointLabel[point]; l != "" {
+		return l
+	}
+	return point
+}
+
+// toolCall is a call as one line: tool(input), its input capped.
+func toolCall(tool string, input any) string {
+	if tool == "" {
+		tool = "tool"
+	}
+	in := ""
+	if input != nil {
+		raw, _ := json.Marshal(input)
+		in = string(raw)
+	}
+	return tool + "(" + capReplay(in) + ")"
+}
+
+// toolOutput is what the ledger kept of a call's output (toolResult's
+// shape: output, or stdout and stderr, each a head and maybe a tail),
+// with its failure and exit code. Each stored head and tail is capped on
+// its own: the writer keeps them within the cap already, and capping them
+// joined would cut the tail's end, where a command says how it ended.
+func toolOutput(p map[string]any) string {
+	var parts []string
+	for _, k := range []string{"output", "stdout", "stderr"} {
+		m, ok := p[k].(map[string]any)
+		if !ok {
+			continue
+		}
+		head, _ := m["head"].(string)
+		s := capReplay(head)
+		if tail, _ := m["tail"].(string); tail != "" {
+			n, _ := m["omittedBytes"].(float64)
+			s += fmt.Sprintf("\n[… %d bytes cut …]\n", int(n)) + capReplay(tail)
+		}
+		if k == "stderr" {
+			s = "stderr: " + s
+		}
+		parts = append(parts, s)
+	}
+	out := strings.Join(parts, "\n")
+	if status, _ := p["status"].(string); status == "error" {
+		out = "error: " + out
+	}
+	if code, ok := p["exitCode"].(float64); ok && code != 0 {
+		out += fmt.Sprintf(" (exit %d)", int(code))
+	}
+	if strings.TrimSpace(out) == "" {
+		return "[no output]"
+	}
+	return out
+}
+
+// capReplay keeps s up to replayToolCap bytes, cut on a character
+// boundary, and says how much it cut.
+func capReplay(s string) string {
+	if len(s) <= replayToolCap {
+		return s
+	}
+	cut := replayToolCap
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("[… %d bytes cut]", len(s)-cut)
+}
+
+func asList(v any) []any { l, _ := v.([]any); return l }
