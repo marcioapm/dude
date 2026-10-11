@@ -435,7 +435,7 @@ func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error)
 				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
 				continue
 			}
-			if next, err = StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, ""); err != nil {
+			if next, err = StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown); err != nil {
 				return "", err
 			}
 			continue

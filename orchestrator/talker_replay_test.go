@@ -88,31 +88,58 @@ func TestANewTalkerRunIsBriefedWithTheConversationSoFar(t *testing.T) {
 	}
 }
 
-// A message a conductor never read when lux ended it is handed to the next
-// as that conductor's briefing message: once, not again in the replay.
+// A message a talker never read when lux ended it is handed to the next
+// Run as its briefing message: once, not again in the replay; and a later
+// Run's replay has it once, before the answer to it.
 func TestAHandedOverMessageIsBriefedOnce(t *testing.T) {
-	tk, first := talkers(t)["conductor"](t)
-	tk.lux.InputGate = make(chan struct{})
-	if status, reached := tk.write("did the build pass?"); status != 200 || reached != first {
-		t.Fatalf("the message: %d reached %q", status, reached)
-	}
-	tk.until("the message sent to lux", func() bool {
-		return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL`, first) == 1
-	})
-	tk.stopOnItsOwn(first, "terminated")
-	tk.releaseInput()
-	var next string
-	tk.until("the next conductor to answer the message", func() bool {
-		next = tk.latest()
-		said := tk.said(next)
-		return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
-	})
-	p := tk.prompt(next)
-	if n := strings.Count(p, "did the build pass?"); n != 1 {
-		t.Errorf("the handed-over message is in the briefing %d times, want once:\n%s", n, p)
-	}
-	if !strings.Contains(p, "## The conversation so far") || !strings.HasSuffix(p, "did the build pass?") {
-		t.Errorf("not briefed with the conversation, then the message:\n%s", p)
+	for kind, start := range talkers(t) {
+		t.Run(kind, func(t *testing.T) {
+			tk, first := start(t)
+			tk.lux.InputGate = make(chan struct{})
+			if status, reached := tk.write("did the build pass?"); status != 200 || reached != first {
+				t.Fatalf("the message: %d reached %q", status, reached)
+			}
+			tk.until("the message sent to lux", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL`, first) == 1
+			})
+			tk.stopOnItsOwn(first, "terminated")
+			tk.releaseInput()
+			var next string
+			tk.until("the next Run to answer the message", func() bool {
+				next = tk.latest()
+				said := tk.said(next)
+				return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
+			})
+			p := tk.prompt(next)
+			if n := strings.Count(p, "did the build pass?"); n != 1 {
+				t.Errorf("the handed-over message is in the briefing %d times, want once:\n%s", n, p)
+			}
+			if !strings.Contains(p, "## The conversation so far") || !strings.HasSuffix(p, "did the build pass?") {
+				t.Errorf("not briefed with the conversation, then the message:\n%s", p)
+			}
+
+			answer := tk.said(next)[0]
+			third := tk.replaced(next, "and the docs?")
+			p = tk.prompt(third)
+			replay := strings.Index(p, "## The conversation so far")
+			if replay < 0 {
+				t.Fatalf("the third Run has no replay:\n%s", p)
+			}
+			// The answer quotes the message: only a person's lines count.
+			lines := strings.Split(p[replay:], "\n\n")
+			message, reply := -1, slices.Index(lines, "You: "+answer)
+			for i, l := range lines {
+				if strings.HasSuffix(l, ": did the build pass?") && !strings.HasPrefix(l, "You") {
+					if message >= 0 {
+						t.Errorf("the handed-over message is in the third Run's replay twice:\n%s", p[replay:])
+					}
+					message = i
+				}
+			}
+			if message < 0 || reply < message {
+				t.Errorf("the handed-over message is not once before its answer in the third Run's replay:\n%s", p[replay:])
+			}
+		})
 	}
 }
 
