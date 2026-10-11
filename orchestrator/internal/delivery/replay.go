@@ -253,6 +253,14 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 	if of.SessionID == "" {
 		scope, id, hadRun = taskScope, of.TaskID, `true`
 	}
+	// The correlated heard probes inflate the plan's cost past
+	// jit_above_cost on a large ledger: JIT then takes ~1 s of a query
+	// that runs in ~70 ms. Off for this query only, and put back after:
+	// the caller's transaction goes on (a briefing, a hand-over).
+	var jitWas string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('jit'), set_config('jit', 'off', true)`).Scan(&jitWas, nil); err != nil {
+		return nil, err
+	}
 	// The start subquery's own "events e" shadows the outer e: scope filters the compactions it reads.
 	rows, err := tx.Query(ctx, `SELECT e.cursor, e.event_type, COALESCE(e.run_id, ''), e.actor_type, COALESCE(e.actor_id, ''),
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
@@ -267,8 +275,22 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[replayEvent])
+	events, err := pgx.CollectRows(rows, pgx.RowToStructByPos[replayEvent])
+	if err != nil {
+		return nil, err
+	}
+	if afterReplayQuery != nil {
+		afterReplayQuery(ctx, tx)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('jit', $1, true)`, jitWas); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
+
+// afterReplayQuery, when set (by tests), runs in the replay's transaction
+// right after its ledger query, before the settings are put back.
+var afterReplayQuery func(context.Context, pgx.Tx)
 
 // replayEntry is one rendered thing: words (a message, a note, a line),
 // or a tool call with its output.
