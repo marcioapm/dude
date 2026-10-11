@@ -132,53 +132,45 @@ const outputDropped = "[output dropped]"
 func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 	entries = slices.Clone(entries)
 	limit := budget * charsPerToken
-	// Sizes are kept by difference, not re-rendered at each step: a
-	// dropped entry takes its text and the blank line before it.
+	// Sizes are kept by difference, not re-rendered at each step: a dropped
+	// entry takes its text, its blank line, and the take-over line before it
+	// when it begins a Run's turn.
 	chars := utf8.RuneCountInString(joinReplay(start, entries, 0))
-	// A dropped entry takes its text, its blank line, and the take-over
-	// line before it when it begins a Run's turn.
 	takeOver := takeOvers(start, entries)
-	size := func(i int) int {
-		n := utf8.RuneCountInString(entries[i].text()) + 2
+	keep := slices.Repeat([]bool{true}, len(entries))
+	drop := func(i int) {
+		keep[i], chars = false, chars-utf8.RuneCountInString(entries[i].text())-2
 		if takeOver[i] {
-			n += utf8.RuneCountInString(tookOver) + 2
+			chars -= utf8.RuneCountInString(tookOver) + 2
 		}
-		return n
 	}
-	for i := range entries {
-		if chars <= limit {
-			break
+	// whileOver visits the entries oldest first until the size fits.
+	whileOver := func(step func(i int)) {
+		for i := 0; i < len(entries) && chars > limit; i++ {
+			step(i)
 		}
+	}
+	whileOver(func(i int) {
 		if entries[i].tool && entries[i].output != outputDropped {
 			chars -= utf8.RuneCountInString(entries[i].output) - utf8.RuneCountInString(outputDropped)
 			entries[i].output = outputDropped
 		}
-	}
-	keep := make([]bool, len(entries))
-	for i := range keep {
-		keep[i] = true
-	}
-	for i, e := range entries {
-		if chars <= limit {
-			break
+	})
+	whileOver(func(i int) {
+		if entries[i].tool {
+			drop(i)
 		}
-		if e.tool {
-			keep[i], chars = false, chars-size(i)
-		}
-	}
+	})
 	omitted := 0
 	if chars > limit {
 		chars += utf8.RuneCountInString(omittedLine(len(entries))) + 2
 	}
-	for i := range entries {
-		if chars <= limit {
-			break
-		}
+	whileOver(func(i int) {
 		if keep[i] {
-			keep[i], chars = false, chars-size(i)
+			drop(i)
 			omitted++
 		}
-	}
+	})
 	kept := entries[:0]
 	for i, e := range entries {
 		if keep[i] {
