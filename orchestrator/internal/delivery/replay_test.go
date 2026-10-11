@@ -131,3 +131,28 @@ func TestASessionsReplayCoversItsRuns(t *testing.T) {
 		t.Errorf("replay:\n%s\n\nwant it to end:\n%s", got, want)
 	}
 }
+
+// A replay read from the ledger starts at the newest compaction summary:
+// the summary under its heading, then only what came after it.
+func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_s1", "brainstorm")
+	w.event("chat.message", "run_s1", "per_ana", `{"text":"EARLIER"}`)
+	w.event("agent.context.compacted", "run_s1", "", `{"trigger":"auto","summary":"SUM"}`)
+	w.event("chat.message", "run_s1", "per_bo", `{"text":"LATER"}`)
+	got := w.replay(delivery.Talker{SessionID: "ses_r"})
+	if !strings.HasSuffix(got, "## Earlier, as the agent summarised it\n\nSUM\n\n## Since then\n\nBo: LATER") || strings.Contains(got, "EARLIER") {
+		t.Errorf("replay:\n%s", got)
+	}
+	// The ledger is read from the summary on, not whole.
+	var types []string
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		types, err = delivery.ReplayEventTypes(context.Background(), tx, delivery.Talker{SessionID: "ses_r"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(types, " ") != "agent.context.compacted chat.message" {
+		t.Errorf("read %v, want the summary and the message after it", types)
+	}
+}
