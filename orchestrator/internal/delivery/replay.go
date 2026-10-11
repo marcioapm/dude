@@ -42,10 +42,22 @@ type replayEvent struct {
 
 // replayTypes are the events the replay renders, or reads to render one.
 var replayTypes = []string{
-	EvChatMessage, EvRunSteered, "agent.message", EvQuestionAsked, "question.answered", EvQuestionClosed,
-	"session.told", EvConductorWoken, EvSessionProposed, EvSessionFiled, EvDecisionTaken, EvFindingResolved,
-	EvTaskUpdated, EvSessionRenamed, "agent.tool.called", "agent.tool.completed", "agent.session.replaced", evContextCompacted,
+	EvChatMessage, EvRunSteered, evAgentMessage, EvQuestionAsked, evQuestionAnswered, EvQuestionClosed,
+	evSessionTold, EvConductorWoken, EvSessionProposed, EvSessionFiled, EvDecisionTaken, EvFindingResolved,
+	EvTaskUpdated, EvSessionRenamed, evToolCalled, evToolCompleted, evSessionReplaced, evContextCompacted,
 }
+
+// The events the replay reads that other packages write (the phase
+// syncer, the API), under the names they are written with.
+const (
+	evAgentMessage     = "agent.message"
+	evQuestionAnswered = "question.answered"
+	evSessionTold      = "session.told"
+	evToolCalled       = "agent.tool.called"
+	evToolCompleted    = "agent.tool.completed"
+	evSessionReplaced  = "agent.session.replaced"
+	evContextCompacted = "agent.context.compacted"
+)
 
 // talkerScope (SQL, over events e; $1 the session or task): the talker's
 // ledger. A session's: every event of the session (events_session_of_run
@@ -94,9 +106,6 @@ func fromCompaction(events []replayEvent) (replayStart, []replayEvent) {
 // none) and the Run whose agent wrote it.
 type replayStart struct{ summary, run string }
 
-// evContextCompacted is the phase syncer's record of a compaction.
-const evContextCompacted = "agent.context.compacted"
-
 // renderReplayFrom is the summary under its heading, if any, then the
 // events rendered, within the budget.
 func renderReplayFrom(start replayStart, events []replayEvent) string {
@@ -106,8 +115,13 @@ func renderReplayFrom(start replayStart, events []replayEvent) string {
 // replayBudgetTokens bounds a replay, estimated by replayTokens.
 const replayBudgetTokens = 100_000
 
-// replayTokens estimates the tokens of s: a token per four characters.
-func replayTokens(s string) int { return (utf8.RuneCountInString(s) + 3) / 4 }
+// charsPerToken is the estimate's ratio of characters to tokens.
+const charsPerToken = 4
+
+// replayTokens estimates the tokens of s.
+func replayTokens(s string) int {
+	return (utf8.RuneCountInString(s) + charsPerToken - 1) / charsPerToken
+}
 
 const outputDropped = "[output dropped]"
 
@@ -117,7 +131,7 @@ const outputDropped = "[output dropped]"
 // never cut, and the summary is never dropped.
 func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 	entries = slices.Clone(entries)
-	limit := budget * 4
+	limit := budget * charsPerToken
 	// Sizes are kept by difference, not re-rendered at each step: a
 	// dropped entry takes its text and the blank line before it.
 	chars := utf8.RuneCountInString(joinReplay(start, entries, 0))
@@ -271,11 +285,6 @@ func (e replayEntry) text() string {
 	return e.call + " → " + e.output
 }
 
-// renderReplay renders the events, in their order, as the agent reads them.
-func renderReplay(events []replayEvent) string {
-	return joinReplay(replayStart{}, replayEntries(events), 0)
-}
-
 func replayEntries(events []replayEvent) []replayEntry {
 	// A proposal's line says what became of it: its filings come later.
 	// A filing of a proposal before the replay's start is said on its own.
@@ -322,13 +331,13 @@ func replayEntries(events []replayEvent) []replayEntry {
 				continue
 			}
 			add(ev, said(personOf(ev), str("text"), p["attachments"]))
-		case "agent.message":
+		case evAgentMessage:
 			if t := str("text"); strings.TrimSpace(t) != "" {
 				add(ev, "You: "+t)
 			}
 		case EvQuestionAsked:
 			add(ev, askedLine(p))
-		case "question.answered":
+		case evQuestionAnswered:
 			line := said(personOf(ev)+" answered", str("answer"), p["attachments"])
 			if note := str("note"); note != "" {
 				line += "\n" + personOf(ev) + ", also: " + replayText(note)
@@ -340,7 +349,7 @@ func replayEntries(events []replayEvent) []replayEntry {
 			} else {
 				add(ev, "dude: your question was settled elsewhere, unanswered.")
 			}
-		case "session.told", EvConductorWoken:
+		case evSessionTold, EvConductorWoken:
 			add(ev, "dude: "+str("text"))
 		case EvSessionProposed:
 			add(ev, proposedLine(p, filed[str("proposalId")]))
@@ -379,14 +388,14 @@ func replayEntries(events []replayEvent) []replayEntry {
 			} else {
 				add(ev, fmt.Sprintf("%s named the session %q.", personOf(ev), str("title")))
 			}
-		case "agent.session.replaced":
+		case evSessionReplaced:
 			add(ev, "[Here the agent's session restarted without its conversation.]")
-		case "agent.tool.called":
+		case evToolCalled:
 			key := ev.RunID + "/" + str("callId")
 			calls[key] = len(out)
 			out = append(out, replayEntry{run: ev.RunID, tool: true, call: toolCall(str("tool"), p["input"]),
 				output: "[no output recorded]"})
-		case "agent.tool.completed":
+		case evToolCompleted:
 			key := ev.RunID + "/" + str("callId")
 			i, ok := calls[key]
 			if !ok || str("callId") == "" {

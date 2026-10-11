@@ -18,6 +18,12 @@ func ev(typ, run, who, payload string) replayEvent {
 	return replayEvent{Type: typ, RunID: run, Who: who, Payload: p, Heard: true}
 }
 
+// renderReplay renders the events, in their order, with no summary and no
+// budget.
+func renderReplay(events []replayEvent) string {
+	return joinReplay(replayStart{}, replayEntries(events), 0)
+}
+
 // Every kind of event a brainstorm's replay renders, as the agent reads it.
 func TestTheReplayRendersASessionsConversation(t *testing.T) {
 	// stdout as phases.capOutput stores an output over 4 KiB: its first and
