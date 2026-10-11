@@ -20,13 +20,18 @@ func ev(typ, run, who, payload string) replayEvent {
 
 // Every kind of event a brainstorm's replay renders, as the agent reads it.
 func TestTheReplayRendersASessionsConversation(t *testing.T) {
+	// stdout as phases.capOutput stores an output over 4 KiB: its first and
+	// last 2048 bytes, and how many bytes between them it dropped.
+	head := strings.Repeat("h", 2047) + "\n"
+	tail := strings.Repeat("t", 2040) + "\nEXIT OK"
+	stdout, _ := json.Marshal(map[string]any{"head": head, "tail": tail, "omittedBytes": 9000})
 	events := []replayEvent{
 		ev("chat.message", "run_a", "Ana", `{"text":"where would metering live? ![arch](attachment:att_1)"}`),
 		ev("agent.thought", "run_a", "", `{"text":"SECRET THOUGHT"}`),
 		ev("agent.tool.called", "run_a", "", `{"tool":"read","callId":"c1","input":{"path":"go.mod"}}`),
 		ev("agent.tool.completed", "run_a", "", `{"tool":"read","callId":"c1","status":"completed","output":{"head":"module x"}}`),
 		ev("agent.tool.completed", "run_a", "", `{"tool":"bash","callId":"c2","status":"error","exitCode":2,
-			"stdout":{"head":"HEAD","tail":"TAIL","omittedBytes":9000},"stderr":{"head":"boom"}}`),
+			"stdout":`+string(stdout)+`,"stderr":{"head":"boom"}}`),
 		ev("agent.message", "run_a", "", `{"text":"In billing.\n\nTwo options."}`),
 		ev("session.renamed", "run_a", "", `{"title":"Metering","by":"agent"}`),
 		ev("question.asked", "run_a", "", `{"kind":"agent","prompt":"Which?","toName":"Ana",
@@ -47,9 +52,9 @@ func TestTheReplayRendersASessionsConversation(t *testing.T) {
 
 read({"path":"go.mod"}) → module x
 
-bash() → error: HEAD
+bash() → error: ` + head + `
 [… 9000 bytes cut …]
-TAIL
+` + tail + `
 stderr: boom (exit 2)
 
 You: In billing.
@@ -79,6 +84,9 @@ Bo: carry on [image: plan.png]
 You: On it.`
 	if got != want {
 		t.Errorf("rendered:\n%s\n\nwant:\n%s", got, want)
+	}
+	if i := strings.Index(got, "\n\nYou: In billing."); !strings.Contains(got, "\nEXIT OK\nstderr: boom (exit 2)") && i >= 0 {
+		t.Errorf("the stored tail's last line is cut: …%q", got[max(0, i-80):i])
 	}
 }
 
