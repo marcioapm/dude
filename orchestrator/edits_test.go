@@ -142,7 +142,7 @@ func TestTheConductorsCheckoutIsWritableWithABranchOfItsOwn(t *testing.T) {
 // where lux's fast-forward can move it (lux never switches branches).
 func TestALaterConductorIsCheckedOutOnTheTaskBranch(t *testing.T) {
 	e := newEditing(t)
-	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 	if status, out := e.chat(e.task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}
@@ -285,7 +285,7 @@ func TestACheckoutLineOnAFailedNoteIsToldAgain(t *testing.T) {
 		return e.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL
 			AND strpos(text, 'has local changes') > 0`, e.cond) == 1
 	})
-	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 	if status, out := e.chat(e.task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}
@@ -318,7 +318,7 @@ func TestAConductorInANewAttemptStartsFromTheDefaultBranch(t *testing.T) {
 	e.until("attempt 2's implementer", func() bool {
 		return e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, e.task) == 1
 	})
-	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+	mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 	if status, out := e.chat(e.task, "where are we?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}
@@ -592,7 +592,7 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 			done <- fmt.Sprint(status, " ", body)
 		}()
 		<-paused
-		mustExec(t, e.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, e.cond)
+		mustExec(t, e.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, e.cond)
 		if status, out := e.chat(e.task, "are you there?"); status != 201 {
 			t.Fatalf("chat: %d %v", status, out)
 		}

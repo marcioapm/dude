@@ -12,8 +12,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -183,6 +185,88 @@ func TestOneQuestionThroughTheFormIsTheSameAnswer(t *testing.T) {
 	if answer != "yes" {
 		t.Errorf("answer kept as %q", answer)
 	}
+}
+
+// lux's state events trail the agent's records: an agent that asks and
+// ends its turn at once can have its turn's end read before lux says the
+// Run is running. An answer given before that end was read leaves the
+// turn done with the answer queued; the Run waits to be running and gives
+// the agent the answer, rather than completing without it.
+func TestAnAnswerQueuedBeforeLuxReportsTheRunRunningReachesTheAgent(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	// Every stream holds lux's "running" until released: the agent's
+	// records, its turn's end included, are read first.
+	release := make(chan struct{})
+	w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
+		if typ == "state" && w.lux.EventState(id, eventID) == "running" {
+			<-release
+		}
+	})
+	t.Cleanup(func() {
+		w.lux.BeforeEvent(nil)
+		if !isClosed(release) {
+			close(release)
+		}
+	})
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) == 1 })
+	// Nothing follows the Run between pumps: its turn ends in lux, and is
+	// answered, before dude reads any of it.
+	luxID := w.lux.Runs()[0].ID
+	for deadline := time.Now().Add(20 * time.Second); !turnEnded(w.lux.Records(luxID)) || w.taskStatus(wi) != "awaiting_input"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent never asked and ended its turn\nruns:\n%s", w.describeRuns())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var runID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if status, body := w.call("/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the turn's end to be read before lux says running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL AND lux_state <> 'running'`, runID) == 1
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state <> 'running' AND push_request_id IS NULL
+		AND status <> 'completed'`, runID); n != 1 {
+		t.Fatalf("the Run did not wait for lux to say running\nruns:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL`, runID); n != 1 {
+		t.Fatalf("the answer was not still queued while lux was held")
+	}
+	close(release)
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if in := w.lux.Runs()[0].Inputs; len(in) != 1 || !strings.HasSuffix(in[0], "\n\nyes") {
+		t.Errorf("the agent was given %q", in)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL`, runID); n != 0 {
+		t.Errorf("%d directives failed: the answer did not reach the agent", n)
+	}
+}
+
+// turnEnded: the agent's last record is its going idle after a turn.
+func turnEnded(records []map[string]any) bool {
+	n := len(records)
+	if n < 2 || records[n-2]["type"] != "acp.turn_end" {
+		return false
+	}
+	data, _ := records[n-1]["data"].(map[string]any)
+	return records[n-1]["type"] == "lux.activity" && data["activity"] == "idle"
 }
 
 // A session's question put to one member: they answer the whole ask

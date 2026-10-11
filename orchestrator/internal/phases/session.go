@@ -33,7 +33,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var noTier string
 	var sizes delivery.Sizes
 	var recorded *delivery.Machine
-	var prompts delivery.Prompts
+	var prompt string
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -64,8 +64,11 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, "", role); err != nil {
-			return err
+		// A resume sends no prompt: lux keeps the submitted one.
+		if stored == nil {
+			if prompt, err = s.talkerPrompt(ctx, tx, r, briefing, nil); err != nil {
+				return err
+			}
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err
@@ -76,12 +79,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	if noTier != "" {
 		return lux.Spec{}, runSizes{}, errNoModel(noTier)
 	}
-	var promptRepos []delivery.PromptRepo
 	for _, repo := range repos {
 		in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true,
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name)})
-		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Key + "/" + repo.Name,
-			Path: delivery.SessionRepoPath(repo.Key, repo.Name), ReadOnly: true})
 	}
 	in.RunID, in.OrganizationID, in.SessionID, in.Role = r.ID, r.Org, r.SessionID, role
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
@@ -97,8 +97,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
 		return lux.Spec{}, runSizes{}, err
 	}
-	in.Prompt = delivery.BrainstormPrompt(briefing, delivery.PromptInput{Repositories: promptRepos,
-		Tools: s.Agent.ToolsURL != "", Context: settings.Context, OrgPrompt: prompts.Org})
+	in.Prompt = prompt
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
 		return lux.Spec{}, runSizes{}, errForge{err}

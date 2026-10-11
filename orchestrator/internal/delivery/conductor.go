@@ -58,7 +58,11 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if person == "" {
 		person = w.Name
 	}
-	briefing, err := briefing(ctx, tx, taskID, id, person, message, woken)
+	why := byPerson
+	if woken {
+		why = byWake
+	}
+	briefing, err := briefing(ctx, tx, taskID, id, person, message, why)
 	if err != nil {
 		return "", err
 	}
@@ -142,11 +146,28 @@ func ChatEvent(ctx context.Context, tx pgx.Tx, ref RunRef, w Writer, payload map
 	return err
 }
 
-// Ending (SQL, over runs r): a live conductor whose container stopped
-// without dude asking. Nothing will resume it: it is ended (EndConductor),
-// by the syncer or by the next message in Chat, and nothing more is queued for it.
-const Ending = `(r.status IN ('scheduled', 'starting', 'running') AND r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost')
-	AND r.lux_stop_reason IS NULL AND r.control = 'none')`
+// Unasked (SQL, over runs r): a live Run dude has asked neither to stop nor
+// to take a control.
+const Unasked = `r.status IN ('scheduled', 'starting', 'running') AND r.lux_stop_reason IS NULL AND r.control = 'none'`
+
+// luxResumable (SQL, over runs r): lux states a resume starts again from.
+const luxResumable = `r.lux_state IN ('stopped', 'succeeded', 'failed', 'lost')`
+
+// Ending (SQL, over runs r): a live conductor (or session agent) whose
+// container stopped without dude asking and that nothing can resume: lux
+// ended it for good, or it stopped before its agent ever had a session, so
+// a resume would start one without its briefing. It is ended
+// (EndConductor), by the syncer or by the next message in Chat, and nothing
+// more is queued for it. One lux can still resume is parked instead
+// (Parkable).
+const Ending = `(` + Unasked + ` AND (r.lux_state IN ('cancelled', 'terminated')
+	OR (` + luxResumable + ` AND r.agent_session_epoch = 0)))`
+
+// Parkable (SQL, over runs r): a live conductor or session agent whose
+// container stopped without dude asking, which lux keeps to resume and
+// whose agent has a session to reload: parked by the syncer, so the next
+// message resumes the same lux Run.
+const Parkable = `(` + Unasked + ` AND ` + luxResumable + ` AND r.agent_session_epoch > 0)`
 
 // EndConductor completes a conductor that can no longer be resumed, and
 // hands what it was sent and never read to the next (HandOver); its

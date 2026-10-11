@@ -331,22 +331,29 @@ func (w *world) luxRunOf(runID string) string {
 	return id
 }
 
-// stopped stops a conductor's container on its own, as a dead host would,
-// and waits, without sweeping, for its follower to record what lux said.
+// stopped ends a conductor's lux Run for good without dude asking, as an
+// operator's terminate would (a resumable stop parks it instead), and
+// waits, without sweeping, for its follower to record what lux said.
 func (w *world) stopped(runID string) {
 	w.t.Helper()
-	w.lux.Crash(w.luxRunOf(runID))
+	w.lux.CancelInLux(w.luxRunOf(runID))
+	w.luxStateRecorded(runID, "terminated")
+}
+
+// luxStateRecorded waits, without sweeping, for the Run's follower to record lux's state.
+func (w *world) luxStateRecorded(runID, state string) {
+	w.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'failed'`, runID) == 0 {
+	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = $2`, runID, state) == 0 {
 		if time.Now().After(deadline) {
-			w.t.Fatalf("lux's stop of %s was never recorded:\n%s", runID, w.describeRuns())
+			w.t.Fatalf("lux's %s of %s was never recorded:\n%s", state, runID, w.describeRuns())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// A message Chat took for a conductor whose container then stopped, before
-// the conductor read it, is not lost when the sweep ends that conductor:
+// A message Chat took for a conductor whose lux Run then ended for good,
+// before the conductor read it, is not lost when the sweep ends that conductor:
 // it goes to the next one, which answers it, and the first says where it went.
 func TestAMessageForAConductorThatStoppedReachesTheNext(t *testing.T) {
 	w := conductorWorld(t)
@@ -399,7 +406,7 @@ func TestAMessageForAConductorThatStoppedReachesTheNext(t *testing.T) {
 	}
 }
 
-// Chat never queues for a conductor whose container has stopped: the
+// Chat never queues for a conductor lux has ended for good: the
 // message starts the next conductor at once, which answers it.
 func TestChatStartsTheNextConductorWhenTheLastHasStopped(t *testing.T) {
 	w := conductorWorld(t)
@@ -424,7 +431,7 @@ func TestChatStartsTheNextConductorWhenTheLastHasStopped(t *testing.T) {
 	})
 }
 
-// A conductor that fails mid-turn with a message queued for it hands the
+// A conductor lux ends for good mid-turn with a message queued for it hands the
 // message to the next conductor; one a person aborted fails it, saying so.
 func TestAMessageForAConductorThatFailedOrWasAbortedIsSettled(t *testing.T) {
 	w := conductorWorld(t, fakeagent.HangModel)
@@ -436,7 +443,8 @@ func TestAMessageForAConductorThatFailedOrWasAbortedIsSettled(t *testing.T) {
 	})
 	_, out = w.chat(task, "and the tests?")
 	queued, _ := out["directiveId"].(string)
-	w.lux.Crash(w.luxRunOf(first))
+	// Ended for good mid-turn: one lux could resume is parked instead.
+	w.lux.CancelInLux(w.luxRunOf(first))
 	w.until("the message to reach the next conductor", func() bool {
 		next, _, _ := w.conductor(task)
 		return next != first && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND prompt LIKE '%and the tests?'`, next) == 1
@@ -470,7 +478,7 @@ func TestAMessageForAConductorThatFailedOrWasAbortedIsSettled(t *testing.T) {
 }
 
 // endedConductor is a delivered task whose conductor answered a message
-// and then stopped, and was ended with nothing unread; and that conductor.
+// and then lux ended for good, and was ended with nothing unread; and that conductor.
 func (w *world) endedConductor() (task, ended string) {
 	w.t.Helper()
 	w.syncer.ConductorWarm = time.Hour
