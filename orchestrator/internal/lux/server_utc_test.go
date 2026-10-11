@@ -59,4 +59,14 @@ func TestAServersTimesArePassedOnInUTC(t *testing.T) {
 	if out, _ := json.Marshal(ready); string(out) != `{"readySince":"2026-10-09T12:00:00Z","state":"ready"}` {
 		t.Errorf("a ready server passed on %s", out)
 	}
+
+	// Already in UTC, however lux spells it: passed on byte for byte.
+	asSent := `{ "state":"ready", "since":"2026-10-09T12:00:00.2500Z", "readySince":"2026-10-09T12:00:00+00:00" }`
+	var utc lux.Server
+	if err := json.Unmarshal([]byte(asSent), &utc); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := utc.MarshalJSON(); string(out) != asSent {
+		t.Errorf("a server already in UTC passed on %s", out)
+	}
 }

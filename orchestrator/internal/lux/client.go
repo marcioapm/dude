@@ -581,13 +581,14 @@ func (s *Server) rawInUTC() error {
 		if t == nil {
 			continue
 		}
+		if _, offset := t.Zone(); offset == 0 {
+			continue
+		}
 		utc, err := json.Marshal(t.UTC())
 		if err != nil {
 			return err
 		}
-		if string(m[key]) != string(utc) {
-			m[key], changed = utc, true
-		}
+		m[key], changed = utc, true
 	}
 	if !changed {
 		return nil
