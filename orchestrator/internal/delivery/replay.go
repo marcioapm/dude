@@ -294,15 +294,14 @@ func replayEntries(events []replayEvent) []replayEntry {
 	filed := map[string][]string{}
 	proposed := map[string]bool{}
 	for _, ev := range events {
-		if ev.Type == EvSessionProposed {
+		switch ev.Type {
+		case EvSessionProposed:
 			id, _ := ev.Payload["proposalId"].(string)
 			proposed[id] = true
+		case EvSessionFiled:
+			id, items := filings(ev.Payload)
+			filed[id] = append(filed[id], items...)
 		}
-		if ev.Type != EvSessionFiled {
-			continue
-		}
-		id, items := filings(ev.Payload)
-		filed[id] = append(filed[id], items...)
 	}
 	var out []replayEntry
 	calls := map[string]int{}
@@ -386,11 +385,11 @@ func replayEntries(events []replayEvent) []replayEntry {
 				add(ev, "You changed the task's "+strings.Join(what, " and ")+".")
 			}
 		case EvSessionRenamed:
+			who := personOf(ev)
 			if str("by") == ByAgent {
-				add(ev, fmt.Sprintf("You named the session %q.", str("title")))
-			} else {
-				add(ev, fmt.Sprintf("%s named the session %q.", personOf(ev), str("title")))
+				who = "You"
 			}
+			add(ev, fmt.Sprintf("%s named the session %q.", who, str("title")))
 		case evSessionReplaced:
 			add(ev, "[Here the agent's session restarted without its conversation.]")
 		case evToolCalled:
