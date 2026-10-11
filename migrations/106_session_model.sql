@@ -8,9 +8,10 @@
 --
 -- Each overrides the organisation's on its own. Read when a Run is built
 -- (phases.brainstormSpec); a resumed Run keeps what it was submitted with.
--- Whether the pair fits (delivery.SessionModelProblem) is checked when
--- either is set, by the orchestrator, against the organisation's value for
--- the other.
+-- Any harness takes any tier's model (the LLM proxy translates); the
+-- orchestrator checks only that a named tier is the organisation's and
+-- names a model, and that a named harness is one dude knows
+-- (delivery.SessionModelProblem).
 --
 -- Catalog changes only, as in 103: the columns have no default, so adding
 -- them rewrites nothing, and the foreign key and check are NOT VALID, so
