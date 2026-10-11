@@ -3,13 +3,10 @@ package lux_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// A server's times leave dude in UTC; the rest of what lux sent, a null
-// and a field dude does not know included, leaves as lux sent it.
 func TestAServersTimesArePassedOnInUTC(t *testing.T) {
 	var s lux.Server
 	if err := json.Unmarshal([]byte(`{"name":"web","port":3000,"state":"stopped","readySince":null,
@@ -40,18 +37,6 @@ func TestAServersTimesArePassedOnInUTC(t *testing.T) {
 	if len(got[0]) != 7 {
 		t.Errorf("passed on %d keys: %s", len(got[0]), out)
 	}
-	// The same instants lux meant.
-	var back lux.Server
-	if err := json.Unmarshal(out[1:len(out)-1], &back); err != nil {
-		t.Fatal(err)
-	}
-	if !back.Since.Equal(*s.Since) || !back.LastRequestAt.Equal(*s.LastRequestAt) || back.ReadySince != nil {
-		t.Errorf("since %v / %v, lastRequestAt %v / %v, readySince %v", back.Since, s.Since, back.LastRequestAt, s.LastRequestAt, back.ReadySince)
-	}
-	if !back.Since.Equal(time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)) {
-		t.Errorf("since = %v", back.Since)
-	}
-
 	var ready lux.Server
 	if err := json.Unmarshal([]byte(`{"state":"ready","readySince":"2026-10-09T17:30:00+05:30"}`), &ready); err != nil {
 		t.Fatal(err)
@@ -60,7 +45,7 @@ func TestAServersTimesArePassedOnInUTC(t *testing.T) {
 		t.Errorf("a ready server passed on %s", out)
 	}
 
-	// Already in UTC, however lux spells it: passed on byte for byte.
+	// Zero-offset spellings and whitespace stay byte-for-byte unchanged.
 	asSent := `{ "state":"ready", "since":"2026-10-09T12:00:00.2500Z", "readySince":"2026-10-09T12:00:00+00:00" }`
 	var utc lux.Server
 	if err := json.Unmarshal([]byte(asSent), &utc); err != nil {

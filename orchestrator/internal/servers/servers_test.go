@@ -279,7 +279,6 @@ func TestLuxsTimesAreSentInUTC(t *testing.T) {
 		t.Errorf("moved at %s, want %q", encoded(m), "2026-10-09T12:00:00Z")
 	}
 
-	// The servers list, as the API sends a Run's servers.
 	s := &Service{Lux: serversAt{run: run, server: stopped}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	view := s.view(context.Background(), &runRow{ID: "run_1", Kind: "agent", Status: "running", LuxRunID: "lr_1"}, nil)
 	var sent struct {
@@ -292,7 +291,6 @@ func TestLuxsTimesAreSentInUTC(t *testing.T) {
 	}
 }
 
-// serversAt is a lux with one Run and its servers, as decoded from lux's JSON.
 type serversAt struct {
 	lux.Client
 	run    lux.Run
