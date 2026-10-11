@@ -113,7 +113,7 @@ dude: Decision waiting: before the pull request.
 
 You decided, at nope: start_phase (fix): one more.
 
-You dismissed finding fnd_1: Dismissed by the conductor: generated
+Finding fnd_1: dismissed by the conductor: generated.
 
 You changed the task's goal and acceptance criteria.
 
