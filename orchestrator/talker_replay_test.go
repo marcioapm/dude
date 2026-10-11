@@ -225,6 +225,40 @@ func TestAMessageLuxCancelledAtATerminateIsHandedOnAndBriefedOnce(t *testing.T) 
 	}
 }
 
+// A message the harness accepted mid-turn, failed by lux as "the agent
+// exited before it read it" when a talker with no session to resume
+// crashes, is handed to the next Run, which answers it; its one failure
+// names that Run.
+func TestAMessageUnreadWhenAnUnresumableTalkerCrashesIsHandedOn(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, first := hangingFirst(t, kind)
+			directive := tk.acceptedUnread(first, "did the build pass?")
+			if _, err := tk.owner.Exec(context.Background(), `UPDATE runs SET agent_session_epoch = 0 WHERE id = $1`, first); err != nil {
+				t.Fatal(err)
+			}
+			tk.stopOnItsOwn(first, "failed")
+			var next string
+			tk.until("the next Run to answer the message", func() bool {
+				next = tk.latest()
+				said := tk.said(next)
+				return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
+			})
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`,
+				directive); n != 1 {
+				t.Errorf("%d run.directive.failed for the message, want 1", n)
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1
+				AND payload->>'nextRunId' = $2`, directive, next); n != 1 {
+				t.Errorf("the message's failure does not name %s as having it:\n%s", next, tk.describeRuns())
+			}
+			answer := tk.said(next)[0]
+			third := tk.replaced(next, "and the docs?")
+			tk.replayedOnceBeforeItsAnswer(third, "did the build pass?", answer)
+		})
+	}
+}
+
 // A message lux accepted mid-turn and cancelled when it stopped the
 // conductor for a person's pause is sent again when the conductor is
 // resumed, and answered there once; it was never failed.
