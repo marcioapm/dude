@@ -170,26 +170,37 @@ func TestAScriptedAgentOnEachHarnessIsSteered(t *testing.T) {
 	}
 }
 
-// A role whose harness cannot run its tier's model fails its Run saying
-// so, before lux: Claude Code with an OpenAI model, Codex with Claude.
-func TestARoleOnAHarnessThatCannotRunItsModelFailsSayingWhy(t *testing.T) {
+// Any harness runs any model, the LLM proxy translating: Claude Code on a
+// GPT model and Codex on a Claude one are submitted to lux on their
+// harness, naming the tier's model, and nothing fails.
+func TestARoleOnAnyHarnessIsSubmittedWithAnyModel(t *testing.T) {
 	for harness, model := range map[string]string{"claude-code": "gpt-6-sol", "codex": "claude-sonnet-5"} {
 		t.Run(harness, func(t *testing.T) {
 			w := newWorld(t)
 			w.onModel("implementer", model)
 			w.setHarness("implementer", harness)
+			w.lux.Decide = hang
 			wi := w.task()
 			w.deliver(wi)
-			w.until("the implementer to fail", func() bool {
-				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, wi) == 1
-			})
-			var reason string
-			_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&reason)
-			if !strings.HasPrefix(reason, "The Implementer runs on ") || !strings.Contains(reason, model) || !strings.Contains(reason, "picks another harness or tier") {
-				t.Errorf("reason = %q", reason)
+			w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+			spec := w.specOf("implement")
+			if spec.Workload.Adapter != harness || spec.Labels["dude.harness"] != harness {
+				t.Errorf("adapter %q, label %q", spec.Workload.Adapter, spec.Labels["dude.harness"])
 			}
-			if n := len(w.lux.Runs()); n != 0 {
-				t.Errorf("%d Runs reached lux", n)
+			switch harness {
+			case "claude-code":
+				if i := slices.Index(spec.Workload.Command, "--model"); i < 0 || i+1 >= len(spec.Workload.Command) || spec.Workload.Command[i+1] != model {
+					t.Errorf("command = %v, want --model %s", spec.Workload.Command, model)
+				}
+			case "codex":
+				i := slices.IndexFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "CODEX_CONFIG" })
+				if i < 0 || !slices.Contains(strings.Split(spec.Secrets[i].Value, "\n"), `model="`+model+`"`) {
+					t.Errorf("CODEX_CONFIG does not name %s: %+v", model, spec.Secrets)
+				}
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status <> 'failed'
+				AND harness = $2 AND model = $3`, wi, harness, model); n != 1 {
+				t.Errorf("the implementer does not record %s on %s, or failed", model, harness)
 			}
 		})
 	}

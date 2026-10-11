@@ -67,21 +67,6 @@ func (s *sessionWorld) otherOrg() string {
 	return id
 }
 
-// failure waits for the session's latest agent to fail, and is why.
-func (s *sessionWorld) failure(session string) string {
-	s.t.Helper()
-	var why string
-	s.until("the session's agent failed", func() bool {
-		run, status := s.brainstorm(session)
-		if status != "failed" {
-			return false
-		}
-		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, run).Scan(&why)
-		return true
-	})
-	return why
-}
-
 // A session made with its own tier and harness stores them, its agent is
 // submitted with them, and its detail says so.
 func TestASessionsOwnTierAndHarnessAreWhatItsAgentRunsOn(t *testing.T) {
@@ -138,18 +123,13 @@ func TestASessionWithOnlyAHarnessTakesTheOrganisationsTier(t *testing.T) {
 	}
 }
 
-// A pair the harness cannot run is refused with a 400 that says why, on
-// create (no session is made) and on /model (nothing changes) — counting
-// the organisation's value for the half the session leaves unset.
-func TestAMisfitTierAndHarnessAreRefused(t *testing.T) {
+// A tier or harness a session cannot name is refused with a 400, on
+// create (no session is made) and on /model (nothing changes).
+func TestATierOrHarnessASessionCannotNameIsRefused(t *testing.T) {
 	s := newSessionWorld(t)
-	gpt := s.tierOn("Sol", "gpt-6-sol")
-	opus := s.tierOn("Opus", "claude-opus-5")
 	// Another organisation's tier is not one this session can name.
 	foreign := s.foreignTier()
 	refused := []map[string]any{
-		{"tier": gpt, "harness": "claude-code"},
-		{"tier": opus, "harness": "codex"},
 		{"tier": "mtr_nope", "harness": nil},
 		{"tier": nil, "harness": "aider"},
 		{"tier": foreign, "harness": nil},
@@ -165,10 +145,6 @@ func TestAMisfitTierAndHarnessAreRefused(t *testing.T) {
 		if status != http.StatusBadRequest {
 			t.Errorf("create %v: %d %v, want 400", withMessage, status, out)
 		}
-	}
-	if status, out := s.as(s.marcio, "POST", "/internal/sessions", map[string]any{"tier": gpt, "harness": "claude-code"}); status != 400 ||
-		!strings.Contains(out["error"].(map[string]any)["message"].(string), "Claude Code takes an Anthropic model") {
-		t.Errorf("create: %d %v", status, out)
 	}
 	if n := s.count(`SELECT count(*) FROM sessions WHERE organization_id = $1`, s.org); n != 0 {
 		t.Errorf("%d sessions made", n)
@@ -190,26 +166,40 @@ func TestAMisfitTierAndHarnessAreRefused(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.changed'`, refusedOn); n != 0 {
 		t.Errorf("a refused /model was recorded")
 	}
+}
 
-	// The organisation's Brainstorm on Claude Code: a session's OpenAI tier
-	// alone does not fit it.
-	s.brainstormOrg("claude-code")
-	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
-	id := s.session()
-	if status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": nil}); status != 400 {
-		t.Errorf("/model with the organisation's harness: %d %v, want 400", status, out)
+// Any harness takes any tier's model, the LLM proxy translating: Codex
+// with a Claude tier and Claude Code with a GPT one are taken on create
+// and on /model, the detail carries no misfit, and the agent is submitted
+// on that pair.
+func TestAnyHarnessWithAnyTierIsTaken(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	opus := s.tierOn("Opus", "claude-opus-5")
+	sol := s.tierOn("Sol", "gpt-6-sol")
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "tier": opus, "harness": "codex"})["id"].(string)
+	run, model, tier, harness := s.submitted(id)
+	if model != "claude-opus-5" || tier != "Opus" || harness != "codex" {
+		t.Errorf("submitted on %s (%s) · %s, want claude-opus-5 (Opus) · codex", model, tier, harness)
 	}
-	if status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"}); status != 400 {
-		t.Errorf("/model with the organisation's tier: %d %v, want 400", status, out)
+	m := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["model"].(map[string]any)
+	if _, has := m["misfit"]; has {
+		t.Errorf("the detail carries a misfit: %v", m)
 	}
-	if n := s.count(`SELECT count(*) FROM sessions WHERE id = $1 AND tier IS NULL AND harness IS NULL`, id); n != 1 {
-		t.Errorf("a refused change was stored")
+
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": sol, "harness": "claude-code"})
+	if eff := out["model"].(map[string]any)["effective"].(map[string]any); eff["model"] != "gpt-6-sol" || eff["harness"] != "claude-code" {
+		t.Errorf("answered %v", out)
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.changed'`, id); n != 0 {
-		t.Errorf("a refused change was recorded")
+	if _, has := out["model"].(map[string]any)["misfit"]; has {
+		t.Errorf("the answer carries a misfit: %v", out)
 	}
-	// Both halves together fit.
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": "codex"})
+	s.endRun(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "again"})
+	s.until("a second agent", func() bool { r, _ := s.brainstorm(id); return r != run })
+	if _, model, tier, harness := s.submitted(id); model != "gpt-6-sol" || tier != "Sol" || harness != "claude-code" {
+		t.Errorf("next start on %s (%s) · %s, want gpt-6-sol (Sol) · claude-code", model, tier, harness)
+	}
 }
 
 // Only the owner chooses the model: a member who can chat, a reader and
@@ -363,48 +353,29 @@ func TestATierWithNoModelIsRefused(t *testing.T) {
 	}
 }
 
-// A session that chooses nothing follows the organisation and is never
-// refused for it: an organisation whose Brainstorm pair does not fit still
-// makes one, whose agent fails in the admin's words, and /model back to
-// the organisation's is taken.
-func TestASessionThatChoosesNothingIsNotRefused(t *testing.T) {
+// A session following the organisation's Brainstorm, Codex on a Claude
+// tier, is made and its agent submitted on that pair; and a session that
+// sets only one half is taken whatever the organisation's other half is.
+func TestASessionOnTheOrganisationsPairIsSubmitted(t *testing.T) {
 	s := newSessionWorld(t)
+	s.lux.Decide = hang
 	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
 	s.brainstormOrg("codex")
 	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
-	if why := s.failure(id); !strings.Contains(why, "The Brainstorm runs on Codex") || !strings.Contains(why, "An admin picks another harness or tier in Agents.") {
-		t.Errorf("failed with %q, want the organisation's wording", why)
+	if _, model, tier, harness := s.submitted(id); model != "claude-sonnet-5" || tier != "Thinker" || harness != "codex" {
+		t.Errorf("submitted on %s (%s) · %s, want claude-sonnet-5 (Thinker) · codex", model, tier, harness)
 	}
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": nil})
-	m := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["model"].(map[string]any)
-	if why, _ := m["misfit"].(string); !strings.Contains(why, "An admin picks") {
-		t.Errorf("model.misfit = %v, want the organisation's wording", m["misfit"])
+	if run, status := s.brainstorm(id); status == "failed" {
+		t.Errorf("the session's agent %s failed", run)
 	}
-}
 
-// A pair that stops fitting after it was chosen: a session on Sol and
-// Codex whose Sol is removed falls back to the organisation's Anthropic
-// tier, keeping Codex. Its detail says so, and its next start fails
-// telling the owner to choose again in the session's Model, not an admin.
-func TestAPairThatNoLongerFitsSaysSoInTheSessionsWords(t *testing.T) {
-	s := newSessionWorld(t)
-	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	s.brainstormOrg("claude-code")
 	sol := s.tierOn("Sol", "gpt-6-sol")
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": sol, "harness": "codex"})
-	m := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["model"].(map[string]any)
-	if m["misfit"] != nil {
-		t.Errorf("a fitting pair says %v", m["misfit"])
-	}
-	mustExec(t, s.owner, `DELETE FROM model_tiers WHERE id = $1`, sol)
-	m = s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["model"].(map[string]any)
-	const want = "Codex takes an OpenAI model, but the tier Thinker requests claude-sonnet-5. Choose another harness or tier in the session's Model."
-	if m["misfit"] != want {
-		t.Errorf("model.misfit = %v, want %q", m["misfit"], want)
-	}
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
-	if why := s.failure(id); why != want {
-		t.Errorf("failed with %q, want %q", why, want)
+	other := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+other+"/model", map[string]any{"tier": sol, "harness": nil})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+other+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	if n := s.count(`SELECT count(*) FROM sessions WHERE id = $1 AND tier IS NULL AND harness = 'codex'`, other); n != 1 {
+		t.Errorf("a one-half change was not stored")
 	}
 }
 

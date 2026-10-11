@@ -25,8 +25,8 @@ type RoleSettings struct {
 	// Per-role notes, appended to the role's prompt.
 	Context string
 	// The coding agent its Runs run on (HarnessOpenCode when no layer
-	// names one). Whether it can run the tier's model is checked when a Run
-	// is built (HarnessFits), not when it is saved.
+	// names one). Any harness runs any tier's model: the LLM proxy
+	// translates between the harness's API and the model's.
 	Harness string
 }
 
@@ -98,34 +98,6 @@ func (rs RoleSettings) HarnessName() string {
 		return HarnessOpenCode
 	}
 	return rs.Harness
-}
-
-// HarnessFits says why harness cannot run model, in words a Run fails
-// with; "" when it can. Claude Code speaks only Anthropic's API and Codex
-// only OpenAI's; OpenCode speaks both (llm.Provider decides which a model
-// goes through). who names the role, as RoleName does.
-func HarnessFits(harness, model, tier, who string, anthropic bool) string {
-	if harnessRuns(harness, anthropic) {
-		return ""
-	}
-	return fmt.Sprintf("The %s runs on %s, which takes %s, but its tier %s requests %s. An admin picks another harness or tier in Agents.",
-		who, harnessLabel[harness], harnessWants(harness), tier, model)
-}
-
-// harnessWants is the models harness takes, in words; "" for one that
-// takes both providers' (OpenCode). packages/domain harnessWants says the same.
-func harnessWants(harness string) string {
-	switch harness {
-	case HarnessClaudeCode:
-		return "an Anthropic model (claude-…)"
-	case HarnessCodex:
-		return "an OpenAI model"
-	}
-	return ""
-}
-
-func harnessRuns(harness string, anthropic bool) bool {
-	return !(harness == HarnessClaudeCode && !anthropic) && !(harness == HarnessCodex && anthropic)
 }
 
 // The no-progress limit: a role's default, and the least a stored one is
