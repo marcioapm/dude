@@ -179,6 +179,21 @@ func TestTheReplayStartsFromTheNewestCompactionSummary(t *testing.T) {
 	}
 }
 
+// A proposal made before the summary and filed after it: the filing is
+// said on its own, since the proposal's line is not in the replay.
+func TestAFilingOfAProposalBeforeTheSummaryIsReplayed(t *testing.T) {
+	summary, rest := fromCompaction([]replayEvent{
+		ev("session.proposed", "run_s", "", `{"proposalId":"pp1","items":[{"kind":"task","project":"BL","title":"Meter"}]}`),
+		ev("agent.context.compacted", "run_s", "", `{"summary":"SUM"}`),
+		ev("session.filed", "", "Ana", `{"proposalId":"pp1","by":"Ana","filed":[{"item":0,"key":"BL-9","kind":"task"}]}`),
+		ev("agent.message", "run_s", "", `{"text":"Noted."}`),
+	})
+	want := "## Earlier, as the agent summarised it\n\nSUM\n\n## Since then\n\nYour earlier proposal: item 1 filed by Ana as BL-9.\n\nYou: Noted."
+	if got := renderReplayFrom(summary, rest); got != want {
+		t.Errorf("rendered:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
 // Over budget, the replay sheds in order: tool outputs, oldest first, the
 // call kept; then tool calls whole, oldest first; then, only if still
 // over, the oldest turns, said in one line. A person's or the agent's
