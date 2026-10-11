@@ -3,6 +3,7 @@
  * conversation with an agent that belongs to its members, not a task.
  */
 
+import type { Harness } from "./harnesses.ts";
 import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
 
@@ -132,6 +133,8 @@ export interface SessionDetail {
     people: SessionMemberView[];
     projects: SessionProjectRef[];
     run: { id: string; status: string; dudePause: string | null; model: string | null; modelTier: string | null;
+      /** The harness it was submitted on (runs.harness): "scripted" for the scripted agent; absent from an older orchestrator. */
+      harness?: string | null;
       machine: string | null; waiting: boolean } | null;
     runs: string[];
     costUsd: number;
@@ -140,6 +143,30 @@ export interface SessionDetail {
   you: { id: string; role: SessionRole; archived: boolean };
   proposals: Proposal[] | null;
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
+  /** The model its agent runs on; absent from an older orchestrator. */
+  model?: SessionModel;
+}
+
+/** A tier as a session's model names it. */
+export interface SessionModelTier {
+  id: string;
+  name: string;
+  model: string | null;
+  effort: string | null;
+}
+
+/**
+ * A session's model: what it chose (each null follows the organisation's
+ * Brainstorm setting), the organisation's setting, and what its agent's
+ * next start would use. A change applies at that start.
+ */
+export interface SessionModel {
+  tier: SessionModelTier | null;
+  harness: Harness | null;
+  effective: { tierName: string | null; model: string | null; harness: Harness };
+  organization: { tier: SessionModelTier | null; harness: Harness };
+  /** Why the effective pair cannot run, as its next start would fail saying; null when it can. Absent from an older orchestrator. */
+  misfit?: string | null;
 }
 
 export interface SessionLink {

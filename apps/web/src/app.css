@@ -572,6 +572,11 @@ body {
   justify-content: space-between;
   width: 100%;
 }
+/* The rail's Model block: the picker, then when a change applies, under it. */
+.sessionModelNote {
+  display: block;
+  margin-top: var(--ds-space-4);
+}
 .sessionList,
 .sessionLinkList,
 .sessionLinkRepos,

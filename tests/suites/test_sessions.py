@@ -497,6 +497,94 @@ def test_a_project_linked_in_the_welcomes_composer_is_what_the_session_it_makes_
     expect(linked).not_to_contain_text("web-console")
 
 
+def _menu_item(page: Page, name: str):
+    """The open menu's radio item named name; a tier's name may hold a "/", which a selector's regex cannot."""
+    return page.get_by_role("menuitemradio").filter(has=page.get_by_text(name, exact=True))
+
+
+def _brainstorm_run(client: ApiClient, owner_dsn: str, session: str, after: str | None = None) -> dict:
+    """The session's latest Run once lux has it (other than `after`), as the API shows it: what it
+    was submitted with. The database is read only to wait for the submit."""
+    run_id = wait_until(lambda: [r["id"] for r in query(owner_dsn, """SELECT id FROM runs
+        WHERE session_id = %s AND lux_run_id IS NOT NULL ORDER BY created_at DESC LIMIT 1""", (session,)) if r["id"] != after],
+        timeout=60, message="the session's agent was never submitted")[0]
+    resp = client.get(f"/v1/runs/{run_id}")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.ui
+def test_a_tier_and_harness_chosen_in_the_welcomes_composer_are_what_its_agent_runs_on(
+        client: ApiClient, page: Page, web_url: str, org: dict, owner_dsn: str):
+    """The organisation's Brainstorm on one scripted tier; the composer picks another and Claude
+    Code. The session made keeps both, and its agent is submitted with them. The scripted agent
+    stands in for any harness (fakeagent.Is), so the pair is never refused."""
+    _scripted_brainstorm(client)
+    chosen = client.tier_for("fake/hang")
+    name = next(t["name"] for t in client.get("/v1/models/tiers").json()["tiers"] if t["id"] == chosen)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"], at="#/")
+    picker = page.get_by_test_id("welcome").get_by_test_id("model-picker")
+    expect(picker).to_have_attribute("aria-label", re.compile(r"on OpenCode \(organisation default\)$"))
+    picker.click()
+    _menu_item(page, name).click()
+    page.get_by_role("menuitemradio", name="Claude Code", exact=True).click()
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("menu")).to_have_count(0)
+    expect(picker).to_have_attribute("aria-label", f"Model: {name} on Claude Code")
+    session = _welcome_send(page, "where does metering go?")
+    model = client.get(f"/v1/brainstorms/{session}").json()["model"]
+    assert (model["tier"]["id"], model["harness"]) == (chosen, "claude-code"), model
+    assert model["effective"] == {"tierName": name, "model": "fake/hang", "harness": "claude-code"}, model
+    run = _brainstorm_run(client, owner_dsn, session)
+    assert (run["model"], run["modelTier"], run["harness"]) == ("fake/hang", name, "claude-code"), run
+    # The rail says what it runs on; the owner may change it.
+    rail = page.get_by_test_id("session-model")
+    expect(rail.get_by_role("button", name=f"Model: {name} on Claude Code")).to_be_visible(timeout=15_000)
+
+
+@pytest.mark.ui
+def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
+        client: ApiClient, env, page: Page, web_url: str, org: dict, owner_dsn: str):
+    """A change in the rail is recorded in the Chat and reaches the agent's next start; a member who
+    is not the owner is refused it, and reads it from the API. That a resumed Run keeps what it was
+    submitted with is the orchestrator's TestAChangeAppliesAtTheNextStartAndAResumeKeepsItsHarness,
+    which reads the resume's secrets."""
+    _scripted_brainstorm(client)
+    chosen = client.tier_for("fake/hang")
+    name = next(t["name"] for t in client.get("/v1/models/tiers").json()["tiers"] if t["id"] == chosen)
+    made = client.post("/v1/brainstorms", {"message": "where does metering go?"})
+    assert made.status_code == 201, made.text
+    session = made.json()["id"]
+    first = _brainstorm_run(client, owner_dsn, session)
+    assert first["harness"] == "scripted", first
+    ana, ana_client = _person(client, env, "Ana Rail")
+    assert client.post(f"/v1/brainstorms/{session}/people", {"people": [ana["id"]], "role": "chat"}).status_code == 200
+    assert ana_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
+    assert ana_client.post(f"/v1/brainstorms/{session}/model", {"tier": chosen, "harness": None}).status_code == 403
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
+    rail = page.get_by_test_id("session-model")
+    # The owner's chip is a button at once; its menu reads the organisation's tiers as it opens.
+    rail.get_by_role("button", name=re.compile(r"^Model: ")).click()
+    _menu_item(page, name).click()
+    page.get_by_role("menuitemradio", name="Codex", exact=True).click()
+    page.keyboard.press("Escape")
+    expect(rail.get_by_role("button", name=f"Model: {name} on Codex")).to_be_visible()
+    # Each pick is a change of its own, said in the Chat; the last says what the next start uses.
+    expect(page.get_by_test_id("session-notice").filter(has_text="set the model to").last).to_contain_text(
+        f"{name} · Codex; it applies the next time the agent starts.", timeout=15_000)
+    # Once it has ended, the next message's agent starts on the new choice.
+    execute(owner_dsn, "UPDATE runs SET status = 'completed', ended_at = now() WHERE id = %s", (first["id"],))
+    assert client.post(f"/v1/brainstorms/{session}/chat", {"text": "a fresh start"}).status_code in (200, 201)
+    second = _brainstorm_run(client, owner_dsn, session, after=first["id"])
+    assert (second["model"], second["modelTier"], second["harness"]) == ("fake/hang", name, "codex"), second
+    # Ana reads it from the API.
+    detail = ana_client.get(f"/v1/brainstorms/{session}").json()["model"]
+    assert detail["effective"] == {"tierName": name, "model": "fake/hang", "harness": "codex"}, detail
+
+
 @pytest.mark.ui
 def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
         client: ApiClient, env, page: Page, web_url: str, org: dict):
@@ -508,13 +596,15 @@ def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
     assert client.post(f"/v1/brainstorms/{session}/people", {"people": [ana["id"]], "role": "chat"}).status_code == 200
     assert ana_client.post(f"/v1/brainstorms/{session}/accept").status_code == 200
     client.post(f"/v1/brainstorms/{session}/chat", {"text": "metering"})
-    wait_until(lambda: client.get(f"/v1/brainstorms/{session}").json()["session"]["run"], timeout=60, message="no Run")
+    run = wait_until(lambda: (r := client.get(f"/v1/brainstorms/{session}").json()["session"]["run"]) and r["modelTier"] and r["harness"] and r,
+                     timeout=60, message="no Run submitted")
     page.set_viewport_size({"width": 375, "height": 800})
     sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
     header = page.get_by_test_id("session-screen").locator("header").first
     expect(header.get_by_test_id("share-open")).to_be_visible(timeout=15_000)
     expect(header.get_by_label("Shared with 1")).to_be_visible()
-    expect(header).to_contain_text("Brainstorm · fake/scripted")
+    # The live Run's tier and harness, as between runs; the scripted agent is recorded as "scripted".
+    expect(header).to_contain_text(f"Brainstorm · {run['modelTier']} · scripted")
     m = header.evaluate("""h => {
         const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
         const probe = words.cloneNode(false);

@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { PersistedEvent, ProposalItemStatus, SessionDetail, SessionsList } from "@dude/domain";
+import type { Harness, PersistedEvent, ProposalItemStatus, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -13,11 +13,14 @@ import { PeopleProvider } from "../src/people.tsx";
 import { SessionScreen, sessionNotice } from "../src/screens/SessionScreen.tsx";
 import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
+import { forgetModelOptions } from "../src/sessionModel.ts";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { Artifact, SentAnswer } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
+import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { useState } from "react";
+import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -137,6 +140,14 @@ async function write(page: HTMLElement, text: string) {
     composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
   await settle();
+}
+
+/** The open menu's item whose name starts with label (its name, then its model or why it is refused), once it is there. */
+async function menuItem(label: string): Promise<HTMLElement> {
+  return until(() => {
+    const found = allByRole(document, "menuitemradio").filter((r) => accessibleName(r).startsWith(label));
+    return found.length === 1 ? found[0] : null;
+  }, `the menu's ${label}`);
 }
 
 describe("a brainstorm session's page", () => {
@@ -645,9 +656,9 @@ describe("a session made from the welcome", () => {
   const PROJECTS = [{ id: "prj_bl", name: "billing" }, { id: "prj_wc", name: "web-console" }];
 
   class Making extends SessionClient {
-    made: Array<{ message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> }> = [];
+    made: Array<{ message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }>; tier?: string; harness?: string }> = [];
     fail: Error | null = null;
-    override createSession(input: { message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }> } = {}) {
+    override createSession(input: { message?: string; projects?: Array<{ projectId: string; repositoryIds: string[] }>; tier?: string; harness?: Harness } = {}) {
       if (this.fail) return Promise.reject(this.fail);
       this.made.push(input);
       return Promise.resolve({ id: "ssn_new", title: null, runId: "run_new" });
@@ -699,6 +710,505 @@ describe("a session made from the welcome", () => {
     expect(opened).toEqual([]);
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=welcome] textarea")!.value).toBe("where does metering go?");
     expect(page.querySelector("[data-testid=welcome-problem]")!.textContent).toContain("Could not start the session");
+  });
+
+  // The fixtures' organisation: Brainstorm on Thinker (claude-fable-5-1), on OpenCode.
+  async function pickModel(page: HTMLElement, ...names: string[]) {
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    for (const name of names) await click(await menuItem(name));
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  }
+
+  test("the composer says the organisation's model; sent as it is, the session names none", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on OpenCode (organisation default)");
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([{ message: "where does metering go?", projects: [] }]);
+  });
+
+  test("a tier and harness chosen in the composer go with the first message", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    await pickModel(page, "Coder", "Claude Code");
+    expect(page.querySelector("[data-testid=welcome] [data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+    await send(page, "where does metering go?");
+    expect(client.made).toEqual([{ message: "where does metering go?", projects: [], tier: "mtr_coder", harness: "claude-code" }]);
+  });
+
+  test("only the half chosen is sent; set back to the organisation's, it is left out", async () => {
+    const client = new Making(detail("owner"));
+    const page = await welcome(client, []);
+    await pickModel(page, "Claude Code", "Coder", "Organisation default (Thinker)");
+    await send(page, "hello");
+    expect(client.made).toEqual([{ message: "hello", projects: [], harness: "claude-code" }]);
+  });
+
+  test("the organisation's own harness is what the chip says it follows", async () => {
+    class OnClaudeCode extends Making {
+      override async organizationSettings() {
+        const settings = await super.organizationSettings();
+        const brainstorm = settings.roles.brainstorm;
+        return { ...settings, roles: { ...settings.roles, brainstorm: { ...brainstorm, harness: { ...brainstorm.harness, value: "claude-code" as const } } } };
+      }
+    }
+    const page = await welcome(new OnClaudeCode(detail("owner")), []);
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on Claude Code (organisation default)");
+  });
+
+  test("the organisation's tier is the one its setting names, not the first listed", async () => {
+    class OnCoder extends Making {
+      override async organizationSettings() {
+        const settings = await super.organizationSettings();
+        const brainstorm = settings.roles.brainstorm;
+        return { ...settings, roles: { ...settings.roles, brainstorm: { ...brainstorm, tier: { ...brainstorm.tier, value: "mtr_coder" } } } };
+      }
+    }
+    const page = await welcome(new OnCoder(detail("owner")), []);
+    const chip = await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on OpenCode (organisation default)");
+  });
+
+  test("tiers that cannot be read leave the picker out, and the session is still made, following the organisation", async () => {
+    class NoTiers extends Making {
+      down = true;
+      override modelTiers() {
+        return this.down ? Promise.reject(new ApiError(503, "unavailable", "down")) as never : super.modelTiers();
+      }
+    }
+    const client = new NoTiers(detail("owner"));
+    const page = await welcome(client, []);
+    await settle(100);
+    expect(page.querySelector("[data-testid=welcome] [data-testid=model-picker]")).toBeNull();
+    await send(page, "hello");
+    expect(client.made).toEqual([{ message: "hello", projects: [] }]);
+    // The failure is not kept: the next welcome reads them again, and has its picker.
+    await mounted.pop()!();
+    client.down = false;
+    const again = await welcome(client, []);
+    await until(() => again.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the picker after a failed read");
+  });
+
+  test("the welcome mounted again reads the tiers and settings once; once forgotten, again", async () => {
+    class Counting extends Making {
+      reads = 0;
+      override modelTiers() {
+        this.reads++;
+        return super.modelTiers();
+      }
+    }
+    const client = new Counting(detail("owner"));
+    for (let i = 0; i < 2; i++) {
+      const page = await welcome(client, []);
+      await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+      await mounted.pop()!();
+    }
+    expect(client.reads).toBe(1);
+    forgetModelOptions(client);
+    const page = await welcome(client, []);
+    await until(() => page.querySelector("[data-testid=welcome] [data-testid=model-picker]"), "the model picker");
+    expect(client.reads).toBe(2);
+  });
+
+  test("a mounted welcome reads the tiers and the organisation's setting again once forgotten: a moved harness and a removed tier show", async () => {
+    class Moving extends Making {
+      harness: Harness = "opencode";
+      removed = new Set<string>();
+      override async organizationSettings() {
+        const settings = await super.organizationSettings();
+        const brainstorm = settings.roles.brainstorm;
+        return { ...settings, roles: { ...settings.roles, brainstorm: { ...brainstorm, harness: { ...brainstorm.harness, value: this.harness } } } };
+      }
+      override async modelTiers() {
+        const read = await super.modelTiers();
+        return { ...read, tiers: read.tiers.filter((t) => !this.removed.has(t.id)) };
+      }
+    }
+    const client = new Moving(detail("owner"));
+    const page = await welcome(client, []);
+    const chip = () => page.querySelector("[data-testid=welcome] [data-testid=model-picker]");
+    await until(() => chip()?.getAttribute("aria-label") === "Model: Thinker on OpenCode (organisation default)" || null, "the organisation's pair");
+    client.harness = "claude-code";
+    client.removed.add("mtr_coder");
+    await act(async () => forgetModelOptions(client));
+    await until(() => chip()?.getAttribute("aria-label") === "Model: Thinker on Claude Code (organisation default)" || null, "the moved harness");
+    await act(async () => void chip()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await menuItem("Thinker");
+    expect(allByRole(document, "menuitemradio").some((r) => accessibleName(r).startsWith("Coder"))).toBe(false);
+  });
+});
+
+describe("a session's model", () => {
+  const MODEL: SessionModel = {
+    tier: null, harness: null,
+    effective: { tierName: "Thinker", model: "claude-fable-5-1", harness: "opencode" },
+    organization: { tier: { id: "mtr_thinker", name: "Thinker", model: "claude-fable-5-1", effort: "high" }, harness: "opencode" },
+  };
+
+  class Choosing extends SessionClient {
+    chosen: Array<{ tier: string | null; harness: string | null }> = [];
+    override setSessionModel(_id: string, choice: { tier: string | null; harness: Harness | null }) {
+      this.chosen.push(choice);
+      const tier = choice.tier === "mtr_coder" ? { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null } : null;
+      const model: SessionModel = { ...MODEL, tier, harness: choice.harness,
+        effective: { tierName: tier?.name ?? "Thinker", model: tier?.model ?? "claude-fable-5-1", harness: choice.harness ?? "opencode" } };
+      this.detail = { ...this.detail, model };
+      // The orchestrator records it on the session, and the stream brings it.
+      this.ledger.push(ev("session.model.changed", { by: YOU, tier: tier && { id: tier.id, name: tier.name }, harness: choice.harness },
+        { type: "human", id: YOU }));
+      emit(this.ledger.at(-1)!);
+      return Promise.resolve({ id: SESSION, model });
+    }
+  }
+
+  test("the owner changes it in the rail: it posts both halves, and the Chat says who and when it applies", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · OpenCode (organisation default)");
+    const chip = await until(() => rail.querySelector("button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click(await menuItem("Claude Code"));
+    expect(client.chosen).toEqual([{ tier: null, harness: "claude-code" }]);
+    await until(() => [...page.querySelectorAll("[data-testid=session-notice]")].find((n) => n.textContent?.includes("set the model")), "the notice");
+    const notice = [...page.querySelectorAll("[data-testid=session-notice]")].map((n) => n.textContent).find((t) => t?.includes("set the model"));
+    expect(notice).toContain(`${ME.name.split(" ")[0]} set the model to the organisation's tier · Claude Code; it applies the next time the agent starts.`);
+    expect(rail.querySelector("[data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Thinker on Claude Code");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Claude Code");
+  });
+
+  test("two picks before the first is answered: the second builds on the first, and they are posted in order", async () => {
+    class Slow extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Slow(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    const chip = await until(() => rail.querySelector("button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click(await menuItem("Coder"));
+    await click(await menuItem("Claude Code"));
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+    // Only the first is out; the second waits for its answer.
+    expect(client.release.length).toBe(1);
+    await act(async () => client.release[0]!());
+    await until(() => client.release.length === 2 || null, "the second post");
+    await act(async () => client.release[1]!());
+    await settle();
+    expect(client.chosen).toEqual([{ tier: "mtr_coder", harness: null }, { tier: "mtr_coder", harness: "claude-code" }]);
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder on Claude Code");
+  });
+
+  const chipName = (page: HTMLElement) => page.querySelector("[data-testid=session-model] [data-testid=model-picker]")?.getAttribute("aria-label")
+    ?? page.querySelector("[data-testid=session-model] [data-testid=model-picker]")?.textContent ?? null;
+  async function openRailMenu(page: HTMLElement) {
+    const chip = await until(() => page.querySelector("[data-testid=session-model] button[data-testid=model-picker]"), "the owner's picker");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    return chip;
+  }
+
+  test("once its post is answered, the chip follows the detail: a removed tier re-read puts it back on the organisation's", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await until(() => chipName(page) === "Model: Coder on OpenCode" || null, "the pick answered");
+    // The tier is removed: the orchestrator sets the session back, and records it.
+    client.detail = { ...client.detail, model: MODEL };
+    client.ledger.push(ev("session.model.fallback", { tier: { id: "mtr_coder", name: "Coder" } }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => chipName(page) === "Model: Thinker on OpenCode (organisation default)" || null, "the chip follows the detail");
+  });
+
+  test("a failed post says why, puts the chip back on the detail, and the pick queued behind it is not sent", async () => {
+    class Failing extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(_id: string, choice: { tier: string | null; harness: Harness | null }) {
+        this.chosen.push(choice);
+        return new Promise<{ id: string; model: SessionModel }>((_resolve, reject) => {
+          this.release.push(() => reject(new ApiError(400, "bad_model", "there is no model tier mtr_coder")));
+        });
+      }
+    }
+    const client = new Failing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await click(await menuItem("Claude Code"));
+    expect(chipName(page)).toBe("Model: Coder on Claude Code");
+    await act(async () => client.release[0]!());
+    await until(() => page.querySelector("[data-testid=session-problem]"), "the problem");
+    expect(page.querySelector("[data-testid=session-problem]")!.textContent).toBe("Could not change the model: there is no model tier mtr_coder");
+    await settle();
+    // Only the failed pick was posted: the second carried its tier.
+    expect(client.chosen).toEqual([{ tier: "mtr_coder", harness: null }]);
+    expect(chipName(page)).toBe("Model: Thinker on OpenCode (organisation default)");
+  });
+
+  test("a post answered after the page moved to another session changes nothing there", async () => {
+    const OTHER = "ssn_other";
+    class Two extends Choosing {
+      release: Array<() => void> = [];
+      posted: string[] = [];
+      override getSession(id: string): Promise<SessionDetail> {
+        return Promise.resolve(id === OTHER ? { ...this.detail, session: { ...this.detail.session, id: OTHER }, model: { ...MODEL, harness: "codex",
+          effective: { ...MODEL.effective, harness: "codex" } } } : this.detail);
+      }
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        this.posted.push(id);
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Two(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    let show: (id: string) => void = () => undefined;
+    function Switching() {
+      const [id, setId] = useState(SESSION);
+      show = setId;
+      return <SessionScreen client={client} sessionId={id} projects={[]} onBack={() => {}} onChanged={() => {}} />;
+    }
+    const { container: page, unmount } = await mount(<PeopleProvider client={client}><ToastProvider><Switching /></ToastProvider></PeopleProvider>);
+    mounted.push(unmount);
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => show(OTHER));
+    await until(() => chipName(page) === "Model: Thinker on Codex" || null, "the other session's chip");
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(client.posted).toEqual([SESSION]);
+    expect(chipName(page)).toBe("Model: Thinker on Codex");
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Codex");
+  });
+
+  test("through the App: a post answered after moving to another session's URL changes nothing there", async () => {
+    const OTHER = "ssn_other";
+    class Two extends Choosing {
+      release: Array<() => void> = [];
+      override getSession(id: string): Promise<SessionDetail> {
+        return Promise.resolve(id === OTHER ? { ...this.detail, session: { ...this.detail.session, id: OTHER }, model: { ...MODEL, harness: "codex",
+          effective: { ...MODEL.effective, harness: "codex" } } } : this.detail);
+      }
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Two(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    window.history.replaceState(null, "", `#/sessions/${SESSION}`);
+    const { container: page, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(async () => {
+      await unmount();
+      window.history.replaceState(null, "", " ");
+    });
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => {
+      window.location.hash = `#/sessions/${OTHER}`;
+    });
+    await until(() => chipName(page) === "Model: Thinker on Codex" || null, "the other session's chip");
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(chipName(page)).toBe("Model: Thinker on Codex");
+    // The new screen's own pick is its own: it follows its detail once answered.
+    await openRailMenu(page);
+    await click(await menuItem("Organisation default (OpenCode)"));
+    await act(async () => client.release[1]!());
+    await until(() => chipName(page) === "Model: Thinker on OpenCode (organisation default)" || null, "the pick on the other session answered");
+  });
+
+  test("handed over after a pick, the former owner's read-only chip says the detail's model", async () => {
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await click(await menuItem("Coder"));
+    await act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await until(() => chipName(page) === "Model: Coder on OpenCode" || null, "the pick answered");
+    // Ana takes it over and sets it back to the organisation's.
+    client.detail = detail("chat", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" } },
+      session: { ...detail("chat").session, run: null } });
+    client.ledger.push(ev("session.owner_changed", { from: YOU, to: ANA.id, keep: "chat", fromName: ME.name, toName: ANA.name }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => page.querySelector("[data-testid=session-screen][data-role=chat]"), "the handover re-read");
+    const rail = page.querySelector("[data-testid=session-model]")!;
+    expect(rail.querySelectorAll("button").length).toBe(0);
+    expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Thinker on Codex");
+  });
+
+  class Reading extends Choosing {
+    tiersRead = 0;
+    tiersFail = false;
+    /** While set, each read waits for its release. */
+    holdTiers = false;
+    releaseTiers: Array<() => void> = [];
+    removed = new Set<string>();
+    override modelTiers() {
+      this.tiersRead++;
+      if (this.tiersFail) return Promise.reject(new ApiError(503, "unavailable", "down")) as never;
+      const read = super.modelTiers().then((r) => ({ ...r, tiers: r.tiers.filter((t) => !this.removed.has(t.id)) }));
+      if (!this.holdTiers) return read;
+      return new Promise<Awaited<typeof read>>((resolve) => this.releaseTiers.push(() => void read.then(resolve)));
+    }
+  }
+  const closeMenu = () => act(async () => void document.querySelector("[role=menu]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  const tierItems = () => allByRole(document, "menuitemradio").filter((r) => r.closest("[role=group]")?.getAttribute("data-testid") === "rowmenu-group-tier")
+    .map((r) => accessibleName(r));
+
+  test("the owner's chip is a button from the start; the tiers are read when its menu first opens", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await settle(100);
+    expect(page.querySelector("[data-testid=session-model] button[data-testid=model-picker]")).not.toBeNull();
+    expect(client.tiersRead).toBe(0);
+    await openRailMenu(page);
+    await menuItem("Coder");
+    expect(client.tiersRead).toBe(1);
+  });
+
+  test("tiers that cannot be read: the owner's menu says so, and still offers the harnesses", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    client.tiersFail = true;
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Could not load the tiers") || null, "the note");
+    await click(await menuItem("Claude Code"));
+    expect(client.chosen).toEqual([{ tier: null, harness: "claude-code" }]);
+  });
+
+  test("tiers that could not be read are read again at the menu's next opening, and listed", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    client.tiersFail = true;
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Could not load the tiers") || null, "the note");
+    await closeMenu();
+    client.tiersFail = false;
+    client.holdTiers = true;
+    await openRailMenu(page);
+    // The new read is out: the old failure is not what the menu says.
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Loading the tiers…") || null, "the loading note");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Could not load the tiers");
+    await act(async () => client.releaseTiers[0]!());
+    await menuItem("Coder");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Could not load the tiers");
+    expect(client.tiersRead).toBe(2);
+  });
+
+  test("while the tiers are read, the open menu says they are coming; then lists them", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    client.holdTiers = true;
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await until(() => document.querySelector("[role=menu]")?.textContent?.includes("Loading the tiers…") || null, "the loading note");
+    // Only the organisation's default is listed under Model tier until the read is in.
+    expect(tierItems().map((name) => name.split("(")[0]!.trim())).toEqual(["Organisation default"]);
+    await act(async () => client.releaseTiers[0]!());
+    await menuItem("Coder");
+    expect(document.querySelector("[role=menu]")!.textContent).not.toContain("Loading the tiers…");
+  });
+
+  test("a rail that read the tiers reads them again when the organisation's settings change: a removed tier is no longer offered", async () => {
+    const client = new Reading(detail("owner", { model: MODEL, session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    await openRailMenu(page);
+    await menuItem("Coder");
+    await closeMenu();
+    client.removed.add("mtr_coder");
+    await act(async () => forgetModelOptions(client));
+    await until(() => client.tiersRead === 2 || null, "the second read");
+    await openRailMenu(page);
+    await menuItem("Thinker");
+    expect(tierItems().some((name) => name.startsWith("Coder"))).toBe(false);
+  });
+
+  test("a pair that no longer fits: the chip says why, under it", async () => {
+    const why = "Codex takes an OpenAI model, but the tier Thinker requests claude-fable-5-1. Choose another harness or tier in the session's Model.";
+    const client = new Choosing(detail("owner", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" }, misfit: why },
+      session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const chip = await until(() => page.querySelector("[data-testid=session-model] button[data-testid=model-picker]"), "the owner's picker");
+    expect(document.getElementById(chip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(why);
+  });
+
+  test("while a pick on a pair that no longer fits is out, the chip shows the pick with no misfit; once answered, the detail's", async () => {
+    const why = "Codex takes an OpenAI model, but the tier Thinker requests claude-fable-5-1. Choose another harness or tier in the session's Model.";
+    class Held extends Choosing {
+      release: Array<() => void> = [];
+      override setSessionModel(id: string, choice: { tier: string | null; harness: Harness | null }) {
+        return new Promise<{ id: string; model: SessionModel }>((resolve) => {
+          this.release.push(() => void super.setSessionModel(id, choice).then(resolve));
+        });
+      }
+    }
+    const client = new Held(detail("owner", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" }, misfit: why },
+      session: { ...detail("owner").session, run: null } }));
+    const page = await sessionPage(client);
+    const chip = await openRailMenu(page);
+    const misfitMark = () => page.querySelector("[data-testid=session-model] [data-testid=model-picker-misfit]");
+    expect(misfitMark()).not.toBeNull();
+    await click(await menuItem("Organisation default (OpenCode)"));
+    expect(client.release.length).toBe(1);
+    expect(chip.getAttribute("aria-label")).toBe("Model: Thinker on OpenCode (organisation default)");
+    expect(chip.hasAttribute("aria-describedby")).toBe(false);
+    expect(misfitMark()).toBeNull();
+    // The server's misfit still names the old pair: it stays off until the detail is read again.
+    await act(async () => client.release[0]!());
+    await settle();
+    expect(chipName(page)).toBe("Model: Thinker on OpenCode (organisation default)");
+    expect(page.querySelector("[data-testid=session-model] [data-testid=model-picker]")!.hasAttribute("aria-describedby")).toBe(false);
+    expect(misfitMark()).toBeNull();
+  });
+
+  test("a member who is not the owner reads it, with nothing to open, and the tiers are never read", async () => {
+    const client = new Reading(detail("chat", { model: { ...MODEL, tier: { id: "mtr_coder", name: "Coder", model: "claude-opus-5-5", effort: null },
+      effective: { tierName: "Coder", model: "claude-opus-5-5", harness: "opencode" } } }));
+    const page = await sessionPage(client);
+    const rail = await until(() => page.querySelector("[data-testid=session-model]"), "the rail's model");
+    await settle(100);
+    expect(client.tiersRead).toBe(0);
+    expect(rail.querySelectorAll("button").length).toBe(0);
+    expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Coder on OpenCode");
+    expect(rail.textContent).toContain("Applies the next time the agent starts.");
+  });
+
+  test("while its agent runs, the header says the tier and harness its Run was started on, in the same words as between runs", async () => {
+    const base = detail("owner");
+    const client = new Choosing(detail("owner", { model: { ...MODEL, harness: "codex", effective: { ...MODEL.effective, harness: "codex" } },
+      session: { ...base.session, run: { ...base.session.run!, harness: "claude-code" } } }));
+    const page = await sessionPage(client);
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · small · Claude Code");
+  });
+
+  test("an agent that failed is not what it runs on: the header says what the next start would use", async () => {
+    const base = detail("owner");
+    const client = new Choosing(detail("owner", { model: MODEL, session: { ...base.session, run: { ...base.session.run!, status: "failed", harness: "claude-code" } } }));
+    const page = await sessionPage(client);
+    expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · OpenCode (organisation default)");
+  });
+
+  test("the Chat's words for a change, a reset and a removed tier", () => {
+    const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
+    expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: { id: "mtr_opus", name: "Opus (High)" }, harness: "claude-code" }), people))
+      .toBe(`${ANA.name.split(" ")[0]} set the model to Opus (High) · Claude Code; it applies the next time the agent starts.`);
+    expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: null, harness: null }), people))
+      .toBe(`${ANA.name.split(" ")[0]} set the model back to the organisation's default; it applies the next time the agent starts.`);
+    expect(sessionNotice(ev("session.model.fallback", { tier: { id: "mtr_opus", name: "Opus (High)" } }), people))
+      .toBe("The tier Opus (High) was removed: the session follows the organisation's from the agent's next start.");
   });
 });
 

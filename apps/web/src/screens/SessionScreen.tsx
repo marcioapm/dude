@@ -14,12 +14,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ProposalCardItem,
+  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, UNTITLED_SESSION, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
+import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
+import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import type { QuestionSubmission } from "@dude/design-system/components";
@@ -44,7 +45,8 @@ type SessionView = "chat" | "events";
 const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
-  EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
+  EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
+  EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
 ]);
@@ -181,6 +183,48 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   }, [client, sessionId, onArchived]);
 
   const linkedKeys = useMemo(() => new Map((detail?.session.projects ?? []).map((p) => [p.key.toUpperCase(), p])), [detail]);
+  // The owner's picker lists the organisation's tiers, read when its menu opens (again on each
+  // opening after a failed read); until then (and for anyone else) the chip reads the detail's words alone.
+  const [menuOpenings, setMenuOpenings] = useState(0);
+  const tierOptions = useTiers(client, menuOpenings);
+  // What the owner picked, shown at once while its posts are out: a second pick before the first
+  // is answered builds on it, and the posts go one after another so the last pick is the one kept.
+  // Once the last one settles the detail drives the chip again. A failure cancels the picks queued
+  // behind it, since each carries the failed one's half; a result for another session is dropped.
+  const [picked, setPicked] = useState<ModelChoice | null>(null);
+  const posting = useRef<Promise<unknown>>(Promise.resolve());
+  const pending = useRef(0);
+  const failures = useRef(0);
+  const shownSession = useRef(sessionId);
+  useEffect(() => {
+    shownSession.current = sessionId;
+    pending.current = 0;
+    failures.current += 1;
+    setPicked(null);
+  }, [sessionId]);
+  const chooseModel = useCallback((choice: ModelChoice) => {
+    setProblem(null);
+    setPicked(choice);
+    pending.current += 1;
+    const failuresBefore = failures.current;
+    const mine = () => shownSession.current === sessionId;
+    posting.current = posting.current.then(async () => {
+      try {
+        if (!mine() || failures.current !== failuresBefore) return;
+        const { model } = await client.setSessionModel(sessionId, choice);
+        if (mine()) setDetail((d) => (d ? { ...d, model } : d));
+      } catch (err) {
+        if (!mine()) return;
+        failures.current += 1;
+        setProblem(`Could not change the model: ${errorText(err)}`);
+      } finally {
+        if (mine()) {
+          pending.current -= 1;
+          if (pending.current === 0) setPicked(null);
+        }
+      }
+    });
+  }, [client, sessionId]);
   const lines = useMemo(() => {
     if (!detail) return [];
     const out: Array<{ id: string; at: string; node: ReactNode }> = [];
@@ -193,9 +237,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     }
     for (const e of events) {
       const text = sessionNotice(e, people);
-      // A rename is signed by whoever named it: the agent, or the person its words name.
+      // A rename is signed by whoever named it: the agent, or the person its words name. A person's model change names them too.
       const renamed = e.eventType === EventTypes.BrainstormRenamed;
-      const by = renamed ? (e.payload.by === "agent" ? "Brainstorm" : undefined) : dudeName(sessionId);
+      const byPerson = e.eventType === EventTypes.BrainstormModelChanged;
+      const by = renamed ? (e.payload.by === "agent" ? "Brainstorm" : undefined) : byPerson ? undefined : dudeName(sessionId);
       if (text) out.push({ id: e.eventId, at: e.occurredAt, node: <ChatNotice key={e.eventId}
         kind={e.eventType === EventTypes.BrainstormTurnStopped ? "stopped" : renamed ? "renamed" : "notice"}
         by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
@@ -235,7 +280,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
         meta={<>
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
-          <span>Brainstorm{session.run?.model ? ` · ${session.run.model}` : ""}</span>
+          <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
@@ -302,6 +347,19 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 {session.projects.length > 0 ? <LinkedProjects projects={session.projects} />
                   : <span className="muted">Nothing linked: it reads only what the organisation remembers.</span>}
               </SessionRailBlock>
+              {detail.model ? (
+                <SessionRailBlock label="Model" data-testid="session-model">
+                  <ModelPicker
+                    tiers={Array.isArray(tierOptions) ? tierOptions : (detail.model.tier ? [pickerTier(detail.model.tier)] : [])}
+                    organization={organizationOf(detail.model)}
+                    value={picked ?? { tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
+                    misfit={picked ? null : detail.model.misfit}
+                    onChange={isOwner ? chooseModel : undefined}
+                    onOpenChange={(open) => open && setMenuOpenings((n) => n + 1)}
+                    menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpenings > 0 ? "Loading the tiers…" : undefined} />
+                  <span className="muted sessionModelNote">Applies the next time the agent starts.</span>
+                </SessionRailBlock>
+              ) : null}
               <SessionRailBlock data-testid="session-files" label={<span className="sessionRailHead">
                 <span>Files{files.length > 0 ? <> <span className="ds-tnum runCount" data-testid="session-files-count">{files.length}</span></> : null}</span>
                 {files.length > 1 ? (
@@ -354,6 +412,26 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   );
 }
 
+/**
+ * The header's model, "· <tier> · <harness>": what the agent runs on now
+ * while one is live (a change waits for its next start), as its Run
+ * records it, else what its next start would use, "(organisation
+ * default)" when the session follows the organisation.
+ */
+export function headerModel(detail: SessionDetail): string {
+  const run = detail.session.run;
+  const live = run && !["completed", "failed", "aborted"].includes(run.status);
+  if (live && (run.modelTier || run.model)) {
+    // The scripted agent is recorded as "scripted": named so, as the Run's own chip leaves it out.
+    const harness = run.harness ? HARNESS_LABEL[run.harness as Harness] ?? run.harness : null;
+    return ` · ${[run.modelTier ?? run.model, harness].filter(Boolean).join(" · ")}`;
+  }
+  const m = detail.model;
+  if (!m) return run?.model ? ` · ${run.modelTier ?? run.model}` : "";
+  const words = `${m.effective.tierName ?? "no tier"} · ${HARNESS_LABEL[m.effective.harness]}`;
+  return ` · ${words}${m.tier === null && m.harness === null ? " (organisation default)" : ""}`;
+}
+
 /** What the session's ledger says of its people and links, as a line in its Chat. */
 export function sessionNotice(e: PersistedEvent, people: People): string | null {
   const p = e.payload ?? {};
@@ -390,6 +468,17 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
     case EventTypes.BrainstormFiled: {
       const filed = Array.isArray(p.filed) ? p.filed as Array<{ key?: string }> : [];
       return `${typeof p.by === "string" ? p.by : by} filed ${filed.map((f) => f.key).filter(Boolean).join(", ")}.`;
+    }
+    case EventTypes.BrainstormModelChanged: {
+      const tier = p.tier && typeof p.tier === "object" && typeof (p.tier as { name?: unknown }).name === "string" ? p.tier as { name: string } : null;
+      const harness = harnessSchema.safeParse(p.harness);
+      const who = firstName(name(p.by ?? e.actor?.id));
+      if (!tier && !harness.success) return `${who} set the model back to the organisation's default; it applies the next time the agent starts.`;
+      return `${who} set the model to ${modelChangeWords(tier, harness.success ? harness.data : null)}; it applies the next time the agent starts.`;
+    }
+    case EventTypes.BrainstormModelFallback: {
+      const tier = p.tier && typeof p.tier === "object" ? (p.tier as { name?: unknown }).name : null;
+      return `The tier ${typeof tier === "string" ? tier : "this session chose"} was removed: the session follows the organisation's from the agent's next start.`;
     }
     default:
       return null;
