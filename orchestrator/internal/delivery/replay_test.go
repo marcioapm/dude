@@ -172,6 +172,55 @@ func TestAnInterruptThatCarriedAFailedSteersWordsIsReplayedOnce(t *testing.T) {
 	}
 }
 
+// A message whose own directive was never delivered, carried to the agent
+// by an "Interrupt now" that resends it: the agent heard it, at the
+// message's place.
+func TestAMessageCarriedByAnInterruptIsReplayedWhereItWasSaid(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_s1", "brainstorm")
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_q', $1, 'run_s1', 'x', now())`, w.org)
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, supersedes, interrupt, resends, interrupt_only, delivered_at)
+		VALUES ('dir_i', $1, 'run_s1', 'x', 'dir_q', true, 'dir_q', false, now())`, w.org)
+	w.event("chat.message", "run_s1", "per_ana", `{"text":"QUEUED","directiveId":"dir_q"}`)
+	w.event("agent.message", "run_s1", "", `{"text":"working"}`)
+	w.event("run.steered", "run_s1", "per_ana", `{"text":"QUEUED","directiveId":"dir_i","supersedes":"dir_q","interrupt":true}`)
+	got := w.replay(delivery.Talker{SessionID: "ses_r"})
+	if !strings.HasSuffix(got, "Ana: QUEUED\n\nYou: working") || strings.Count(got, "QUEUED") != 1 {
+		t.Errorf("replay:\n%s", got)
+	}
+}
+
+// A compaction with a blank summary after one with a real summary: the
+// replay starts at the real one.
+func TestABlankCompactionAfterASummaryKeepsTheSummary(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_s1", "brainstorm")
+	w.event("chat.message", "run_s1", "per_ana", `{"text":"EARLIER"}`)
+	w.event("agent.context.compacted", "run_s1", "", `{"trigger":"auto","summary":"SUM"}`)
+	w.event("chat.message", "run_s1", "per_bo", `{"text":"LATER"}`)
+	w.event("agent.context.compacted", "run_s1", "", `{"trigger":"auto","summary":"  "}`)
+	w.event("agent.message", "run_s1", "", `{"text":"NEWEST"}`)
+	got := w.replay(delivery.Talker{SessionID: "ses_r"})
+	if !strings.HasSuffix(got, "## Earlier, as the agent summarised it\n\nSUM\n\n## Since then\n\nBo: LATER\n\nYou: NEWEST") || strings.Contains(got, "EARLIER") {
+		t.Errorf("replay:\n%s", got)
+	}
+}
+
+// A phase Run's compaction on the task is not the conductor's: the
+// conductor's replay does not start at it.
+func TestAPhaseRunsCompactionDoesNotMoveTheConductorsStart(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_c1", "conductor")
+	w.run("run_impl", "implementer")
+	w.event("chat.message", "run_c1", "per_ana", `{"text":"BEFORE"}`)
+	w.event("agent.context.compacted", "run_impl", "", `{"trigger":"auto","summary":"PHASE SUM"}`)
+	w.event("agent.message", "run_c1", "", `{"text":"AFTER"}`)
+	got := w.replay(delivery.Talker{TaskID: "wi_r"})
+	if !strings.HasSuffix(got, "Ana: BEFORE\n\nYou: AFTER") || strings.Contains(got, "PHASE SUM") {
+		t.Errorf("replay:\n%s", got)
+	}
+}
+
 // A replay read from the ledger starts at the newest compaction summary:
 // the summary under its heading, then only what came after it.
 func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {
