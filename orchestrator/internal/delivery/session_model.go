@@ -43,17 +43,10 @@ func (m SessionModel) Over(org RoleSettings) RoleSettings {
 	return org
 }
 
-// IsHarness says whether h names a harness.
-func IsHarness(h string) bool { return harnessLabel[h] != "" }
-
-// Chose says whether the session set either half.
-func (m SessionModel) Chose() bool { return m.Tier != nil || m.Harness != nil }
-
 // SessionModelProblem is why a session cannot choose m, in words for a
 // 400; "" when it can. The tier must be the organisation's (locked FOR KEY
 // SHARE, so a concurrent removal waits for the caller's commit) and name a
-// model, and the harness one of the three. Any harness takes any tier's
-// model: the LLM proxy translates.
+// model, and the harness one of the three.
 func SessionModelProblem(ctx context.Context, tx pgx.Tx, m SessionModel) (string, error) {
 	if m.Tier != nil {
 		var name string

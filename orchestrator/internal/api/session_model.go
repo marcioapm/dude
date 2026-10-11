@@ -11,13 +11,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// checkSessionModel refuses, with a 400 in words, a tier and harness a
-// session cannot choose (delivery.SessionModelProblem). A session that
-// chooses neither follows the organisation and is not checked.
 func checkSessionModel(ctx context.Context, tx pgx.Tx, m delivery.SessionModel) error {
-	if !m.Chose() {
-		return nil
-	}
 	problem, err := delivery.SessionModelProblem(ctx, tx, m)
 	if err != nil {
 		return err

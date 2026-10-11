@@ -25,8 +25,7 @@ type RoleSettings struct {
 	// Per-role notes, appended to the role's prompt.
 	Context string
 	// The coding agent its Runs run on (HarnessOpenCode when no layer
-	// names one). Any harness runs any tier's model: the LLM proxy
-	// translates between the harness's API and the model's.
+	// names one).
 	Harness string
 }
 
@@ -37,8 +36,14 @@ const (
 	HarnessCodex      = "codex"
 )
 
-// harnessLabel is a harness as a person reads it.
-var harnessLabel = map[string]string{HarnessOpenCode: "OpenCode", HarnessClaudeCode: "Claude Code", HarnessCodex: "Codex"}
+func IsHarness(h string) bool {
+	switch h {
+	case HarnessOpenCode, HarnessClaudeCode, HarnessCodex:
+		return true
+	default:
+		return false
+	}
+}
 
 // roleLayer is one layer's config for a role, as stored: agent_models on a
 // project, default_agent_models on an organization ({role -> config}).
@@ -84,7 +89,7 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 			if rs.Context == "" && l.Context != nil {
 				rs.Context = *l.Context
 			}
-			if rs.Harness == "" && l.Harness != nil && harnessLabel[*l.Harness] != "" {
+			if rs.Harness == "" && l.Harness != nil && IsHarness(*l.Harness) {
 				rs.Harness = *l.Harness
 			}
 		}
