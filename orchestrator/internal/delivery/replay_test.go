@@ -70,6 +70,21 @@ func (w *replayWorld) event(typ, run, actor, payload string) {
 		fmt.Sprintf("ev_r%03d", w.n), w.org, typ, run, task, session, actorType, actorID, payload)
 }
 
+// directive adds a directive on run, delivered or failed. With resends
+// set it is an "Interrupt now" that carried the words of the one it resends.
+func (w *replayWorld) directive(id, run string, delivered bool, resends string) {
+	at := "failed_at"
+	if delivered {
+		at = "delivered_at"
+	}
+	if resends == "" {
+		exec(w.t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, `+at+`) VALUES ($1, $2, $3, 'x', now())`, id, w.org, run)
+		return
+	}
+	exec(w.t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, supersedes, interrupt, resends, interrupt_only, `+at+`)
+		VALUES ($1, $2, $3, 'x', $4, true, $4, false, now())`, id, w.org, run, resends)
+}
+
 func (w *replayWorld) replay(of delivery.Talker) string {
 	w.t.Helper()
 	var out string
@@ -125,9 +140,9 @@ func TestASessionsReplayCoversItsRuns(t *testing.T) {
 	w.run("run_s2", "brainstorm")
 	w.event("chat.message", "run_s1", "per_ana", `{"text":"hello"}`)
 	w.event("agent.message", "run_s1", "", `{"text":"hi Ana"}`)
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_lost', $1, 'run_s1', 'x', now())`, w.org)
+	w.directive("dir_lost", "run_s1", false, "")
 	w.event("chat.message", "run_s1", "per_bo", `{"text":"UNREAD","directiveId":"dir_lost"}`)
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, delivered_at) VALUES ('dir_read', $1, 'run_s2', 'x', now())`, w.org)
+	w.directive("dir_read", "run_s2", true, "")
 	w.event("chat.message", "run_s2", "per_bo", `{"text":"UNREAD","directiveId":"dir_read"}`)
 	w.event("session.renamed", "-", "per_bo", `{"title":"Named","by":"per_bo"}`)
 	got := w.replay(delivery.Talker{SessionID: "ses_r"})
@@ -142,9 +157,10 @@ func TestASessionsReplayCoversItsRuns(t *testing.T) {
 func TestARetriedSteerIsReplayedOnce(t *testing.T) {
 	w := newReplayWorld(t)
 	w.run("run_c1", "conductor")
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_f', $1, 'run_c1', 'x', now())`, w.org)
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, delivered_at) VALUES ('dir_r', $1, 'run_c1', 'x', now()),
-		('dir_h', $1, 'run_c1', 'x', now()), ('dir_h2', $1, 'run_c1', 'x', now())`, w.org)
+	w.directive("dir_f", "run_c1", false, "")
+	for _, id := range []string{"dir_r", "dir_h", "dir_h2"} {
+		w.directive(id, "run_c1", true, "")
+	}
 	w.event("run.steered", "run_c1", "per_ana", `{"text":"RETRIED","directiveId":"dir_f"}`)
 	w.event("run.steered", "run_c1", "per_ana", `{"text":"RETRIED","directiveId":"dir_r","supersedes":"dir_f"}`)
 	w.event("run.steered", "run_c1", "per_bo", `{"text":"HEARD","directiveId":"dir_h"}`)
@@ -161,9 +177,8 @@ func TestARetriedSteerIsReplayedOnce(t *testing.T) {
 func TestAnInterruptThatCarriedAFailedSteersWordsIsReplayedOnce(t *testing.T) {
 	w := newReplayWorld(t)
 	w.run("run_c1", "conductor")
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_s', $1, 'run_c1', 'x', now())`, w.org)
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, supersedes, interrupt, resends, interrupt_only, delivered_at)
-		VALUES ('dir_i', $1, 'run_c1', 'x', 'dir_s', true, 'dir_s', false, now())`, w.org)
+	w.directive("dir_s", "run_c1", false, "")
+	w.directive("dir_i", "run_c1", true, "dir_s")
 	w.event("run.steered", "run_c1", "per_ana", `{"text":"MIGRATION","directiveId":"dir_s"}`)
 	w.event("run.steered", "run_c1", "per_ana", `{"text":"MIGRATION","directiveId":"dir_i","supersedes":"dir_s","interrupt":true}`)
 	got := w.replay(delivery.Talker{TaskID: "wi_r"})
@@ -178,9 +193,8 @@ func TestAnInterruptThatCarriedAFailedSteersWordsIsReplayedOnce(t *testing.T) {
 func TestAMessageCarriedByAnInterruptIsReplayedWhereItWasSaid(t *testing.T) {
 	w := newReplayWorld(t)
 	w.run("run_s1", "brainstorm")
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_q', $1, 'run_s1', 'x', now())`, w.org)
-	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, supersedes, interrupt, resends, interrupt_only, delivered_at)
-		VALUES ('dir_i', $1, 'run_s1', 'x', 'dir_q', true, 'dir_q', false, now())`, w.org)
+	w.directive("dir_q", "run_s1", false, "")
+	w.directive("dir_i", "run_s1", true, "dir_q")
 	w.event("chat.message", "run_s1", "per_ana", `{"text":"QUEUED","directiveId":"dir_q"}`)
 	w.event("agent.message", "run_s1", "", `{"text":"working"}`)
 	w.event("run.steered", "run_s1", "per_ana", `{"text":"QUEUED","directiveId":"dir_i","supersedes":"dir_q","interrupt":true}`)
