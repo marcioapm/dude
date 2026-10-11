@@ -273,12 +273,12 @@ func TestTheReplayQueryRunsWithoutJIT(t *testing.T) {
 	w.run("run_s1", "brainstorm")
 	w.event("chat.message", "run_s1", "per_ana", `{"text":"hello"}`)
 	var during string
-	delivery.AfterReplayQuery(func(ctx context.Context, tx pgx.Tx) {
+	delivery.BeforeReplayQuery(func(ctx context.Context, tx pgx.Tx) {
 		if err := tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&during); err != nil {
 			t.Error(err)
 		}
 	})
-	t.Cleanup(func() { delivery.AfterReplayQuery(nil) })
+	t.Cleanup(func() { delivery.BeforeReplayQuery(nil) })
 	var before, after, got string
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 		ctx := context.Background()

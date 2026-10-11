@@ -261,6 +261,9 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 	if err := tx.QueryRow(ctx, `SELECT current_setting('jit'), set_config('jit', 'off', true)`).Scan(&jitWas, nil); err != nil {
 		return nil, err
 	}
+	if beforeReplayQuery != nil {
+		beforeReplayQuery(ctx, tx)
+	}
 	// The start subquery's own "events e" shadows the outer e: scope filters the compactions it reads.
 	rows, err := tx.Query(ctx, `SELECT e.cursor, e.event_type, COALESCE(e.run_id, ''), e.actor_type, COALESCE(e.actor_id, ''),
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
@@ -279,18 +282,15 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 	if err != nil {
 		return nil, err
 	}
-	if afterReplayQuery != nil {
-		afterReplayQuery(ctx, tx)
-	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('jit', $1, true)`, jitWas); err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
-// afterReplayQuery, when set (by tests), runs in the replay's transaction
-// right after its ledger query, before the settings are put back.
-var afterReplayQuery func(context.Context, pgx.Tx)
+// beforeReplayQuery, when set (by tests), runs in the replay's transaction
+// right before its ledger query, with the query's settings in force.
+var beforeReplayQuery func(context.Context, pgx.Tx)
 
 // replayEntry is one rendered thing: words (a message, a note, a line),
 // or a tool call with its output.

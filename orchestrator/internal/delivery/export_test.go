@@ -17,6 +17,6 @@ func ReplayEventTypes(ctx context.Context, tx pgx.Tx, of Talker) ([]string, erro
 	return types, err
 }
 
-// AfterReplayQuery has fn called in the replay's transaction once its
-// ledger query has returned its rows; nil removes it.
-func AfterReplayQuery(fn func(context.Context, pgx.Tx)) { afterReplayQuery = fn }
+// BeforeReplayQuery has fn called in the replay's transaction just before
+// its ledger query starts; nil removes it.
+func BeforeReplayQuery(fn func(context.Context, pgx.Tx)) { beforeReplayQuery = fn }
