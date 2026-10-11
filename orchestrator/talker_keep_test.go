@@ -337,13 +337,7 @@ func TestAMessageUnreadWhenTheAgentCrashesIsAnsweredAfterTheResume(t *testing.T)
 				return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
 			})
 			tk.keptAndResumed(run)
-			answered := 0
-			for _, s := range tk.said(run) {
-				answered += strings.Count(s, "did the build pass?")
-			}
-			if answered != 1 {
-				t.Errorf("the message answered %d times, want once: %q", answered, tk.said(run))
-			}
+			tk.answeredOnce(run, "did the build pass?")
 			if n := tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NULL AND delivered_at IS NOT NULL`, id); n != 1 {
 				t.Errorf("the message was not delivered unfailed:\n%s", tk.describeRuns())
 			}
