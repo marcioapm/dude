@@ -249,6 +249,7 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 		id, role).Scan(&had); err != nil || !had {
 		return nil, err
 	}
+	// The start subquery's own "events e" shadows the outer e: scope filters the compactions it reads.
 	rows, err := tx.Query(ctx, `SELECT e.cursor, e.event_type, COALESCE(e.run_id, ''), e.actor_type, COALESCE(e.actor_id, ''),
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
 				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
