@@ -128,6 +128,38 @@ Márcio, also: and log it`
 	}
 }
 
+// The replay starts from the agent's newest compaction summary when the
+// ledger has one: the summary under its heading, then only what came
+// after. A compaction with no summary (a remote one) changes nothing.
+func TestTheReplayStartsFromTheNewestCompactionSummary(t *testing.T) {
+	before := ev("chat.message", "run_a", "Ana", `{"text":"OLDEST"}`)
+	first := ev("agent.context.compacted", "run_a", "", `{"summary":"FIRST SUMMARY"}`)
+	mid := ev("agent.message", "run_a", "", `{"text":"MIDDLE"}`)
+	second := ev("agent.context.compacted", "run_b", "", `{"summary":"SECOND SUMMARY","trigger":"auto"}`)
+	empty := ev("agent.context.compacted", "run_b", "", `{"trigger":"auto"}`)
+	after := ev("chat.message", "run_b", "Bo", `{"text":"NEWEST"}`)
+
+	summary, rest := fromCompaction([]replayEvent{before, first, mid, after})
+	if got := renderReplayFrom(summary, rest); got != "## Earlier, as the agent summarised it\n\nFIRST SUMMARY\n\n## Since then\n\nYou: MIDDLE\n\n"+
+		"[A new agent took over here.]\n\nBo: NEWEST" {
+		t.Errorf("one summary mid-ledger:\n%s", got)
+	}
+	summary, rest = fromCompaction([]replayEvent{before, first, mid, second, empty, after})
+	got := renderReplayFrom(summary, rest)
+	if got != "## Earlier, as the agent summarised it\n\nSECOND SUMMARY\n\n## Since then\n\nBo: NEWEST" {
+		t.Errorf("two summaries, want the newest:\n%s", got)
+	}
+	summary, rest = fromCompaction([]replayEvent{before, empty, after})
+	if got := renderReplayFrom(summary, rest); got != "Ana: OLDEST\n\n[A new agent took over here.]\n\nBo: NEWEST" {
+		t.Errorf("a compaction with no summary:\n%s", got)
+	}
+	// The summary alone, when nothing came after it.
+	summary, rest = fromCompaction([]replayEvent{before, first})
+	if got := renderReplayFrom(summary, rest); got != "## Earlier, as the agent summarised it\n\nFIRST SUMMARY" {
+		t.Errorf("a summary last:\n%s", got)
+	}
+}
+
 // A tool's input and output are each cut at 4 KiB, on a character, saying
 // how much; a message the agent never heard is not in its past.
 func TestTheReplayCutsLongToolCallsAndSkipsWhatWasNeverHeard(t *testing.T) {
