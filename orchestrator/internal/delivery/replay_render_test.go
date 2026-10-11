@@ -99,14 +99,16 @@ func TestTheReplayRendersATasksChat(t *testing.T) {
 		ev("chat.message", "run_c", "", `{"text":"Because.","by":"conductor","github":{"repo":"sdk","number":4}}`),
 		ev("run.steered", "run_c", "Márcio", `{"text":"stop"}`),
 		ev("run.steered", "run_c", "Márcio", `{"text":"stop","supersedes":"dir_1","interrupt":true}`),
+		ev("run.steered", "run_c", "", `{"text":"CONDUCTOR STEER","by":"conductor"}`),
 		ev("conductor.woken", "run_c", "", `{"text":"Decision waiting: before the pull request."}`),
-		ev("conductor.decided", "run_c", "", `{"point":"nope","action":"start_phase","phase":"fix","note":"one more"}`),
+		ev("conductor.decided", "run_c", "", `{"point":"before_pull_request","action":"start_phase","phase":"fix","note":"one more"}`),
 		ev("review.finding_resolved", "run_c", "", `{"findingId":"fnd_1","note":"Dismissed by the conductor: generated","by":"conductor"}`),
 		ev("review.finding_resolved", "run_c", "", `{"findingId":"fnd_2","note":"a person's"}`),
 		ev("task.updated", "run_c", "", `{"goal":"g","acceptanceCriteria":[],"by":"conductor"}`),
 		ev("question.asked", "run_c", "", `{"kind":"agent","items":[{"header":"Scope","question":"Retry what?"},
 			{"header":"Cap","question":"How long?","choices":[{"label":"8s"}]}]}`),
 		ev("question.answered", "run_c", "Márcio", `{"answer":"1. ...","note":"and log it"}`),
+		ev("question.closed", "run_c", "", `{"questionId":"q2","by":"decision","action":"start_phase"}`),
 	}
 	want := `Márcio: what changed?
 
@@ -120,7 +122,7 @@ Márcio: stop
 
 dude: Decision waiting: before the pull request.
 
-You decided, at nope: start_phase (fix): one more.
+You decided, at before the pull request: start_phase (fix): one more.
 
 Finding fnd_1: dismissed by the conductor: generated.
 
@@ -131,7 +133,9 @@ You asked:
 2. Cap — How long? (choices: 8s)
 
 Márcio answered: 1. ...
-Márcio, also: and log it`
+Márcio, also: and log it
+
+dude: your question was settled elsewhere, unanswered.`
 	if got := renderReplay(events); got != want {
 		t.Errorf("rendered:\n%s\n\nwant:\n%s", got, want)
 	}
@@ -290,7 +294,9 @@ func TestTheRenderedReplayKeepsToTheBudget(t *testing.T) {
 // A tool's input and output are each cut at 4 KiB, on a character, saying
 // how much; a message the agent never heard is not in its past.
 func TestTheReplayCutsLongToolCallsAndSkipsWhatWasNeverHeard(t *testing.T) {
-	long := strings.Repeat("é", 3000) // 6000 bytes
+	// One byte in, so byte 4096 of the input and of the output falls inside
+	// a two-byte character.
+	long := "x" + strings.Repeat("é", 3000) // 6001 bytes
 	in, _ := json.Marshal(map[string]any{"cmd": long})
 	out, _ := json.Marshal(map[string]any{"tool": "bash", "callId": "c", "output": map[string]any{"head": long}})
 	unheard := ev("chat.message", "run_a", "Ana", `{"text":"NEVER READ","directiveId":"dir_x"}`)
