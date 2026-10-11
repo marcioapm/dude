@@ -268,26 +268,25 @@ func (e replayEntry) text() string {
 }
 
 // renderReplay renders the events, in their order, as the agent reads them.
-func renderReplay(events []replayEvent) string { return joinReplay(replayStart{}, replayEntries(events), 0) }
+func renderReplay(events []replayEvent) string {
+	return joinReplay(replayStart{}, replayEntries(events), 0)
+}
 
 func replayEntries(events []replayEvent) []replayEntry {
 	// A proposal's line says what became of it: its filings come later.
+	// A filing of a proposal before the replay's start is said on its own.
 	filed := map[string][]string{}
+	proposed := map[string]bool{}
 	for _, ev := range events {
+		if ev.Type == EvSessionProposed {
+			id, _ := ev.Payload["proposalId"].(string)
+			proposed[id] = true
+		}
 		if ev.Type != EvSessionFiled {
 			continue
 		}
-		id, _ := ev.Payload["proposalId"].(string)
-		by, _ := ev.Payload["by"].(string)
-		if by == "" {
-			by = "someone"
-		}
-		for _, f := range asList(ev.Payload["filed"]) {
-			m, _ := f.(map[string]any)
-			n, _ := m["item"].(float64)
-			key, _ := m["key"].(string)
-			filed[id] = append(filed[id], fmt.Sprintf("item %d filed by %s as %s", int(n)+1, by, key))
-		}
+		id, items := filings(ev.Payload)
+		filed[id] = append(filed[id], items...)
 	}
 	var out []replayEntry
 	calls := map[string]int{}
@@ -340,6 +339,10 @@ func replayEntries(events []replayEvent) []replayEntry {
 			add(ev, "dude: "+str("text"))
 		case EvSessionProposed:
 			add(ev, proposedLine(p, filed[str("proposalId")]))
+		case EvSessionFiled:
+			if id, items := filings(p); !proposed[id] && len(items) > 0 {
+				add(ev, "Your earlier proposal: "+strings.Join(items, ", ")+".")
+			}
 		case EvDecisionTaken:
 			line := fmt.Sprintf("You decided, at %s: %s", pointWords(str("point")), str("action"))
 			if ph := str("phase"); ph != "" {
@@ -456,6 +459,24 @@ func askedLine(p map[string]any) string {
 		fmt.Fprintf(&b, "\n%d. %s — %s", i+1, it.Header, item(it))
 	}
 	return b.String()
+}
+
+// filings are a session.filed's proposal and, per item filed, who filed
+// it as what ("item 1 filed by Ana as BL-9"; items are 0-based stored).
+func filings(p map[string]any) (string, []string) {
+	id, _ := p["proposalId"].(string)
+	by, _ := p["by"].(string)
+	if by == "" {
+		by = "someone"
+	}
+	var out []string
+	for _, f := range asList(p["filed"]) {
+		m, _ := f.(map[string]any)
+		n, _ := m["item"].(float64)
+		key, _ := m["key"].(string)
+		out = append(out, fmt.Sprintf("item %d filed by %s as %s", int(n)+1, by, key))
+	}
+	return id, out
 }
 
 func proposedLine(p map[string]any, filed []string) string {
