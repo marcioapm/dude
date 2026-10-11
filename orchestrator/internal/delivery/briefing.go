@@ -76,27 +76,34 @@ const (
 
 // lostConversation is dude's message in a talker's briefing again, after
 // its harness restarted without the conversation (Rebriefing).
-const lostConversation = "Your agent session restarted without its earlier conversation: what was said before this " +
-	"is lost to you. This is your briefing again, as things stand now. Read again with your tools what you need, " +
-	"and answer the messages that follow, or that just came before this one, as if they were the first."
+const lostConversation = "Your agent session restarted without its earlier conversation: you no longer hold what was said " +
+	"before this. This is your briefing again, as things stand now, with the conversation so far as dude recorded it. " +
+	"Read again with your tools what you need, and answer the messages that follow, or that just came before this one."
 
 // Rebriefing is the briefing of a talker whose harness restarted without
 // its conversation (lux started a blank session on resume), in dude's own
 // words: its briefing as it would be written now, saying the conversation
-// is lost, and lux's reason when it gave one. A conductor gets the task's
-// (briefing, opened as a briefing again), a session's agent the session's
-// (sessionAbout) under a heading of dude's before it. The caller wraps it
-// as the first prompt was (instructions, checkouts, tools).
+// is lost, and lux's reason when it gave one, with the conversation so far
+// (Replay). A conductor gets the task's (briefing, opened as a briefing
+// again), a session's agent the session's (sessionAbout) under a heading of
+// dude's before it. The caller wraps it as the first prompt was
+// (instructions, checkouts, tools).
 func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (string, error) {
 	message := lostConversation
 	if reason != "" {
 		message += "\n\n(lux: " + oneLine(reason) + ")"
 	}
-	// PR B: the conversation replayed from the ledger joins the briefing here.
 	if ref.SessionID != "" {
 		about, err := sessionAbout(ctx, tx, ref.SessionID)
 		if err != nil {
 			return "", err
+		}
+		replay, err := Replay(ctx, tx, Talker{SessionID: ref.SessionID})
+		if err != nil {
+			return "", err
+		}
+		if replay != "" {
+			about += "\n\n" + replay
 		}
 		return "## Your earlier conversation is lost\n\n" + message + "\n\n" + about, nil
 	}
@@ -176,6 +183,16 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	b.WriteString("\n\nYour checkout is at that head.")
 	if err := briefDeciderSection(ctx, tx, &b, taskID); err != nil {
 		return "", err
+	}
+	// What the task's conductors were told and said before: none before
+	// its first. A message handed over is not in it (never read): it is
+	// this briefing's message.
+	replay, err := Replay(ctx, tx, Talker{TaskID: taskID})
+	if err != nil {
+		return "", err
+	}
+	if replay != "" {
+		b.WriteString("\n\n" + replay)
 	}
 	fmt.Fprintf(&b, "\n\n## %s's message\n\n%s", who, message)
 	return b.String(), nil
