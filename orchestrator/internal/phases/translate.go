@@ -745,10 +745,10 @@ func landsOf(data map[string]any) string {
 // (internal/adapter/adapter.go). An older lux sends the same "claude: the
 // message was cancelled" when Claude Code gives up on a line after three
 // interrupts on a live Run; that one is read as unread too, but the live
-// shim drops the resend of its request id, so
-// it waits, neither delivered nor failed, until the talker's Run ends and
-// hands it on. A lux that says so ("cancelled N times by interrupts") is
-// not matched: that message fails.
+// shim drops the resend of its request id, so it waits, neither delivered
+// nor failed, until the talker's Run ends and hands it on. A lux that says
+// so ("cancelled N times by interrupts") is not matched: that message
+// fails.
 func stopCancelled(msg string) bool {
 	switch msg {
 	case "claude: the message was cancelled", "claude: the message was discarded",
