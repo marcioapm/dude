@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -360,6 +361,52 @@ func TestEachFormOfFailureIsRecordedOnce(t *testing.T) {
 			}
 			if _, d, _ := w.directive(); d || w.events(evDirectiveFailed) != 1 {
 				t.Errorf("delivered=%v, %d failed events, want not delivered and 1", d, w.events(evDirectiveFailed))
+			}
+		})
+	}
+}
+
+// A talker's input lux accepted and then cancelled because it stopped the
+// Run, in each adapter's words, stays accepted and unread, unsent for the
+// next send, with nothing in the ledger. Refused, never accepted, or on a
+// phase Run, the same record is a failure.
+func TestAStopCancellationLeavesATalkersAcceptedInputUnread(t *testing.T) {
+	cases := []struct {
+		name, reason     string
+		talker, accepted bool
+		unread           bool
+	}{
+		{"claude cancelled", "claude: the message was cancelled", true, true, true},
+		{"claude discarded", "claude: the message was discarded", true, true, true},
+		{"codex or opencode stopped", "the Run stopped before the agent read it", true, true, true},
+		{"claude refused", "claude: the message was refused", true, true, false},
+		{"opencode never stored it", "OpenCode accepted it and never stored it", true, true, false},
+		{"never accepted", "claude: the message was cancelled", true, false, false},
+		{"a phase Run", "claude: the message was cancelled", false, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newReceiptWorld(t)
+			if c.talker {
+				w.tr.run.Role = delivery.RoleConductor
+			}
+			if c.accepted {
+				w.receive(accepted("dir_1", true, "next_step"))
+			}
+			w.receive(failedAfterAccepted("dir_1", c.reason))
+			failed, msg := w.failure()
+			a, d, _ := w.directive()
+			var sent bool
+			_ = w.owner.QueryRow(context.Background(), `SELECT sent_at IS NOT NULL FROM directives WHERE id = 'dir_1'`).Scan(&sent)
+			if c.unread {
+				if failed || d || !a || sent || w.events(evDirectiveFailed) != 0 {
+					t.Errorf("failed=%v (%q) delivered=%v accepted=%v sent=%v, %d failed events; want accepted, unsent, unread",
+						failed, msg, d, a, sent, w.events(evDirectiveFailed))
+				}
+				return
+			}
+			if !failed || msg != c.reason || w.events(evDirectiveFailed) != 1 {
+				t.Errorf("failed=%v error=%q, %d failed events; want failed with %q", failed, msg, w.events(evDirectiveFailed), c.reason)
 			}
 		})
 	}
