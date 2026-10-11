@@ -630,7 +630,8 @@ const interruptAloneOf = `f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FA
 //     which acknowledges once, on handoff. Delivered then, as it always was.
 //   - lux.input phase "failed" (never accepted), lux.input.failed (after
 //     it was), or an older lux's lux.input with an error: it will not reach
-//     the agent.
+//     the agent. Except a talker's accepted input lux cancelled because it
+//     stopped the Run (unreadAtStop): that is unread, not failed.
 //
 // Each transition happens once per directive and Run however often lux
 // repeats a receipt (a reconnect, a resumed shim): the update is guarded on
@@ -663,6 +664,9 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if phase == lux.InputFailed {
 		if msg == "" {
 			msg = "lux could not deliver it"
+		}
+		if typ == lux.RecordInputFailed && t.run.talker() && stopCancelled(msg) {
+			return unreadAtStop(ctx, tx, s, t.run, id, msg)
 		}
 		return failDirectiveTx(ctx, tx, s, t.run, id, msg)
 	}
@@ -731,6 +735,39 @@ func landsOf(data map[string]any) string {
 		return lands
 	}
 	return ""
+}
+
+// stopCancelled says msg is how lux's adapters fail an input they accepted
+// and the agent never read because lux is stopping the Run: Claude Code's
+// line cancelled or discarded (lux internal/adapter/claude.go
+// lifecycleFrame), and Codex's and OpenCode's errStoppedUnread
+// (internal/adapter/adapter.go). Claude Code's also follows a line
+// cancelled three times by interrupts on a live Run; that one is read as
+// unread too, and sent again on the next resume.
+func stopCancelled(msg string) bool {
+	switch msg {
+	case "claude: the message was cancelled", "claude: the message was discarded",
+		"the Run stopped before the agent read it":
+		return true
+	}
+	return false
+}
+
+// unreadAtStop keeps a talker's message lux accepted and cancelled as the
+// Run stopped as it was: accepted, neither delivered nor failed, so the
+// Run's end hands it on (delivery.HandOver, SessionHandOver) and a resume
+// sends it again. Unsent here, as unsendUnread does at a park: the
+// harness that held it is gone with its request ids. Nothing is written
+// to the ledger, so a person's Chat shows it waiting, not failed with a
+// Retry. One not accepted, or already settled, is failed as any other.
+func unreadAtStop(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, msg string) error {
+	tag, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
+		WHERE id = $1 AND run_id = $2 AND accepted_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL
+		  AND interrupt_only IS NOT TRUE`, id, r.ID)
+	if err != nil || tag.RowsAffected() > 0 {
+		return err
+	}
+	return failDirectiveTx(ctx, tx, s, r, id, msg)
 }
 
 // session records the placement the agent's session is established in. The
