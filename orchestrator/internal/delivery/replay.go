@@ -26,16 +26,18 @@ type Talker struct{ SessionID, TaskID string }
 // replayEvent is one ledger event as the renderer reads it. Who is the
 // actor's name when a person wrote it; Heard is false for a message whose
 // directive never reached the agent (it is handed on, or failed, and the
-// next agent gets it as its own input if at all).
+// next agent gets it as its own input if at all). RepeatsHeard is true for
+// a resend (payload supersedes) of a directive the agent did hear.
 type replayEvent struct {
-	Cursor    int64
-	Type      string
-	RunID     string
-	ActorType string
-	ActorID   string
-	Who       string
-	Payload   map[string]any
-	Heard     bool
+	Cursor       int64
+	Type         string
+	RunID        string
+	ActorType    string
+	ActorID      string
+	Who          string
+	Payload      map[string]any
+	Heard        bool
+	RepeatsHeard bool
 }
 
 // replayTypes are the events the replay renders, or reads to render one.
@@ -239,7 +241,9 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 			e.payload,
 			NOT (e.payload ? 'directiveId')
 				OR EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
-				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL),
+			e.payload ? 'supersedes' AND EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'supersedes'
+				AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
 		FROM events e WHERE `+scope+` AND e.event_type = ANY($2)
 			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
 				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
@@ -312,8 +316,9 @@ func replayEntries(events []replayEvent) []replayEntry {
 			}
 			add(ev, said(personOf(ev), str("text"), p["attachments"]))
 		case EvRunSteered:
-			// A resend (Retry, Interrupt now) repeats words already said.
-			if str("supersedes") != "" || str("by") == "conductor" {
+			// A resend (Retry, Interrupt now) of words the agent heard
+			// repeats them; a Retry of a failed steer is their delivery.
+			if ev.RepeatsHeard || str("by") == "conductor" {
 				continue
 			}
 			add(ev, said(personOf(ev), str("text"), p["attachments"]))

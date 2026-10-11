@@ -92,13 +92,16 @@ You: On it.`
 
 // Every kind of event a conductor's replay renders.
 func TestTheReplayRendersATasksChat(t *testing.T) {
+	// An Interrupt now of the steer before it, which the agent heard.
+	resend := ev("run.steered", "run_c", "Márcio", `{"text":"stop","supersedes":"dir_1","interrupt":true}`)
+	resend.RepeatsHeard = true
 	events := []replayEvent{
 		ev("chat.message", "run_c", "Márcio", `{"text":"what changed?"}`),
 		ev("agent.message", "run_c", "", `{"text":"The retry."}`),
 		ev("chat.message", "run_c", "", `{"text":"why 8s?","github":{"login":"ana","repo":"sdk","number":4}}`),
 		ev("chat.message", "run_c", "", `{"text":"Because.","by":"conductor","github":{"repo":"sdk","number":4}}`),
 		ev("run.steered", "run_c", "Márcio", `{"text":"stop"}`),
-		ev("run.steered", "run_c", "Márcio", `{"text":"stop","supersedes":"dir_1","interrupt":true}`),
+		resend,
 		ev("run.steered", "run_c", "", `{"text":"CONDUCTOR STEER","by":"conductor"}`),
 		ev("conductor.woken", "run_c", "", `{"text":"Decision waiting: before the pull request."}`),
 		ev("conductor.decided", "run_c", "", `{"point":"before_pull_request","action":"start_phase","phase":"fix","note":"one more"}`),
