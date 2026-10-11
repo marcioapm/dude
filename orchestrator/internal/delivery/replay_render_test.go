@@ -171,6 +171,12 @@ func TestTheReplayStartsFromTheNewestCompactionSummary(t *testing.T) {
 	if got := renderReplayFrom(summary, rest); got != "## Earlier, as the agent summarised it\n\nFIRST SUMMARY" {
 		t.Errorf("a summary last:\n%s", got)
 	}
+	// A summary by Run A's agent, then Run B's: B's agent took over.
+	summary, rest = fromCompaction([]replayEvent{before, first, after})
+	if got := renderReplayFrom(summary, rest); got != "## Earlier, as the agent summarised it\n\nFIRST SUMMARY\n\n## Since then\n\n"+
+		"[A new agent took over here.]\n\nBo: NEWEST" {
+		t.Errorf("a summary, then another Run:\n%s", got)
+	}
 }
 
 // Over budget, the replay sheds in order: tool outputs, oldest first, the
@@ -188,44 +194,44 @@ func TestTheReplayKeepsToItsBudget(t *testing.T) {
 	entries := func() []replayEntry {
 		return []replayEntry{ana, tool("t1", big), you, tool("t2", big), words("Bo", "last word")}
 	}
-	full := joinReplay("", entries(), 0)
+	full := joinReplay(replayStart{}, entries(), 0)
 	tokens := replayTokens(full)
 	if tokens != (utf8.RuneCountInString(full)+3)/4 {
 		t.Fatalf("tokens %d for %d characters", tokens, utf8.RuneCountInString(full))
 	}
-	if got := fitReplay("", entries(), tokens); got != full {
+	if got := fitReplay(replayStart{}, entries(), tokens); got != full {
 		t.Errorf("within budget, changed:\n%s", got)
 	}
 
 	// Step 1: the oldest output goes first, its call line kept.
-	got := fitReplay("", entries(), tokens-50)
+	got := fitReplay(replayStart{}, entries(), tokens-50)
 	if !strings.Contains(got, "t1({}) → [output dropped]") || !strings.Contains(got, "t2({}) → "+big) {
 		t.Errorf("step 1, the oldest output:\n%s", got)
 	}
 	// Then every output.
-	got = fitReplay("", entries(), tokens-150)
+	got = fitReplay(replayStart{}, entries(), tokens-150)
 	if !strings.Contains(got, "t1({}) → [output dropped]") || !strings.Contains(got, "t2({}) → [output dropped]") {
 		t.Errorf("step 1, both outputs:\n%s", got)
 	}
 	// Step 2: calls whole, oldest first; every word kept.
 	afterOutputs := replayTokens(got)
-	got = fitReplay("", entries(), afterOutputs-3)
+	got = fitReplay(replayStart{}, entries(), afterOutputs-3)
 	if strings.Contains(got, "t1(") || !strings.Contains(got, "t2({}) → [output dropped]") || !strings.Contains(got, ana.words) {
 		t.Errorf("step 2, the oldest call:\n%s", got)
 	}
-	got = fitReplay("", entries(), afterOutputs-12)
+	got = fitReplay(replayStart{}, entries(), afterOutputs-12)
 	if strings.Contains(got, "t1(") || strings.Contains(got, "t2(") ||
 		got != ana.words+"\n\n"+you.words+"\n\nBo: last word" {
 		t.Errorf("step 2, every call:\n%s", got)
 	}
 	// Step 3: the oldest turns, whole, said in a line.
-	got = fitReplay("", entries(), replayTokens(you.words+"\n\nBo: last word")+12)
+	got = fitReplay(replayStart{}, entries(), replayTokens(you.words+"\n\nBo: last word")+12)
 	if got != "[1 earlier messages omitted]\n\n"+you.words+"\n\nBo: last word" {
 		t.Errorf("step 3:\n%s", got)
 	}
 	// The summary stays whatever the budget.
 	summary := strings.Repeat("s", 600)
-	got = fitReplay(summary, entries(), 10)
+	got = fitReplay(replayStart{summary: summary}, entries(), 10)
 	if !strings.HasPrefix(got, "## Earlier, as the agent summarised it\n\n"+summary) {
 		t.Errorf("the summary dropped:\n%s", got)
 	}
@@ -251,13 +257,13 @@ func TestTheReplayDropsAWholeTurnWhenItsRenderingIsStillOver(t *testing.T) {
 	entries := []replayEntry{a1, a2, tb, b1, b2}
 	// With a1 and the call gone, the estimate leaves out the take-over line
 	// before b1: within budget by it, over by the rendering.
-	rendered := joinReplay("", []replayEntry{a2, b1, b2}, 1)
+	rendered := joinReplay(replayStart{}, []replayEntry{a2, b1, b2}, 1)
 	budget := (utf8.RuneCountInString(rendered) - 1) / 4
 	estimate := utf8.RuneCountInString(rendered) - utf8.RuneCountInString(tookOver) - 2
 	if estimate > budget*4 {
 		t.Fatalf("the budget %d is under the estimate %d", budget*4, estimate)
 	}
-	got := fitReplay("", entries, budget)
+	got := fitReplay(replayStart{}, entries, budget)
 	want := "[2 earlier messages omitted]\n\n" + b1.words + "\n\n" + b2.words
 	if got != want {
 		t.Errorf("fitted:\n%s\n\nwant:\n%s", got, want)
@@ -279,7 +285,7 @@ func TestTheRenderedReplayKeepsToTheBudget(t *testing.T) {
 		text := fmt.Sprintf("%03d ", i) + strings.Repeat("w", 3996)
 		events = append(events, ev("agent.message", "run_a", "", `{"text":"`+text+`"}`))
 	}
-	got := renderReplayFrom("", events)
+	got := renderReplayFrom(replayStart{}, events)
 	if n := replayTokens(got); n > replayBudgetTokens {
 		t.Errorf("%d tokens, over the budget of %d", n, replayBudgetTokens)
 	}
@@ -337,7 +343,7 @@ func TestTheReplayBudgetCountsTheTakeOverLinesItDrops(t *testing.T) {
 		entries = append(entries, replayEntry{run: fmt.Sprintf("run_%03d", i), words: fmt.Sprintf("Ana: message number %03d here", i)})
 	}
 	budget := 2000
-	got := fitReplay("", entries, budget)
+	got := fitReplay(replayStart{}, entries, budget)
 	if replayTokens(got) > budget {
 		t.Fatalf("over budget: %d tokens", replayTokens(got))
 	}
@@ -345,7 +351,7 @@ func TestTheReplayBudgetCountsTheTakeOverLinesItDrops(t *testing.T) {
 	// The fewest turns that fit, kept from the newest, at most one under.
 	best := 0
 	for n := 1; n <= len(entries); n++ {
-		if replayTokens(joinReplay("", entries[len(entries)-n:], len(entries)-n)) > budget {
+		if replayTokens(joinReplay(replayStart{}, entries[len(entries)-n:], len(entries)-n)) > budget {
 			break
 		}
 		best = n
