@@ -47,12 +47,12 @@ var replayTypes = []string{
 
 // talkerScope (SQL, over events e; $1 the session or task): the talker's
 // ledger. A session's: every event of the session (events_session_of_run
-// stamps the session on each event of its Runs). A task's: its Chat —
-// chat.message and its conductor Runs' events, never a phase Run's.
+// stamps the session on each event of its Runs). A task's: its conductor
+// Runs' events, never a phase Run's; every writer of a task's chat.message
+// puts it on a conductor Run.
 const (
 	sessionScope = `e.session_id = $1`
-	taskScope    = `(e.task_id = $1 AND (e.event_type = 'chat.message'
-		OR e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent')))`
+	taskScope    = `(e.task_id = $1 AND e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent'))`
 )
 
 // Replay is the talker's conversation so far under its heading, "" for a

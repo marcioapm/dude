@@ -116,6 +116,11 @@ func TestAConductorsReplayIsItsChatAcrossConductors(t *testing.T) {
 // across its Runs; a message a Run never read is not in it.
 func TestASessionsReplayCoversItsRuns(t *testing.T) {
 	w := newReplayWorld(t)
+	// Renamed before its first message: no Run yet, so nothing to replay.
+	w.event("session.renamed", "-", "per_bo", `{"title":"Early","by":"per_bo"}`)
+	if got := w.replay(delivery.Talker{SessionID: "ses_r"}); got != "" {
+		t.Errorf("a session that never had a Run replays %q", got)
+	}
 	w.run("run_s1", "brainstorm")
 	w.run("run_s2", "brainstorm")
 	w.event("chat.message", "run_s1", "per_ana", `{"text":"hello"}`)
