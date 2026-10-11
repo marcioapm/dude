@@ -213,6 +213,11 @@ type Run struct {
 	harness *harnessSay
 	// Turns the agent finished (went idle after), for TurnsEnded.
 	turnsEnded int
+	// Its next failTurns turns fail at once with failWith (FailTurns).
+	failTurns int
+	failWith  string
+	// Its next resume cannot reload the agent's session (LoseSession).
+	loseSession bool
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
 	openTools []string
 	queued    []queuedInput
@@ -966,8 +971,24 @@ func (s *Server) Lose(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
+		run.busy = false
+		s.dropQueued(run)
 		s.setStateWith(run, "lost", "host lost")
 	}
+}
+
+// dropQueued is a harness gone with its process: input it took and the
+// agent never read is lost, and its request ids with it. lux dedupes input
+// only in the container's shim (internal/shim/shim.go, Shim.delivered,
+// checked in deliver); neither luxd's postInput nor the runner's MsgInput
+// does, and host_messages are per host and epoch, acked once the shim took
+// them. So a send under the same id after a resume is new input. Callers
+// hold s.mu.
+func (s *Server) dropQueued(run *Run) {
+	for _, q := range run.queued {
+		delete(run.taken, q.requestID)
+	}
+	run.queued = nil
 }
 
 // Wait has a Run wait for a host with reason, as lux's scheduler does when
@@ -990,11 +1011,14 @@ func (s *Server) Place(id string) {
 	}
 }
 
-// Crash ends a Run's agent as a dead container would.
+// Crash ends a Run's agent as a dead container would: a resume finds it
+// idle, as lux restarts the harness, and what it had not read is gone.
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
+		run.busy = false
+		s.dropQueued(run)
 		s.setState(run, "failed")
 	}
 }
@@ -1006,6 +1030,40 @@ func (s *Server) Succeed(id string) {
 	if run := s.runs[id]; run != nil {
 		run.busy = false
 		s.setState(run, "succeeded")
+	}
+}
+
+// LoseSession has the Run's next resume start the agent in a new session,
+// as lux does when session/load or thread/resume fails: a lux.warning,
+// then a lux.session with another id.
+func (s *Server) LoseSession(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.loseSession = true
+	}
+}
+
+// FailTurns has the Run's next n turns fail at once with err, as
+// TurnError does for every turn.
+func (s *Server) FailTurns(id string, n int, err string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.failTurns, run.failWith = n, err
+	}
+}
+
+// StopOnItsOwn stops a Run nobody asked to stop, with no reason, as lux
+// reports a container stopped from outside it: resumable, with what its
+// harness had not read gone.
+func (s *Server) StopOnItsOwn(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.busy = false
+		s.dropQueued(run)
+		s.setState(run, "stopped")
 	}
 }
 
@@ -1312,7 +1370,13 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		return
 	}
 	// As lux's shim does: in the record stream, in order with the agent's
-	// own messages.
+	// own messages. A harness that cannot reload its session gets a new
+	// one, and lux says why first.
+	if resumed && run.loseSession {
+		run.loseSession = false
+		run.SessionID = fmt.Sprintf("ses_%s_%d", run.ID, epoch)
+		s.recordEvent(run, "lux.warning", map[string]any{"message": "session/load failed, starting a new session: session not found"})
+	}
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	if !resumed {
@@ -1341,6 +1405,12 @@ func (s *Server) turn(run *Run) {
 	run.busy = true
 	run.openTools = nil
 	b := run.behavior
+	if run.failTurns > 0 {
+		run.failTurns--
+		s.turnEnd(run, map[string]any{"stopReason": "", "error": run.failWith}, true)
+		run.busy = false
+		return
+	}
 	if b.TurnError != "" {
 		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError}, true)
 		run.busy = false
@@ -1878,8 +1948,8 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
-	// One request id is one input, as lux keys input by it: a retry of one
-	// it already took is answered, not queued again.
+	// One request id is one input while the harness that took it lives, as
+	// lux's shim drops a repeat (dropQueued): a retry is answered, not queued.
 	if run.taken[in.RequestID] && in.RequestID != "" {
 		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 		return

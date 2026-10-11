@@ -919,14 +919,14 @@ func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
 	}
 }
 
-// A conductor whose container stopped mid-turn, with no turn end seen,
+// A conductor lux ended for good mid-turn, with no turn end seen,
 // does not hold the task's live slot against a decision's note: its
 // replacement is started with the note, no person's message needed.
 func TestAWakeReplacesAConductorWhoseContainerStopped(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
 	first := w.talk(task)
-	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL, lux_state = 'stopped' WHERE id = $1`, first)
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL, lux_state = 'terminated' WHERE id = $1`, first)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
@@ -994,7 +994,7 @@ func TestASupersededConductorDecidesNothing(t *testing.T) {
 	}()
 	<-paused
 	// Meanwhile its container stops, and the next message replaces it.
-	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, first)
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, first)
 	if status, out := w.chat(task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}

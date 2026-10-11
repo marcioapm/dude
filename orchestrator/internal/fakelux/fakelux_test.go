@@ -140,6 +140,48 @@ func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 	}
 }
 
+// Input lux took and the agent never read dies with the harness when the
+// container stops on its own (crashed, lost, stopped from outside): the
+// resumed agent is not given it, and the same request id sent again is new
+// input that it is given.
+func TestInputUnreadWhenTheContainerStopsIsGoneAndItsRequestIDIsNew(t *testing.T) {
+	for name, stop := range map[string]func(*Server, string){
+		"crash":        (*Server).Crash,
+		"lose":         (*Server).Lose,
+		"stopOnItsOwn": (*Server).StopOnItsOwn,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Reply: "Done."} })
+			gate := make(chan struct{})
+			fake.InputGate = gate
+			c, run := submitRun(t, fake)
+			ctx := context.Background()
+			awaitRun(t, fake, run.ID, "the first turn never ended", func(r *Run) bool { return r.turnsEnded == 1 })
+			if err := c.Input(ctx, run.ID, lux.InputRequest{Text: "more", RequestID: "req_1"}); err != nil {
+				t.Fatal(err)
+			}
+			stop(fake, run.ID)
+			fake.mu.Lock()
+			fake.InputGate = nil
+			fake.mu.Unlock()
+			close(gate)
+			if _, err := c.Resume(ctx, run.ID, lux.ResumeInput{}); err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, c, run.ID, "running")
+			if got := fake.Runs()[0].Inputs; len(got) != 0 {
+				t.Fatalf("the resumed agent was given %q, want nothing", got)
+			}
+			if err := c.Input(ctx, run.ID, lux.InputRequest{Text: "more", RequestID: "req_1"}); err != nil {
+				t.Fatal(err)
+			}
+			awaitRun(t, fake, run.ID, "the input sent again was never given to the agent", func(r *Run) bool {
+				return slices.Equal(r.Inputs, []string{"more"})
+			})
+		})
+	}
+}
+
 // inputReceipts is each input record of the Run for requestID, in order:
 // lux.input's phase, "consumed" (lux.input.consumed) or "failed"
 // (lux.input.failed); an older lux's phase-less lux.input is "handoff", or

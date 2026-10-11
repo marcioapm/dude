@@ -227,7 +227,7 @@ func TestASupersededConductorSteersNothing(t *testing.T) {
 		done <- body
 	}()
 	<-paused
-	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'stopped' WHERE id = $1`, s.conductor)
+	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, s.conductor)
 	if status, out := w.chat(s.task, "are you there?"); status != 201 {
 		t.Fatalf("chat: %d %v", status, out)
 	}

@@ -28,6 +28,8 @@ const (
 	evPlanUpdated        = "agent.plan.updated"
 	evModelRequestDone   = "agent.model.request.completed"
 	evSessionStarted     = "agent.session.started"
+	evSessionReplaced    = "agent.session.replaced"
+	evAgentWarning       = "agent.warning"
 	evSessionStopped     = "agent.session.stopped"
 	evRunStarted         = "run.started"
 	evRuntimeStopped     = "runtime.stopped"
@@ -107,6 +109,24 @@ type harnessState struct {
 	claudeIdle     bool
 	codexTurn      codexTokens
 	turnError      string
+	talkerState
+}
+
+// talkerState is the part of harness_state a conductor or session agent
+// keeps across its parks and resumes, stored under these JSON names as they
+// are (harnessStateJSON embeds it).
+type talkerState struct {
+	// Its turns failed in a row (turnFailed), and whether the turn that
+	// ended last was one: a turn that did not fail resets the count.
+	FailedTurns int  `json:"failedTurns,omitempty"`
+	LastFailed  bool `json:"lastFailed,omitempty"`
+	// What lux last warned about the agent (lux.warning), and in which
+	// placement: the reason for a session replaced in that placement only.
+	Warning      string `json:"warning,omitempty"`
+	WarningEpoch int    `json:"warningEpoch,omitempty"`
+	// The agent's current harness session (session), "" on a Run from
+	// before it was kept here.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type codexTokens struct {
@@ -123,11 +143,13 @@ type harnessStateJSON struct {
 	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
 	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
 	TurnError      string           `json:"turnError,omitempty"`
+	talkerState
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
-		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError}
+		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
+		talkerState: h.talkerState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -140,7 +162,8 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
-		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError}
+		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
+		talkerState: j.talkerState}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -472,6 +495,11 @@ const maxRefusedNames = 100
 // has failed. One lux stopped at its time limit is not kept: its running
 // time is spent, so a resume would be stopped again at once.
 func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
+	// A conductor or session agent lux can resume, with a session to
+	// reload, is parked by the sweep (betweenTurns), not failed.
+	if t.run.talker() && !lux.Terminated(state) && t.sessionEpoch > 0 {
+		return nil
+	}
 	if reason == "" {
 		reason = state
 	}
@@ -502,8 +530,15 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	switch typ {
 	case "lux.session":
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
+	case "lux.warning":
+		// What lux says went wrong around the agent, as it says it: a
+		// session it could not reload among them (session).
+		t.Warning, t.WarningEpoch = str("message"), epoch
+		return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem, map[string]any{"message": t.Warning})
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"), epoch)
+	case recordCompacted:
+		return t.recordLuxCompaction(ctx, tx, s, data)
 	case lux.RecordInputConsumed, lux.RecordInputFailed:
 		if str("requestId") == promptRequestID {
 			return t.briefingReceipt(ctx, tx, typ, data)
@@ -722,14 +757,73 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		// Its state event says so too, but trails the agent's records on
 		// the stream, the first busy included.
 		t.resumeRunning(ctx, tx, s, epoch)
-		return nil
+		return t.sessionKept(ctx, tx, s, id, epoch)
 	}
+	t.Warning, t.SessionID = "", id
 	role := t.run.Phase
 	if t.run.talker() {
 		role = t.run.Role
 	}
 	return s.event(ctx, tx, t.run, evSessionStarted, ledger.ActorAgent,
 		map[string]any{"role": role, "externalSessionId": id})
+}
+
+// sessionKept checks a resumed agent's session is the one it had. lux
+// starts a blank one when the harness cannot reload its own (session/load,
+// thread/resume failed), says why in a lux.warning, and reports the new id:
+// recorded as agent.session.replaced, and a talker is briefed again, its
+// briefing queued as its next input (delivery.Rebriefing). The resume's own
+// input (a person's message, or the resume nudge) went first: the session
+// is known only after it was sent. The reason is lux's warning in this
+// placement, if it gave one.
+func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id string, epoch int) error {
+	reason := ""
+	if t.WarningEpoch == epoch {
+		reason = t.Warning
+	}
+	t.Warning = ""
+	had := t.SessionID
+	// A Run from before the session was kept: the last one its events name.
+	if had == "" {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
+			t.run.ID, evSessionStarted, evSessionReplaced).Scan(&had); err != nil {
+			return err
+		}
+	}
+	t.SessionID = id
+	if had == "" || had == id {
+		return nil
+	}
+	payload := map[string]any{"from": had, "to": id, "reason": reason}
+	if t.run.talker() {
+		ref := t.run.ref()
+		briefing, err := delivery.Rebriefing(ctx, tx, ref, reason)
+		if err != nil {
+			return err
+		}
+		// A blank session has no other prompt: the briefing goes as the
+		// first did, with how it works, its checkouts and tools. The
+		// task's images are not sent again; their references read as such.
+		text, err := s.talkerPrompt(ctx, tx, t.run, briefing, nil)
+		if err != nil {
+			return err
+		}
+		directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"})
+		if err != nil {
+			return err
+		}
+		// Sent before the messages still waiting (deliverDirectives sends
+		// by created_at): the agent reads who it is before what they say.
+		if _, err := tx.Exec(ctx, `UPDATE directives d SET created_at = LEAST(d.created_at,
+				(SELECT min(o.created_at) - interval '1 millisecond' FROM directives o
+				 WHERE o.run_id = d.run_id AND o.id <> d.id AND o.sent_at IS NULL AND o.failed_at IS NULL))
+			WHERE d.id = $1`, directiveID); err != nil {
+			return err
+		}
+		payload["directiveId"] = directiveID
+	}
+	return s.event(ctx, tx, t.run, evSessionReplaced, ledger.ActorSystem, payload)
 }
 
 // activity tracks the agent's turn. Busy means it took its task; idle after
@@ -740,6 +834,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 	case "busy":
 		// A new turn: an idle held for a Claude turn's end is past.
 		t.claudeIdle = false
+		t.LastFailed = false
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -768,6 +863,11 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	clear(t.openCalls)
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
+	// A failed turn's idle: the turn is over, not done (turnFailed).
+	if t.LastFailed {
+		return nil
+	}
+	t.FailedTurns = 0
 	// A turn that ended with something open for a person — a question, a
 	// repository it asked for — is not done: the agent waits, and the
 	// answer starts its next turn. The syncer parks it if the wait is
@@ -973,12 +1073,58 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
+	if t.run.talker() {
+		t.LastFailed = true
+		if t.FailedTurns < maxFailedTurnResumes {
+			return t.parkFailed(ctx, tx, s, reason)
+		}
+		t.FailedTurns++
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	return s.failedTx(ctx, tx, t.run, reason)
+}
+
+// maxFailedTurnResumes is how many times in a row a talker whose turn
+// failed is parked to be resumed; a failure past it (a context overflow
+// that fails every turn) ends it, as any Run's. Any turn that ends without
+// failing resets the count (idle), a resume nudge's included: the bound
+// is on consecutive failures, and a person's Resume, whose nudge turn can
+// succeed, may start a new count.
+const maxFailedTurnResumes = 2
+
+// parkFailed keeps a talker whose turn failed: the failure is said as any
+// Run's (run.failed, kept), and the Run is paused as its warm period's end
+// parks it, its lux Run stopped and kept, so the next message resumes it.
+// Under a control already pending (a person's pause, a repository's) the
+// failure is still said, and that control stops the Run: not parked for
+// the failure, it is not counted towards maxFailedTurnResumes.
+func (t *translator) parkFailed(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+			dude_pause = $3, turn_done_at = NULL
+		WHERE r.id = $1 AND `+delivery.Unasked, t.run.ID, "parked after its turn failed", t.run.parkKind())
+	if err != nil {
+		return err
+	}
+	failed := map[string]any{"status": "failed", "error": reason, "kept": true}
+	if tag.RowsAffected() == 0 {
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1
+			AND status IN ('scheduled', 'starting', 'running') AND control <> 'none')`, t.run.ID).Scan(&pending); err != nil || !pending {
+			return err
+		}
+		return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, failed)
+	}
+	t.FailedTurns++
+	failed["failedTurns"] = t.FailedTurns
+	if err := s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, failed); err != nil {
+		return err
+	}
+	return s.event(ctx, tx, t.run, evParked, ledger.ActorSystem,
+		map[string]any{"reason": t.run.parkKind(), "message": "its turn failed", "failedTurns": t.FailedTurns})
 }
 
 // turnFailure says why a turn failed, for a person. OpenCode answers a
