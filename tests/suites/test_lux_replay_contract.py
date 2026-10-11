@@ -310,10 +310,9 @@ def test_replay_a_message_handed_over_unread_is_briefed_once_and_replayed_once(
                                                          (directive,))[0],
                                  "luxInputs": inputs, "dudeFailed": failed, "runsCreated": t.runs_created()})
         # Real lux fails an accepted, unread input when the Run stops
-        # (lux.input.failed); dude fails the directive with lux's error
-        # before the Run's end is seen, so HandOver finds nothing unsettled.
-        pytest.xfail(f"lux failed the unread message as the Run stopped ({inputs}); dude failed it ({failed}) "
-                     f"and handed nothing on: runs {t.runs_created()}")
+        # (lux.input.failed); dude must keep a talker's as unread and hand it on.
+        pytest.fail(f"lux failed the unread message as the Run stopped ({inputs}); dude failed it ({failed}) "
+                    f"and handed nothing on: runs {t.runs_created()}")
     nxt = got[0]
     second = _prompt(t, nxt)
     answer = next(s for s in t.said(nxt) if "did the build pass?" in s)
