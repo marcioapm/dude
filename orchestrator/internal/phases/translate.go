@@ -743,7 +743,10 @@ func landsOf(data map[string]any) string {
 // lifecycleFrame), and Codex's and OpenCode's errStoppedUnread
 // (internal/adapter/adapter.go). Claude Code's also follows a line
 // cancelled three times by interrupts on a live Run; that one is read as
-// unread too, and sent again on the next resume.
+// unread too, but the live shim drops the resend of its request id, so it
+// waits, neither delivered nor failed, until the talker's Run ends and
+// hands it on. Rare, and kept: telling the two apart needs lux's stopping
+// state, which can reach dude after the record.
 func stopCancelled(msg string) bool {
 	switch msg {
 	case "claude: the message was cancelled", "claude: the message was discarded",
