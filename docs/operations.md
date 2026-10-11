@@ -748,12 +748,9 @@ any other key is logged as ignored. What the args do differs:
 A tier's header values hold no DEL character, which HTTP does not allow and
 TOML does not allow raw.
 
-Claude Code takes only Anthropic models (`claude-*`), Codex only OpenAI's;
-OpenCode takes both. A role whose harness cannot run its tier's model fails
-its Run when it is built, saying so; the settings page warns of it beside
-the Harness field and saves it all the same. The scripted `fake/*` models
-play a role on Claude Code or Codex with lux-fake speaking that harness's
-protocol.
+Any harness takes any tier's model, and the LLM proxy translates. The
+scripted `fake/*` models play a role on Claude Code or Codex with lux-fake
+speaking that harness's protocol.
 
 `scripts/real_harnesses.py` runs the real `claude` and `codex` with exactly
 the command, env and secrets dude builds, on a read-only question in this

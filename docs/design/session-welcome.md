@@ -216,16 +216,11 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   (`sessions.tier`, `sessions.harness`, migration 106; NULL follows). The
   welcome sends only what was chosen, so a session left alone keeps
   following the organisation when its setting changes.
-- **An invalid pair is never offered.** An item whose harness cannot run
-  the tier's model is disabled with the reason ("Claude Code takes an
-  Anthropic model (claude-…); Sol requests gpt-6-sol"), judged by
-  `harnessMisfit` against the other half as it stands, and worded with
-  `harnessWants` (the orchestrator's `harnessWants` says the same). A tier
-  naming no model is disabled too ("names no model yet"). The orchestrator
-  checks the pair the next start would use and refuses a misfit, or a tier
-  with no model, with a 400, on create and on `/model`. A session that
-  chooses neither half is not checked: a misfit there is the
-  organisation's, and its Run fails saying so, in the admin's words.
+- **Any harness takes any tier's model, and the LLM proxy translates.**
+  No pair is refused, disabled or annotated. Only a tier naming no model
+  is disabled ("names no model yet"), and the orchestrator refuses it, an
+  unknown tier or another organisation's, or an unknown harness, with a
+  400, on create and on `/model`.
 - **A change applies at the agent's next start, never mid-turn.** The
   rail's **Model** block carries the same picker for the owner (everyone
   else reads it); a change records `session.model.changed`, which the Chat
@@ -240,11 +235,6 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   session that chose it back to the organisation's tier, under the row's
   lock, and records `session.model.fallback` on each one it changed, so
   its members are told (`ON DELETE SET NULL` stays as the net).
-- **A pair that stops fitting later** (its tier removed, or the
-  organisation's half changed) is said where it is seen: the detail's
-  `model.misfit`, under the chip with an attention mark, and the Run's failure,
-  both in the session's words ("…Choose another harness or tier in the
-  session's Model.").
 - **The header** says "Brainstorm · <tier> · <harness>": a live agent's as
   its Run records them; with none live, what the next start would use,
   "(organisation default)" when it follows.

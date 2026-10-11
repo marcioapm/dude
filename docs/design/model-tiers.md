@@ -80,14 +80,9 @@ thinks. This is how tiers are kept, chosen, sent to the agent and shown.
   harness is how the agent runs; the tier is which model it asks for and
   how hard it thinks. A Claude Code role on "Coder (High)" runs `claude`
   with Coder's model and effort.
-- **Fit is checked when a Run is built, not when it is saved.** Claude Code
-  takes Anthropic models (`claude-*`), Codex OpenAI's; OpenCode both
-  (`llm.Provider` decides). A role whose harness cannot run its tier's
-  model fails its Run, as a role on no tier does: "The Implementer runs on
-  Claude Code, which takes an Anthropic model (claude-…), but its tier
-  Coder requests gpt-6-sol. An admin picks another harness or tier in
-  Agents." The settings page says so beside the Harness field, and saves
-  the choice all the same, since the tier may be about to change too.
+- **Any harness takes any tier's model, and the LLM proxy translates.**
+  Claude Code sends Anthropic Messages and Codex sends Responses, whatever
+  model the tier names; nothing refuses or warns of a pair.
 - **What each harness is given** for a tier's effort, options and headers is
   in [operations](../operations.md#claude-code-and-codex): Claude Code's
   `--effort`/`--thinking disabled` and `ANTHROPIC_CUSTOM_HEADERS`, Codex's
