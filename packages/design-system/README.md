@@ -522,16 +522,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   half left alone is the organisation's Brainstorm setting, and while both
   are, the chip says "default" in muted ink. Its menu has two groups,
   **Model tier** and **Harness**, each led by "Organisation default
-  (…)", which sets that half back. **An invalid pair is never offered**:
-  an item whose harness cannot run the tier's model is disabled, its
-  reason in place of its model, wrapping, read with the item
-  ("Claude Code takes an Anthropic model (claude-…); Sol requests
-  gpt-6-sol"), with `harnessMisfit` from `@dude/domain`, against the other
-  half as it stands; a tier that names no model is refused the same way
-  ("names no model yet"). A pair that stopped fitting after it was chosen
-  (a tier's model or the organisation's half changed) is still shown, as
-  it is what the session is on: `misfit` puts the warning glyph in
-  attention ink on the chip and its sentence under it. After the first
+  (…)", which sets that half back. **Any harness takes any tier**: the
+  LLM proxy translates, so no item is refused or annotated for the pair.
+  Only a tier that names no model is disabled, its reason in place of its
+  model, read with the item ("names no model yet"). After the first
   send the rail's **Model** block carries the
   same picker: its owner changes it, everyone else reads it
   (`readOnly`). **A change applies at the agent's next start**, never
@@ -1580,7 +1574,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
 | `<StarterPills onPick={(s) => setText(s.prompt)} />`, the caret at the end | a starter that sends its words, or opens a dialog |
 | `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
-| `<ModelPicker tiers organization value onChange />` in the composer's `toAside` and the rail's Model block, a refused pair disabled with its reason | a `Select` of every tier × harness, or a pair accepted and failed at start |
+| `<ModelPicker tiers organization value onChange />` in the composer's `toAside` and the rail's Model block, a tier with no model disabled with its reason | a `Select` of every tier × harness |
 
 ## Components
 
@@ -1914,9 +1908,7 @@ sessions*):
   organisation, and a `RowMenu` of two `kind: "radio"` groups that stay
   open as both halves are picked; `onChange({ tier, harness })`, null for
   "Organisation default". A tier naming no model is disabled ("names no
-  model yet"). `misfit`: the pair it is on stopped fitting after it was
-  chosen; the chip takes the `warning` glyph in attention ink and the
-  sentence sits under it in xs secondary text, as the chip's description.
+  model yet"); every harness is offered with every tier.
   `menuNote`: a muted line atop the menu ("Could not load the tiers");
   `onOpenChange` lets the app read the tiers on the first opening.
   `readOnly`: the chip alone.

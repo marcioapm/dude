@@ -9,7 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
-import { GALLERY_MISFIT, WelcomeSection } from "../src/gallery/sections/Welcome.tsx";
+import { WelcomeSection } from "../src/gallery/sections/Welcome.tsx";
 import { accessibleName, allByRole } from "./queries.ts";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
@@ -72,7 +72,7 @@ test("ComposerLinks: none, two, read only, and the menu drawn open inside its pa
   expect(pane.querySelector("[role=menu]")).not.toBeNull();
 });
 
-test("ModelPicker: default, chosen, read only, a misfit, and one menu open in its pane with refused items saying why", async () => {
+test("ModelPicker: default, chosen, read only, and one menu open in its pane offering every pair, only a tier with no model refused", async () => {
   const el = await mount();
   const panes = [...el.querySelectorAll("#wl-model [data-theme][data-density]")];
   expect(panes.length).toBe(FRAMES.length);
@@ -83,22 +83,22 @@ test("ModelPicker: default, chosen, read only, a misfit, and one menu open in it
     const readOnly = pane.querySelector("[data-testid=model-readonly]")!;
     expect(readOnly.querySelectorAll("button").length).toBe(0);
     expect(readOnly.textContent).toContain("Coder· Claude Code");
-    const misfit = pane.querySelector("[data-testid=model-misfit] [data-testid=model-picker]")!;
-    expect(misfit.getAttribute("aria-label")).toBe("Model: Coder on Codex");
-    expect(document.getElementById(misfit.getAttribute("aria-describedby") ?? "")?.textContent).toBe(GALLERY_MISFIT);
     // One menu per frame, under its own chip.
     const menus = [...pane.querySelectorAll("[data-testid=model-menu] [role=menu]")];
     expect(menus.length).toBe(1);
     expect(pane.querySelectorAll("[role=menu]").length).toBe(2);
-    const item = (name: string) => allByRole(menus[0]!, "menuitemradio").find((r) => accessibleName(r).startsWith(name))!;
-    expect(item("Sol").getAttribute("aria-disabled")).toBe("true");
-    expect(item("Sol").textContent).toContain("Claude Code takes an Anthropic model");
-    expect(item("Fast").getAttribute("aria-disabled")).toBe("true");
+    const items = allByRole(menus[0]!, "menuitemradio");
+    const item = (name: string) => items.find((r) => accessibleName(r).startsWith(name))!;
+    // On Claude Code, the GPT tier and Codex are offered as any other.
+    expect(item("Sol").getAttribute("aria-disabled")).not.toBe("true");
+    expect(item("Sol").textContent).toBe("Solgpt-6-sol");
+    expect(item("Codex").getAttribute("aria-disabled")).not.toBe("true");
+    expect(items.filter((r) => r.getAttribute("aria-disabled") === "true").map((r) => accessibleName(r))).toEqual([accessibleName(item("Fast"))]);
     expect(item("Fast").textContent).toContain("names no model yet");
   }
-  // The welcome's own composer carries the picker (in its wrapper) after "To Brainstorm".
+  // The welcome's own composer carries the picker right after "To Brainstorm".
   const shell = el.querySelector("#wl-shell [data-shot]")!;
-  expect(shell.querySelector("[data-testid=composer-to] + span > [data-testid=model-picker]")).not.toBeNull();
+  expect(shell.querySelector("[data-testid=composer-to] + [data-testid=model-picker]")).not.toBeNull();
 });
 
 test("ModelPicker's menu when the tiers could not be read: the note atop it, as the menu's description, in every frame", async () => {
