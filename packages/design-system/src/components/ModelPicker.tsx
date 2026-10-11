@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { HARNESSES, HARNESS_LABEL, type Harness } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
@@ -62,11 +62,10 @@ export function modelWords(tier: PickerTier | null, harness: Harness): string {
  * quiet chip reading the effective pair ("Claude (High) · Claude Code",
  * with a muted "default" while both follow the organisation), opening a
  * float with two groups, Model tier and Harness, each led by
- * "Organisation default (…)". Any harness takes any tier; a tier naming no
- * model is never offered: it is disabled and says so. A change applies at
- * the agent's next start; the app says so.
+ * "Organisation default (…)". A tier naming no model is disabled and says
+ * so. A change applies at the agent's next start; the app says so.
  */
-export function ModelPicker({ tiers, organization, value, onChange, readOnly, onOpenChange, menuNote, previewMenu, "data-testid": testId = "model-picker" }: ModelPickerProps) {
+export function ModelPicker({ tiers, organization, value, onChange, readOnly, onOpenChange, menuNote, previewMenu, "data-testid": testId = "model-picker" }: ModelPickerProps): ReactElement {
   const [open, setOpen] = useState(false);
   const eff = effectiveModel({ tiers, organization, value });
   const words = modelWords(eff.tier, eff.harness);
@@ -90,12 +89,12 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, on
 
   const orgTierWords = organization.tier?.name ?? "no tier";
   const tierItems: RowMenuAction[] = [
-    item(TIER_DEFAULT, `Organisation default (${orgTierWords})`, organization.tier?.model ?? undefined, null),
-    ...tiers.map((t) => item(t.id, t.name, t.model ?? undefined, t.model ? null : NO_MODEL)),
+    tierItem(TIER_DEFAULT, `Organisation default (${orgTierWords})`, organization.tier?.model),
+    ...tiers.map((t) => tierItem(t.id, t.name, t.model, !t.model)),
   ];
   const harnessItems: RowMenuAction[] = [
-    item(HARNESS_DEFAULT, `Organisation default (${HARNESS_LABEL[organization.harness]})`, undefined, null),
-    ...HARNESSES.map((h) => item(h, HARNESS_LABEL[h], undefined, null)),
+    { id: HARNESS_DEFAULT, label: `Organisation default (${HARNESS_LABEL[organization.harness]})` },
+    ...HARNESSES.map((h) => ({ id: h, label: HARNESS_LABEL[h] })),
   ];
   return (
     <RowMenu
@@ -125,9 +124,7 @@ export function ModelPicker({ tiers, organization, value, onChange, readOnly, on
   );
 }
 
-// A refused item (a tier naming no model) says why on its second line, in place of its model,
-// so the words are read with the item and seen without hovering.
-function item(id: string, label: string, model: string | undefined, reason: string | null): RowMenuAction {
-  if (reason) return { id, label, description: reason, descriptionWraps: true, disabled: true };
+function tierItem(id: string, label: string, model: string | null | undefined, disabled = false): RowMenuAction {
+  if (disabled) return { id, label, description: NO_MODEL, descriptionWraps: true, disabled: true };
   return { id, label, ...(model ? { description: model, descriptionMono: true } : {}) };
 }
