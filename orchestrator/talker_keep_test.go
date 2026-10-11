@@ -145,6 +145,13 @@ func (tk *talking) resumedAnswering(run, text string) {
 		said := tk.said(run)
 		return len(said) >= 2 && strings.Contains(said[len(said)-1], text)
 	})
+	tk.keptAndResumed(run)
+}
+
+// keptAndResumed checks that run is still the talker's latest Run and has
+// one lux Run, resumed.
+func (tk *talking) keptAndResumed(run string) {
+	tk.t.Helper()
 	luxRuns := 0
 	for _, r := range tk.lux.Runs() {
 		if strings.Contains(string(r.Spec), `"dude.run":"`+run+`"`) {
@@ -304,6 +311,39 @@ func TestAMessageUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.
 			tk.stopOnItsOwn(run, "failed")
 			tk.releaseInput()
 			tk.resumedAnswering(run, "did the build pass?")
+		})
+	}
+}
+
+// A message the harness accepted mid-turn, which lux fails as "the agent
+// exited before it read it" when the agent crashes, is not failed: the
+// Run is parked, the message sent again, and the resumed agent answers it.
+func TestAMessageUnreadWhenTheAgentCrashesIsAnsweredAfterTheResume(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := hangingTalker(t, kind)
+			id := tk.acceptedUnread(run, "did the build pass?")
+			tk.stopOnItsOwn(run, "failed")
+			tk.until("lux to fail it as the agent exited", func() bool {
+				for _, r := range tk.lux.Records(tk.luxRunOf(run)) {
+					if data, _ := r["data"].(map[string]any); r["type"] == "lux.input.failed" && data["requestId"] == id {
+						return data["error"] == "the agent exited before it read it"
+					}
+				}
+				return false
+			})
+			tk.until("the resumed Run to answer the message", func() bool {
+				said := tk.said(run)
+				return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
+			})
+			tk.keptAndResumed(run)
+			tk.answeredOnce(run, "did the build pass?")
+			if n := tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NULL AND delivered_at IS NOT NULL`, id); n != 1 {
+				t.Errorf("the message was not delivered unfailed:\n%s", tk.describeRuns())
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, id); n != 0 {
+				t.Errorf("%d run.directive.failed for the message, want 0", n)
+			}
 		})
 	}
 }

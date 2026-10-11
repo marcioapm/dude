@@ -225,6 +225,61 @@ func TestAStopFailsAcceptedUnreadInputAsLuxDoes(t *testing.T) {
 	}
 }
 
+// An agent that exits on its own fails each input its harness accepted and
+// never read with lux's errExitedUnread, whatever the harness; input not
+// yet accepted is not failed.
+func TestACrashFailsAcceptedUnreadInputAsTheAgentExited(t *testing.T) {
+	for _, adapter := range []string{"opencode", "claude-code"} {
+		t.Run(adapter, func(t *testing.T) {
+			fake := New("", "k", func(spec map[string]any) Behaviour {
+				if prompt, _ := spec["workload"].(map[string]any)["prompt"].(string); prompt == "idle" {
+					return Behaviour{Reply: "Done."}
+				}
+				return Behaviour{Hang: true}
+			})
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(srv.Close)
+			c := lux.New(srv.URL, "k")
+			run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: adapter, Prompt: "go"}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			awaitRun(t, fake, run.ID, "the turn never started", func(r *Run) bool { return r.busy && r.State == "running" })
+			if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "did the build pass?", RequestID: "dir_a"}); err != nil {
+				t.Fatal(err)
+			}
+			fake.Crash(run.ID)
+			if got := inputReceipts(fake, run.ID, "dir_a"); !slices.Equal(got, []string{"accepted", "failed"}) {
+				t.Fatalf("receipts %v, want accepted then failed", got)
+			}
+			for _, r := range fake.Records(run.ID) {
+				if data, _ := r["data"].(map[string]any); r["type"] == lux.RecordInputFailed && data["error"] != "the agent exited before it read it" {
+					t.Errorf("failed with %q, want lux's errExitedUnread", data["error"])
+				}
+			}
+
+			// An idle agent's input held on the gate is not yet accepted.
+			idle, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: adapter, Prompt: "idle"}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			awaitRun(t, fake, idle.ID, "the first turn never ended", func(r *Run) bool { return r.turnsEnded == 1 })
+			gate := make(chan struct{})
+			t.Cleanup(func() { close(gate) })
+			fake.mu.Lock()
+			fake.InputGate = gate
+			fake.mu.Unlock()
+			if err := c.Input(context.Background(), idle.ID, lux.InputRequest{Text: "and the tests?", RequestID: "dir_b"}); err != nil {
+				t.Fatal(err)
+			}
+			fake.Crash(idle.ID)
+			if got := inputReceipts(fake, idle.ID, "dir_b"); slices.Contains(got, "failed") {
+				t.Errorf("input not yet accepted has receipts %v, want it not failed", got)
+			}
+		})
+	}
+}
+
 // inputReceipts is each input record of the Run for requestID, in order:
 // lux.input's phase, "consumed" (lux.input.consumed) or "failed"
 // (lux.input.failed); an older lux's phase-less lux.input is "handoff", or

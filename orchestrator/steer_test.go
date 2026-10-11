@@ -557,7 +557,9 @@ func TestTheConductorIsWokenWhenItsSteeredRunEnds(t *testing.T) {
 		s.until("the implementer to fail", func() bool {
 			return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, s.implementer) == 1
 		})
-		s.settledOnce(id, "the run failed before the agent read it")
+		// lux fails the input its harness held, in its own words, before it
+		// reports the Run failed: that failure is the one told.
+		s.settledOnce(id, "the agent exited before it read it")
 	})
 }
 

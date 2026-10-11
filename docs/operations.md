@@ -397,7 +397,8 @@ mode.
    without blocking Runs). It is recorded once it succeeds; if the process
    dies in between, the next run repeats it, which its `IF NOT EXISTS`
    makes a no-op. A concurrent build interrupted part-way leaves an invalid
-   index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`) and run
+   index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`, or 107's
+   `sessions_tier_idx`, or 108's `directives_resends_idx`) and run
    `dude-migrate` again.
    A migration that adds a uniqueness rule checks the data first and stops,
    naming what breaks it, before anything changes: 094 for two repositories

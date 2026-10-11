@@ -266,6 +266,40 @@ func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {
 	}
 }
 
+// The replay's ledger query runs with JIT off, and the transaction has its
+// own setting back once the replay is read.
+func TestTheReplayQueryRunsWithoutJIT(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_s1", "brainstorm")
+	w.event("chat.message", "run_s1", "per_ana", `{"text":"hello"}`)
+	var during string
+	delivery.BeforeReplayQuery(func(ctx context.Context, tx pgx.Tx) {
+		if err := tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&during); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(func() { delivery.BeforeReplayQuery(nil) })
+	var before, after, got string
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		ctx := context.Background()
+		if err := tx.QueryRow(ctx, `SELECT set_config('jit', 'on', true)`).Scan(&before); err != nil {
+			return err
+		}
+		if got, err = delivery.Replay(ctx, tx, delivery.Talker{SessionID: "ses_r"}); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&after)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got, "Ana: hello") {
+		t.Fatalf("replay:\n%s", got)
+	}
+	if before != "on" || during != "off" || after != "on" {
+		t.Errorf("jit %q before the replay, %q during its query, %q after; want on, off, on", before, during, after)
+	}
+}
+
 // A summary by one Run's agent and only another Run's events after it: a
 // take-over line between them.
 func TestTheReplayAfterAnotherRunsSummarySaysANewAgentTookOver(t *testing.T) {

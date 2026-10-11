@@ -106,12 +106,7 @@ func TestAHandedOverMessageIsBriefedOnce(t *testing.T) {
 			})
 			tk.stopOnItsOwn(first, "terminated")
 			tk.releaseInput()
-			var next string
-			tk.until("the next Run to answer the message", func() bool {
-				next = tk.latest()
-				said := tk.said(next)
-				return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
-			})
+			next := tk.nextAnswering(first, "did the build pass?")
 			p := tk.prompt(next)
 			if n := strings.Count(p, "did the build pass?"); n != 1 {
 				t.Errorf("the handed-over message is in the briefing %d times, want once:\n%s", n, p)
@@ -190,6 +185,45 @@ func (tk *talking) acceptedUnread(run, text string) string {
 	return id
 }
 
+// nextAnswering waits for a Run after first to answer text as the first
+// thing it says. Returns that Run.
+func (tk *talking) nextAnswering(first, text string) string {
+	tk.t.Helper()
+	var next string
+	tk.until("the next Run to answer the message", func() bool {
+		next = tk.latest()
+		said := tk.said(next)
+		return next != first && len(said) == 1 && strings.Contains(said[0], text)
+	})
+	return next
+}
+
+// failedOnceNaming checks that directive has one run.directive.failed, and
+// that it names next as the Run that has the message.
+func (tk *talking) failedOnceNaming(directive, next string) {
+	tk.t.Helper()
+	if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`,
+		directive); n != 1 {
+		tk.t.Errorf("%d run.directive.failed for the message, want 1", n)
+	}
+	if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1
+		AND payload->>'nextRunId' = $2`, directive, next); n != 1 {
+		tk.t.Errorf("the message's failure does not name %s as having it:\n%s", next, tk.describeRuns())
+	}
+}
+
+// answeredOnce checks that run's agent answered text once in all it said.
+func (tk *talking) answeredOnce(run, text string) {
+	tk.t.Helper()
+	answered := 0
+	for _, s := range tk.said(run) {
+		answered += strings.Count(s, text)
+	}
+	if answered != 1 {
+		tk.t.Errorf("the message answered %d times, want once: %q", answered, tk.said(run))
+	}
+}
+
 // A message lux accepted mid-turn, then failed as unread when it
 // terminated the talker (lux.input.failed, as its adapters report every
 // accepted, unread input of a Run that stops), is handed to the next Run:
@@ -201,23 +235,31 @@ func TestAMessageLuxCancelledAtATerminateIsHandedOnAndBriefedOnce(t *testing.T) 
 			tk, first := hangingFirst(t, kind)
 			directive := tk.acceptedUnread(first, "did the build pass?")
 			tk.stopOnItsOwn(first, "terminated")
-			var next string
-			tk.until("the next Run to answer the message", func() bool {
-				next = tk.latest()
-				said := tk.said(next)
-				return next != first && len(said) == 1 && strings.Contains(said[0], "did the build pass?")
-			})
+			next := tk.nextAnswering(first, "did the build pass?")
 			if p := tk.prompt(next); strings.Count(p, "did the build pass?") != 1 || !strings.HasSuffix(p, "did the build pass?") {
 				t.Errorf("the next Run is not briefed with the message once, last:\n%s", p)
 			}
-			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`,
-				directive); n != 1 {
-				t.Errorf("%d run.directive.failed for the message, want 1", n)
-			}
-			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1
-				AND payload->>'nextRunId' = $2`, directive, next); n != 1 {
-				t.Errorf("the message's failure does not name %s as having it:\n%s", next, tk.describeRuns())
-			}
+			tk.failedOnceNaming(directive, next)
+			answer := tk.said(next)[0]
+			third := tk.replaced(next, "and the docs?")
+			tk.replayedOnceBeforeItsAnswer(third, "did the build pass?", answer)
+		})
+	}
+}
+
+// A message the harness accepted mid-turn, failed by lux as "the agent
+// exited before it read it" when a talker with no session to resume
+// crashes, is handed to the next Run, which answers it; its one failure
+// names that Run.
+func TestAMessageUnreadWhenAnUnresumableTalkerCrashesIsHandedOn(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, first := hangingFirst(t, kind)
+			directive := tk.acceptedUnread(first, "did the build pass?")
+			mustExec(t, tk.owner, `UPDATE runs SET agent_session_epoch = 0 WHERE id = $1`, first)
+			tk.stopOnItsOwn(first, "failed")
+			next := tk.nextAnswering(first, "did the build pass?")
+			tk.failedOnceNaming(directive, next)
 			answer := tk.said(next)[0]
 			third := tk.replaced(next, "and the docs?")
 			tk.replayedOnceBeforeItsAnswer(third, "did the build pass?", answer)
@@ -244,13 +286,7 @@ func TestAMessageLuxCancelledAtAPauseIsAnsweredOnceAfterTheResume(t *testing.T) 
 		said := tk.said(run)
 		return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
 	})
-	answered := 0
-	for _, s := range tk.said(run) {
-		answered += strings.Count(s, "did the build pass?")
-	}
-	if answered != 1 {
-		t.Errorf("the message answered %d times, want once: %q", answered, tk.said(run))
-	}
+	tk.answeredOnce(run, "did the build pass?")
 	if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, directive); n != 0 {
 		t.Errorf("the message was failed %d times", n)
 	}
