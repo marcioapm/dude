@@ -46,11 +46,11 @@ var replayTypes = []string{
 }
 
 // talkerScope (SQL, over events e; $1 the session or task): the talker's
-// ledger. A session's: every event of the session and of its brainstorm
-// Runs. A task's: its Chat — chat.message and its conductor Runs' events,
-// never a phase Run's.
+// ledger. A session's: every event of the session (events_session_of_run
+// stamps the session on each event of its Runs). A task's: its Chat —
+// chat.message and its conductor Runs' events, never a phase Run's.
 const (
-	sessionScope = `(e.session_id = $1 OR e.run_id IN (SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'))`
+	sessionScope = `e.session_id = $1`
 	taskScope    = `(e.task_id = $1 AND (e.event_type = 'chat.message'
 		OR e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent')))`
 )
@@ -115,7 +115,19 @@ func fitReplay(summary string, entries []replayEntry, budget int) string {
 	// Sizes are kept by difference, not re-rendered at each step: a
 	// dropped entry takes its text and the blank line before it.
 	chars := utf8.RuneCountInString(joinReplay(summary, entries, 0))
-	size := func(e replayEntry) int { return utf8.RuneCountInString(e.text()) + 2 }
+	// A dropped entry takes its text, its blank line, and the take-over
+	// line before it when it begins a Run's turn.
+	takeOver := make([]int, len(entries))
+	last := ""
+	for i, e := range entries {
+		if last != "" && e.run != "" && e.run != last {
+			takeOver[i] = utf8.RuneCountInString(tookOver) + 2
+		}
+		if e.run != "" {
+			last = e.run
+		}
+	}
+	size := func(i int) int { return utf8.RuneCountInString(entries[i].text()) + 2 + takeOver[i] }
 	for i := range entries {
 		if chars <= limit {
 			break
@@ -134,19 +146,19 @@ func fitReplay(summary string, entries []replayEntry, budget int) string {
 			break
 		}
 		if e.tool {
-			keep[i], chars = false, chars-size(e)
+			keep[i], chars = false, chars-size(i)
 		}
 	}
 	omitted := 0
 	if chars > limit {
 		chars += utf8.RuneCountInString(omittedLine(len(entries))) + 2
 	}
-	for i, e := range entries {
+	for i := range entries {
 		if chars <= limit {
 			break
 		}
 		if keep[i] {
-			keep[i], chars = false, chars-size(e)
+			keep[i], chars = false, chars-size(i)
 			omitted++
 		}
 	}
@@ -156,8 +168,8 @@ func fitReplay(summary string, entries []replayEntry, budget int) string {
 			kept = append(kept, e)
 		}
 	}
-	// The estimate leaves out the take-over lines between Runs: the oldest
-	// turns go until the rendering itself fits.
+	// The estimate cannot know which take-over lines survive the drops: the
+	// oldest turns go until the rendering itself fits.
 	out := joinReplay(summary, kept, omitted)
 	for len(kept) > 0 && utf8.RuneCountInString(out) > limit {
 		kept, omitted = kept[1:], omitted+1
@@ -165,6 +177,9 @@ func fitReplay(summary string, entries []replayEntry, budget int) string {
 	}
 	return out
 }
+
+// tookOver marks where another Run's agent took the conversation on.
+const tookOver = "[A new agent took over here.]"
 
 func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
 
@@ -181,7 +196,7 @@ func joinReplay(summary string, entries []replayEntry, omitted int) string {
 			b.WriteString("\n\n")
 		}
 		if last != "" && e.run != "" && e.run != last {
-			b.WriteString("[A new agent took over here.]\n\n")
+			b.WriteString(tookOver + "\n\n")
 		}
 		if e.run != "" {
 			last = e.run
@@ -217,9 +232,13 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
 				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
 			e.payload,
-			NOT (e.payload ? 'directiveId') OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = e.run_id
-				AND (d.id = e.payload->>'directiveId' OR d.resends = e.payload->>'directiveId') AND d.delivered_at IS NOT NULL)
-		FROM events e WHERE `+scope+` AND e.event_type = ANY($2) ORDER BY e.cursor`, id, replayTypes)
+			NOT (e.payload ? 'directiveId')
+				OR EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+		FROM events e WHERE `+scope+` AND e.event_type = ANY($2)
+			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
+				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
+		ORDER BY e.cursor`, id, replayTypes)
 	if err != nil {
 		return nil, err
 	}
