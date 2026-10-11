@@ -160,6 +160,72 @@ func TestTheReplayStartsFromTheNewestCompactionSummary(t *testing.T) {
 	}
 }
 
+// Over budget, the replay sheds in order: tool outputs, oldest first, the
+// call kept; then tool calls whole, oldest first; then, only if still
+// over, the oldest turns, said in one line. A person's or the agent's
+// words are never cut, and the summary is never dropped.
+func TestTheReplayKeepsToItsBudget(t *testing.T) {
+	words := func(who, s string) replayEntry { return replayEntry{run: "run_a", words: who + ": " + s} }
+	tool := func(name, out string) replayEntry {
+		return replayEntry{run: "run_a", tool: true, call: name + "({})", output: out}
+	}
+	big := strings.Repeat("o", 400)
+	ana := words("Ana", strings.Repeat("a", 200))
+	you := words("You", strings.Repeat("y", 200))
+	entries := func() []replayEntry {
+		return []replayEntry{ana, tool("t1", big), you, tool("t2", big), words("Bo", "last word")}
+	}
+	full := joinReplay("", entries(), 0)
+	tokens := replayTokens(full)
+	if tokens != (utf8.RuneCountInString(full)+3)/4 {
+		t.Fatalf("tokens %d for %d characters", tokens, utf8.RuneCountInString(full))
+	}
+	if got := fitReplay("", entries(), tokens); got != full {
+		t.Errorf("within budget, changed:\n%s", got)
+	}
+
+	// Step 1: the oldest output goes first, its call line kept.
+	got := fitReplay("", entries(), tokens-50)
+	if !strings.Contains(got, "t1({}) → [output dropped]") || !strings.Contains(got, "t2({}) → "+big) {
+		t.Errorf("step 1, the oldest output:\n%s", got)
+	}
+	// Then every output.
+	got = fitReplay("", entries(), tokens-150)
+	if !strings.Contains(got, "t1({}) → [output dropped]") || !strings.Contains(got, "t2({}) → [output dropped]") {
+		t.Errorf("step 1, both outputs:\n%s", got)
+	}
+	// Step 2: calls whole, oldest first; every word kept.
+	afterOutputs := replayTokens(got)
+	got = fitReplay("", entries(), afterOutputs-3)
+	if strings.Contains(got, "t1(") || !strings.Contains(got, "t2({}) → [output dropped]") || !strings.Contains(got, ana.words) {
+		t.Errorf("step 2, the oldest call:\n%s", got)
+	}
+	got = fitReplay("", entries(), afterOutputs-12)
+	if strings.Contains(got, "t1(") || strings.Contains(got, "t2(") ||
+		got != ana.words+"\n\n"+you.words+"\n\nBo: last word" {
+		t.Errorf("step 2, every call:\n%s", got)
+	}
+	// Step 3: the oldest turns, whole, said in a line.
+	got = fitReplay("", entries(), replayTokens(you.words+"\n\nBo: last word")+12)
+	if got != "[1 earlier messages omitted]\n\n"+you.words+"\n\nBo: last word" {
+		t.Errorf("step 3:\n%s", got)
+	}
+	// The summary stays whatever the budget.
+	summary := strings.Repeat("s", 600)
+	got = fitReplay(summary, entries(), 10)
+	if !strings.HasPrefix(got, "## Earlier, as the agent summarised it\n\n"+summary) {
+		t.Errorf("the summary dropped:\n%s", got)
+	}
+	for _, w := range []string{ana.words, you.words, "Bo: last word"} {
+		if i := strings.Index(got, w[:min(len(w), 8)]); i >= 0 && !strings.Contains(got, w) {
+			t.Errorf("words cut: %q", got[i:])
+		}
+	}
+	if replayBudgetTokens != 100_000 {
+		t.Errorf("budget %d", replayBudgetTokens)
+	}
+}
+
 // A tool's input and output are each cut at 4 KiB, on a character, saying
 // how much; a message the agent never heard is not in its past.
 func TestTheReplayCutsLongToolCallsAndSkipsWhatWasNeverHeard(t *testing.T) {
