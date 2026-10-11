@@ -568,16 +568,19 @@ func (s *Server) UnmarshalJSON(b []byte) error {
 	return s.rawInUTC()
 }
 
-// rawInUTC rewrites the times dude reads in Raw to UTC, as time.Time
-// marshals them; every other key and value, null included, stays lux's.
-// Raw is re-encoded (keys sorted) only when a time was in another offset.
+// rawInUTC converts known times with non-zero offsets, preserving other values.
+// If no time needs conversion, Raw stays byte-for-byte unchanged.
 func (s *Server) rawInUTC() error {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(s.Raw, &m); err != nil {
 		return err
 	}
 	changed := false
-	for key, t := range map[string]*time.Time{"since": s.Since, "readySince": s.ReadySince, "lastRequestAt": s.LastRequestAt} {
+	for key, t := range map[string]*time.Time{
+		"since":         s.Since,
+		"readySince":    s.ReadySince,
+		"lastRequestAt": s.LastRequestAt,
+	} {
 		if t == nil {
 			continue
 		}
