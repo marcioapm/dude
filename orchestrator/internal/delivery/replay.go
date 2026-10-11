@@ -327,7 +327,8 @@ func replayEntries(events []replayEvent) []replayEntry {
 			add(ev, line+".")
 		case EvFindingResolved:
 			if str("by") == "conductor" {
-				add(ev, fmt.Sprintf("You dismissed finding %s: %s", str("findingId"), oneLine(str("note"))))
+				// In the words the briefing's findings use (AcceptedBy).
+				add(ev, fmt.Sprintf("Finding %s: %s.", str("findingId"), AcceptedBy(str("note"))))
 			}
 		case EvTaskUpdated:
 			if str("by") == "conductor" {
