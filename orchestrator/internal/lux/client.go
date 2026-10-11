@@ -530,7 +530,8 @@ type ServerInput struct {
 
 // Server is one of a Run's servers as lux reports it. dude reads a few of
 // its fields and passes the object on as lux sent it (Raw), so what a
-// person sees is lux's word, whatever lux adds to it later.
+// person sees is lux's word, whatever lux adds to it later; only its times
+// are moved to UTC.
 type Server struct {
 	Name string `json:"name"`
 	Port int    `json:"port"`
@@ -564,6 +565,38 @@ func (s *Server) UnmarshalJSON(b []byte) error {
 	}
 	*s = Server(p)
 	s.Raw = append(json.RawMessage(nil), b...)
+	return s.rawInUTC()
+}
+
+// rawInUTC rewrites the times dude reads in Raw to UTC, as time.Time
+// marshals them; every other key and value, null included, stays lux's.
+// Raw is re-encoded (keys sorted) only when a time was in another offset.
+func (s *Server) rawInUTC() error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(s.Raw, &m); err != nil {
+		return err
+	}
+	changed := false
+	for key, t := range map[string]*time.Time{"since": s.Since, "readySince": s.ReadySince, "lastRequestAt": s.LastRequestAt} {
+		if t == nil {
+			continue
+		}
+		utc, err := json.Marshal(t.UTC())
+		if err != nil {
+			return err
+		}
+		if string(m[key]) != string(utc) {
+			m[key], changed = utc, true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	s.Raw = raw
 	return nil
 }
 
