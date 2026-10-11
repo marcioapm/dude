@@ -248,15 +248,11 @@ const replayLead = "What was said here before you, oldest first, from dude's rec
 	"before you). Tool calls show their input and output, cut where long; thoughts are not kept. Images are named, not attached."
 
 func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, error) {
-	scope, id, role := sessionScope, of.SessionID, "brainstorm"
-	where := `session_id = $1`
+	// A session renamed before its first Run has events and nothing to
+	// replay; a task's scope already requires a conductor Run.
+	scope, id, hadRun := sessionScope, of.SessionID, `EXISTS (SELECT 1 FROM runs WHERE session_id = $1 AND role = 'brainstorm' AND kind = 'agent')`
 	if of.SessionID == "" {
-		scope, id, role, where = taskScope, of.TaskID, "conductor", `task_id = $1`
-	}
-	var had bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE `+where+` AND role = $2::agent_role AND kind = 'agent')`,
-		id, role).Scan(&had); err != nil || !had {
-		return nil, err
+		scope, id, hadRun = taskScope, of.TaskID, `true`
 	}
 	// The start subquery's own "events e" shadows the outer e: scope filters the compactions it reads.
 	rows, err := tx.Query(ctx, `SELECT e.cursor, e.event_type, COALESCE(e.run_id, ''), e.actor_type, COALESCE(e.actor_id, ''),
@@ -265,7 +261,7 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 			e.payload,
 			NOT (e.payload ? 'directiveId') OR `+heardDirective("directiveId")+`,
 			e.payload ? 'supersedes' AND `+heardDirective("supersedes")+`
-		FROM events e WHERE `+scope+` AND e.event_type = ANY($2)
+		FROM events e WHERE `+hadRun+` AND `+scope+` AND e.event_type = ANY($2)
 			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
 				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
 		ORDER BY e.cursor`, id, replayTypes)
