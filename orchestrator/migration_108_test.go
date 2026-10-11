@@ -8,8 +8,8 @@ import (
 )
 
 // The Go migrator builds 108's index concurrently over existing
-// directives, as the runner does outside a transaction: it is valid, and
-// the replay's lookup of a directive's resends finds them.
+// directives, as the runner does outside a transaction: it is valid and
+// partial on resends IS NOT NULL, and the directives are still there.
 func TestTheResendsIndexIsBuiltOnAnUpgrade(t *testing.T) {
 	owner, apply := dbtest.Upgrade(t, "108")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES ('org_u', 'U', 'u')`)
@@ -22,10 +22,12 @@ func TestTheResendsIndexIsBuiltOnAnUpgrade(t *testing.T) {
 		VALUES ('dir_r', 'org_u', 'run_u', 'x', 'dir_u7', true, 'dir_u7', now())`)
 	apply()
 	var valid bool
-	if err := owner.QueryRow(context.Background(), `SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-		WHERE c.relname = 'directives_resends_idx'`).Scan(&valid); err != nil || !valid {
-		t.Fatalf("directives_resends_idx valid=%v: %v", valid, err)
+	var pred *string
+	if err := owner.QueryRow(context.Background(), `SELECT i.indisvalid, pg_get_expr(i.indpred, i.indrelid) FROM pg_index i
+		WHERE i.indexrelid = 'directives_resends_idx'::regclass`).Scan(&valid, &pred); err != nil || !valid || pred == nil || *pred != "(resends IS NOT NULL)" {
+		t.Fatalf("directives_resends_idx valid=%v predicate=%v: %v", valid, pred, err)
 	}
+	// The resend reads back after the build; on 51 rows this does not show the index is used.
 	var id string
 	if err := owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE resends = 'dir_u7'
 		AND run_id = 'run_u' AND delivered_at IS NOT NULL`).Scan(&id); err != nil || id != "dir_r" {
