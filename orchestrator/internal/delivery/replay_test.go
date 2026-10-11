@@ -155,6 +155,23 @@ func TestARetriedSteerIsReplayedOnce(t *testing.T) {
 	}
 }
 
+// A steer that failed before its "Interrupt now" was first sent: the
+// interrupt carried the words (resends the steer), so the agent heard them
+// once, and the replay says them once.
+func TestAnInterruptThatCarriedAFailedSteersWordsIsReplayedOnce(t *testing.T) {
+	w := newReplayWorld(t)
+	w.run("run_c1", "conductor")
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, failed_at) VALUES ('dir_s', $1, 'run_c1', 'x', now())`, w.org)
+	exec(t, w.owner, `INSERT INTO directives (id, organization_id, run_id, text, supersedes, interrupt, resends, interrupt_only, delivered_at)
+		VALUES ('dir_i', $1, 'run_c1', 'x', 'dir_s', true, 'dir_s', false, now())`, w.org)
+	w.event("run.steered", "run_c1", "per_ana", `{"text":"MIGRATION","directiveId":"dir_s"}`)
+	w.event("run.steered", "run_c1", "per_ana", `{"text":"MIGRATION","directiveId":"dir_i","supersedes":"dir_s","interrupt":true}`)
+	got := w.replay(delivery.Talker{TaskID: "wi_r"})
+	if !strings.HasSuffix(got, "Ana: MIGRATION") || strings.Count(got, "MIGRATION") != 1 {
+		t.Errorf("replay:\n%s", got)
+	}
+}
+
 // A replay read from the ledger starts at the newest compaction summary:
 // the summary under its heading, then only what came after it.
 func TestTheReplayFromTheLedgerStartsAtItsCompactionSummary(t *testing.T) {

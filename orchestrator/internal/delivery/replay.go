@@ -256,8 +256,9 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 			NOT (e.payload ? 'directiveId')
 				OR EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
 				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'directiveId' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL),
-			e.payload ? 'supersedes' AND EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'supersedes'
+			e.payload ? 'supersedes' AND (EXISTS (SELECT 1 FROM directives d WHERE d.id = e.payload->>'supersedes'
 				AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL)
+				OR EXISTS (SELECT 1 FROM directives d WHERE d.resends = e.payload->>'supersedes' AND d.run_id = e.run_id AND d.delivered_at IS NOT NULL))
 		FROM events e WHERE `+scope+` AND e.event_type = ANY($2)
 			AND e.cursor >= COALESCE((SELECT max(e.cursor) FROM events e WHERE `+scope+`
 				AND e.event_type = '`+evContextCompacted+`' AND btrim(e.payload->>'summary') <> ''), 0)
