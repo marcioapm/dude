@@ -137,17 +137,14 @@ func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 	chars := utf8.RuneCountInString(joinReplay(start, entries, 0))
 	// A dropped entry takes its text, its blank line, and the take-over
 	// line before it when it begins a Run's turn.
-	takeOver := make([]int, len(entries))
-	last := start.run
-	for i, e := range entries {
-		if last != "" && e.run != "" && e.run != last {
-			takeOver[i] = utf8.RuneCountInString(tookOver) + 2
+	takeOver := takeOvers(start, entries)
+	size := func(i int) int {
+		n := utf8.RuneCountInString(entries[i].text()) + 2
+		if takeOver[i] {
+			n += utf8.RuneCountInString(tookOver) + 2
 		}
-		if e.run != "" {
-			last = e.run
-		}
+		return n
 	}
-	size := func(i int) int { return utf8.RuneCountInString(entries[i].text()) + 2 + takeOver[i] }
 	for i := range entries {
 		if chars <= limit {
 			break
@@ -201,6 +198,20 @@ func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 // tookOver marks where another Run's agent took the conversation on.
 const tookOver = "[A new agent took over here.]"
 
+// takeOvers is, per entry, whether a take-over line goes before it: its
+// Run differs from the last Run seen, counting from the summary's.
+func takeOvers(start replayStart, entries []replayEntry) []bool {
+	at := make([]bool, len(entries))
+	last := start.run
+	for i, e := range entries {
+		at[i] = last != "" && e.run != "" && e.run != last
+		if e.run != "" {
+			last = e.run
+		}
+	}
+	return at
+}
+
 func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
 
 // joinReplay renders the summary under its heading, then the entries,
@@ -211,16 +222,13 @@ func joinReplay(start replayStart, entries []replayEntry, omitted int) string {
 	if omitted > 0 {
 		b.WriteString(omittedLine(omitted))
 	}
-	last := start.run
-	for _, e := range entries {
+	takeOver := takeOvers(start, entries)
+	for i, e := range entries {
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
 		}
-		if last != "" && e.run != "" && e.run != last {
+		if takeOver[i] {
 			b.WriteString(tookOver + "\n\n")
-		}
-		if e.run != "" {
-			last = e.run
 		}
 		b.WriteString(e.text())
 	}
