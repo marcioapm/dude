@@ -636,17 +636,6 @@ func ignoredOptions(harness string, options map[string]any) []string {
 	return out
 }
 
-// harnessMisfit is why the role's harness cannot run its tier's model, the
-// reason its Run fails with; "" when it can. The scripted agent stands in
-// for any harness.
-func harnessMisfit(settings delivery.RoleSettings, tier delivery.Tier, role string) string {
-	if fakeagent.Is(tier.Model) {
-		return ""
-	}
-	return delivery.HarnessFits(settings.HarnessName(), tier.Model, tier.Name, delivery.RoleName(role),
-		llm.Provider(tier.Model) == llm.ProviderAnthropic)
-}
-
 // submittedHarness is the harness a resumed Run goes on with: the one it
 // was submitted on (runs.harness), whatever its role says now, since lux
 // resumes the command the spec named. A scripted Run, or one from before
