@@ -165,8 +165,6 @@ export interface SessionModel {
   harness: Harness | null;
   effective: { tierName: string | null; model: string | null; harness: Harness };
   organization: { tier: SessionModelTier | null; harness: Harness };
-  /** Why the effective pair cannot run, as its next start would fail saying; null when it can. Absent from an older orchestrator. */
-  misfit?: string | null;
 }
 
 export interface SessionLink {

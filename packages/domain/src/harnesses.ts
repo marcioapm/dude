@@ -1,10 +1,7 @@
 /**
  * Harnesses: the coding agent a role's Runs run on, separate from the
- * model tier it asks for. OpenCode speaks both the proxy's APIs; Claude
- * Code only Anthropic's, Codex only OpenAI's. Whether a role's harness can
- * run its tier's model is checked when a Run is built (the orchestrator's
- * delivery.HarnessFits, the same rule), and warned of when it is set — but
- * a setting that does not fit is still saved.
+ * model tier it asks for. Any harness takes any tier's model: each speaks
+ * its own API to the LLM proxy, which translates to the model's.
  */
 
 import { z } from "zod";
@@ -22,44 +19,6 @@ export const HARNESS_LABEL: Record<Harness, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
 };
-
-export const HARNESS_DESCRIPTION: Record<Harness, string> = {
-  opencode: "Runs Anthropic and OpenAI models",
-  "claude-code": "Runs Anthropic models (claude-…)",
-  codex: "Runs OpenAI models",
-};
-
-/** The API a model is requested through, by its name: the orchestrator's llm.Provider. */
-export function modelProvider(model: string): "anthropic" | "openai" {
-  return model.startsWith("claude-") ? "anthropic" : "openai";
-}
-
-/**
- * The models `harness` takes, in words, for a sentence saying why a pair
- * does not fit; null for one that takes both (OpenCode). The orchestrator's
- * delivery.harnessWants says the same.
- */
-export function harnessWants(harness: Harness): string | null {
-  if (harness === "claude-code") return "an Anthropic model (claude-…)";
-  if (harness === "codex") return "an OpenAI model";
-  return null;
-}
-
-/**
- * Why `harness` cannot run `model`, in a sentence; null when it can, or
- * when there is no model to check. The scripted agent stands in for any.
- */
-export function harnessMisfit(harness: Harness, model: string | null | undefined): string | null {
-  if (!model || model.startsWith("fake/")) return null;
-  const provider = modelProvider(model);
-  if (harness === "claude-code" && provider !== "anthropic") {
-    return `Claude Code runs only Anthropic models (claude-…); ${model} is not one. Its Runs will fail until the harness or tier changes.`;
-  }
-  if (harness === "codex" && provider !== "openai") {
-    return `Codex runs only OpenAI models; ${model} is Anthropic's. Its Runs will fail until the harness or tier changes.`;
-  }
-  return null;
-}
 
 /**
  * The harness a role runs on: the project's, then the organization's —

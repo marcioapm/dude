@@ -353,7 +353,6 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                     tiers={Array.isArray(tierOptions) ? tierOptions : (detail.model.tier ? [pickerTier(detail.model.tier)] : [])}
                     organization={organizationOf(detail.model)}
                     value={picked ?? { tier: detail.model.tier?.id ?? null, harness: detail.model.harness }}
-                    misfit={picked ? null : detail.model.misfit}
                     onChange={isOwner ? chooseModel : undefined}
                     onOpenChange={(open) => open && setMenuOpenings((n) => n + 1)}
                     menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpenings > 0 ? "Loading the tiers…" : undefined} />

@@ -1,7 +1,8 @@
 /**
  * ModelPicker, mounted in happy-dom: what the chip says (following the
- * organisation, or chosen), what the menu offers and refuses and why, what
- * a pick hands back, and that a reader gets the chip with nothing to open.
+ * organisation, or chosen), what the menu offers (any harness with any
+ * tier) and refuses (a tier naming no model), what a pick hands back, and
+ * that a reader gets the chip with nothing to open.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -68,33 +69,34 @@ describe("ModelPicker", () => {
     expect(groups).toEqual(["Model tier", "Harness"]);
     expect(radios().map((r) => r.textContent)).toEqual([
       "Organisation default (Claude (High))claude-opus-5", "Claude (High)claude-opus-5", "Solgpt-6-sol",
-      "Organisation default (OpenCode)", "OpenCode", "Claude Code",
-      "CodexCodex takes an OpenAI model; Claude (High) requests claude-opus-5",
+      "Organisation default (OpenCode)", "OpenCode", "Claude Code", "Codex",
     ]);
     // The current choice is checked in each group.
     expect(radios().filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.textContent))
       .toEqual(["Organisation default (Claude (High))claude-opus-5", "Organisation default (OpenCode)"]);
   });
 
-  test("a pair the harness cannot run is disabled and says why, in both groups", async () => {
-    // On Claude Code (the organisation's): an OpenAI tier is refused.
-    const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={DEFAULT} onChange={() => undefined} />);
-    await openMenu(el);
-    expect(disabled(radio("Sol"))).toBe(true);
-    expect(radio("Sol").textContent).toContain("Claude Code takes an Anthropic model (claude-…); Sol requests gpt-6-sol");
-    expect(disabled(radio("Claude (High)"))).toBe(false);
-    // On Claude's tier, Codex is refused; OpenCode and Claude Code are not.
-    expect(disabled(radio("Codex"))).toBe(true);
-    expect(radio("Codex").textContent).toContain("Codex takes an OpenAI model; Claude (High) requests claude-opus-5");
-    expect(["OpenCode", "Claude Code"].map((h) => disabled(radio(h)))).toEqual([false, false]);
-  });
-
-  test("a disabled item cannot be picked", async () => {
+  test("any harness takes any tier: Codex on a Claude tier and Claude Code on a GPT one are offered and picked, with no note", async () => {
     const picked: ModelChoice[] = [];
+    // On Claude Code with the Claude tier (the organisation's): Codex and Sol are offered as any other.
     const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={DEFAULT} onChange={(c) => picked.push(c)} />);
+    expect(el.querySelector("[data-testid=model-picker]")!.hasAttribute("aria-describedby")).toBe(false);
     await openMenu(el);
+    expect(radios().filter(disabled).map((r) => r.textContent)).toEqual([]);
+    expect(radio("Codex").textContent).toBe("Codex");
+    expect(radio("Sol").textContent).toBe("Solgpt-6-sol");
+    await act(async () => radio("Codex").click());
     await act(async () => radio("Sol").click());
-    expect(picked).toEqual([]);
+    expect(picked).toEqual([{ tier: null, harness: "codex" }, { tier: SOL.id, harness: null }]);
+    await act(async () => root?.unmount());
+    host?.remove();
+
+    // The reverse: on Sol and Codex, the Claude tier and the organisation's Claude Code.
+    const chosen = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={{ tier: SOL.id, harness: "codex" }} onChange={() => undefined} />);
+    await openMenu(chosen);
+    expect(radios().filter(disabled).map((r) => r.textContent)).toEqual([]);
+    expect(radio("Claude (High)").textContent).toBe("Claude (High)claude-opus-5");
+    expect(radio("Organisation default (Claude Code)").textContent).toBe("Organisation default (Claude Code)");
   });
 
   test("picking hands back both halves; the menu stays open for the other; Organisation default sends null", async () => {
@@ -109,30 +111,14 @@ describe("ModelPicker", () => {
     await act(async () => radio("Sol").click());
     expect(document.querySelector("[role=menu]")).not.toBeNull();
     await act(async () => radio("Codex").click());
-    // On Codex the organisation's Claude tier is refused, so the harness goes back first.
-    expect(disabled(radio("Organisation default (Claude (High))"))).toBe(true);
-    await act(async () => radio("Organisation default (OpenCode)").click());
     await act(async () => radio("Organisation default (Claude (High))").click());
+    await act(async () => radio("Organisation default (OpenCode)").click());
     expect(picked).toEqual([
       { tier: SOL.id, harness: null },
       { tier: SOL.id, harness: "codex" },
-      { tier: SOL.id, harness: null },
+      { tier: null, harness: "codex" },
       { tier: null, harness: null },
     ]);
-  });
-
-  test("on a chosen pair, each item is judged against the pair's other half: on Sol and Codex, the Anthropic tier and the organisation's Claude Code are refused", async () => {
-    const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={{ tier: SOL.id, harness: "codex" }} onChange={() => undefined} />);
-    await openMenu(el);
-    // Codex cannot run claude-opus-5: the Claude tier, and the organisation's default tier (Claude), are refused.
-    expect(disabled(radio("Claude (High)"))).toBe(true);
-    expect(radio("Claude (High)").textContent).toContain("Codex takes an OpenAI model; Claude (High) requests claude-opus-5");
-    expect(disabled(radio("Sol"))).toBe(false);
-    // Claude Code cannot run Sol: the organisation's harness is refused, and says why.
-    const orgHarness = radio("Organisation default (Claude Code)");
-    expect(disabled(orgHarness)).toBe(true);
-    expect(orgHarness.textContent).toContain("Claude Code takes an Anthropic model (claude-…); Sol requests gpt-6-sol");
-    expect(disabled(radio("Codex"))).toBe(false);
   });
 
   test("a tier that names no model is refused, saying so", async () => {
@@ -144,45 +130,6 @@ describe("ModelPicker", () => {
     expect(radio("Fast").textContent).toBe("Fastnames no model yet");
     await act(async () => radio("Fast").click());
     expect(picked).toEqual([]);
-  });
-
-  test("a pair that no longer fits: an attention mark on the chip, and why under it, read with it", async () => {
-    const why = "Codex takes an OpenAI model, but the tier Claude (High) requests claude-opus-5. Choose another harness or tier in the session's Model.";
-    for (const readOnly of [false, true]) {
-      const el = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={{ tier: null, harness: "codex" }} misfit={why} readOnly={readOnly}
-        onChange={() => undefined} />);
-      const chip = el.querySelector<HTMLElement>("[data-testid=model-picker]")!;
-      const described = chip.getAttribute("aria-describedby");
-      expect(described && document.getElementById(described)?.textContent).toBe(why);
-      expect(el.querySelector("[data-testid=model-picker-misfit]")).not.toBeNull();
-      await act(async () => root?.unmount());
-      host?.remove();
-    }
-    const fits = await mount(<ModelPicker tiers={TIERS} organization={ORG} value={DEFAULT} misfit={null} onChange={() => undefined} />);
-    expect(fits.querySelector("[data-testid=model-picker]")!.hasAttribute("aria-describedby")).toBe(false);
-    expect(fits.querySelector("[data-testid=model-picker-misfit]")).toBeNull();
-  });
-
-  test("a misfit going away (a pick pending) keeps the same trigger and the same open menu", async () => {
-    const why = "Codex takes an OpenAI model, but the tier Claude (High) requests claude-opus-5.";
-    const picker = (misfit: string | null) =>
-      <ModelPicker tiers={TIERS} organization={ORG} value={{ tier: null, harness: "codex" }} misfit={misfit} onChange={() => undefined} />;
-    // mount() wraps in TooltipProvider; a re-render must keep that shape.
-    const rerender = (misfit: string | null) => act(async () => root!.render(<TooltipProvider>{picker(misfit)}</TooltipProvider>));
-    // Identity compared as a boolean: a failing toBe on a DOM node prints the whole happy-dom window.
-    const sameTrigger = () => el.querySelector("[data-testid=model-picker]") === trigger;
-    const el = await mount(picker(why));
-    const trigger = el.querySelector("[data-testid=model-picker]");
-    await rerender(null);
-    expect(sameTrigger()).toBe(true);
-    expect(trigger!.hasAttribute("aria-describedby")).toBe(false);
-    await rerender(why);
-    expect(sameTrigger()).toBe(true);
-    // With the menu open, it stays the same node too.
-    const menu = await openMenu(el);
-    await rerender(null);
-    expect(sameTrigger()).toBe(true);
-    expect(document.querySelector("[role=menu]") === menu).toBe(true);
   });
 
   test("a note atop the menu, when it cannot list everything yet, is the menu's description", async () => {

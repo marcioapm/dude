@@ -131,7 +131,7 @@ test("each frame shows the brainstorm's face beside the conductor's and a needs-
   }
 });
 
-test("the rail's Model: the owner's chip, chosen, read only and no longer fitting, each with when a change applies", async () => {
+test("the rail's Model: the owner's chip, chosen and read only, each with when a change applies", async () => {
   const el = await mount();
   const panes = [...el.querySelectorAll("#bs-rail-model [data-theme][data-density]")];
   expect(panes.length).toBe(FRAMES.length);
@@ -141,8 +141,6 @@ test("the rail's Model: the owner's chip, chosen, read only and no longer fittin
     const readOnly = pane.querySelector("[data-testid=rail-model-readonly]")!;
     expect(readOnly.querySelectorAll("button").length).toBe(0);
     expect(readOnly.textContent).toContain("Model: Coder on Claude Code");
-    const misfit = pane.querySelector("[data-testid=rail-model-misfit] [data-testid=model-picker]")!;
-    expect(document.getElementById(misfit.getAttribute("aria-describedby") ?? "")?.textContent).toContain("Choose another harness or tier in the session's Model.");
     for (const block of [chosen, readOnly]) expect(block.textContent).toContain("Applies the next time the agent starts.");
   }
   for (const pane of el.querySelectorAll("#bs-rail [data-theme][data-density]")) {

@@ -727,13 +727,14 @@ def test_an_admin_adds_a_tier_and_changes_one_and_the_role_page_follows(
 
 
 @pytest.mark.ui
-def test_a_roles_harness_is_picked_inherited_overridden_and_warned_of_when_its_tier_does_not_fit(
+def test_a_roles_harness_is_picked_inherited_overridden_and_reset(
     page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
 ):
     """The implementer's harness, above its model: picked on the
     organisation, inherited by a project and named as such, overridden and
-    reset there. The project's implementer is on a tier requesting an OpenAI
-    model, so on Claude Code the page warns, inline, and saves it anyway."""
+    reset there. The project's implementer is on a tier requesting a GPT
+    model: Claude Code on it saves with no warning, as any harness takes any
+    model."""
     org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
     # The fixture's project names OpenCode for its implementer: it follows its organisation here.
     client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"harness": None}}})
@@ -745,28 +746,25 @@ def test_a_roles_harness_is_picked_inherited_overridden_and_warned_of_when_its_t
     fields = settings.locator("[data-testid='role-harness'], [data-testid='role-tier']")
     expect(fields.first).to_have_attribute("data-testid", "role-harness")
     expect(harness).to_have_text(re.compile(r"^OpenCode"))
-    _pick(page, harness, "Claude Code", "Runs Anthropic models (claude-…)")
+    _pick(page, harness, "Claude Code")
     expect(toast(page, "Harness saved")).to_be_visible()
     assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["harness"]["value"] == "claude-code"
-    # The organisation's Coder names no model yet: nothing to warn of.
-    expect(settings.get_by_test_id("role-harness-misfit")).to_have_count(0)
     page.locator("[data-settings-nav='fixer']").click()
     expect(settings.get_by_test_id("role-harness")).to_have_text(re.compile(r"^The implementer’s · Claude Code"))
     expect(toast(page, "Harness saved")).to_have_count(0, timeout=10_000)
 
-    # The project inherits it; its implementer's tier requests an OpenAI model.
+    # The project inherits Claude Code; its implementer's tier requests a GPT model, and nothing warns of it.
     page.goto(f"{web_url}#/project/{project['id']}/settings/implementer")
     ps = page.get_by_test_id("project-settings")
     harness = ps.get_by_test_id("role-harness")
     expect(harness).to_have_text(re.compile(rf"^From {re.escape(org_name)} · Claude Code"))
-    misfit = ps.get_by_test_id("role-harness-misfit")
-    expect(misfit).to_have_text("Claude Code runs only Anthropic models (claude-…); project-implementer is not one. "
-                                "Its Runs will fail until the harness or tier changes.")
+    tier_id = client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["tier"]
+    assert next(t for t in _tiers(client).values() if t["id"] == tier_id)["model"] == "project-implementer"
+    expect(ps.locator("[data-tone]")).to_have_count(0)
 
-    # Overridden with Codex, which fits: the warning goes, and Reset is offered.
-    _pick(page, harness, "Codex", "Runs OpenAI models")
+    # Overridden with Codex, then Reset.
+    _pick(page, harness, "Codex")
     expect(toast(page, "Harness saved")).to_be_visible()
-    expect(misfit).to_have_count(0)
     was_claude = re.compile(rf"^Overridden\s*{re.escape(org_name)}: Claude Code\s*Reset$")
     overridden = ps.locator("[data-source='project']").filter(has_text=was_claude)
     expect(overridden).to_be_visible()
@@ -775,7 +773,7 @@ def test_a_roles_harness_is_picked_inherited_overridden_and_warned_of_when_its_t
     overridden.get_by_role("button", name="Reset", exact=True).click()
     expect(ps.locator("[data-source='project']").filter(has_text=was_claude)).to_have_count(0)
     expect(harness).to_have_text(re.compile(rf"^From {re.escape(org_name)} · Claude Code"))
-    expect(misfit).to_be_visible()
+    expect(ps.locator("[data-tone]")).to_have_count(0)
     assert "harness" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]
     assert console_errors == []
 
