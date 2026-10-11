@@ -308,6 +308,45 @@ func TestAMessageUnreadWhenTheContainerStopsIsAnsweredAfterTheResume(t *testing.
 	}
 }
 
+// A message the harness accepted mid-turn, which lux fails as "the agent
+// exited before it read it" when the agent crashes, is not failed: the
+// Run is parked, the message sent again, and the resumed agent answers it.
+func TestAMessageUnreadWhenTheAgentCrashesIsAnsweredAfterTheResume(t *testing.T) {
+	for _, kind := range []string{"brainstorm", "conductor"} {
+		t.Run(kind, func(t *testing.T) {
+			tk, run := hangingTalker(t, kind)
+			if status, reached := tk.write("did the build pass?"); status != 200 || reached != run {
+				t.Fatalf("the message: %d reached %q, want %s", status, reached, run)
+			}
+			var id string
+			tk.until("the message accepted by the harness", func() bool {
+				_ = tk.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1
+					AND accepted_at IS NOT NULL AND delivered_at IS NULL`, run).Scan(&id)
+				return id != ""
+			})
+			tk.stopOnItsOwn(run, "failed")
+			tk.until("lux to fail it as the agent exited", func() bool {
+				for _, r := range tk.lux.Records(tk.luxRunOf(run)) {
+					if data, _ := r["data"].(map[string]any); r["type"] == "lux.input.failed" && data["requestId"] == id {
+						return data["error"] == "the agent exited before it read it"
+					}
+				}
+				return false
+			})
+			tk.until("the resumed Run to answer the message", func() bool {
+				said := tk.said(run)
+				return len(said) > 0 && strings.Contains(said[len(said)-1], "did the build pass?")
+			})
+			if n := tk.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NULL AND delivered_at IS NOT NULL`, id); n != 1 {
+				t.Errorf("the message was not delivered unfailed:\n%s", tk.describeRuns())
+			}
+			if n := tk.count(`SELECT count(*) FROM events WHERE event_type = 'run.directive.failed' AND payload->>'directiveId' = $1`, id); n != 0 {
+				t.Errorf("%d run.directive.failed for the message, want 0", n)
+			}
+		})
+	}
+}
+
 // An "Interrupt now" that carries the words (its message failed before it
 // went) and was taken and unread when the container stopped is sent again
 // too: the conductor resumes on its own and answers it.

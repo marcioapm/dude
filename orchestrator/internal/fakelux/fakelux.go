@@ -998,23 +998,11 @@ func (s *Server) dropQueued(run *Run) {
 // errStoppedUnread for Codex and OpenCode). Input not yet accepted stays
 // queued. Callers hold s.mu.
 func (s *Server) stoppedUnread(run *Run) {
-	if s.LegacyInput {
-		return
-	}
 	reason := "the Run stopped before the agent read it"
 	if run.dialect() == dialectClaude {
 		reason = "claude: the message was cancelled"
 	}
-	kept := run.queued[:0]
-	for _, q := range run.queued {
-		if !q.accepted {
-			kept = append(kept, q)
-			continue
-		}
-		delete(run.taken, q.requestID)
-		s.recordFailed(run, q, reason)
-	}
-	run.queued = kept
+	s.failAccepted(run, reason)
 }
 
 // Wait has a Run wait for a host with reason, as lux's scheduler does when
@@ -1039,14 +1027,45 @@ func (s *Server) Place(id string) {
 
 // Crash ends a Run's agent as a dead container would: a resume finds it
 // idle, as lux restarts the harness, and what it had not read is gone.
+// What its harness had accepted fails as lux's adapters fail it when the
+// agent exits unasked (exitedUnread).
 func (s *Server) Crash(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		run.busy = false
+		s.exitedUnread(run)
 		s.dropQueued(run)
 		s.setState(run, "failed")
 	}
+}
+
+// exitedUnread fails input the harness accepted, with a receipt, and the
+// agent never read, as lux's adapters do once the agent exits without lux
+// stopping it (lux internal/adapter/adapter.go errExitedUnread, chosen by
+// unreadWhy(false) in claude.go exited, acp.go exited and codex.go Run).
+// Input not yet accepted is left to dropQueued. Callers hold s.mu.
+func (s *Server) exitedUnread(run *Run) {
+	s.failAccepted(run, "the agent exited before it read it")
+}
+
+// failAccepted fails, with reason, the queued input the harness accepted,
+// freeing its request id; input not yet accepted stays queued. Callers
+// hold s.mu.
+func (s *Server) failAccepted(run *Run, reason string) {
+	if s.LegacyInput {
+		return
+	}
+	kept := run.queued[:0]
+	for _, q := range run.queued {
+		if !q.accepted {
+			kept = append(kept, q)
+			continue
+		}
+		delete(run.taken, q.requestID)
+		s.recordFailed(run, q, reason)
+	}
+	run.queued = kept
 }
 
 // Succeed ends a Run as lux does when its workload exits 0 on its own.

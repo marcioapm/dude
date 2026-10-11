@@ -631,7 +631,8 @@ const interruptAloneOf = `f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FA
 //   - lux.input phase "failed" (never accepted), lux.input.failed (after
 //     it was), or an older lux's lux.input with an error: it will not reach
 //     the agent. Except a talker's accepted input lux cancelled because it
-//     stopped the Run (unreadAtStop): that is unread, not failed.
+//     stopped the Run or its agent exited (unreadAtStop): that is unread,
+//     not failed.
 //
 // Each transition happens once per directive and Run however often lux
 // repeats a receipt (a reconnect, a resumed shim): the update is guarded on
@@ -665,7 +666,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		if msg == "" {
 			msg = "lux could not deliver it"
 		}
-		if typ == lux.RecordInputFailed && t.run.talker() && stopCancelled(msg) {
+		if typ == lux.RecordInputFailed && t.run.talker() && unreadAtExit(msg) {
 			return unreadAtStop(ctx, tx, s, t.run, id, msg)
 		}
 		return failDirectiveTx(ctx, tx, s, t.run, id, msg)
@@ -740,13 +741,13 @@ func landsOf(data map[string]any) string {
 // stopCancelled says msg is how lux's adapters fail an input they accepted
 // and the agent never read because lux is stopping the Run: Claude Code's
 // line cancelled or discarded (lux internal/adapter/claude.go
-// lifecycleFrame), and Codex's and OpenCode's errStoppedUnread
-// (internal/adapter/adapter.go). Claude Code's also follows a line
-// cancelled three times by interrupts on a live Run; that one is read as
-// unread too, but the live shim drops the resend of its request id, so it
-// waits, neither delivered nor failed, until the talker's Run ends and
-// hands it on. Rare, and kept: telling the two apart needs lux's stopping
-// state, which can reach dude after the record.
+// lifecycleFrame), and every adapter's errStoppedUnread
+// (internal/adapter/adapter.go). Claude Code's older lines also follow a
+// line cancelled three times by interrupts on a live Run; that one is read
+// as unread too, but the live shim drops the resend of its request id, so
+// it waits, neither delivered nor failed, until the talker's Run ends and
+// hands it on. A lux that says so ("cancelled N times by interrupts") is
+// not matched: that message fails.
 func stopCancelled(msg string) bool {
 	switch msg {
 	case "claude: the message was cancelled", "claude: the message was discarded",
@@ -756,13 +757,26 @@ func stopCancelled(msg string) bool {
 	return false
 }
 
+// unreadAtExit says msg fails an accepted input because the agent's process
+// is gone: lux stopping the Run (stopCancelled), or the agent exiting on its
+// own (errExitedUnread, lux internal/adapter/adapter.go unreadWhy). Either
+// way the container ends with it: the shim's only workload exiting ends
+// the shim (internal/shim/shim.go run), and with it the container, run
+// with --restart=no (internal/runner/placement.go hardening). The shim's
+// delivered map dies with it, so a resume or a hand-over sends the input
+// again as new.
+func unreadAtExit(msg string) bool {
+	return stopCancelled(msg) || msg == "the agent exited before it read it"
+}
+
 // unreadAtStop keeps a talker's message lux accepted and cancelled as the
-// Run stopped as it was: accepted, neither delivered nor failed, so the
-// Run's end hands it on (delivery.HandOver, SessionHandOver) and a resume
-// sends it again. Unsent here, as unsendUnread does at a park: the
-// harness that held it is gone with its request ids. Nothing is written
-// to the ledger, so a person's Chat shows it waiting, not failed with a
-// Retry. One not accepted, or already settled, is failed as any other.
+// Run stopped, or as its agent exited, as it was: accepted, neither
+// delivered nor failed, so the Run's end hands it on (delivery.HandOver,
+// SessionHandOver) and a resume sends it again. Unsent here, as
+// unsendUnread does at a park: the harness that held it is gone with its
+// request ids. Nothing is written to the ledger, so a person's Chat shows
+// it waiting, not failed with a Retry. One not accepted, or already
+// settled, is failed as any other.
 func unreadAtStop(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, msg string) error {
 	tag, err := tx.Exec(ctx, `UPDATE directives SET sent_at = NULL, claimed_at = NULL
 		WHERE id = $1 AND run_id = $2 AND accepted_at IS NOT NULL AND delivered_at IS NULL AND failed_at IS NULL

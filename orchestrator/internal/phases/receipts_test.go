@@ -367,8 +367,9 @@ func TestEachFormOfFailureIsRecordedOnce(t *testing.T) {
 }
 
 // A talker's input lux accepted and then cancelled because it stopped the
-// Run, in each adapter's words, stays accepted and unread, unsent for the
-// next send, with nothing in the ledger. Refused, never accepted, or on a
+// Run, or because the agent exited on its own, in each adapter's words,
+// stays accepted and unread, unsent for the next send, with nothing in the
+// ledger. Refused, given up on after interrupts, never accepted, or on a
 // phase Run, the same record is a failure.
 func TestAStopCancellationLeavesATalkersAcceptedInputUnread(t *testing.T) {
 	cases := []struct {
@@ -379,7 +380,10 @@ func TestAStopCancellationLeavesATalkersAcceptedInputUnread(t *testing.T) {
 		{"claude cancelled", "claude: the message was cancelled", true, true, true},
 		{"claude discarded", "claude: the message was discarded", true, true, true},
 		{"codex or opencode stopped", "the Run stopped before the agent read it", true, true, true},
+		{"the agent exited", "the agent exited before it read it", true, true, true},
 		{"claude refused", "claude: the message was refused", true, true, false},
+		{"claude gave up on interrupts", "claude: the message was cancelled 3 times by interrupts", true, true, false},
+		{"a phase Run's agent exited", "the agent exited before it read it", false, true, false},
 		{"opencode never stored it", "OpenCode accepted it and never stored it", true, true, false},
 		{"never accepted", "claude: the message was cancelled", true, false, false},
 		{"a phase Run", "claude: the message was cancelled", false, true, false},
@@ -409,6 +413,32 @@ func TestAStopCancellationLeavesATalkersAcceptedInputUnread(t *testing.T) {
 				t.Errorf("failed=%v error=%q, %d failed events; want failed with %q", failed, msg, w.events(evDirectiveFailed), c.reason)
 			}
 		})
+	}
+}
+
+// Which lux.input.failed reasons say the agent's process is gone with the
+// input unread: lux stopping the Run (each adapter's words, an older
+// lux's Claude lines included) or the agent exiting on its own. Claude
+// Code giving up on a line after interrupts on a live Run is a failure:
+// its shim lives on and would drop a resend of the same request id.
+func TestWhichFailuresLeaveATalkersInputUnread(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"the Run stopped before the agent read it":                true,
+		"the agent exited before it read it":                      true,
+		"claude: the message was cancelled":                       true,
+		"claude: the message was discarded":                       true,
+		"claude: the message was cancelled 3 times by interrupts": false,
+		"claude: the message was cancelled 1 times by interrupts": false,
+		"claude: the message was refused":                         false,
+		"the agent exited":                                        false,
+		"OpenCode accepted it and never stored it":                false,
+	} {
+		if got := unreadAtExit(msg); got != want {
+			t.Errorf("unreadAtExit(%q) = %v, want %v", msg, got, want)
+		}
+	}
+	if stopCancelled("the agent exited before it read it") {
+		t.Errorf("stopCancelled matches the agent's own exit; it names only a stop")
 	}
 }
 
