@@ -742,9 +742,10 @@ func landsOf(data map[string]any) string {
 // and the agent never read because lux is stopping the Run: Claude Code's
 // line cancelled or discarded (lux internal/adapter/claude.go
 // lifecycleFrame), and every adapter's errStoppedUnread
-// (internal/adapter/adapter.go). Claude Code's older lines also follow a
-// line cancelled three times by interrupts on a live Run; that one is read
-// as unread too, but the live shim drops the resend of its request id, so
+// (internal/adapter/adapter.go). An older lux sends the same "claude: the
+// message was cancelled" when Claude Code gives up on a line after three
+// interrupts on a live Run; that one is read as unread too, but the live
+// shim drops the resend of its request id, so
 // it waits, neither delivered nor failed, until the talker's Run ends and
 // hands it on. A lux that says so ("cancelled N times by interrupts") is
 // not matched: that message fails.
@@ -764,7 +765,9 @@ func stopCancelled(msg string) bool {
 // the shim (internal/shim/shim.go run), and with it the container, run
 // with --restart=no (internal/runner/placement.go hardening). The shim's
 // delivered map dies with it, so a resume or a hand-over sends the input
-// again as new.
+// again as new. A Claude stdout that breaks off on a live process (a line
+// past the scanner's buffer, a read error) gives the same reason; the
+// message then waits unread until the talker is parked or ended.
 func unreadAtExit(msg string) bool {
 	return stopCancelled(msg) || msg == "the agent exited before it read it"
 }

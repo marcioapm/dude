@@ -996,7 +996,8 @@ func (s *Server) dropQueued(run *Run) {
 // accepted, with a receipt, and the agent never read, when lux stops the
 // Run (lux internal/adapter: claude.go lifecycleFrame, adapter.go
 // errStoppedUnread for Codex and OpenCode). Input not yet accepted stays
-// queued. Callers hold s.mu.
+// queued. Claude's reason models a lux before lux#89; from #89 on, lux
+// fails Claude's input with errStoppedUnread too. Callers hold s.mu.
 func (s *Server) stoppedUnread(run *Run) {
 	reason := "the Run stopped before the agent read it"
 	if run.dialect() == dialectClaude {
