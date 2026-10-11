@@ -41,7 +41,7 @@ type replayEvent struct {
 var replayTypes = []string{
 	EvChatMessage, EvRunSteered, "agent.message", EvQuestionAsked, "question.answered", EvQuestionClosed,
 	"session.told", EvConductorWoken, EvSessionProposed, EvSessionFiled, EvDecisionTaken, EvFindingResolved,
-	EvTaskUpdated, EvSessionRenamed, "agent.tool.called", "agent.tool.completed", "agent.session.replaced",
+	EvTaskUpdated, EvSessionRenamed, "agent.tool.called", "agent.tool.completed", "agent.session.replaced", evContextCompacted,
 }
 
 // talkerScope (SQL, over events e; $1 the session or task): the talker's
@@ -62,11 +62,46 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 	if err != nil || len(events) == 0 {
 		return "", err
 	}
-	body := renderReplay(events)
+	body := renderReplayFrom(fromCompaction(events))
 	if body == "" {
 		return "", nil
 	}
 	return "## The conversation so far\n\n" + replayLead + "\n\n" + body, nil
+}
+
+// fromCompaction is where the replay starts: the newest compaction summary
+// the agent's harness kept (agent.context.compacted), and the events after
+// it; with none, "" and every event. A summary covers whatever the
+// conversation before it held, a replay a Run was given included, so the
+// newest is enough.
+// Another source of summaries (a harness's own record) would be read here.
+func fromCompaction(events []replayEvent) (string, []replayEvent) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != evContextCompacted {
+			continue
+		}
+		if s, _ := events[i].Payload["summary"].(string); strings.TrimSpace(s) != "" {
+			return s, events[i+1:]
+		}
+	}
+	return "", events
+}
+
+// evContextCompacted is the phase syncer's record of a compaction.
+const evContextCompacted = "agent.context.compacted"
+
+// renderReplayFrom is the summary under its heading, if any, then the
+// events rendered.
+func renderReplayFrom(summary string, events []replayEvent) string {
+	body := renderReplay(events)
+	if summary == "" {
+		return body
+	}
+	out := "## Earlier, as the agent summarised it\n\n" + strings.TrimSpace(summary)
+	if body != "" {
+		out += "\n\n## Since then\n\n" + body
+	}
+	return out
 }
 
 const replayLead = "What was said here before you, oldest first, from dude's record (\"You\" is this conversation's agent, " +
