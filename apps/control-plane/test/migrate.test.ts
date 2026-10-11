@@ -631,6 +631,23 @@ test("106 validates nothing under its exclusive lock on sessions: its foreign ke
   }
 }, 120_000);
 
+test("091 stores an open call's time at +00:00 on a database whose zone is not UTC", async () => {
+  const { url, sql } = await migratedBefore("091");
+  try {
+    // New sessions on this database default to Asia/Kolkata (+05:30); this one already began in UTC.
+    await sql.unsafe(`ALTER DATABASE "${new URL(url).pathname.slice(1)}" SET timezone TO 'Asia/Kolkata'`);
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_z', 'z', 'z')`;
+    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_z', 'org_z', 'z')`;
+    await sql`INSERT INTO runs (id, organization_id, session_id, attempt, role, status, open_tool_calls, started_at)
+      VALUES ('run_z', 'org_z', 'ssn_z', 1, 'brainstorm', 'running', ARRAY['call_1'], '2026-10-09 12:00:00+00')`;
+    expect((await migrate(url, { log: () => {} })).applied[0]).toBe("091_brainstorm_stuck_turn.sql");
+    const [run] = await sql`SELECT open_tool_calls_at::text AS at FROM runs WHERE id = 'run_z'`;
+    expect(run.at).toBe(`{"call_1": "2026-10-09T12:00:00+00:00"}`);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
 test("107 leaves a valid index on the sessions that chose a tier, and only those", async () => {
   const url = await createDatabase();
   const migrated = run([binary], { DATABASE_URL: url });
