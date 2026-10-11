@@ -235,6 +235,26 @@ func TestTheReplayKeepsToItsBudget(t *testing.T) {
 	}
 }
 
+// A ledger longer than the budget is rendered within it: the oldest
+// messages said in a line, the newest whole.
+func TestTheRenderedReplayKeepsToTheBudget(t *testing.T) {
+	var events []replayEvent
+	for i := range 120 {
+		text := fmt.Sprintf("%03d ", i) + strings.Repeat("w", 3996)
+		events = append(events, ev("agent.message", "run_a", "", `{"text":"`+text+`"}`))
+	}
+	got := renderReplayFrom("", events)
+	if n := replayTokens(got); n > replayBudgetTokens {
+		t.Errorf("%d tokens, over the budget of %d", n, replayBudgetTokens)
+	}
+	if !strings.HasPrefix(got, "[") || !strings.Contains(got[:40], " earlier messages omitted]\n\n") {
+		t.Errorf("does not start saying what it omitted: %q", got[:min(len(got), 60)])
+	}
+	if last := "You: 119 " + strings.Repeat("w", 3996); !strings.HasSuffix(got, "\n\n"+last) {
+		t.Errorf("the last message is not whole at the end: …%q", got[max(0, len(got)-60):])
+	}
+}
+
 // A tool's input and output are each cut at 4 KiB, on a character, saying
 // how much; a message the agent never heard is not in its past.
 func TestTheReplayCutsLongToolCallsAndSkipsWhatWasNeverHeard(t *testing.T) {
