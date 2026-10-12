@@ -505,6 +505,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
+                  toAside={conversation.start && !conversation.start.failed ? <span className="muted" data-testid="composer-start-hint">
+                    · {conversation.start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK}</span> : undefined}
                 />
                 </>
               }
@@ -516,6 +518,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 : Array.isArray(item.group)
                   ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
                   : render(item.group))}
+              {startRow}
               {conversation.activity ? (
                 <ChatMessage role={role} activity={conversation.activity}
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />

@@ -177,3 +177,32 @@ describe("a task's Run page", () => {
     expect(picked).toBe("retry");
   });
 });
+
+describe("a conductor's Chat", () => {
+  test("the same row shows as it wakes", async () => {
+    const t = Date.now() - 5_000;
+    const ledger = [{ ...created(), occurredAt: new Date(t).toISOString() },
+      { ...stage("waiting", 0), payload: { stage: "waiting", since: new Date(t).toISOString(), epoch: 1 } }];
+    const page = await runPage("scheduled", ledger, true);
+    const row = await until(() => page.querySelector("[data-testid=start-progress]"), "the row in Chat");
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Starting: Waiting for a machine.");
+    expect(page.querySelector("[data-testid=composer-start-hint]")!.textContent).toBe(`· ${READ_WHEN_STARTED}`);
+  });
+
+  test("a resumed conductor reads as resuming, and a message waits for it to be back", async () => {
+    const ledger = [created(), stage("waiting", 0), ev("agent.message", { text: "Ready." }, 1_000), ev("run.parked", { reason: "conductor" }, 2_000),
+      ev("run.unparked", { reason: "conductor", epoch: 2 }, 3_000), stage("waiting", 3_000, 2),
+      ev("chat.message", { text: "status?", directiveId: "dir_9" }, 3_500, { type: "person", id: "per_marcio" } as PersistedEvent["actor"])];
+    const page = await runPage("running", ledger, true);
+    const row = await until(() => page.querySelector("[data-testid=start-progress]"), "the row");
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Resuming: Waiting for a machine.");
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain(READ_WHEN_BACK);
+  });
+
+  test("once it is up the row goes", async () => {
+    const ledger = [created(), stage("waiting", 0), ev("agent.message", { text: "Ready." }, 1_000)];
+    const page = await runPage("running", ledger, true);
+    await until(() => page.querySelector("[data-testid=conductor-turn]"), "its first words");
+    expect(page.querySelector("[data-testid=start-progress]")).toBeNull();
+  });
+});
