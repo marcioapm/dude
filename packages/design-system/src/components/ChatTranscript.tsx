@@ -87,6 +87,23 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
 const HELD_MARGIN = 12;
 const SCROLL_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 const DESCENDANT_SCROLL_KEYS: ReadonlySet<string> = new Set(["PageUp", "PageDown", "Home", "End"]);
+const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]';
+
+/**
+ * Whether an element between `from` and the viewport scrolls itself in the
+ * key's direction (a focused code block or tool output): the browser moves
+ * it, not the log, so the key is no reason to let the held turn go.
+ */
+function innerScroller(from: HTMLElement, viewport: HTMLElement, key: string): boolean {
+  const down = key === "PageDown" || key === "End";
+  for (let el: HTMLElement | null = from; el && el !== viewport; el = el.parentElement) {
+    if (el.scrollHeight <= el.clientHeight) continue;
+    const overflow = getComputedStyle(el).overflowY;
+    if (overflow !== "auto" && overflow !== "scroll") continue;
+    if (down ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0) return true;
+  }
+  return false;
+}
 
 /**
  * The transcript: the operator's day-to-day screen. A header states what
@@ -222,7 +239,9 @@ export function ChatTranscript({
             const own = target === e.currentTarget;
             // Descendants own Space and arrows (activation, choice navigation); page/home/end bubble to the log.
             if (!own && !DESCENDANT_SCROLL_KEYS.has(e.key)) return;
-            if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="slider"], [role="spinbutton"], [role="tree"], [role="grid"], [role="menu"], [role="tablist"]')) return;
+            // Fields keep their keys (caret, value) whether or not they consume them; widgets that use Home/End preventDefault.
+            if (target.closest(FIELD)) return;
+            if (innerScroller(target, e.currentTarget, e.key)) return;
             release();
           }}
           // A drag of the scrollbar, which is the viewport's own: not a click inside a turn.

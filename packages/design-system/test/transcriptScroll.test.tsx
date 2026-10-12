@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ChatTranscript } from "../src/components/ChatTranscript.tsx";
+import { QuestionCard } from "../src/components/QuestionCard.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -47,9 +48,31 @@ const measured = HTMLElement.prototype.getBoundingClientRect;
 function Transcript({ turns, held }: { turns: string[]; held?: string | undefined }) {
   return (
     <ChatTranscript fill keepInView={held} revision={turns.length}>
-      {turns.map((t) => <div key={t} data-turn={t}>{t}<button>Choice</button><input /><textarea /><span contentEditable /><button onKeyDown={(e) => e.preventDefault()}>Consumed</button></div>)}
+      {turns.map((t) => (
+        <div key={t} data-turn={t}>
+          {t}<button>Choice</button><input /><textarea /><span contentEditable /><button data-consumed onKeyDown={(e) => e.preventDefault()}>Consumed</button>
+          <select><option>One</option></select><div role="textbox" tabIndex={0} />
+          {t === "t3" ? <QuestionCard role="conductor" text="" items={ITEMS} askedAt={new Date()} answeredAt={null} onSubmit={async () => {}} /> : null}
+          <pre data-scroll="tall" style={{ overflowY: "auto" }}><code>output</code></pre>
+          <pre data-scroll="visible"><code>short</code></pre>
+        </div>
+      ))}
     </ChatTranscript>
   );
+}
+
+const ITEMS = [
+  { header: "Scope", question: "Which scope?", choices: [{ label: "A" }, { label: "B" }] },
+  { header: "Order", question: "Which order?", choices: [{ label: "C" }, { label: "D" }] },
+];
+
+/** Gives each `pre[data-scroll]` 100px of box: "tall" holds 400px of content (scrollTop as set), "visible" overflows without a scroller. */
+function scrollers(viewport: HTMLElement, at: number) {
+  for (const pre of viewport.querySelectorAll<HTMLElement>("pre[data-scroll]")) {
+    Object.defineProperty(pre, "clientHeight", { configurable: true, get: () => 100 });
+    Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => 400 });
+    Object.defineProperty(pre, "scrollTop", { configurable: true, get: () => at });
+  }
 }
 
 async function render(turns: string[], held?: string) {
@@ -140,7 +163,7 @@ describe("ChatTranscript keepInView", () => {
 
   for (const [selector, key] of [
     ["button", " "], ["button", "ArrowDown"], ["input", "End"], ["textarea", "PageDown"],
-    ["[contenteditable]", "Home"], ["button:last-child", "End"],
+    ["[contenteditable]", "Home"], ["button[data-consumed]", "End"], ["select", "End"], ["[role=textbox]", "PageDown"],
   ] as const) {
     test(`${key} on ${selector} does not release the question hold`, async () => {
       const viewport = await mount(turns(8), "[data-turn=t3]");
@@ -151,6 +174,51 @@ describe("ChatTranscript keepInView", () => {
       });
       await render(turns(9), "[data-turn=t3]");
       expect(viewport.scrollTop).toBe(3 * TURN - 12);
+    });
+  }
+
+  // The browser scrolls the log for these (no widget consumes them), so the hold must go or it snaps back.
+  for (const [selector, key, ctrlKey] of [
+    ["[role=tab]", "End", true], ["[role=tab]", "PageDown", false], ["[role=radio]", "End", true], ["[role=radio]", "PageDown", false],
+  ] as const) {
+    test(`unconsumed ${key} on a question's ${selector} releases the hold`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      await act(async () => {
+        viewport.querySelector<HTMLElement>(`[data-turn=t3] ${selector}`)!.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }));
+        viewport.scrollTop = viewport.scrollHeight - HEIGHT;
+        viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
+    });
+  }
+
+  for (const [key, at] of [["PageDown", 0], ["End", 0], ["PageUp", 300], ["Home", 300]] as const) {
+    test(`${key} in a code block that scrolls that way keeps the hold: the block moves, not the log`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      scrollers(viewport, at);
+      await act(async () => {
+        viewport.querySelector<HTMLElement>("[data-turn=t3] pre[data-scroll=tall] code")!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(3 * TURN - 12);
+    });
+  }
+
+  for (const [name, selector, at] of [
+    ["already at its end", "pre[data-scroll=tall]", 300],
+    ["that overflows without scrolling", "pre[data-scroll=visible]", 0],
+  ] as const) {
+    test(`PageDown in a code block ${name} releases: the browser scrolls the log`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      scrollers(viewport, at);
+      await act(async () => {
+        viewport.querySelector<HTMLElement>(`[data-turn=t3] ${selector}`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true }));
+        viewport.scrollTop = viewport.scrollHeight - HEIGHT;
+        viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
     });
   }
 
