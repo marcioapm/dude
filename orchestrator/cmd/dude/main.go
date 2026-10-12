@@ -107,8 +107,12 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, get("/tools"))
 	case "task list":
 		text := fs.String("text", "", "only work mentioning this")
+		peers := fs.Bool("peers", false, "your peers: the other tasks on your epic, and what each is doing")
 		if err := fs.Parse(rest); err != nil {
 			return err
+		}
+		if *peers {
+			return show(out, *asJSON, call("list_tasks", map[string]any{"peers": true}))
 		}
 		return show(out, *asJSON, call("list_tasks", map[string]any{"text": *text}))
 	case "epic list":
@@ -250,12 +254,15 @@ func run(args []string, out io.Writer) error {
 		nameStatus := fs.Bool("name-status", false, "each file's path and status only")
 		limit := fs.Int("limit", 0, "files per page, 1 to 1000 (default 200)")
 		offset := fs.Int("offset", 0, "files to skip, for the next page")
+		task := fs.String("task", "", "a peer's key (ABS-2): its code as dude last stored it")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		body := map[string]any{}
-		if len(args) > 0 && runID.MatchString(args[0]) {
+		if *task != "" {
+			body["task"] = *task
+		} else if len(args) > 0 && runID.MatchString(args[0]) {
 			body["run"], args = args[0], args[1:]
 		}
 		if len(args) > 0 {
