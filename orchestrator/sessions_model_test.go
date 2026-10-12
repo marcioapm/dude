@@ -403,6 +403,42 @@ func TestAChangeSetBackOrNoneResumesTheSameAgent(t *testing.T) {
 	}
 }
 
+// A parked agent still holding a message it was never sent swaps nothing
+// at a change: a fresh agent would read the newer message first. Both are
+// queued on it, in the order written.
+func TestAChangeWhileAnEarlierMessageIsUnsentQueuesTheNextOnTheSameAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	id, run := s.parkedOn()
+	// Queued and a resume asked for; the syncer has not run since.
+	first := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "first this"})
+	if first["runId"] != run {
+		t.Fatalf("the first message went to %v, want %s", first["runId"], run)
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "opencode"})
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "then this"})
+	if out["runId"] != run || out["created"] != false {
+		t.Errorf("answered %v, want queued on %s", out, run)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+		t.Errorf("%d Runs, want the parked one", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 0 {
+		t.Errorf("a swap was recorded")
+	}
+	rows, err := s.owner.Query(context.Background(), `SELECT text FROM directives WHERE run_id = $1 AND failed_at IS NULL
+		ORDER BY created_at, id`, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Márcio Martins: first this", "Márcio Martins: then this"}; !slices.Equal(texts, want) {
+		t.Errorf("queued %q, want %q", texts, want)
+	}
+}
+
 // A change while the agent is mid-turn interrupts nothing: a message then
 // is queued on it as a steer; the first message after its turn ends hands
 // the conversation to a fresh agent.

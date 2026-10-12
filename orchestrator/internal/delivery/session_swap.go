@@ -25,9 +25,14 @@ const QuestionReplaced = "replaced"
 
 // betweenTurns (SQL, over runs r): a submitted session agent not in a
 // turn: parked or paused, or running with its turn over (done, or waiting
-// on a person).
+// on a person); and holding no unsent message that is not held for an
+// answer. Such a message was written before the one at hand, and a fresh
+// agent would read it after (SessionHandOver), so the swap waits for a
+// later message.
 const betweenTurns = `(r.lux_run_id IS NOT NULL AND (r.status = 'paused'
-	OR (r.status IN ('scheduled', 'starting', 'running') AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))`
+	OR (r.status IN ('scheduled', 'starting', 'running') AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)))
+	AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL
+		AND NOT ` + HeldBack + `))`
 
 // BrainstormSwap is what a fresh agent would run on, when the session's
 // live agent runRunID runs on something else and is between turns; nil
