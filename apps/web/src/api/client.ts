@@ -292,6 +292,8 @@ export interface EpicOverview {
   machineUsd: number;
   lastActivity: string | null;
   needsYou: number;
+  /** Its tasks' agents waiting on a peer's reply now, as [waiting task's key, the key it waits on]. */
+  waiting?: Array<[string, string]>;
   createdAt: string;
   updatedAt: string;
 }

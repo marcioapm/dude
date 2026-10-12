@@ -462,7 +462,7 @@ export class FixtureClient extends ApiClient {
     return this.#patch(true, { network: { egress: [...this.#projectEgress, ...names] } });
   }
   override projectOverview() {
-    return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });
+    return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, ...(this.#peers ? { waiting: [["WC-214", "WC-212"] as [string, string]] } : {}), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });
   }
   override pushKey() {
     return Promise.reject(new ApiError(404, "not_found", "No push in the fixtures."));

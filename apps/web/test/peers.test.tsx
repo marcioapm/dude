@@ -14,8 +14,9 @@ import { EventTypes, type EpicNotes, type EpicPeers, type EpicThreads, type Pers
 import { act, click, mount, until } from "./dom.ts";
 import { ApiError } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { EPIC, RUN_ID } from "../src/fixtures/data.ts";
+import { EPIC, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
 import { CONDUCTOR_ID } from "../src/fixtures/peers.ts";
+import { ProjectEpics } from "../src/screens/ProjectEpics.tsx";
 import { EpicCoordination } from "../src/screens/EpicCoordination.tsx";
 import { project, type DigestTurn, type PeerWaitTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { RunScreen, renderTurn } from "../src/screens/RunScreen.tsx";
@@ -291,6 +292,12 @@ describe("an epic's Coordination view", () => {
 });
 
 describe("a Run on an epic", () => {
+  test("the project page's card for an epic says which of its agents wait on which", async () => {
+    const client = new FixtureClient("a");
+    const page = await show(<ProjectEpics client={client} projectId={PROJECT.id} version={0} onOpenEpic={() => {}} />, client);
+    const mark = await until(() => page.querySelector("[data-testid=peer-wait-mark]"), "the mark");
+    expect(mark.textContent).toBe("WC-214 waits on WC-212");
+  });
   test("its header says whom it waits on, its rail its peers and the epic's notes, its transcript its peer turns", async () => {
     const client = new FixtureClient("a");
     const page = await show(<RunScreen client={client} runId={RUN_ID} onBack={() => {}} />, client);

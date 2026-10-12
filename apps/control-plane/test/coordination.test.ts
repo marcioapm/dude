@@ -192,6 +192,36 @@ test("pin and retire go to the orchestrator as the person who asked; a bad note 
   expect(forwarded.length).toBe(2);
 });
 
+test("in the tree, a Run waiting on a peer says on whom, and parked on it it does not need a person", async () => {
+  const res = await call("GET", "/v1/navigation");
+  expect(res.status).toBe(200);
+  const { projects } = (await res.json()) as { projects: Array<{ id: string; epics: Array<{ tasks: Array<{ key: string;
+    runs: Array<{ sessions: Array<{ id: string; role: string; title: string; status: string; activity?: string }> }> }> }> }> };
+  const sessions = Object.fromEntries(projects.find((p) => p.id === "prj_c")!.epics[0]!.tasks
+    .flatMap((t) => t.runs.flatMap((r) => r.sessions)).map((s) => [s.id, s]));
+  expect(sessions["run_4"]).toEqual({ id: "run_4", role: "implementer", status: "pending", title: expect.any(String), activity: "Waiting on ABS-1" });
+  // Its earlier wait closed with the reply: ABS-2 waits on nobody.
+  expect(sessions["run_2"]!.activity).toBeUndefined();
+  expect(sessions["run_2"]!.status).toBe("running");
+});
+
+test("the project page marks an epic whose agents wait on each other, from live Runs' open waits", async () => {
+  const res = await call("GET", "/v1/projects/prj_c/overview");
+  expect(res.status).toBe(200);
+  const { epics } = (await res.json()) as { epics: Array<{ id: string; waiting: Array<[string, string]>; needsYou: number }> };
+  const epic = epics.find((e) => e.id === "epc_c")!;
+  expect(epic.waiting).toEqual([["ABS-4", "ABS-1"]]);
+  expect(epic.needsYou).toBe(0);
+  // A wait whose Run ended is no one waiting.
+  await owner`UPDATE runs SET status = 'aborted' WHERE id = 'run_4'`;
+  try {
+    const after = (await (await call("GET", "/v1/projects/prj_c/overview")).json()) as { epics: Array<{ id: string; waiting: unknown[] }> };
+    expect(after.epics.find((e) => e.id === "epc_c")!.waiting).toEqual([]);
+  } finally {
+    await owner`UPDATE runs SET status = 'paused' WHERE id = 'run_4'`;
+  }
+});
+
 test("there is no route for a person to write in a thread", async () => {
   for (const [method, path] of [["POST", "/v1/epics/epc_c/threads"], ["POST", "/v1/epics/epc_c/threads/pm_q/reply"],
     ["POST", "/v1/epics/epc_c/messages"]] as const) {

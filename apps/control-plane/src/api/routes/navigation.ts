@@ -64,6 +64,8 @@ interface RunRow {
   category: string | null;
   /** The open question the Run waits on, if any. */
   question: string | null;
+  /** "Waiting on ABS-2" while it waits on a peer's reply. */
+  peerWait: string | null;
 }
 
 /**
@@ -99,11 +101,12 @@ function attemptStatus(all: RunRow[]): RunStatus {
 /**
  * A Run as a session row: what it asks of a person, if anything, else its
  * status. A conductor dude parked between messages is quiet — waiting, not
- * waiting on you: nobody owes it anything.
+ * waiting on you: nobody owes it anything. So is a Run parked on a peer's
+ * reply: the peer owes it, not a person.
  */
 function sessionStatus(r: RunRow): SessionStatus {
   if (r.question) return "awaiting_input";
-  if (isConductor(r) && r.status === "paused") return "pending";
+  if ((isConductor(r) || r.peerWait) && r.status === "paused") return "pending";
   return SESSION_STATUS[r.status];
 }
 
@@ -162,7 +165,14 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
                (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
                 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
                 WHERE q.run_id = ranked.id AND q.status = 'pending' ORDER BY q.created_at DESC LIMIT 1)
-             ) AS question
+             ) AS question,
+             -- The peer task its open wait is on: it waits on another agent, not on a person.
+             (SELECT 'Waiting on ' || wp.key_prefix || '-' || wt.number
+              FROM peer_waits w JOIN peer_messages m ON m.id = w.message_id
+              JOIN tasks wt ON wt.id = m.to_task_id JOIN projects wp ON wp.id = wt.project_id
+              WHERE w.run_id = ranked.id AND w.closed_at IS NULL
+                AND ranked.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+              ORDER BY w.since DESC LIMIT 1) AS "peerWait"
       FROM (
         SELECT r.id, r.task_id AS "taskId", r.attempt, r.status, r.phase,
                r.role, r.category, r.created_at,
@@ -222,8 +232,9 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
             status: sessionStatus(r),
             title: runLabel(r),
             // What it asked, so the board and the attention list say it
-            // without opening the chat.
-            ...(r.question ? { activity: r.question } : {}),
+            // without opening the chat; else the peer it waits on, which
+            // leaves its status running: a peer owes it, not a person.
+            ...(r.question ? { activity: r.question } : r.peerWait ? { activity: r.peerWait } : {}),
           })),
         })),
       };
