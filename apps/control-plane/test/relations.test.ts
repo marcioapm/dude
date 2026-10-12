@@ -137,3 +137,131 @@ test("path 8: a blocker done with nothing merged still blocks a bare Run", async
   expect(((await res.json()) as { error: { message: string } }).error.message)
     .toBe(`${key(blocked)} is blocked by ${key(blocker)} (done, nothing merged): it can start once that's merged.`);
 });
+
+type Relations = {
+  blockedBy: Array<{ task: { key: string; project: string | null; unmerged: boolean; merged: boolean }; canRemove: boolean; removableBy: string | null; why: string | null }>;
+  blocks: Array<{ task: { key: string }; canRemove: boolean; removableBy: string | null }>;
+  related: Array<{ task: { key: string }; canRemove: boolean }>;
+  autoStart: { how: string; by: { name: string } } | null;
+};
+
+async function relations(as: { key: string }, id: string): Promise<Relations> {
+  const res = await call(as, "GET", `/v1/tasks/${id}/relations`);
+  expect(res.status).toBe(200);
+  return (await res.json()) as Relations;
+}
+
+test("any member adds a relation by key, on both tasks' history; the reader is told what they may remove", async () => {
+  const a = await task(ana);
+  const b = await task(ana);
+  const web = await task(bo, "running", "prj_web");
+  let res = await call(bo, "POST", `/v1/tasks/${b}/relations`, { kind: "blocked_by", task: key(a), why: "needs the meter" });
+  expect(res.status).toBe(201);
+  res = await call(bo, "POST", `/v1/tasks/${b}/relations`, { kind: "blocked_by", task: web });
+  expect(res.status).toBe(201);
+  const [{ n }] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'task.relation_added' AND task_id IN (${a}, ${b}, ${web})`;
+  expect(n).toBe(4);
+
+  // Bo reads Ana's task: the edges hold Ana's task up, so they are hers to remove.
+  const asBo = await relations(bo, b);
+  expect(asBo.blockedBy.map((r) => r.task.key)).toEqual([key(a), "WEB-" + web.replace("wi_rel_", "")]);
+  expect(asBo.blockedBy[0]!.why).toBe("needs the meter");
+  expect(asBo.blockedBy[1]!.task.project).toBe("Web");
+  expect(asBo.blockedBy.every((r) => !r.canRemove && r.removableBy === "Only Ana, the owner, can remove this")).toBe(true);
+  // On the blocker's page, the same edge is still the blocked task's owner's.
+  const onA = await relations(bo, a);
+  expect(onA.blocks[0]!.canRemove).toBe(false);
+  expect(onA.blocks[0]!.removableBy).toBe(`Only Ana, ${key(b)}'s owner, can remove this`);
+  expect((await relations(ana, b)).blockedBy.every((r) => r.canRemove)).toBe(true);
+});
+
+test("removing is the blocked task's owner's for blocks, either owner's for related", async () => {
+  const a = await task(ana);
+  const b = await task(bo);
+  expect((await call(ana, "POST", `/v1/tasks/${a}/relations`, { kind: "blocks", task: b })).status).toBe(201);
+  // Ana's task blocks Bo's: Bo's to remove, not Ana's, from either page.
+  let res = await call(ana, "DELETE", `/v1/tasks/${a}/relations/blocks/${b}`);
+  expect(res.status).toBe(403);
+  expect(((await res.json()) as { error: { code: string; message: string } }).error)
+    .toEqual({ code: "not_owner", message: "only Bo can remove this relation — it holds up their task" });
+  expect((await call(bo, "DELETE", `/v1/tasks/${b}/relations/blocked_by/${a}`)).status).toBe(204);
+
+  expect((await call(ana, "POST", `/v1/tasks/${b}/relations`, { kind: "related", task: a })).status).toBe(201);
+  expect((await relations(ana, b)).related[0]!.canRemove).toBe(true);
+  expect((await call(ana, "DELETE", `/v1/tasks/${b}/relations/related/${a}`)).status).toBe(204);
+});
+
+test("a loop is refused naming it, a self-relation and a duplicate too", async () => {
+  const [a, b, c] = [await task(ana), await task(ana), await task(ana)];
+  await call(ana, "POST", `/v1/tasks/${a}/relations`, { kind: "blocks", task: b });
+  await call(ana, "POST", `/v1/tasks/${b}/relations`, { kind: "blocks", task: c });
+  let res = await call(ana, "POST", `/v1/tasks/${c}/relations`, { kind: "blocks", task: a });
+  expect(res.status).toBe(409);
+  const body = (await res.json()) as { error: { code: string; details: { loop: string[] } } };
+  expect(body.error.code).toBe("cycle");
+  expect(body.error.details.loop).toEqual([key(a), key(b), key(c), key(a)]);
+  // Related gates nothing: never a loop.
+  expect((await call(ana, "POST", `/v1/tasks/${c}/relations`, { kind: "related", task: a })).status).toBe(201);
+  res = await call(ana, "POST", `/v1/tasks/${a}/relations`, { kind: "blocks", task: a });
+  expect(res.status).toBe(400);
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe("self");
+  res = await call(ana, "POST", `/v1/tasks/${a}/relations`, { kind: "blocks", task: b });
+  expect(res.status).toBe(409);
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe("duplicate");
+});
+
+test("start when unblocked is the owner's, only on a task blocked by something that can merge", async () => {
+  const blocker = await task(ana, "review");
+  const t = await task(ana);
+  const free = await task(ana);
+  await blocks(blocker, t);
+  let res = await call(bo, "PUT", `/v1/tasks/${t}/auto-start`, { how: "deliver" });
+  expect(res.status).toBe(403);
+  expect(((await res.json()) as { error: { message: string } }).error.message).toBe("only Ana, its owner, can set this");
+  expect((await call(ana, "PUT", `/v1/tasks/${free}/auto-start`, { how: "deliver" })).status).toBe(409);
+  expect((await call(ana, "PUT", `/v1/tasks/${t}/auto-start`, { how: "deliver" })).status).toBe(200);
+  expect((await relations(bo, t)).autoStart).toMatchObject({ how: "deliver", by: { name: "Ana" } });
+  expect((await call(bo, "DELETE", `/v1/tasks/${t}/auto-start`)).status).toBe(403);
+  expect((await call(ana, "DELETE", `/v1/tasks/${t}/auto-start`)).status).toBe(204);
+  const [{ why }] = await owner`SELECT payload->>'why' AS why FROM events WHERE task_id = ${t} AND event_type = 'task.auto_start_cancelled'`;
+  expect(why).toBe("owner");
+
+  // A blocker done with nothing merged will never merge: refused.
+  const spike = await task(ana, "done");
+  const after = await task(ana);
+  await blocks(spike, after);
+  res = await call(ana, "PUT", `/v1/tasks/${after}/auto-start`, { how: "talk" });
+  expect(res.status).toBe(409);
+  expect(((await res.json()) as { error: { code: string; message: string } }).error)
+    .toMatchObject({ code: "never_merges", message: `${key(spike)} was marked done with nothing merged and will never merge, so this would never start it.` });
+});
+
+test("a change of owner drops the request, and removing the last blocker ends it without firing", async () => {
+  const blocker = await task(ana, "review");
+  const t = await task(ana);
+  await blocks(blocker, t);
+  expect((await call(ana, "PUT", `/v1/tasks/${t}/auto-start`, { how: "talk" })).status).toBe(200);
+  const res = await call(ana, "PUT", `/v1/tasks/${t}/people`, { people: [bo.personId] });
+  expect(res.status).toBeLessThan(300);
+  let [{ why }] = await owner`SELECT payload->>'why' AS why FROM events WHERE task_id = ${t} AND event_type = 'task.auto_start_cancelled'`;
+  expect(why).toBe("owner_changed");
+  expect((await relations(bo, t)).autoStart).toBeNull();
+
+  const t2 = await task(ana);
+  await blocks(blocker, t2);
+  expect((await call(ana, "PUT", `/v1/tasks/${t2}/auto-start`, { how: "deliver" })).status).toBe(200);
+  expect((await call(ana, "DELETE", `/v1/tasks/${t2}/relations/blocked_by/${blocker}`)).status).toBe(204);
+  [{ why }] = await owner`SELECT payload->>'why' AS why FROM events WHERE task_id = ${t2} AND event_type = 'task.auto_start_cancelled'`;
+  expect(why).toBe("unblocked_by_removal");
+  const [{ n }] = await owner`SELECT count(*)::int AS n FROM workflow_runs WHERE task_id = ${t2}`;
+  expect(n).toBe(0);
+});
+
+test("deliver and talk pass a person's override and note to the orchestrator", async () => {
+  forwarded.length = 0;
+  const t = await task(ana);
+  expect((await call(ana, "POST", `/v1/tasks/${t}/deliver`, { override: true, note: "enough" })).status).toBe(201);
+  expect((await call(ana, "POST", `/v1/tasks/${t}/talk`, { override: true })).status).toBe(201);
+  expect(forwarded.map((f) => f.body)).toEqual([{ override: true, note: "enough" }, { override: true }]);
+  expect((await call(ana, "POST", `/v1/tasks/${t}/deliver`, { override: "yes" })).status).toBe(400);
+});

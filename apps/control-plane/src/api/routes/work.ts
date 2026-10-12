@@ -178,7 +178,12 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
+  /** Start a blocked task anyway: a person only (the orchestrator checks), recorded with the note. */
+  override: z.literal(true).optional(),
+  note: z.string().max(2000).optional(),
 }).strict();
+
+const talkInput = deliverInput.omit({ policy: true });
 
 /**
  * Start the delivery workflow for a task.
@@ -227,7 +232,12 @@ async function chatTask(ctx: RequestContext): Promise<Response> {
  * conductor says so.
  */
 async function talkTask(ctx: RequestContext): Promise<Response> {
-  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`, "{}", ctx.principal);
+  // Images are the task text's to name: anything else in the body is dropped, as before.
+  const raw = (await ctx.request.json().catch(() => ({}))) as Record<string, unknown>;
+  const input = talkInput.safeParse({ override: raw.override, note: raw.note });
+  if (!input.success) throw badRequest("request body failed validation", input.error.flatten());
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`,
+    JSON.stringify(input.data), ctx.principal);
 }
 
 const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
