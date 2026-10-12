@@ -64,6 +64,7 @@ type world struct {
 	repoID    string
 	gh        *fakegithub.Server
 	web       *fakegithub.Server
+	marcioWeb *fakegithub.Server
 	lux       *fakelux.Server
 	runtime   *workflow.Runtime
 	syncer    *phases.Syncer
@@ -95,12 +96,16 @@ func newWorld(t *testing.T) *world {
 	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
 	w.gh = fakegithub.New(bare, "acme/target")
 	w.web = fakegithub.New(webBare, "acme/web")
+	// The same repository as another owner's, for an App installed on two.
+	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
+	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
 	mux.Handle("/acme/target.git/", w.gh.Handler())
 	mux.Handle("/acme/web.git/", w.web.Handler())
-	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web))
+	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if app := w.ghApp.Load(); app != nil && fakegithub.AppPath(r.URL.Path) {

@@ -1,10 +1,12 @@
 package phases
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A GitHub App's Run commits as its bot, on every harness and the scripted
@@ -56,5 +58,32 @@ func TestARepositoryOfAnotherOwnerHasItsOwnTokenSecret(t *testing.T) {
 	}
 	if got := ownerOfSecret("GIT_TOKEN_MARCIO_M"); got != "marcio-m" {
 		t.Errorf("ownerOfSecret = %q", got)
+	}
+}
+
+// A resume sends an owner's token only where lux would take it as a
+// credential: the stored spec declares it, or a repository the resume adds
+// names it. Any other would be declared as the workload's, in the agent's
+// environment.
+func TestAResumeSendsOnlyTheOwnersTokensLuxDeclares(t *testing.T) {
+	fresh := []lux.Secret{{Name: "GIT_TOKEN", Value: "a"}, {Name: "GIT_TOKEN_MARCIO", Value: "m"}, {Name: "DUDE_TOOLS_AUTH", Value: "t"}}
+	names := func(list []lux.Secret) []string {
+		var out []string
+		for _, s := range list {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	stored := lux.StoredSpec{Secrets: []lux.StoredSecret{{Name: "GIT_TOKEN", RunnerOnly: true}, {Name: "DUDE_TOOLS_AUTH"}}}
+	if got := names(declaredTokens(fresh, stored, nil)); !slices.Equal(got, []string{"GIT_TOKEN", "DUDE_TOOLS_AUTH"}) {
+		t.Errorf("stored spec declares GIT_TOKEN only: sent %v", got)
+	}
+	added := []lux.Repository{{Name: "web", Credential: "GIT_TOKEN_MARCIO"}}
+	if got := names(declaredTokens(fresh, stored, added)); !slices.Equal(got, []string{"GIT_TOKEN", "GIT_TOKEN_MARCIO", "DUDE_TOOLS_AUTH"}) {
+		t.Errorf("an added repository names GIT_TOKEN_MARCIO: sent %v", got)
+	}
+	stored.Secrets = append(stored.Secrets, lux.StoredSecret{Name: "GIT_TOKEN_MARCIO", RunnerOnly: true})
+	if got := names(declaredTokens(fresh, stored, nil)); !slices.Equal(got, []string{"GIT_TOKEN", "GIT_TOKEN_MARCIO", "DUDE_TOOLS_AUTH"}) {
+		t.Errorf("stored spec declares GIT_TOKEN_MARCIO: sent %v", got)
 	}
 }

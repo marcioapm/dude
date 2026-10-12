@@ -22,9 +22,20 @@ type CredentialRepo struct{ Name, URL string }
 // repository's own by spec name. A PAT is the same for all; a GitHub App's
 // is minted for the installation covering each repository's owner. A
 // local repository (no slug) takes the Run's.
-func forgeTokens(ctx context.Context, gh *forge.GitHub, repos []specRepo) (string, map[string]string, error) {
+//
+// submitted is a resumed Run's runs.lux_repositories, in the spec's order
+// at submit: the Run's token stays that first remote repository's, as lux
+// holds GIT_TOKEN for it, whichever sorts first among the repositories now.
+// nil at submit.
+func forgeTokens(ctx context.Context, gh *forge.GitHub, repos []specRepo, submitted []string) (string, map[string]string, error) {
 	perRepo := map[string]string{}
-	first := ""
+	first, firstName := "", ""
+	for _, name := range submitted {
+		if i := slices.IndexFunc(repos, func(r specRepo) bool { return lux.SpecName(r.Name) == name }); i >= 0 && forge.SlugFromURL(repos[i].URL) != "" {
+			firstName = name
+			break
+		}
+	}
 	for _, r := range repos {
 		slug := forge.SlugFromURL(r.URL)
 		if slug == "" {
@@ -34,8 +45,9 @@ func forgeTokens(ctx context.Context, gh *forge.GitHub, repos []specRepo) (strin
 		if err != nil {
 			return "", nil, err
 		}
-		perRepo[lux.SpecName(r.Name)] = token
-		if first == "" {
+		name := lux.SpecName(r.Name)
+		perRepo[name] = token
+		if first == "" && (firstName == "" || firstName == name) {
 			first = token
 		}
 	}
@@ -74,7 +86,7 @@ func RepoCredentials(ctx context.Context, gh *forge.GitHub, repos []CredentialRe
 		in.Repos = append(in.Repos, specRepo{Name: r.Name, URL: r.URL})
 	}
 	var err error
-	if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
+	if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, nil); err != nil {
 		return nil, nil, err
 	}
 	s := credentialSecrets(in)

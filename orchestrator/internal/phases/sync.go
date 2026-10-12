@@ -1034,6 +1034,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var settings delivery.RoleSettings
 	var orgEgress, projectEgress []string
 	var egressMode string
+	// A resumed Run's repositories as lux holds them, in submit's order
+	// (forgeTokens).
+	var firstRepo []string
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -1066,8 +1069,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine, lux_repositories FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded, &firstRepo); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
@@ -1179,11 +1182,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, runSizes{}, nil, errForge{err}
 	}
 	if gh != nil {
-		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
-			return lux.Spec{}, runSizes{}, nil, errForge{err}
+		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, firstRepo); err != nil {
+			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
 		}
 		if in.Bot, err = botOf(ctx, gh); err != nil {
-			return lux.Spec{}, runSizes{}, nil, errForge{err}
+			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -2104,6 +2107,9 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s and the organisation has no forge credentials to supply it", sec.Name)}
 		}
 		token, err := gh.Token(ctx, owner)
+		if forge.Refused(err) {
+			return nil, errCannotResume{err}
+		}
 		if err != nil {
 			return nil, errForge{err}
 		}
@@ -2610,6 +2616,17 @@ type errForge struct{ err error }
 
 func (e errForge) Error() string { return "reading the forge's credentials: " + e.err.Error() }
 func (e errForge) Unwrap() error { return e.err }
+
+// forgeFailure is err from minting a Run's forge token or reading its bot:
+// GitHub's refusal (the App not installed on the owner, a key not the
+// App's) as it is, which fails the submit or resume with GitHub's reason;
+// anything else errForge, asked again.
+func forgeFailure(err error) error {
+	if forge.Refused(err) {
+		return err
+	}
+	return errForge{err}
+}
 
 // errRegistry: no registry login could be had now (ECR unreachable, the
 // role's credentials expiring). Passing, like errForge.
