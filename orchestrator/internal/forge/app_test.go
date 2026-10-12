@@ -198,6 +198,94 @@ func TestTheInstallationIDIsTheDefaultWhereGitHubNamesNone(t *testing.T) {
 	if tok, err := g.Token(ctx, "stranger/x"); err != nil || f.app.Installation(tok) != 33 {
 		t.Errorf("stranger/x: installation %d, %v; want the default, 33", f.app.Installation(tok), err)
 	}
+	// The default is not that owner's for good: once the App is installed
+	// there, its token is that installation's.
+	f.app.Set(func(a *fakegithub.App) { a.Installations["stranger"] = 44 })
+	if tok, err := g.Token(ctx, "stranger/y"); err != nil || f.app.Installation(tok) != 44 {
+		t.Errorf("stranger/y after the install: installation %d, %v; want 44", f.app.Installation(tok), err)
+	}
+	// The same key with no default shares nothing a default decided.
+	f.app.Set(func(a *fakegithub.App) { delete(a.Installations, "stranger") })
+	if _, err := f.client(Credential{}).Token(ctx, "stranger/z"); !Refused(err) {
+		t.Errorf("no default, owner without the App: %v, want a refusal", err)
+	}
+}
+
+// Calls about no account read the owners' installations while calls for a
+// repository fill them in: run under -race.
+func TestScopedAndUnscopedCallsRunTogether(t *testing.T) {
+	f := newAppFixture(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			if _, err := f.client(Credential{}).Token(ctx, []string{"acme", "marcio"}[i%2]+"/r"+strconv.Itoa(i)); err != nil {
+				t.Error(err)
+			}
+		})
+		wg.Go(func() {
+			if _, err := f.client(Credential{}).Token(ctx, ""); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// A refresh GitHub fails to answer leaves the token in hand, which still
+// has minutes to live.
+func TestAFailedRefreshKeepsATokenStillValid(t *testing.T) {
+	f := newAppFixture(t)
+	g := f.client(Credential{})
+	ctx := context.Background()
+	first, err := g.Token(ctx, "acme/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.clock.advance(51 * time.Minute)
+	f.app.Set(func(a *fakegithub.App) { a.Down = 502 })
+	tok, err := g.Token(ctx, "acme/api")
+	if err != nil || tok != first {
+		t.Errorf("with 9 minutes left and GitHub failing: %q, %v; want the old token", tok, err)
+	}
+	if n := f.app.AttemptsFor(11); n != 2 {
+		t.Errorf("%d exchanges asked for, want 2: the refresh was tried", n)
+	}
+	f.app.Set(func(a *fakegithub.App) { a.Down = 0 })
+	if again, _ := g.Token(ctx, "acme/api"); again == first || f.app.ExchangesFor(11) != 2 {
+		t.Errorf("GitHub back: %q (exchanges %d); want a new token from a second exchange", again, f.app.ExchangesFor(11))
+	}
+	f.clock.advance(time.Hour)
+	f.app.Set(func(a *fakegithub.App) { a.Down = 502 })
+	if _, err := g.Token(ctx, "acme/api"); !Transient(err) {
+		t.Errorf("an expired token and GitHub failing: %v, want the transient error", err)
+	}
+}
+
+// An owner who reinstalls the App has a new installation: the first call
+// after it fails as worth retrying, and the retry finds the new one.
+func TestAReinstalledAppIsFoundOnTheRetry(t *testing.T) {
+	f := newAppFixture(t)
+	g := f.client(Credential{})
+	ctx := context.Background()
+	if _, err := g.Token(ctx, "acme/api"); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.advance(55 * time.Minute)
+	f.app.Set(func(a *fakegithub.App) { a.Installations["acme"] = 81 })
+	if _, err := g.Token(ctx, "acme/api"); !Transient(err) {
+		t.Fatalf("the removed installation's exchange: %v, want transient", err)
+	}
+	if tok, err := g.Token(ctx, "acme/api"); err != nil || f.app.Installation(tok) != 81 {
+		t.Errorf("the retry: installation %d, %v; want 81", f.app.Installation(tok), err)
+	}
+	// Uninstalled for good: the lookup's refusal.
+	f.clock.advance(55 * time.Minute)
+	f.app.Set(func(a *fakegithub.App) { delete(a.Installations, "acme") })
+	_, _ = g.Token(ctx, "acme/api")
+	if _, err := g.Token(ctx, "acme/api"); !Refused(err) {
+		t.Errorf("after the uninstall: %v, want a refusal", err)
+	}
 }
 
 func TestAppFailuresAreClassified(t *testing.T) {

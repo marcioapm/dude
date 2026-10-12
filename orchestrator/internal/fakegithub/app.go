@@ -39,6 +39,8 @@ type App struct {
 	// installation lookups per path.
 	Exchanges map[int64]int
 	Lookups   map[string]int
+	// Attempts counts every exchange asked for, answered or not.
+	Attempts map[int64]int
 	// ExchangeDelay holds each exchange, so concurrent callers overlap.
 	ExchangeDelay time.Duration
 	// Down answers every App request with this status (0: up).
@@ -49,7 +51,7 @@ type App struct {
 
 func NewApp(id int64, slug string, key *rsa.PublicKey) *App {
 	return &App{ID: id, Slug: slug, Key: key, BotUserID: 4242, Installations: map[string]int64{}, Users: map[string]int64{},
-		TokenLifetime: time.Hour, Now: time.Now, Exchanges: map[int64]int{}, Lookups: map[string]int{}, issued: map[string]int64{}}
+		TokenLifetime: time.Hour, Now: time.Now, Exchanges: map[int64]int{}, Lookups: map[string]int{}, Attempts: map[int64]int{}, issued: map[string]int64{}}
 }
 
 // Set changes the fake's state under its lock.
@@ -71,6 +73,13 @@ func (a *App) ExchangesFor(installation int64) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.Exchanges[installation]
+}
+
+// AttemptsFor is how many exchanges were asked for installation.
+func (a *App) AttemptsFor(installation int64) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Attempts[installation]
 }
 
 // AppPath says whether a request path is one of the App's endpoints here,
@@ -96,7 +105,13 @@ func (a *App) Handler() http.Handler {
 	}))
 	mux.HandleFunc("GET /repos/{owner}/{repo}/installation", a.withJWT(a.installation))
 	mux.HandleFunc("GET /users/{owner}/installation", a.withJWT(a.installation))
-	mux.HandleFunc("POST /app/installations/{id}/access_tokens", a.withJWT(a.exchange))
+	mux.HandleFunc("POST /app/installations/{id}/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		a.mu.Lock()
+		a.Attempts[id]++
+		a.mu.Unlock()
+		a.withJWT(a.exchange)(w, r)
+	})
 	mux.HandleFunc("GET /users/{login}", func(w http.ResponseWriter, r *http.Request) {
 		if !a.tokenOK(r) {
 			fail(w, 401, "Bad credentials")

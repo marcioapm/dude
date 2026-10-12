@@ -78,7 +78,7 @@ type identityEntry struct {
 var appSessions sync.Map // sessionKey → *appSession
 
 func sessionKey(c Credential) string {
-	sum := sha256.Sum256([]byte(c.APIBaseURL + "\x00" + c.AppID + "\x00" + c.Secret))
+	sum := sha256.Sum256([]byte(c.APIBaseURL + "\x00" + c.AppID + "\x00" + c.InstallationID + "\x00" + c.Secret))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -168,6 +168,7 @@ func (g *GitHub) installationFor(ctx context.Context, s *appSession, scope strin
 	if owner == "" {
 		return g.anyInstallation(ctx, s)
 	}
+	account := owner
 	owner = strings.ToLower(owner)
 	s.mu.Lock()
 	e, ok := s.owners[owner]
@@ -190,18 +191,29 @@ func (g *GitHub) installationFor(ctx context.Context, s *appSession, scope strin
 	}
 	err := g.appRequest(ctx, s, "GET", path, &inst)
 	if ge, ok := err.(*Error); ok && ge.NotFound() {
+		// The default is not the owner's: it is not cached, so the owner's
+		// own installation is found once the App is installed there.
 		if id := strings.TrimSpace(g.cred.InstallationID); id != "" {
-			e.installation = id
 			return id, nil
 		}
 		return "", &Error{Status: http.StatusNotFound,
-			Message: fmt.Sprintf("the GitHub App is not installed on %s: install it there, with access to the repository", scope)}
+			Message: fmt.Sprintf("the GitHub App is not installed on %s: install it there, with access to %s", account, scope)}
 	}
 	if err != nil {
 		return "", err
 	}
-	e.installation = strconv.FormatInt(inst.ID, 10)
-	return e.installation, nil
+	id := strconv.FormatInt(inst.ID, 10)
+	s.setInstallation(e, id)
+	return id, nil
+}
+
+// setInstallation writes an owner's installation under s.mu as well as the
+// entry's own lock (held by the caller): anyInstallation reads every owner's
+// under s.mu alone, never waiting on a lookup in flight.
+func (s *appSession) setInstallation(e *ownerEntry, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.installation = id
 }
 
 func (g *GitHub) anyInstallation(ctx context.Context, s *appSession) (string, error) {
@@ -251,11 +263,21 @@ func (g *GitHub) installationToken(ctx context.Context, s *appSession, installat
 	}
 	err := g.appRequest(ctx, s, "POST", "/app/installations/"+url.PathEscape(installation)+"/access_tokens", &out)
 	if ge, ok := err.(*Error); ok && ge.NotFound() {
-		// The installation was removed: the owner's must be found again.
-		s.forgetInstallation(installation)
+		// The installation was removed, as a reinstall does: an owner's is
+		// found again on the next call, so this one is worth retrying (503).
+		// An owner with none left then gets the lookup's 404, a refusal; so
+		// does a removed default installation, which nothing looks up again.
+		if s.forgetInstallation(installation) {
+			return "", &Error{Status: http.StatusServiceUnavailable, Message: "the GitHub App's installation " + installation + " no longer exists; its owner's is looked up again"}
+		}
 		return "", &Error{Status: http.StatusNotFound, Message: "the GitHub App's installation " + installation + " no longer exists"}
 	}
 	if err != nil {
+		// A token with time left still serves a push or a clone; the next
+		// caller tries the exchange again.
+		if Transient(err) && e.token != "" && e.expires.After(s.now()) {
+			return e.token, nil
+		}
 		return "", err
 	}
 	if out.Token == "" {
@@ -265,14 +287,19 @@ func (g *GitHub) installationToken(ctx context.Context, s *appSession, installat
 	return e.token, nil
 }
 
-func (s *appSession) forgetInstallation(installation string) {
+// forgetInstallation drops every owner cached as installation, saying
+// whether there was one.
+func (s *appSession) forgetInstallation(installation string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	forgot := false
 	for owner, e := range s.owners {
 		if e.installation == installation {
 			delete(s.owners, owner)
+			forgot = true
 		}
 	}
+	return forgot
 }
 
 // BotIdentity is the App's bot account, as commits name it: "<slug>[bot]"

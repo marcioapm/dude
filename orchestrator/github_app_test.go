@@ -229,7 +229,7 @@ func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {
 	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{} })
 	mustExec(t, w.owner, `UPDATE repositories SET url = 'https://github.com/elsewhere/target.git' WHERE id = $1`, w.repoID)
 	status, out = w.call("/internal/github/verify-app", map[string]any{})
-	if reason, _ := out["reason"].(string); status != 200 || out["ok"] != false || !strings.Contains(reason, "not installed on elsewhere/target") {
+	if reason, _ := out["reason"].(string); status != 200 || out["ok"] != false || !strings.Contains(reason, "not installed on elsewhere: install it there, with access to elsewhere/target") {
 		t.Errorf("verify, not installed: %d %v", status, out)
 	}
 }
