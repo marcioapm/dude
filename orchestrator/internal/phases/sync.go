@@ -141,7 +141,7 @@ type phaseRun struct {
 	// and the one each checkout really started from (lux's git.checkout).
 	BaseRefs, BaseSHAs      map[string]string
 	TurnDone, HasDirectives bool
-	// A directive lux has, sent within unreadGraceSecs, that the agent has
+	// A directive lux has, sent within delivery.UnreadGraceSecs, that the agent has
 	// not read, or read after its last turn ended (by ledger order: in one
 	// transaction the two carry the same now()): a new turn is starting.
 	// An interrupt alone starts no turn: the directive carrying its words
@@ -217,7 +217,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.interrupt_only IS NOT TRUE
-	        AND d.sent_at > now() - make_interval(secs => ` + unreadGraceSecs + `)
+	        AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)
 	        AND (d.delivered_at IS NULL OR (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id
 	              AND e.event_type = 'run.directive.delivered' AND e.payload->>'directiveId' = d.id)
 	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped')))
@@ -340,11 +340,6 @@ var stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_obj
 var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.conducted AND (
 	r.stall_reported_at <= now() - make_interval(secs => $2::float8)
 	OR r.stall_reported_at <= now() - make_interval(secs => $1::float8) AND r.stall_fingerprint IS DISTINCT FROM ` + stallFacts + `)))`
-
-// unreadGraceSecs (SQL): how long a sent directive the agent has not read
-// holds a finished turn open. lux answers in well under a second; this
-// bounds a receipt that never comes, so the Run is still collected.
-const unreadGraceSecs = `120`
 
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
@@ -582,7 +577,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		// A steer that reached dude as the turn ended holds the Run open:
 		// sent, the agent takes it as its next turn, whose end is the one
 		// collected. Until that turn's "busy" arrives the Run waits (Unread),
-		// bounded by unreadGraceSecs. Once the push is asked for, the work
+		// bounded by delivery.UnreadGraceSecs. Once the push is asked for, the work
 		// is what it is: a steer later still is marked not delivered when
 		// the Run completes, not heard after the work was taken.
 		// lux's state event trails the agent's records, so a turn can end

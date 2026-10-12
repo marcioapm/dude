@@ -475,6 +475,58 @@ func TestAChangeWhileAnEarlierMessageIsUnsentQueuesTheNextOnTheSameAgent(t *test
 	}
 }
 
+// directiveTexts are a Run's live messages, in the order written.
+func (s *sessionWorld) directiveTexts(run string) []string {
+	s.t.Helper()
+	rows, err := s.owner.Query(context.Background(), `SELECT text FROM directives WHERE run_id = $1 AND failed_at IS NULL
+		ORDER BY created_at, id`, run)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	texts, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return texts
+}
+
+// A message lux was sent and the agent has not read yet holds the swap as
+// an unsent one does: B is queued on the same agent after A. Once both are
+// read, the next message swaps.
+func TestAChangeWhileAnEarlierMessageIsUnreadQueuesTheNextOnTheSameAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	s.syncer.ConductorWarm = time.Hour
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
+	run := s.started(id)
+	s.runningIdle(run)
+	release := s.gateInput()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "first this"})
+	s.until("the first message sent, not read", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND sent_at IS NOT NULL AND delivered_at IS NULL`, run) == 1
+	})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "then this"})
+	if out["runId"] != run || out["created"] != false {
+		t.Errorf("answered %v, want queued on %s", out, run)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 0 {
+		t.Errorf("a swap was recorded")
+	}
+	if texts, want := s.directiveTexts(run), []string{"Márcio Martins: first this", "Márcio Martins: then this"}; !slices.Equal(texts, want) {
+		t.Errorf("queued %q, want %q", texts, want)
+	}
+
+	release()
+	s.until("both read", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, run) == 2
+	})
+	s.runningIdle(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "and now"})
+	next := s.freshAgent(id, run)
+	conversationThenFirst(t, s.prompt(next), "Márcio Martins: first this", "Márcio Martins: and now")
+	conversationThenFirst(t, s.prompt(next), "Márcio Martins: then this", "Márcio Martins: and now")
+}
+
 // A change while the agent is mid-turn interrupts nothing: a message then
 // is queued on it as a steer; the first message after its turn ends hands
 // the conversation to a fresh agent.
@@ -498,6 +550,13 @@ func TestAChangeMidTurnQueuesTheMessageOnTheSameAgent(t *testing.T) {
 		t.Errorf("%d Runs, want the one mid-turn", n)
 	}
 
+	// The agent ends its turn and reads the steer as its next one.
+	var luxID string
+	_ = s.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1`, run).Scan(&luxID)
+	s.lux.EndTurn(luxID)
+	s.until("the steer read", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = 'Márcio Martins: also this' AND delivered_at IS NOT NULL`, run) == 1
+	})
 	s.runningIdle(run)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "and now"})
 	s.freshAgent(id, run)

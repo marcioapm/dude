@@ -19,15 +19,21 @@ import (
 // model. Payload: { from, to, tier: { name } | null, model, harness }.
 const EvSessionModelApplied = "session.model.applied"
 
+// UnreadGraceSecs (SQL): how long a sent directive the agent has not read
+// holds a finished turn open. lux answers in well under a second; this
+// bounds a receipt that never comes, so the Run is still collected.
+const UnreadGraceSecs = `120`
+
 // betweenTurns (SQL, over runs r): a submitted session agent not in a
 // turn: parked or paused, or running with its turn over (done, or waiting
-// on a person); and holding no unsent message that is not held for an
-// answer. Such a message was written before the one at hand, and a fresh
-// agent would read it after (SessionHandOver), so the swap waits for a
-// later message.
+// on a person); and holding no unread message that is not held for an
+// answer: unsent, or sent within UnreadGraceSecs and not delivered. Such a
+// message was written before the one at hand, and a fresh agent would read
+// it after (SessionHandOver), so the swap waits for a later message.
 const betweenTurns = `(r.lux_run_id IS NOT NULL AND (r.status = 'paused'
 	OR (r.status IN ('scheduled', 'starting', 'running') AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)))
-	AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL
+	AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.failed_at IS NULL
+		AND (d.sent_at IS NULL OR d.sent_at > now() - make_interval(secs => ` + UnreadGraceSecs + `))
 		AND NOT ` + HeldBack + `))`
 
 // BrainstormSwap is what a fresh agent would run on, when the session's
