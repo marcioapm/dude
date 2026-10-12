@@ -668,6 +668,64 @@ func TestAnAsideWhileAQuestionIsOpenWaitsForTheAnswerToSwap(t *testing.T) {
 	}
 }
 
+// Two messages at once after a change: one swaps the agent, the other
+// queues on the fresh one. Exactly one session.model.applied, two Runs.
+func TestTwoMessagesAtOnceAfterAChangeSwapOnce(t *testing.T) {
+	s := newSessionWorld(t)
+	id, run := s.parkedOn()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "opencode"})
+	statuses := make(chan int, 2)
+	for _, text := range []string{"one", "two"} {
+		go func() {
+			status, _ := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+			statuses <- status
+		}()
+	}
+	for range 2 {
+		if status := <-statuses; status >= 300 {
+			t.Errorf("a message answered %d", status)
+		}
+	}
+	next := s.freshAgent(id, run)
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 1 {
+		t.Errorf("%d swaps recorded, want 1", n)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 2 {
+		t.Errorf("%d Runs, want the old one and one fresh agent", n)
+	}
+	// Whichever came second is queued on the fresh agent.
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text IN ('Márcio Martins: one', 'Márcio Martins: two')`, next); n != 1 {
+		t.Errorf("%d messages queued on the fresh agent, want the second", n)
+	}
+}
+
+// A repository linked after a change, to an agent running between turns,
+// pauses and resumes it as it was (sync.go betweenTurns, "repository"):
+// no member's message, so no swap. A parked agent is not woken by a link
+// at all; it gets the repository at its next resume.
+func TestALinkAfterAChangeResumesTheSameAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	s.syncer.ConductorWarm = time.Hour
+	s.lux.Decide = hang
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": "claude-code"})["id"].(string)
+	run, _, _, _ := s.submitted(id)
+	s.runningIdle(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "opencode"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
+	if now, _ := s.brainstorm(id); now != run {
+		t.Errorf("a fresh agent %s, want %s resumed", now, run)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 0 {
+		t.Errorf("a swap was recorded")
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness = 'claude-code' AND status IN ('running', 'paused')`, run); n != 1 {
+		t.Errorf("the agent no longer runs on what it was submitted with")
+	}
+}
+
 // A tier a session chose that is then removed: the session follows the
 // organisation's again, its members are told on the session, and its next
 // agent runs on the organisation's tier.
