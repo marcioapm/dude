@@ -430,6 +430,32 @@ func TestAConductorsSyncAcrossTwoOwnersCarriesEachOwnersToken(t *testing.T) {
 	}
 }
 
+// A GitHub login's id, as a profile save asks it of the orchestrator, read
+// as an App with no installation_id: any of its installations may ask, the
+// first GitHub lists. A login GitHub has no user for is
+// github_user_unknown; an App installed nowhere cannot ask at all, which is
+// github_unavailable, not an unknown user.
+func TestAGitHubLoginIsReadAsTheAppsInstallation(t *testing.T) {
+	w := newWorld(t)
+	app := w.asApp()
+	app.Set(func(a *fakegithub.App) { a.Users = map[string]int64{"ana-dev": 5150} })
+	if status, body := w.get("/internal/github/users/ana-dev", w.org); status != 200 || !strings.Contains(body, `"id":5150`) {
+		t.Errorf("ana-dev: %d %s, want id 5150", status, body)
+	}
+	if status, body := w.get("/internal/github/users/nobody", w.org); status != 404 || !strings.Contains(body, `"github_user_unknown"`) {
+		t.Errorf("nobody: %d %s, want 404 github_user_unknown", status, body)
+	}
+	// No owner was asked about: the token came from the installation
+	// GET /app/installations listed.
+	if app.ExchangesFor(71) == 0 {
+		t.Errorf("no token was minted for the listed installation 71")
+	}
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{} })
+	if status, body := w.get("/internal/github/users/ana-dev", w.org); status != 502 || !strings.Contains(body, `"github_unavailable"`) {
+		t.Errorf("App installed nowhere: %d %s, want 502 github_unavailable", status, body)
+	}
+}
+
 // Verify mints a token for one linked repository and reads the bot, or
 // says GitHub's reason it could not.
 func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {

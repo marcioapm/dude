@@ -87,13 +87,17 @@ func (s *Server) verifyGithubApp(w http.ResponseWriter, r *http.Request, org str
 
 // githubUser is a GitHub login's numeric id, read with the organisation's
 // credential: what a person's profile keeps beside their login. 404
-// github_user_unknown for a login GitHub has no account for; a forge that
-// cannot be asked (none connected, GitHub down) is the caller's to treat
-// as unknown.
+// github_user_unknown only for GitHub's 404 on the user itself; a forge
+// that cannot be asked (none connected, GitHub down, an App with no
+// installation to ask as) is 502 github_unavailable, which the caller
+// stores the login without an id for.
 func (s *Server) githubUser(w http.ResponseWriter, r *http.Request, org string) error {
 	gh, err := s.forge(r.Context(), org)
 	if err != nil {
 		return err
+	}
+	if _, err := gh.Token(r.Context(), ""); err != nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub could not be asked: %s", err.Error())
 	}
 	login := r.PathValue("login")
 	id, err := gh.UserID(r.Context(), login)
