@@ -1,0 +1,296 @@
+/*
+ * The relation pieces (Relations.tsx) and the little the mockup's pages lay
+ * out. Every value is a token. No tone is new: "blocked" is neutral ink on
+ * the hover wash with a lock and words, so it never reads as needs-you (the
+ * one loud amber) or as an agent's role colour.
+ */
+
+.muted {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* A glyph inside a sentence sits on its line (base.css makes an svg a block). */
+.glyph {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: -0.1em;
+}
+
+/* -- RelationChip: a chip at the chip height, on a card. -- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  align-self: flex-start;
+  max-width: 100%;
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-mark);
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+  outline: none;
+}
+.chipBlocked {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+}
+.chipBlocks {
+  padding-left: 0;
+  color: var(--ds-color-text-muted);
+}
+.chipKey {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-feature-settings: "tnum", "zero";
+}
+.chipCount {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ds-weight-medium);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+}
+
+/* The tooltip's list: each task as the sidebar names it. */
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  max-width: 340px;
+}
+.tipHead {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.tipRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.tipTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tipProject {
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- RelationList: groups under small-caps heads, RemovableList's rows. -- */
+.relations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  max-width: 820px;
+}
+.relationsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--ds-size-control-sm);
+}
+.relationsHead h2 {
+  margin: 0;
+}
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.groupCount {
+  font-weight: var(--ds-weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  --ds-avatar-bed: var(--ds-color-surface);
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.settled .rowTitle {
+  color: var(--ds-color-text-muted);
+}
+.rowOpen {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1;
+  min-width: 0;
+  min-height: var(--ds-size-row-default);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.rowOpen:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-control);
+}
+.rowTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-strong);
+}
+.rowProject {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.rowStatus {
+  flex-shrink: 0;
+  min-width: 96px;
+}
+
+/* -- StartGate -- */
+.gate {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.gateTrigger {
+  display: inline-flex;
+  border-radius: var(--ds-radius-control);
+  outline: none;
+}
+.gateTrigger:focus-visible {
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+
+/* -- DependencyStrip: steps on the chrome shade, told apart by space. -- */
+.strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+}
+.stripHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+}
+.stripCounts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.stripNum {
+  font-weight: var(--ds-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-strong);
+}
+.dot {
+  color: var(--ds-color-text-muted);
+}
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-4);
+  overflow-x: auto;
+}
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+  flex-shrink: 0;
+}
+.stepNo {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: var(--ds-size-row-compact);
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.stepTasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stepArrow {
+  margin-top: 7px;
+  color: var(--ds-color-text-muted);
+}
+.stripTask {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-surface);
+  color: inherit;
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  outline: none;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.stripTask:hover {
+  background: var(--ds-color-active-wash);
+}
+.stripTask:focus-visible {
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.canStart {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.stripLock {
+  color: var(--ds-color-text-muted);
+}
+.dim {
+  opacity: 0.4;
+}
