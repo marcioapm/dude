@@ -566,6 +566,141 @@ describe("a steer read at the agent's next step", () => {
   });
 });
 
+describe("an ask's tool row and the question it asked", () => {
+  // As prod writes them: dude's handler records the question and its own
+  // call, then the harness reports the call that made them.
+  const ask = (questionId: string, call: string, tool = "ask_person", args: Record<string, unknown> = {}) => [
+    asked(questionId), dudeRecord(questionId, tool, args), called(call, tool),
+    ev(EventTypes.ToolCompleted, { tool, callId: call, status: "completed" }),
+  ];
+  const asked = (questionId: string) => ev(EventTypes.QuestionAsked, { kind: "agent", questionId, prompt: `Q ${questionId}?` });
+  const dudeRecord = (questionId: string, tool = "ask_person", args: Record<string, unknown> = {}) =>
+    ev("agent.tool.dude", { tool, arguments: args, result: { questionId, next: "End your turn now." } });
+  const called = (call: string, tool = "ask_person") => ev(EventTypes.ToolCalled, { tool, callId: call, input: {} });
+  const order = (events: PersistedEvent[]) =>
+    project(events).turns.map((t) => (t.kind === "tool" ? `tool:${t.id}` : t.kind === "question" ? `q:${t.questionId}` : t.kind));
+
+  // OpenCode writes the agent's words before a call only when the call's
+  // first update arrives: after dude has recorded the question.
+  test("the harness's later report of the call goes before the question, after the agent's words, by each harness's name", () => {
+    for (const tool of ["ask_person", "mcp__dude__ask_person", "dude_ask_person"]) {
+      const events = [asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentMessage, { text: "Let me ask." }), called("c_1", tool),
+        ev(EventTypes.ToolCompleted, { tool, callId: "c_1", status: "completed" })];
+      expect(order(events)).toEqual(["message", "tool:c_1", "q:q_1"]);
+    }
+  });
+
+  test("the agent's thought and words written after the question stay before the row", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentThought, { text: "Ask them." }),
+      ev(EventTypes.AgentMessage, { text: "Asking." }), called("c_1")]))
+      .toEqual(["thought", "message", "tool:c_1", "q:q_1"]);
+  });
+
+  test("the message before the question stays before the row too", () => {
+    expect(order([ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1")]))
+      .toEqual(["message", "tool:c_1", "q:q_1"]);
+  });
+
+  test("a conductor's decide(ask_person) pairs with its question the same way", () => {
+    expect(order(ask("q_1", "c_1", "decide", { action: "ask_person", note: "Open it?" }))).toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("a dude tool that names a question it did not ask does not pair with it", () => {
+    // decide_escalation answers the escalation its question asked about: q_1 is already answered.
+    const events = [...ask("q_1", "c_1"), ev(EventTypes.QuestionAnswered, { questionId: "q_1", answer: "Retry" }),
+      ev("agent.tool.dude", { tool: "decide_escalation", arguments: { action: "retry" }, result: { decided: "retry", questionId: "q_1" } }),
+      called("c_2", "decide_escalation")];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+  });
+
+  test("a question already answered does not pair, even with an ask's own record", () => {
+    const answered = [asked("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes" }), dudeRecord("q_2"), called("c_3")];
+    expect(order(answered)).toEqual(["q:q_2", "tool:c_3"]);
+  });
+
+  test("an open question named by a tool that does not ask does not pair", () => {
+    expect(order([asked("q_3"), dudeRecord("q_3", "remember"), called("c_4", "remember")])).toEqual(["q:q_3", "tool:c_4"]);
+  });
+
+  test("a record that names no projected question pairs with nothing", () => {
+    const other = ev("agent.tool.dude", { tool: "remember", arguments: {}, result: { saved: true } });
+    expect(order([...ask("q_1", "c_1"), other, called("c_2", "remember")])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+  });
+
+  test("an ask's record naming an unknown question pairs with nothing", () => {
+    expect(order([asked("q_4"), dudeRecord("q_unknown"), called("c_5")])).toEqual(["q:q_4", "tool:c_5"]);
+  });
+
+  test("a call reported before its question stays where it is", () => {
+    const events = [called("c_1"), asked("q_1"), dudeRecord("q_1"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_1" })];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("two asks in a row each keep their own question", () => {
+    const events = [
+      ...ask("q_1", "c_1"),
+      ev(EventTypes.QuestionAnswered, { questionId: "q_1", answer: "Yes" }),
+      ev(EventTypes.AgentMessage, { text: "Thanks." }),
+      ...ask("q_2", "c_2"),
+    ];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1", "message", "tool:c_2", "q:q_2"]);
+  });
+
+  test("an unrelated tool after a question is not moved", () => {
+    expect(order([...ask("q_1", "c_1"), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c_2", input: {} })]))
+      .toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+  });
+
+  test("a different tool reported first is not the ask's, and ends the pairing", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), called("c_2", "bash"), called("c_1")]))
+      .toEqual(["q:q_1", "tool:c_2", "tool:c_1"]);
+  });
+
+  test("a person's turn after the question keeps the question where it is", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.RunSteered, { text: "Also check X.", directiveId: "d_1" }), called("c_1")]))
+      .toEqual(["q:q_1", "human", "tool:c_1"]);
+  });
+
+  test("an answer's note after the question keeps the question where it is", () => {
+    expect(order([asked("q_2"), dudeRecord("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes", note: "And hurry." }),
+      called("c_2")])).toEqual(["q:q_2", "human", "tool:c_2"]);
+  });
+
+  test("a refused second ask, with no record of its own, stays after the question", () => {
+    const first = ask("q_1", "c_1");
+    const refused = [called("c_2"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_2", status: "error" })];
+    expect(order([...first, ...refused])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+  });
+
+  test("an ask through the dude CLI is ended by the bash call's completion", () => {
+    const cli = [called("b_1", "bash"), asked("q_2"), dudeRecord("q_2"), ev(EventTypes.ToolCompleted, { tool: "bash", callId: "b_1" }), called("c_3")];
+    expect(order(cli)).toEqual(["tool:b_1", "q:q_2", "tool:c_3"]);
+  });
+
+  test("a call the harness reports only once finished goes before its question", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_1", status: "completed" })]))
+      .toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("events replayed after a reconnect change nothing", () => {
+    const events = [ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1"), ...ask("q_2", "c_2")];
+    const state = apply(emptyProjection(), events.slice(0, 3));
+    apply(state, events);
+    apply(state, events);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+  });
+
+  test("folded one event at a time, the order is the same, and the progress row stays found", () => {
+    const events = [ev("agent.custom.progress", { data: { done: 1, of: 2 } }), ...ask("q_1", "c_1"),
+      ev("agent.custom.progress", { data: { done: 2, of: 2 } })];
+    const state = emptyProjection();
+    for (const e of events) apply(state, [e]);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+    expect(order(events)).toEqual(["progress", "tool:c_1", "q:q_1"]);
+    expect(snapshot(state).turns[0]).toMatchObject({ kind: "progress", done: 2 });
+  });
+});
+
 describe("what a queued steer waits for, and what the composer promises", () => {
   const queued = (lands: "next_step" | "next_turn" | null = null) =>
     ({ ...(project([ev(EventTypes.RunSteered, { text: "S", directiveId: "d" })]).turns[0] as HumanTurn), lands });
