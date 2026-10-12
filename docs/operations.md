@@ -762,7 +762,11 @@ model options; on Claude Code and Codex only `{"args": ["…"]}` is used, and
 any other key is logged as ignored. What the args do differs:
 
 - **Claude Code** appends them to its command as given (lux adds only plain
-  flags after them).
+  flags after them), except `--settings`: Claude Code keeps only the last
+  one, so a tier's `--settings <json>` (or `--settings=<json>`) is merged
+  into dude's, later keys winning, with `skipWebFetchPreflight` true
+  whatever it says. A `--settings` that is not an inline JSON object (a
+  file path) is dropped and logged.
 - **Codex** takes only its config overrides, `-c key=value` (or
   `--config key=value`), and writes each as a line of `config.toml`,
   replacing dude's own line for that key or adding one. The value is JSON (a

@@ -450,12 +450,15 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // (/api/web/domain_info) whether the page's host is blocklisted: egress
 // refuses that host, so every fetch failed, and allowing it would tell
 // Anthropic every host an agent reads. skipWebFetchPreflight turns the
-// check off; --settings takes it as inline JSON.
+// check off; --settings takes it as inline JSON. Claude Code keeps only the
+// last --settings it is given, so a tier's own is merged into dude's
+// (claudeCodeArgs) rather than following it.
 func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessClaudeCode
 	spec.Workload.Adapter = delivery.HarnessClaudeCode
+	settings, args, _ := claudeCodeArgs(in.Options)
 	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized",
-		"--settings", claudeCodeSettings}
+		"--settings", settings}
 	switch in.Effort {
 	case "":
 	case "none":
@@ -463,7 +466,7 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	default:
 		cmd = append(cmd, "--effort", in.Effort)
 	}
-	spec.Workload.Command = append(cmd, harnessArgs(in.Options)...)
+	spec.Workload.Command = append(cmd, args...)
 	if c.LLMURL != "" {
 		spec.Env["ANTHROPIC_BASE_URL"] = anthropicBaseURL(c.LLMURL)
 	}
@@ -485,6 +488,43 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 }
 
 const claudeCodeSettings = `{"skipWebFetchPreflight":true}`
+
+// claudeCodeArgs are a Claude Code Run's --settings value and the tier's
+// other args. Each of the tier's `--settings <json>` (or --settings=) that
+// is a JSON object is merged into dude's, later keys over earlier, with
+// skipWebFetchPreflight true whatever it says; one that is not (a file
+// path, which dude cannot read to merge) is dropped and named.
+func claudeCodeArgs(options map[string]any) (settings string, args, dropped []string) {
+	merged := map[string]any{}
+	for list, i := harnessArgs(options), 0; i < len(list); i++ {
+		arg, value := list[i], ""
+		switch {
+		case arg == "--settings" && i+1 >= len(list):
+			dropped = append(dropped, arg)
+			continue
+		case arg == "--settings":
+			i++
+			value = list[i]
+		case strings.HasPrefix(arg, "--settings="):
+			value = strings.TrimPrefix(arg, "--settings=")
+		default:
+			args = append(args, arg)
+			continue
+		}
+		var tier map[string]any
+		if err := json.Unmarshal([]byte(value), &tier); err != nil || tier == nil {
+			dropped = append(dropped, "--settings "+value)
+			continue
+		}
+		maps.Copy(merged, tier)
+	}
+	if len(merged) == 0 {
+		return claudeCodeSettings, args, dropped
+	}
+	merged["skipWebFetchPreflight"] = true
+	b, _ := json.Marshal(merged)
+	return string(b), args, dropped
+}
 
 // anthropicBaseURL is the proxy's URL as Claude Code takes it: without the
 // /v1 it adds to every path itself.
@@ -678,8 +718,9 @@ func submittedHarness(ranOn, role string) string {
 }
 
 // logIgnoredOptions says which of the tier's options a Run on Claude Code
-// or Codex leaves out (only "args" means anything to them), and which of
-// its args Codex leaves out (all but its -c overrides).
+// or Codex leaves out (only "args" means anything to them), which of
+// its args Codex leaves out (all but its -c overrides), and which tier
+// --settings Claude Code leaves out (all but inline JSON).
 func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	if s.Log == nil {
 		return
@@ -691,6 +732,12 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	if in.Harness == delivery.HarnessCodex {
 		if _, dropped := codexSettings(s.Agent, in); len(dropped) > 0 {
 			s.Log.Warn("Codex takes only -c key=value args from a tier, written to its config.toml; dropped the rest",
+				"run", r.ID, "tier", in.ModelTier, "dropped", dropped)
+		}
+	}
+	if in.Harness == delivery.HarnessClaudeCode {
+		if _, _, dropped := claudeCodeArgs(in.Options); len(dropped) > 0 {
+			s.Log.Warn("Claude Code takes a tier's --settings only as inline JSON, merged into dude's; dropped the rest",
 				"run", r.ID, "tier", in.ModelTier, "dropped", dropped)
 		}
 	}
