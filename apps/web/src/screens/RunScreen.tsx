@@ -705,7 +705,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
-                  <span className="muted">{TOOL_USAGE_NOTE}</span>
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
             </SessionRail>}
@@ -895,7 +895,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
-                  <span className="muted">{TOOL_USAGE_NOTE}</span>
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
               {changed.length > 0 ? (

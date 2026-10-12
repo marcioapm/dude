@@ -420,7 +420,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
-                  <span className="muted">{TOOL_USAGE_NOTE}</span>
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
               <SessionRailBlock label="It can">
