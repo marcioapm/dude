@@ -408,6 +408,9 @@ export interface DigestTurn {
   peers: Array<{ task: string; status: string; at: string }>;
 }
 
+/** Turns that are the agent's own work on its task, which its task's prompt goes before. */
+const AGENTS_OWN: ReadonlySet<Turn["kind"]> = new Set(["tool", "message", "thought", "question", "usage", "event", "progress", "repositoryRequest"]);
+
 /** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
 export type DudePause = NonNullable<Run["dudePause"]>;
 export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }> = {
@@ -1060,7 +1063,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = typeof payload.text === "string" ? payload.text : "";
         const attachments = attachmentsOf(payload.attachments);
         if ((!text.trim() && attachments.length === 0) || state.briefed) break;
-        turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments });
+        // The agent's task, before anything the agent did with it. What dude's
+        // tools wrote while the agent worked (a question it asked) can reach
+        // the ledger before the syncer has read lux's record of the prompt
+        // from the stream; the agent asked it after having its task all the same.
+        const prompt: Turn = { kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments };
+        const first = turns.findIndex((t) => AGENTS_OWN.has(t.kind));
+        if (first < 0) turns.push(prompt);
+        else {
+          turns.splice(first, 0, prompt);
+          if (state.progressIndex !== null && state.progressIndex >= first) state.progressIndex += 1;
+        }
         break;
       }
 
