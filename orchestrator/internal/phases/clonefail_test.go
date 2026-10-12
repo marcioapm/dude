@@ -18,11 +18,17 @@ func TestAFailedCloneIsSaidInPlainWords(t *testing.T) {
 			"carry on without it, or ask a person to check the repository's URL and access."; got != want {
 		t.Errorf("a task's note:\n got %s\nwant %s", got, want)
 	}
-	if got := cloneReason(auth); got != cloneSignInReason {
-		t.Errorf("an auth failure: %s", got)
-	}
-	if got := cloneReason("git clone: exit status 128: remote: Repository not found.\nfatal: repository 'https://github.com/acme/x/' not found"); got != cloneSignInReason {
-		t.Errorf("a repository GitHub hides: %s", got)
+	for _, err := range []string{
+		auth,
+		"git clone: exit status 128: remote: Repository not found.\nfatal: repository 'https://github.com/acme/x/' not found",
+		"git clone: exit status 128: remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/a/b/'",
+		"git clone: exit status 128: fatal: unable to access 'https://github.com/a/b/': The requested URL returned error: 403",
+		"git clone: exit status 128: fatal: unable to access 'https://github.com/a/b/': The requested URL returned error: 401",
+		"git clone: exit status 128: fatal: could not read Password for 'https://x@github.com': No such device or address",
+	} {
+		if got := cloneReason(err); got != cloneSignInReason {
+			t.Errorf("an auth failure %q: %s", err, got)
+		}
 	}
 	if got := cloneReason("ref not found"); got != "git said: ref not found." {
 		t.Errorf("another failure: %s", got)
