@@ -217,15 +217,26 @@ on, a brainstorm Run of the organisation is submitted unrestricted,
 whatever its list or the operator's says, so it can read the web; on
 OpenCode it also gets `OPENCODE_ENABLE_EXA=1`, its websearch tool (which
 reaches `mcp.exa.ai`; off, it would be refused, so the variable is not
-set). Every other role keeps the lists. The settings API carries it as
+set). On Codex it gets `web_search = "live"`, the Responses API's hosted
+search, which OpenAI runs behind the LLM proxy (the container makes no
+request for it); every other Codex Run gets `web_search = "disabled"`, since
+Codex 0.144 otherwise sends the tool on every Run. Claude Code's WebSearch is
+likewise server-side, through the proxy. The brainstorm is also told, after
+its instructions and whatever the organisation's prompt says: "You can read
+the web: search for and fetch public pages when the conversation needs facts
+from outside the linked repositories. Say where each fact came from, with its
+URL." Off, it is told nothing about the web. Every other role keeps the
+lists. The settings API carries it as
 `network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
 a project's); `network.effective` stays what other roles get. What it
 risks: anything a page says can steer the agent, and a brainstorm holds
 read-only checkouts of its session's repositories and the model key, which
 a malicious page could talk it into sending out. Like the lists, a change
 reaches brainstorm Runs submitted after it, either way: a brainstorm already
-started, running or parked, keeps the network it had (any host and Exa, or
-the list) through its resumes until its session starts a new agent.
+started, running or parked, keeps the network it had (any host, Exa and
+Codex's search, or the list) through its resumes until its session starts a
+new agent; briefed again after a lost conversation, it is told what that
+network allows.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
@@ -750,7 +761,10 @@ from it), with the tier's headers as the provider's `http_headers`,
 container is the sandbox), `model_reasoning_summary = "auto"`,
 `model_supports_reasoning_summaries = true` (Codex does not know the
 proxy's model names, and otherwise sends no reasoning) and
-`model_reasoning_effort` unless the effort is `none` or unset. These are
+`model_reasoning_effort` unless the effort is `none` or unset, and
+`web_search`: `"live"` for a brainstorm that may reach any host,
+`"disabled"` for every other Run (see [Agent network](#agent-network)).
+These are
 both `-c` overrides on the command and a `$HOME/.codex/config.toml` file
 secret (`CODEX_CONFIG`): Codex 0.144 drops every `-c` given before
 `app-server` once one follows it, and lux's adapter adds its MCP servers
@@ -772,7 +786,8 @@ any other key is logged as ignored. What the args do differs:
   replacing dude's own line for that key or adding one. The value is JSON (a
   string, number, boolean or a list of those) or a bare word, taken as a
   string. Every other argument is dropped and logged, as is an override of a
-  key inside or above one dude sets as a table (`model_providers.dude`).
+  key inside or above one dude sets as a table (`model_providers.dude`), and
+  of `web_search`, which the Run's network decides.
   They cannot go on the command: lux adds its MCP servers as `-c` after
   `app-server`, and Codex 0.144 then ignores everything given before the
   subcommand, `-m` included.
