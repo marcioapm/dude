@@ -1233,8 +1233,7 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	var models []json.RawMessage
 	if r.brainstorm() {
 		var orgModels json.RawMessage
-		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM runs r JOIN organizations o ON o.id = r.organization_id
-			WHERE r.id = $1`, r.ID).Scan(&orgModels); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
 			return "", fmt.Errorf("load the session's organization: %w", err)
 		}
 		var err error
