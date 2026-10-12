@@ -16,7 +16,7 @@ import { EventRow } from "@dude/design-system/components";
 import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
-import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn } from "../src/api/conversation.ts";
+import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn } from "../src/api/conversation.ts";
 import { modelCostShown } from "../src/api/client.ts";
 
 let cursor = 0;
@@ -563,6 +563,29 @@ describe("a steer read at the agent's next step", () => {
     const { turns } = project(events);
     expect(turns.map((t) => t.kind)).toEqual(["progress", "human"]);
     expect(turns[0]).toMatchObject({ done: 2 });
+  });
+});
+
+describe("the tools a Run used, for the session rail", () => {
+  const dude = (tool: string) => ev("agent.tool.dude", { tool, arguments: {}, result: {} });
+  const called = (tool: string, callId: string) => ev(EventTypes.ToolCalled, { tool, callId, input: {} });
+
+  test("dude's tools are counted beside the harness's, under a readable name", () => {
+    // The scripted conductor's update_task through lux's service: dude's record, no harness call.
+    const usage = toolUsage(project([called("read", "c_1"), dude("update_task"), dude("start_phase"), dude("start_phase")]));
+    expect(usage).toEqual([{ name: "Read", count: 1 }, { name: "dude update task", count: 1 }, { name: "dude start phase", count: 2 }]);
+  });
+
+  test("a dude tool the harness also reported, by any harness's name, counts once", () => {
+    for (const tool of ["update_task", "dude_update_task", "mcp__dude__update_task"]) {
+      const usage = toolUsage(project([dude("update_task"), called(tool, "c_1")]));
+      expect(usage).toEqual([{ name: "dude update task", count: 1 }]);
+    }
+  });
+
+  test("a call the harness reported and dude refused still counts", () => {
+    expect(toolUsage(project([called("dude_decide", "c_1"), called("dude_decide", "c_2"), dude("decide")])))
+      .toEqual([{ name: "dude decide", count: 2 }]);
   });
 });
 

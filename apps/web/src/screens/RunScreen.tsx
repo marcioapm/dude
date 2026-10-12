@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
@@ -416,8 +416,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
-  // Which tools it called, and how often: for the rail. The projection counts them.
-  const tools = [...conversation.toolCounts].map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count }));
+  // Which tools it called, and how often, dude's own among them: for the rail.
+  const tools = toolUsage(conversation);
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while

@@ -540,6 +540,26 @@ export function toolLabel(name: string): string {
 }
 
 /**
+ * The tools a Run used, for the session rail: the harness's, by its label,
+ * and dude's own, as "dude update task". A dude tool called over MCP is
+ * also the harness's call (`ask_person`, `dude_ask_person`): it counts once,
+ * as the larger of the two records, since dude records only the calls it
+ * carried out and the harness also those that failed. Called through the
+ * dude CLI it is a `bash` call as well, and both are shown.
+ */
+export function toolUsage(conversation: Pick<Conversation, "toolCounts" | "dudeToolCounts">): { name: string; count: number }[] {
+  const dude = new Map(conversation.dudeToolCounts);
+  const out: { name: string; count: number }[] = [];
+  for (const [name, count] of conversation.toolCounts) {
+    const own = dudeToolName(name);
+    if (name !== own || dude.has(own)) dude.set(own, Math.max(count, dude.get(own) ?? 0));
+    else out.push({ name: toolLabel(name), count });
+  }
+  for (const [name, count] of dude) out.push({ name: `dude ${name.replaceAll("_", " ")}`, count });
+  return out;
+}
+
+/**
  * Who priced a Run's model cost. lux's cost plugins meter every token and
  * settle the price over days (`settled` once its status is final); the
  * agent's harness's own running total is never settled.
@@ -575,6 +595,8 @@ export interface Conversation {
   activeTool: { name: string; since: string } | null;
   /** How often it called each tool, by the tool's name as the harness gives it. */
   toolCounts: ReadonlyMap<string, number>;
+  /** How often dude recorded a call of each of its tools (`agent.tool.dude`), by the tool's name. */
+  dudeToolCounts: ReadonlyMap<string, number>;
   /**
    * Where a steer sent now lands, as this Run's lux last said: `next_step`,
    * `next_turn`, or null when it has said nothing (an older lux, which
@@ -638,6 +660,7 @@ export interface Projection {
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
   toolCounts: Map<string, number>;
+  dudeToolCounts: Map<string, number>;
   lands: SteerLands | null;
   /**
    * "Taken back up" notices whose resume is not timed yet, by the epoch
@@ -723,6 +746,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     activity: null,
     activeTool: null,
     toolCounts: new Map(),
+    dudeToolCounts: new Map(),
     lands: null,
     untimedUnparks: new Map(),
     untimedUnpark: null,
@@ -1397,6 +1421,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // question only when it asks) names the open question it just
         // asked. decide_escalation names the answered one it acts on.
         const name = String(payload.tool ?? "");
+        if (name) state.dudeToolCounts.set(name, (state.dudeToolCounts.get(name) ?? 0) + 1);
         const asks = name === "ask_person" || name === "decide";
         const result = payload.result as Record<string, unknown> | null | undefined;
         const question = asks && typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
@@ -1561,6 +1586,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       activity: state.activity,
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
+      dudeToolCounts: state.dudeToolCounts,
       lands: state.lands,
       start: shownStart(state.start, runStatus),
       startFailed: state.failedStart?.turn.start ?? null,
@@ -1610,6 +1636,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activity: null,
     activeTool: null,
     toolCounts: state.toolCounts,
+    dudeToolCounts: state.dudeToolCounts,
     lands: state.lands,
     start: null,
     startFailed: state.failedStart?.turn.start ?? null,

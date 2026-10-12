@@ -15,14 +15,14 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { firstName, type NavProject } from "@dude/design-system";
 import {
   Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem, type ProposalRelation,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, readWhen, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
@@ -140,7 +140,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     return snapshot(apply(projection.current, events), status);
   }, [events, sessionId, status]);
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
-
+  // Which tools its agent called, dude's own among them, as a task's session rail says it.
+  const tools = toolUsage(conversation);
   const send = useCallback(async (text: string, aside = false) => {
     setProblem(null);
     try {
@@ -415,6 +416,11 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                     onOpen={setViewing} />
                 ) : <span className="muted">Nothing published yet: documents it writes for you appear here.</span>}
               </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                </SessionRailBlock>
+              ) : null}
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
