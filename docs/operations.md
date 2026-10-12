@@ -236,9 +236,16 @@ read-only checkouts of its session's repositories and the model key, which
 a malicious page could talk it into sending out. Like the lists, a change
 reaches brainstorm Runs submitted after it, either way: a brainstorm already
 started, running or parked, keeps the network it had (any host, Exa and
-Codex's pinned search, or the list) through its resumes until its session starts a
-new agent; briefed again after a lost conversation, it is told what that
-network allows.
+Codex's pinned search, or the list) through its resumes until its session
+starts a new agent. A resume writes Codex's `config.toml` again, from the
+network recorded on the Run (`runs.network`), not from the setting as it is
+now; briefed again after a lost conversation, the brainstorm is told what
+that network allows.
+
+A brainstorm whose network is unrestricted for any reason may reach any
+host, and is treated as one: `*` in the operator's or the organisation's
+list, with the setting off, also gets Exa, Codex's pinned search and the
+web line in its first prompt.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
@@ -766,12 +773,10 @@ proxy's model names, and otherwise sends no reasoning) and
 `model_reasoning_effort` unless the effort is `none` or unset, and, for a
 brainstorm that may reach any host, `web_search = "live"`; every other Run
 has no `web_search` line and keeps Codex's default, which searches (see
-[Agent network](#agent-network)).
-These are
-both `-c` overrides on the command and a `$HOME/.codex/config.toml` file
-secret (`CODEX_CONFIG`): Codex 0.144 drops every `-c` given before
-`app-server` once one follows it, and lux's adapter adds its MCP servers
-there.
+[Agent network](#agent-network)). These are both `-c` overrides on the
+command and a `$HOME/.codex/config.toml` file secret (`CODEX_CONFIG`):
+Codex 0.144 drops every `-c` given before `app-server` once one follows it,
+and lux's adapter adds its MCP servers there.
 
 Both keep their session under the agent's home (`~/.claude`, `~/.codex`),
 which is a state volume, as lux requires. A tier's `options` are OpenCode
