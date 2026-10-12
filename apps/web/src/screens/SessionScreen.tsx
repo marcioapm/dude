@@ -477,19 +477,22 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
       return `${who} set the model to ${modelChangeWords(tier, harness.success ? harness.data : null)}; it applies from the next message.`;
     }
     case EventTypes.BrainstormModelApplied: {
-      const tier = p.tier && typeof p.tier === "object" ? (p.tier as { name?: unknown }).name : null;
       const harness = harnessSchema.safeParse(p.harness);
-      const words = [typeof tier === "string" ? tier : typeof p.model === "string" ? p.model : null,
-        harness.success ? HARNESS_LABEL[harness.data] : null].filter(Boolean).join(" · ");
+      const model = tierName(p.tier) ?? (typeof p.model === "string" ? p.model : null);
+      const words = [model, harness.success ? HARNESS_LABEL[harness.data] : null].filter(Boolean).join(" · ");
       return `Started a fresh agent${words ? ` on ${words}` : ""}; it has the conversation so far.`;
     }
-    case EventTypes.BrainstormModelFallback: {
-      const tier = p.tier && typeof p.tier === "object" ? (p.tier as { name?: unknown }).name : null;
-      return `The tier ${typeof tier === "string" ? tier : "this session chose"} was removed: the session follows the organisation's from the next message.`;
-    }
+    case EventTypes.BrainstormModelFallback:
+      return `The tier ${tierName(p.tier) ?? "this session chose"} was removed: the session follows the organisation's from the next message.`;
     default:
       return null;
   }
+}
+
+/** The name of a payload's `tier: { name }`, if it has one. */
+function tierName(tier: unknown): string | null {
+  const name = tier && typeof tier === "object" ? (tier as { name?: unknown }).name : null;
+  return typeof name === "string" ? name : null;
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
