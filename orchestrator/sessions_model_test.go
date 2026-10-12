@@ -370,17 +370,47 @@ func TestATierChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
 	conversationThenFirst(t, s.prompt(next), "Márcio Martins: hello", "Márcio Martins: now on Sol")
 }
 
-// A change set back to what the agent runs on, and no change at all, swap
-// nothing: the parked agent is resumed with the message, on what it was
-// submitted with.
+// A tier on the same model at another effort is a change: the next
+// message hands over to a fresh agent requesting the new effort.
+func TestAnEffortChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	id, run := s.parkedOn()
+	quick := "mtr_quick_" + s.org
+	mustExec(t, s.owner, `INSERT INTO model_tiers (id, organization_id, name, model, effort, position)
+		VALUES ($1, $2, 'Quick', 'claude-sonnet-5', 'low', 21)`, quick, s.org)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": quick, "harness": "claude-code"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "quicker now"})
+	next := s.freshAgent(id, run)
+	if _, model, _, harness := s.submitted(id); model != "claude-sonnet-5" || harness != "claude-code" {
+		t.Errorf("the fresh agent runs on %s · %s, want claude-sonnet-5 · claude-code", model, harness)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND effort = 'low'`, next); n != 1 {
+		t.Errorf("the fresh agent does not request the low effort")
+	}
+	if v := s.luxRun(run); v == nil || v.resumed != 0 {
+		t.Errorf("the old agent was resumed")
+	}
+}
+
+// A change set back to what the agent runs on, no change at all, another
+// tier requesting the same model and effort, and the agent's tier renamed
+// swap nothing: the parked agent is resumed with the message, on what it
+// was submitted with.
 func TestAChangeSetBackOrNoneResumesTheSameAgent(t *testing.T) {
-	for _, back := range []bool{true, false} {
-		t.Run(map[bool]string{true: "set back", false: "no change"}[back], func(t *testing.T) {
+	for _, change := range []string{"set back", "no change", "same model and effort on another tier", "tier renamed"} {
+		t.Run(change, func(t *testing.T) {
 			s := newSessionWorld(t)
 			id, run := s.parkedOn()
-			if back {
+			switch change {
+			case "set back":
 				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
 				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "claude-code"})
+			case "same model and effort on another tier":
+				// Thinker requests claude-sonnet-5 at high effort, as tierOn's tiers do.
+				twin := s.tierOn("Twin", "claude-sonnet-5")
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": twin, "harness": "claude-code"})
+			case "tier renamed":
+				mustExec(t, s.owner, `UPDATE model_tiers SET name = 'Deep thinker' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
 			}
 			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
 			s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
