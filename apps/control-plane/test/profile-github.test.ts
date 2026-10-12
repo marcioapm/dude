@@ -8,7 +8,7 @@
  * create databases.
  */
 
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { closePool, setPool } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
@@ -83,7 +83,15 @@ const patchMe = (body: Record<string, unknown>) => router.handle(new Request("ht
 const stored = async () => (await owner`
   SELECT github_login, github_user_id::int AS github_user_id, commit_email::text FROM people WHERE id = ${personId}`)[0];
 
+// Each test starts from the same profile: a login GitHub knows, and a
+// commit email.
+beforeEach(async () => {
+  githubDown = false;
+  await owner`UPDATE people SET github_login = 'ana-dev', github_user_id = 5150, commit_email = 'ana@users.example' WHERE id = ${personId}`;
+});
+
 test("a GitHub username is saved with GitHub's id for it, and shown back on your profile", async () => {
+  await owner`UPDATE people SET github_login = NULL, github_user_id = NULL, commit_email = NULL WHERE id = ${personId}`;
   const res = await patchMe({ githubLogin: "ana-dev", commitEmail: "ana@users.example" });
   expect(res.status).toBe(200);
   const { person } = (await res.json()) as { person: { githubLogin: string; commitEmail: string } };
@@ -95,18 +103,14 @@ test("a username GitHub does not know is refused, 422, and nothing changes", asy
   const res = await patchMe({ githubLogin: "nobody-here" });
   expect(res.status).toBe(422);
   expect(((await res.json()) as { error: { message: string } }).error.message).toContain("GitHub has no user named nobody-here");
-  expect(await stored()).toMatchObject({ github_login: "ana-dev", github_user_id: 5150 });
+  expect(await stored()).toEqual({ github_login: "ana-dev", github_user_id: 5150, commit_email: "ana@users.example" });
 });
 
-test("a username saved while GitHub cannot be asked is kept, without an id", async () => {
+test("a username saved while GitHub cannot be asked is kept, without an id, and the commit email is untouched", async () => {
   githubDown = true;
-  try {
-    const res = await patchMe({ githubLogin: "someone-else" });
-    expect(res.status).toBe(200);
-    expect(await stored()).toMatchObject({ github_login: "someone-else", github_user_id: null });
-  } finally {
-    githubDown = false;
-  }
+  const res = await patchMe({ githubLogin: "someone-else" });
+  expect(res.status).toBe(200);
+  expect(await stored()).toEqual({ github_login: "someone-else", github_user_id: null, commit_email: "ana@users.example" });
 });
 
 test("an empty username or commit email clears it", async () => {

@@ -40,6 +40,8 @@ let router: Router;
 let key: { key: string };
 let orchestrator: ReturnType<typeof Bun.serve>;
 const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+// How the stand-in orchestrator answers an App's verify.
+let verifyApp: () => Response = () => Response.json({ ok: true, repository: "acme/api", bot: "dude-acme[bot]" });
 
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
@@ -58,7 +60,9 @@ beforeAll(async () => {
   key = made;
   orchestrator = Bun.serve({ port: 0, async fetch(request) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    forwarded.push({ path: new URL(request.url).pathname, body });
+    const path = new URL(request.url).pathname;
+    if (path === "/internal/github/verify-app") return verifyApp();
+    forwarded.push({ path, body });
     // A registration that waits takes as long as forty repositories would.
     if (!body.background) await Bun.sleep(3_000);
     return Response.json(body.background ? { background: true } : { repositories: [] }, { status: body.background ? 202 : 200 });
@@ -109,6 +113,20 @@ test("a GitHub App connects with its App ID alone; the installation is found per
   const body = (await shown.json()) as Record<string, unknown>;
   expect(body).toMatchObject({ connected: true, auth: "github_app", appId: "9001", installationId: null, secretHint: "" });
   expect(JSON.stringify(body)).not.toContain("BEGIN");
+});
+
+test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {
+  const verify = async () => {
+    const res = await router.handle(new Request("http://dude.test/v1/forge/credential/verify", {
+      method: "POST", headers: { authorization: `Bearer ${key.key}` } }));
+    expect(res.status).toBe(200);
+    return res.json();
+  };
+  expect(await verify()).toEqual({ ok: true, app: true, bot: "dude-acme[bot]", repository: "acme/api" });
+  verifyApp = () => Response.json({ ok: false, repository: "acme/api", reason: "GitHub would not give the App a token for acme/api" });
+  expect(await verify()).toEqual({ ok: false, reason: "GitHub would not give the App a token for acme/api" });
+  verifyApp = () => Response.json({ error: { code: "conflict", message: "GitHub is connected with a token, not an App" } }, { status: 409 });
+  expect(await verify()).toEqual({ ok: false, reason: "GitHub is connected with a token, not an App" });
 });
 
 test("an App's deliveries are taken with the credential's secret; its installation events are answered and ignored", async () => {
