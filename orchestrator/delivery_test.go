@@ -946,8 +946,8 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if !strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"model":"llm-anthropic/claude-impl"`) || spec.Env["DUDE_LLM_URL"] != "https://llm.example/v1" {
 		t.Errorf("env = %v, want the implementer's model inline and the LLM URL", spec.Env)
 	}
-	if spec.Network == nil || len(spec.Network.Egress) != 1 || spec.Network.Egress[0].Host != "llm.example" {
-		t.Errorf("network = %+v, want egress to the model provider only", spec.Network)
+	if spec.Network == nil || len(spec.Network.Egress) != 2 || spec.Network.Egress[0].Host != "llm.example" || spec.Network.Egress[1].Host != "mcp.exa.ai" {
+		t.Errorf("network = %+v, want egress to the model provider and Exa's search only", spec.Network)
 	}
 	// The tools it runs colour their output, which the chat renders.
 	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" || spec.Env["GIT_CONFIG_VALUE_0"] != "always" {

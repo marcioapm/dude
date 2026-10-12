@@ -407,12 +407,29 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 }
 
 // runNetwork is a Run's network: unrestricted when it may reach any host,
-// else its lists (egress).
+// else its lists with what its harness needs (egress). The scripted agent
+// (toolsOnly) runs no harness.
 func runNetwork(c AgentConfig, in specInput) *lux.Network {
 	if in.Anywhere {
 		return &lux.Network{Unrestricted: true}
 	}
-	return egress(c, in.Egress)
+	var harness []string
+	if !c.toolsOnly {
+		harness = harnessHosts(in.Harness)
+	}
+	return egress(c, in.Egress, harness)
+}
+
+// harnessHosts are the hosts a harness reaches from the container on its
+// own: OpenCode's websearch tool calls Exa's MCP server
+// (https://mcp.exa.ai/mcp). Claude Code's and Codex's search go through
+// the LLM proxy.
+func harnessHosts(harness string) []string {
+	switch harness {
+	case delivery.HarnessClaudeCode, delivery.HarnessCodex:
+		return nil
+	}
+	return []string{"mcp.exa.ai"}
 }
 
 // openCodeWorkload: the image's OpenCode config defines the two providers,
@@ -428,11 +445,9 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	}
 	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
 	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
-	// OpenCode's websearch tool exists only with Exa on, and reaches
-	// mcp.exa.ai: only a Run that may reach any host gets it.
-	if in.Anywhere {
-		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
-	}
+	// OpenCode's websearch tool exists only with Exa on; its host is on
+	// every OpenCode Run's list (harnessHosts).
+	spec.Env["OPENCODE_ENABLE_EXA"] = "1"
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
@@ -791,14 +806,15 @@ var colourEnv = map[string]string{
 }
 
 // egress is a Run's network: the operator's floor (agent.egress), the
-// Run's own list (RunEgress), the LLM API's host and dude's tools, each
-// rule once, in that order. "*" in either list turns filtering off. With
-// nothing listed anywhere and no model's host, filtering is off rather than
-// leaving an agent that cannot reach its own model; the tools alone
+// Run's own list (RunEgress), the LLM API's host, the hosts its harness
+// needs (harnessHosts) and dude's tools, each rule once, in that order.
+// "*" in either list turns filtering off. With nothing listed anywhere and
+// no model's host, filtering is off rather than leaving an agent that
+// cannot reach its own model; the harness's hosts and the tools alone
 // restrict nothing. Every entry is one lux takes (LoadAgentConfig refuses
 // others in the operator's list, the API in the Run's own); were one not,
 // lux would refuse the Run rather than run it with less listed.
-func egress(c AgentConfig, own []string) *lux.Network {
+func egress(c AgentConfig, own, harness []string) *lux.Network {
 	n := &lux.Network{}
 	seen := map[lux.EgressRule]bool{}
 	add := func(entry string) {
@@ -819,6 +835,9 @@ func egress(c AgentConfig, own []string) *lux.Network {
 	}
 	if len(n.Egress) == 0 && !c.toolsOnly {
 		return &lux.Network{Unrestricted: true}
+	}
+	for _, h := range harness {
+		add(h)
 	}
 	if u, err := url.Parse(c.ToolsURL); err == nil && u.Hostname() != "" {
 		add(u.Hostname())

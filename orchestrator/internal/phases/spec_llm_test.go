@@ -205,19 +205,28 @@ func TestEgressAllowsTheLLMURLsHost(t *testing.T) {
 		slices.Sort(hs)
 		return hs
 	}
-	n := egress(AgentConfig{LLMURL: "https://llmproxy.example.com:8443/v1", ToolsURL: "http://10.0.0.5:3120/mcp"}, nil)
+	n := egress(AgentConfig{LLMURL: "https://llmproxy.example.com:8443/v1", ToolsURL: "http://10.0.0.5:3120/mcp"}, nil, nil)
 	if n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"10.0.0.5/32", "llmproxy.example.com"}) {
 		t.Errorf("egress = %+v, want the LLM host and the tools", n)
 	}
-	n = egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"pypi.org"}}, nil)
+	n = egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"pypi.org"}}, nil, nil)
 	if !reflect.DeepEqual(hosts(n), []string{"llm.example", "pypi.org"}) {
 		t.Errorf("egress = %+v", n)
 	}
-	if n := egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"*"}}, nil); !n.Unrestricted {
+	if n := egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"*"}}, nil, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want * to turn filtering off", n)
 	}
-	if n := egress(AgentConfig{ToolsURL: "http://10.0.0.5:3120/mcp"}, nil); !n.Unrestricted {
+	if n := egress(AgentConfig{ToolsURL: "http://10.0.0.5:3120/mcp"}, nil, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want no filtering with nothing to restrict to", n)
+	}
+	// A harness's own hosts are listed with the rest, once, and restrict
+	// nothing on their own.
+	n = egress(AgentConfig{LLMURL: "https://llm.example/v1"}, []string{"mcp.exa.ai"}, []string{"mcp.exa.ai"})
+	if n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"llm.example", "mcp.exa.ai"}) {
+		t.Errorf("egress = %+v, want the LLM host and the harness's", n)
+	}
+	if n := egress(AgentConfig{}, nil, []string{"mcp.exa.ai"}); !n.Unrestricted {
+		t.Errorf("egress = %+v, want the harness's hosts alone to restrict nothing", n)
 	}
 }
 
@@ -233,17 +242,17 @@ func TestARunsEgressIsTheOperatorsFloorAndItsOwnList(t *testing.T) {
 		return hs
 	}
 	c := AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"mirror.internal"}}
-	n := egress(c, []string{"*.github.com", "10.60.0.0/16", "10.0.0.5", "mirror.internal", "Registry.npmjs.org"})
+	n := egress(c, []string{"*.github.com", "10.60.0.0/16", "10.0.0.5", "mirror.internal", "Registry.npmjs.org"}, nil)
 	if want := []string{"*.github.com", "10.0.0.5/32", "10.60.0.0/16", "llm.example", "mirror.internal", "registry.npmjs.org"}; n.Unrestricted ||
 		!reflect.DeepEqual(hosts(n), want) {
 		t.Errorf("egress = %v, want %v", hosts(n), want)
 	}
-	if n := egress(c, []string{"pypi.org", "*"}); !n.Unrestricted {
+	if n := egress(c, []string{"pypi.org", "*"}, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want the Run's * to turn filtering off", n)
 	}
 	// Without a model's host, a Run's own list is still something to
 	// restrict to: only nothing anywhere leaves it unrestricted.
-	if n := egress(AgentConfig{}, []string{"pypi.org"}); n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"pypi.org"}) {
+	if n := egress(AgentConfig{}, []string{"pypi.org"}, nil); n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"pypi.org"}) {
 		t.Errorf("egress = %+v, want the Run's list", n)
 	}
 }

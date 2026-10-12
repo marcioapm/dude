@@ -389,8 +389,9 @@ func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
 }
 
 // A Run that may reach any host is unrestricted whatever the lists say, on
-// every harness and on the scripted agent; on OpenCode it also gets Exa,
-// its websearch tool. A Run on the lists gets neither.
+// every harness and on the scripted agent. A Run on the lists keeps them,
+// with mcp.exa.ai only on OpenCode. OpenCode has Exa, its websearch tool,
+// either way; no other harness, nor the scripted agent, has it.
 func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T) {
 	harnesses := []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex}
 	for _, model := range []string{"claude-sonnet-5", "fake/scripted"} {
@@ -404,9 +405,13 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 				if spec.Network == nil || spec.Network.Unrestricted != anywhere || anywhere != (len(spec.Network.Egress) == 0) {
 					t.Errorf("%s: network = %+v", name, spec.Network)
 				}
+				opencode := harness == delivery.HarnessOpenCode && model != "fake/scripted"
+				if exa := slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "mcp.exa.ai"}); exa != (opencode && !anywhere) {
+					t.Errorf("%s: mcp.exa.ai listed %v, want %v: %+v", name, exa, opencode && !anywhere, spec.Network.Egress)
+				}
 				exa, has := spec.Env["OPENCODE_ENABLE_EXA"]
-				if want := anywhere && harness == delivery.HarnessOpenCode && model != "fake/scripted"; has != want || (has && exa != "1") {
-					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, want)
+				if has != opencode || (has && exa != "1") {
+					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, opencode)
 				}
 			}
 		}
@@ -419,6 +424,43 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 		c.ToolsURL, in.Egress, in.Harness, in.Anywhere = "", nil, harness, true
 		if spec := buildSpec(c, in); len(spec.Workload.MCPServers) > 0 || !reflect.DeepEqual(spec.Network, &lux.Network{Unrestricted: true}) {
 			t.Errorf("fake/scripted on %s, anywhere, no lists or MCP: mcp = %v, network = %+v", harness, spec.Workload.MCPServers, spec.Network)
+		}
+	}
+}
+
+// Every role on OpenCode searches the web through Exa: OPENCODE_ENABLE_EXA
+// is set and, on a list, mcp.exa.ai is on it. On Claude Code and Codex the
+// list has no mcp.exa.ai. An unrestricted network ("*" in a list, or
+// nothing to restrict to) stays unrestricted on every harness.
+func TestEveryOpenCodeRunSearchesThroughExa(t *testing.T) {
+	for role, edit := range everyRole {
+		for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+			name := role + " on " + harness
+			c, in := goldenInput("claude-sonnet-5")
+			edit(&in)
+			in.Harness, in.Egress = harness, []string{"pypi.org"}
+			spec := buildSpec(c, in)
+			opencode := harness == delivery.HarnessOpenCode
+			if got := spec.Env["OPENCODE_ENABLE_EXA"]; (got == "1") != opencode {
+				t.Errorf("%s: OPENCODE_ENABLE_EXA = %q, want set %v", name, got, opencode)
+			}
+			if spec.Network == nil || spec.Network.Unrestricted ||
+				!slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "pypi.org"}) ||
+				slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "mcp.exa.ai"}) != opencode {
+				t.Errorf("%s: network = %+v, want the list with mcp.exa.ai %v", name, spec.Network, opencode)
+			}
+			for what, set := range map[string]func(){
+				"* in the list":       func() { in.Egress = []string{"pypi.org", "*"} },
+				"nothing to restrict": func() { c.LLMURL, c.Egress, in.Egress = "", nil, nil },
+			} {
+				c, in = goldenInput("claude-sonnet-5")
+				edit(&in)
+				in.Harness = harness
+				set()
+				if n := buildSpec(c, in).Network; !reflect.DeepEqual(n, &lux.Network{Unrestricted: true}) {
+					t.Errorf("%s, %s: network = %+v, want unrestricted", name, what, n)
+				}
+			}
 		}
 	}
 }

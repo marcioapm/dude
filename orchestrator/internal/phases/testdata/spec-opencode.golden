@@ -63,6 +63,7 @@
     "GIT_CONFIG_VALUE_0": "always",
     "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-opus-5-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-opus-5-5\":{\"options\":{\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
     "OPENCODE_DISABLE_MODELS_FETCH": "1",
+    "OPENCODE_ENABLE_EXA": "1",
     "PY_COLORS": "1",
     "TERM": "xterm-256color"
   },
@@ -120,6 +121,9 @@
     "egress": [
       {
         "host": "llm.example"
+      },
+      {
+        "host": "mcp.exa.ai"
       },
       {
         "cidr": "10.9.8.7/32"
