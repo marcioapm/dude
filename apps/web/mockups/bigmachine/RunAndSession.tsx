@@ -138,7 +138,7 @@ function Refused({ view, t0 }: { view: RefusedView; t0: number }) {
   return (
     <>
       <ChatMessage role="qa_browser" startedAt={t0 - 4 * MIN} costUsd={0.14}
-        content="Two of the four browser workers crashed while the full preview rendered. Each peaks at about 5 GiB; four need XL." />
+        content="Two of the four browser workers crashed while the full preview rendered. Each peaks at about 5 GiB; the conductor said to try XL." />
       <ChatAside>
         <ToolCallCard name="bash" status="failed" summary={<code>npx playwright test --workers 4 e2e/export.spec.ts</code>} exitCode={1}
           error="Target crashed" defaultExpanded={false} durationMs={96_000} />
