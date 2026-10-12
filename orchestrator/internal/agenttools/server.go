@@ -314,7 +314,9 @@ func find(name, role string) (tool, bool) {
 
 // allTools are every role's tools: the task agents', then the session
 // agent's.
-func allTools() []tool { return append(slices.Clone(tools), brainstormTools...) }
+func allTools() []tool {
+	return slices.Concat(tools, coordinationTools, brainstormTools)
+}
 
 // define makes a tool from a typed function: its input schema from In,
 // its arguments decoded strictly into In.
@@ -418,6 +420,17 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	var refused refusal
+	if errors.As(err, &refused) && refused.event != nil {
+		// The call's transaction rolled back: its refusal is recorded on
+		// its own, so the ledger shows what was refused and why.
+		if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+			return err
+		}); logged != nil {
+			s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
+		}
+	}
 	if err != nil || t.outside == nil {
 		return out, err
 	}
@@ -467,12 +480,27 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	return nil
 }
 
-// refusal is a tool declining a request, with the reason for the caller.
-type refusal struct{ msg string }
+// refusal is a tool declining a request, with the reason for the caller,
+// and the ledger event that records it when the refusal is itself worth
+// recording (a message over the rate, a note past the limit).
+type refusal struct {
+	msg   string
+	event *refusedEvent
+}
+
+type refusedEvent struct {
+	typ     string
+	payload map[string]any
+}
 
 func (r refusal) Error() string { return r.msg }
 
-func refuse(format string, a ...any) error { return refusal{fmt.Sprintf(format, a...)} }
+func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
+
+// refuseRecorded is refuse with the event that records the refusal.
+func refuseRecorded(typ string, payload map[string]any, msg string) error {
+	return refusal{msg: msg, event: &refusedEvent{typ, payload}}
+}
 
 // structured is a tool's result as MCP structured content, which must be a
 // JSON object: a list is given as {"items": [...]}. (The text content, and

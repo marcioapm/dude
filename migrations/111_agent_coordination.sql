@@ -174,5 +174,7 @@ BEGIN
 END $$;
 
 GRANT SELECT, INSERT, UPDATE ON peer_messages, peer_waits, epic_notes, epic_note_reads, conductor_digests TO dude_app;
--- The syncer asks every live Run whether it waits on a peer (OpenAsk).
-GRANT SELECT ON peer_waits TO dude_sweeper;
+-- The syncer asks every live Run whether it waits on a peer (OpenAsk); a
+-- Run it ends closes its waits (the trigger runs as whoever ends the Run).
+GRANT SELECT, UPDATE ON peer_waits TO dude_sweeper;
+GRANT SELECT ON peer_messages TO dude_sweeper;

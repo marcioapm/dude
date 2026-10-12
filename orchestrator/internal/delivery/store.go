@@ -569,18 +569,24 @@ func (r RunRef) correlation() string {
 // a person's answer.
 const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')`
 
-// OpenAsk is true (SQL, over a Run aliased r) while the Run is blocked on a
-// person: a question, or a repository it said it cannot go on without. An
-// agent that ends its turn with one open is waiting, not done.
-const OpenAsk = `(` + openQuestion + `
+// PersonAsk is true (SQL, over a Run aliased r) while the Run is blocked on
+// a person: a question, or a repository it said it cannot go on without.
+const PersonAsk = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking))`
 
+// OpenAsk is true (SQL, over a Run aliased r) while the Run is blocked on a
+// person (PersonAsk) or on a peer's reply (peer_waits). An agent that ends
+// its turn with one open is waiting, not done: parked past the grace,
+// resumed once it closes.
+const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + `)`
+
 // HoldsTurn is true (SQL, over a Run aliased r) while a turn that ends
-// is not done: something is open for a person (OpenAsk), or a repository
-// the agent waits on was approved and has not reached it yet — it is
-// resumed with it.
+// is not done: something is open for a person or a peer (OpenAsk), or a
+// repository the agent waits on was approved and has not reached it yet —
+// it is resumed with it.
 const HoldsTurn = `(` + openQuestion + `
-	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved')))`
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved'))
+	OR ` + openPeerWait + `)`
 
 // Directive is a message queued for a Run's agent: delivered by the phase
 // syncer, acknowledged by lux when the agent takes it. Scope "run" holds for

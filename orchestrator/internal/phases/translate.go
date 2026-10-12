@@ -714,6 +714,10 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err := delivery.SteerSettledTx(ctx, tx, t.run.Org, id, true, ""); err != nil {
 		return err
 	}
+	// A peer's message, or a note change, read: recorded where it was read.
+	if err := delivery.CoordinationReadTx(ctx, tx, t.run.Org, id); err != nil {
+		return err
+	}
 	// A wake note read after its failure was counted: its reasons, back to
 	// pending, are heard and not told again.
 	if err := delivery.WakesHeardTx(ctx, tx, id); err != nil {
@@ -925,10 +929,18 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 		return nil
 	}
 	t.FailedTurns = 0
+	// A turn that ends with a question to a peer unanswered waits on it,
+	// as if the agent had run `dude wait`: otherwise it would complete,
+	// and move to review, before the answer could land.
+	if t.run.Phase != "" {
+		if _, err := delivery.WaitOnUnansweredTx(ctx, tx, t.run.ref()); err != nil {
+			return err
+		}
+	}
 	// A turn that ended with something open for a person — a question, a
-	// repository it asked for — is not done: the agent waits, and the
-	// answer starts its next turn. The syncer parks it if the wait is
-	// long.
+	// repository it asked for — or a peer's reply is not done: the agent
+	// waits, and the answer starts its next turn. The syncer parks it if
+	// the wait is long.
 	tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
 		WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
 	if err != nil || tag.RowsAffected() > 0 {

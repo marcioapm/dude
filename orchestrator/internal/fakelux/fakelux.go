@@ -137,7 +137,10 @@ type Run struct {
 	// Some repository got a commit from a push.
 	Pushed bool
 	// dude tools the agent called: "tool status".
-	ToolCalls   []string
+	ToolCalls []string
+	// The id the agent's last dude tool call answered with: CallTools'
+	// arguments name it as {{last.id}} (a message it then waits on).
+	lastID      string
 	Cancelled   bool
 	Stopped     int
 	Resumed     int
@@ -1621,7 +1624,8 @@ func (s *Server) callTool(run *Run, tool, args string) {
 		if svc.Name != "dude" {
 			continue
 		}
-		req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
+		req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool,
+			strings.NewReader(strings.ReplaceAll(args, "{{last.id}}", run.lastID)))
 		if err != nil {
 			return
 		}
@@ -1645,6 +1649,9 @@ func (s *Server) callTool(run *Run, tool, args string) {
 			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
 				"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, res.StatusCode)}})
 		default:
+			var answer struct{ ID string }
+			_ = json.NewDecoder(res.Body).Decode(&answer)
+			run.lastID = answer.ID
 			res.Body.Close()
 		}
 	}

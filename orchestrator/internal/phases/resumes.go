@@ -100,11 +100,12 @@ func placementsAround(ps []lux.Placement, epoch int) (cur, prev lux.Placement) {
 // A person's Resume: control_requested_at. A repository: its latest
 // approval not yet brought (status still approved; a denial brings
 // nothing). An answer: the last ask that held the park (delivery.OpenAsk:
-// a question, or a blocking repository request) answered or decided since
-// the park began. The park began at its run.parked's parkedAt, on the
-// database's clock like the answers; older parks without it fall back to
-// occurred_at, the orchestrator's clock. A message to a parked conductor:
-// the first message it has not been sent yet.
+// a question, a blocking repository request, or a wait on a peer's reply)
+// answered, decided or closed since the park began. The park began at its
+// run.parked's parkedAt, on the database's clock like the answers; older
+// parks without it fall back to occurred_at, the orchestrator's clock. A
+// message to a parked conductor: the first message it has not been sent
+// yet.
 const woken = `CASE $3
 	WHEN 'person' THEN r.control_requested_at
 	WHEN 'idle' THEN r.control_requested_at
@@ -114,7 +115,8 @@ const woken = `CASE $3
 	ELSE (SELECT GREATEST(
 			(SELECT max(q.answered_at) FROM questions q WHERE q.run_id = r.id AND q.answered_at >= park.at),
 			(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.blocking
-				AND q.decided_at >= park.at))
+				AND q.decided_at >= park.at),
+			(SELECT max(w.closed_at) FROM peer_waits w WHERE w.run_id = r.id AND w.closed_at >= park.at))
 		FROM (SELECT COALESCE(max(COALESCE((e.payload->>'parkedAt')::timestamptz, e.occurred_at)), '-infinity') AS at FROM events e
 			WHERE e.run_id = r.id AND e.event_type = 'run.parked') park) END`
 
