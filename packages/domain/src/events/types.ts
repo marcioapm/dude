@@ -90,8 +90,9 @@ export const EventTypes = {
   /** The owner set start when unblocked. Payload: `{ how }`. */
   TaskAutoStartSet: "task.auto_start_set",
   /**
-   * Start when unblocked ended without firing. Payload: `{ how, why }`,
-   * why `owner` | `started` | `owner_changed` | `unblocked_by_removal`.
+   * Start when unblocked ended without firing. Payload: `{ how, why, error? }`,
+   * why `owner` | `started` | `owner_changed` | `unblocked_by_removal` |
+   * `failed` (its start failed for a reason other than a blocker: `error`).
    */
   TaskAutoStartCancelled: "task.auto_start_cancelled",
   /**

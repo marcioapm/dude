@@ -18,7 +18,7 @@
  * it can be a blank column.
  */
 
-import type { AgentRole, TaskStatus } from "@dude/domain";
+import { notStarted, type AgentRole, type TaskStatus } from "@dude/domain";
 import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, sumTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
 import { askingSession, currentRun, taskTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavTask } from "./navModel.ts";
 
@@ -90,9 +90,9 @@ function toCard(task: NavTask, epic: NavEpic | null, you?: string | null): Board
   };
 }
 
-/** A status before any start: Backlog's. */
+/** A status before any start: Backlog's (the domain's list). */
 export function notStartedStatus(status: TaskStatus): boolean {
-  return BOARD_COLUMN_FOR_STATUS[status] === "backlog";
+  return notStarted(status);
 }
 
 /** Not started, with an open blocker. */

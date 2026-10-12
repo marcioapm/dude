@@ -66,13 +66,23 @@ export function startsWhen(blockers: ReadonlyArray<{ key: string }>): string {
   return `Starts when ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}`;
 }
 
+/** Why start when unblocked would never fire: "CP-38 was marked done with nothing merged and will never merge, …". */
+export function neverMergesRefusal(keys: ReadonlyArray<string>): string {
+  return `${keyList(keys)} ${keys.length === 1 ? "was" : "were"} marked done with nothing merged and will never merge, so this would never start it.`;
+}
+
+/** "Ana" from "Ana Ribeiro": what a sentence calls someone; `fallback` for no name. */
+export function firstName(name: string | null | undefined, fallback = ""): string {
+  return (name ?? "").trim().split(/\s+/)[0] || fallback;
+}
+
 /** How a start when unblocked starts the task. */
 export type AutoStartHow = "deliver" | "talk";
 
 export const AUTO_START_HOW_LABEL: Record<AutoStartHow, string> = { deliver: "Deliver", talk: "Talk it through" };
 
-/** Why a start when unblocked ended without firing (task.auto_start_cancelled's `why`). */
-export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal";
+/** Why a start when unblocked ended without firing (task.auto_start_cancelled's `why`); `failed` carries `error`. */
+export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal" | "failed";
 
 /** One relation as `GET /v1/tasks/:id/relations` lists it. */
 export interface TaskRelationView {

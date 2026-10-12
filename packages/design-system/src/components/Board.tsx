@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useCallback, useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import type { AgentRole } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
@@ -273,6 +273,19 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
     else onSelect({ kind: "task", id: card.task.id }, card.task);
   };
 
+  // A card's handlers are stable, so a memoised card re-renders only when
+  // its own props change (its lit state on a hover): they call through to
+  // this render's closures.
+  const latest = useRef({ light, onKeyDown, select });
+  latest.current = { light, onKeyDown, select };
+  const onCardFocus = useCallback((key: string, taskKey: string | null) => {
+    setFocusedKey(key);
+    latest.current.light(taskKey);
+  }, []);
+  const onCardHover = useCallback((taskKey: string | null) => latest.current.light(taskKey), []);
+  const onCardKeyDown = useCallback((e: KeyboardEvent<HTMLElement>, gi: number, col: number, row: number) => latest.current.onKeyDown(e, gi, col, row), []);
+  const onCardClick = useCallback((card: BoardCard) => latest.current.select(card), []);
+
   const scopeLabel = epic ? epic.title : project.name;
   // The heading says where you are with a face: the project's.
 
@@ -342,7 +355,6 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                   {cards.map((card, ri) => {
                     const key = cardKey(card);
                     const k = card.task.key;
-                    const start = cardStart?.(card, { tabIndex: key === tabStop ? 0 : -1 }) ?? null;
                     return (
                       <BoardCardView
                         key={key}
@@ -351,16 +363,16 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                         showEpic={!epic && !swimlanes}
                         selected={cardContains(card, selectedKey)}
                         tabIndex={key === tabStop ? 0 : -1}
-                        onFocus={() => {
-                          setFocusedKey(key);
-                          light(k ?? null);
-                        }}
-                        onKeyDown={(e) => onKeyDown(e, gi, ci, ri)}
-                        onClick={() => select(card)}
-                        onHover={() => light(k ?? null)}
+                        group={gi}
+                        col={ci}
+                        row={ri}
+                        onFocus={onCardFocus}
+                        onKeyDown={onCardKeyDown}
+                        onClick={onCardClick}
+                        onHover={onCardHover}
                         lit={highlight ? (k === litKey ? "self" : k && highlight.has(k) ? "related" : "dim") : null}
-                        marks={cardMarks ? cardMarks(card) : <DefaultMarks card={card} />}
-                        start={card.column === "backlog" ? start : null}
+                        cardMarks={cardMarks}
+                        cardStart={cardStart}
                       />
                     );
                   })}
@@ -476,17 +488,21 @@ interface BoardCardViewProps {
   readonly now: number;
   readonly showEpic: boolean;
   readonly selected: boolean;
-  readonly tabIndex: number;
-  readonly onFocus: () => void;
-  readonly onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
-  readonly onClick: () => void;
-  readonly onHover: () => void;
+  readonly tabIndex: 0 | -1;
+  /** Where the card is drawn: swimlane, column and row, for the keys that move between cards. */
+  readonly group: number;
+  readonly col: number;
+  readonly row: number;
+  readonly onFocus: (key: string, taskKey: string | null) => void;
+  readonly onKeyDown: (e: KeyboardEvent<HTMLElement>, group: number, col: number, row: number) => void;
+  readonly onClick: (card: BoardCard) => void;
+  readonly onHover: (taskKey: string | null) => void;
   /** Lit by a hovered card: itself, one of its relations, or dimmed; null when nothing is lit. */
   readonly lit: "self" | "related" | "dim" | null;
-  /** Between the title and the foot: relation chips, a start when unblocked. */
-  readonly marks: ReactNode;
+  /** Between the title and the foot: relation chips, a start when unblocked. `DefaultMarks` when absent. */
+  readonly cardMarks: BoardProps["cardMarks"];
   /** A Backlog card's start: after the card in its list item, never inside it. */
-  readonly start: ReactNode;
+  readonly cardStart: BoardProps["cardStart"];
 }
 
 /** The card's name: its key and title, then why it can't start, and when it will. */
@@ -536,10 +552,15 @@ function DefaultMarks({ card }: { readonly card: BoardCard }) {
  * requests' states, how far the working agent's plan has got, and its
  * people with what is happening — the agent working for the owner sits on
  * the owner's face. A Backlog card's start is its sibling, over the foot's
- * right end, which keeps the room for it.
+ * right end, which keeps the room for it. Memoised: a hover re-renders
+ * only the cards whose lit state changes.
  */
-function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKeyDown, onClick, onHover, lit, marks, start }: BoardCardViewProps) {
+const BoardCardView = memo(function BoardCardView({ card, now, showEpic, selected, tabIndex, group, col, row, onFocus, onKeyDown, onClick, onHover,
+  lit, cardMarks, cardStart }: BoardCardViewProps) {
   const wi = card.task;
+  const key = navKey({ kind: "task", id: wi.id });
+  const marks = cardMarks ? cardMarks(card) : <DefaultMarks card={card} />;
+  const start = card.column === "backlog" ? (cardStart?.(card, { tabIndex }) ?? null) : null;
   const spec = statusSpec(wi.status);
   const needsYou = card.triage === "needs_you";
   const since = toMs(wi.statusSince);
@@ -550,12 +571,12 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
   const plan = working?.plan;
   const prs = wi.pullRequests ?? [];
   return (
-    <li className={styles["cardItem"]} onMouseEnter={onHover}>
+    <li className={styles["cardItem"]} onMouseEnter={() => onHover(wi.key ?? null)}>
       <div
         role="button"
         className={cx(styles["card"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"],
           lit === "self" && styles["lit"], lit === "related" && styles["litRelated"], lit === "dim" && styles["dimmed"], Boolean(start) && styles["hasStart"])}
-        data-board-key={navKey({ kind: "task", id: wi.id })}
+        data-board-key={key}
         data-triage={card.triage}
         data-status={wi.status}
         data-blocked={card.blocked || undefined}
@@ -563,16 +584,16 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
         aria-current={selected ? "true" : undefined}
         aria-label={cardName(wi)}
         tabIndex={tabIndex}
-        onFocus={onFocus}
+        onFocus={() => onFocus(key, wi.key ?? null)}
         onKeyDown={(e) => {
           if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
             e.preventDefault();
-            onClick();
+            onClick(card);
             return;
           }
-          onKeyDown(e);
+          onKeyDown(e, group, col, row);
         }}
-        onClick={onClick}
+        onClick={() => onClick(card)}
       >
         <span className={styles["top"]}>
           {wi.key ? <span className={styles["key"]}>{wi.key}</span> : null}
@@ -620,7 +641,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
       {start ? <span className={styles["cardStart"]}>{start}</span> : null}
     </li>
   );
-}
+});
 
 /** Who, and what is happening: the working agent and what it is doing, or where the task stands. */
 function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readonly working: ReadonlyArray<NavSession>; readonly needsYou: boolean }) {

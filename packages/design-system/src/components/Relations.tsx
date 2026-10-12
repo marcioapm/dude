@@ -180,15 +180,18 @@ export function StartGate({ blockers, starts, onStartAnyway, onStartWhenUnblocke
       <span id={reasonId} className="ds-sr-only">{reason}</span>
       {starts.map((s) => (
         <Tooltip key={s.id} content={reason} side="bottom">
-          {/* A focusable wrapper: a disabled button takes no pointer or focus, so its tooltip would never open. */}
-          <span className={styles["gateTrigger"]} tabIndex={0} aria-describedby={reasonId} data-testid={`gate-${s.id}`}>
-            <Button variant="secondary" leadingIcon={s.icon} disabled aria-describedby={reasonId}>{s.label}</Button>
+          {/* A focusable wrapper: a disabled button takes no pointer or focus, so its tooltip would never open.
+              The wrapper is the control assistive tech meets (a button's children are presentational). */}
+          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label={s.label}
+            aria-describedby={reasonId} data-testid={`gate-${s.id}`}>
+            <Button variant="secondary" leadingIcon={s.icon} disabled>{s.label}</Button>
           </span>
         </Tooltip>
       ))}
       {onStartWhenUnblocked && startWhenUnblockedRefused ? (
         <Tooltip content={startWhenUnblockedRefused} side="bottom">
-          <span className={styles["gateTrigger"]} tabIndex={0} aria-describedby={refusedId}>
+          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label="Start when unblocked…"
+            aria-describedby={refusedId}>
             <span id={refusedId} className="ds-sr-only">{startWhenUnblockedRefused}</span>
             <Button variant="quiet" leadingIcon="play" disabled>Start when unblocked…</Button>
           </span>
@@ -475,7 +478,7 @@ export function DependencyStrip({ steps, counts, onOpen, highlight }: Dependency
                   <li key={t.key}>
                     <Tooltip side="bottom" content={<span className={styles["tip"]}><span className={styles["tipTitle"]}>{t.title}</span>
                       {t.blockedBy.length ? <span className={styles["tipHead"]}>Waits on {keyList(t.blockedBy)}</span> : null}</span>}>
-                      <button type="button" className={cx(styles["stripTask"], dim && styles["dim"])} onClick={() => onOpen?.(t.key)} aria-label={name} data-key={t.key}>
+                      <button type="button" className={cx(styles["stripTask"], dim && styles["dim"])} onClick={() => onOpen?.(t.key)} aria-label={name} data-key={t.key} data-dim={dim || undefined}>
                         <RefLead type="task" taskKey={t.key} status={t.status} />
                         {t.startable ? <span className={styles["canStart"]}>can start</span>
                           : t.blockedBy.length ? <Icon name="lock" size={12} className={cx(styles["glyph"], styles["stripLock"])} /> : null}

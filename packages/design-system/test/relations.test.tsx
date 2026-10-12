@@ -58,6 +58,13 @@ describe("StartGate", () => {
       onStartAnyway={() => undefined} onStartWhenUnblocked={() => undefined} />);
     const disabled = [...el.querySelectorAll("button[disabled]")].map((b) => b.textContent);
     expect(disabled).toEqual(["Talk it through", "Deliver"]);
+    // The focusable wrapper is the control a screen reader meets: a disabled
+    // button named for the way, described once by the reason.
+    const deliver = el.querySelector<HTMLElement>('[data-testid="gate-deliver"]')!;
+    expect([deliver.getAttribute("role"), deliver.getAttribute("aria-disabled"), deliver.getAttribute("aria-label")]).toEqual(["button", "true", "Deliver"]);
+    expect(document.getElementById(deliver.getAttribute("aria-describedby")!)?.textContent)
+      .toBe("Blocked by CP-41 (in review) and CP-43 (in progress): it can start once they're merged.");
+    expect(el.querySelectorAll("[aria-describedby]").length).toBe(2);
     expect(el.textContent).toContain("Blocked by CP-41 (in review) and CP-43 (in progress): it can start once they're merged.");
     expect(el.querySelector('[data-testid="start-when-unblocked"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="start-anyway"]')).not.toBeNull();
@@ -136,6 +143,8 @@ describe("RelationList", () => {
     ]} />);
     expect([...el.querySelectorAll("[data-group]")].map((g) => g.getAttribute("data-group"))).toEqual(["blocked-by", "blocks"]);
     expect(el.textContent).toContain("1 of 2 open");
+    // A settled blocker says it merged.
+    expect(el.querySelector('[data-key="CP-43"] button')?.getAttribute("aria-label")).toBe("CP-43 Stripe sync, merged");
     expect(el.querySelector('[aria-label="Remove blocked by CP-41"]')).not.toBeNull();
     expect(el.querySelector('[aria-label="Remove blocks CP-45"]')).toBeNull();
     const row = el.querySelector<HTMLElement>('[data-key="CP-45"] button')!;
@@ -269,5 +278,24 @@ describe("Board", () => {
     expect(el.querySelector('[data-testid="board-lit"]')?.textContent).toBe("CP-41's relations: blocks CP-44.");
     await act(async () => el.querySelector("section")!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
     expect(lit[0]).toBe("CP-41");
+  });
+
+  test("hovering one card re-renders only the cards whose lit state changes", async () => {
+    // cardMarks is called once per card render: a render count by card.
+    const renders = new Map<string, number>();
+    const marks = (card: { task: NavTask }) => {
+      renders.set(card.task.key!, (renders.get(card.task.key!) ?? 0) + 1);
+      return null;
+    };
+    const el = await mount(<Board project={board} cardMarks={marks} />);
+    const hover = async (k: string) => {
+      const item = el.querySelector(`[data-board-key="task:${k}"]`)!.closest("li")!;
+      await act(async () => item.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    };
+    await hover("CP-41");
+    renders.clear();
+    // CP-41 goes from self to related, CP-44 from related to self; the rest stay dim.
+    await hover("CP-44");
+    expect(Object.fromEntries(renders)).toEqual({ "CP-41": 1, "CP-44": 1 });
   });
 });
