@@ -10,7 +10,7 @@ import { useState } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { EventTypes, type PersistedEvent, type SettingsPatch, type SettingsResponse } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
-import { byLabel, byRole } from "../../../packages/design-system/test/queries.ts";
+import { allByRole, byLabel, byRole } from "../../../packages/design-system/test/queries.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { hostMatchers, refusedHostIn, useNetworkNotes } from "../src/networkRefused.tsx";
 import type { ToolTurn } from "../src/api/conversation.ts";
@@ -124,26 +124,28 @@ describe("an organisation's Network page", () => {
     expect(container.querySelector("[data-testid=network-empty]")?.textContent).toContain("Agents can reach only their model.");
   });
 
+  const OFF = "Off — the list above applies to them too";
+  const ON = "On — brainstorm agents may reach any host, to read the web";
+  /** The danger Callout under the switch (role alert), found by its heading words; null when absent. */
+  const risk = (c: Element) => allByRole(c, "alert").find((a) => a.textContent?.startsWith("Anything a page says can steer the agent")) ?? null;
+
   test("Brainstorm sessions: off, the list applies; on, they reach any host, and the page says what that risks", async () => {
     const { container, client } = await organisation();
-    const toggle = () => container.querySelector<HTMLButtonElement>("[data-testid=network-brainstorm-switch]")!;
-    expect(toggle().getAttribute("aria-checked")).toBe("false");
-    expect(container.textContent).toContain("Off — the list above applies to them too");
+    expect(byRole(container, "switch", OFF).getAttribute("aria-checked")).toBe("false");
     expect(container.textContent).toContain("one already started, running or parked, keeps any host until its session starts a new agent");
-    expect(container.querySelector("[data-testid=network-brainstorm-anywhere]")).toBeNull();
-    await click(toggle());
+    expect(risk(container)).toBeNull();
+    await click(byRole(container, "switch", OFF));
     await settle(150);
     expect(client.patches).toEqual([{ network: { brainstorm: true } }]);
-    expect(toggle().getAttribute("aria-checked")).toBe("true");
-    expect(container.textContent).toContain("On — brainstorm agents may reach any host, to read the web");
-    const risk = container.querySelector("[data-testid=network-brainstorm-anywhere]")?.textContent ?? "";
-    for (const said of ["Anything a page says can steer the agent", "read-only checkouts", "model’s key", "malicious page"]) expect(risk).toContain(said);
+    expect(byRole(container, "switch", ON).getAttribute("aria-checked")).toBe("true");
+    const said = risk(container)?.textContent ?? "";
+    for (const words of ["read-only checkouts", "model’s key", "malicious page"]) expect(said).toContain(words);
     // The list every other agent gets is untouched: not Anywhere.
-    expect(container.querySelector("[data-testid=network-anywhere]")).toBeNull();
-    await click(toggle());
+    expect(byRole(container, "switch", "Off — only the list above").getAttribute("aria-checked")).toBe("false");
+    await click(byRole(container, "switch", ON));
     await settle(150);
     expect(client.patches.at(-1)).toEqual({ network: { brainstorm: false } });
-    expect(container.querySelector("[data-testid=network-brainstorm-anywhere]")).toBeNull();
+    expect(risk(container)).toBeNull();
   });
 
   test("a member who may not change it sees Brainstorm sessions disabled", async () => {
@@ -152,9 +154,9 @@ describe("an organisation's Network page", () => {
     client.patches = [];
     client.readOnly = true;
     const { container } = await organisation(client);
-    const toggle = container.querySelector<HTMLButtonElement>("[data-testid=network-brainstorm-switch]")!;
+    const toggle = byRole<HTMLButtonElement>(container, "switch", ON);
     expect([toggle.disabled, toggle.getAttribute("aria-checked")]).toEqual([true, "true"]);
-    expect(container.querySelector("[data-testid=network-brainstorm-anywhere]")).not.toBeNull();
+    expect(risk(container)).not.toBeNull();
   });
 });
 
