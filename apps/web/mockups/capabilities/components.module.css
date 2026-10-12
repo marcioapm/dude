@@ -1,0 +1,177 @@
+/* The proposed components' styles: tokens only, both themes and densities. */
+
+/* ---- LevelChoice: ChoiceList's options laid in a row, told apart by shade; the chosen one by the accent wash. */
+.levelsFrame {
+  container-type: inline-size;
+  width: 100%;
+}
+.levels {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: var(--ds-space-4);
+}
+@container (max-width: 559.98px) {
+  .levels {
+    grid-auto-flow: row;
+  }
+}
+.level {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.level:hover:not([aria-disabled="true"]):not(.levelChosen) {
+  background: var(--ds-color-hover-wash);
+}
+.level:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
+}
+.level[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.levelChosen {
+  background: var(--ds-color-accent-subtle);
+}
+.levelHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.levelDot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--ds-color-border-strong);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-field-bg);
+}
+.levelChosen .levelDot {
+  border: 4px solid var(--ds-color-accent);
+}
+.level[aria-disabled="true"] .levelDot {
+  opacity: 0.5;
+}
+.levelCaution {
+  flex: none;
+  color: var(--ds-tone-danger-fg);
+}
+.levelLabel {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.level[aria-disabled="true"] .levelLabel {
+  color: var(--ds-color-text-disabled);
+}
+.levelTag {
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.levelDescription {
+  padding-left: 22px;
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-muted);
+}
+
+/* ---- CapabilityCell */
+.cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  /* Two lines on a project (value, then its source): the table's own cell air above and below. */
+  padding: var(--ds-space-cell-y) 0;
+}
+.cellValue {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  font: inherit;
+  color: var(--ds-color-text-primary);
+  text-align: left;
+  white-space: nowrap;
+}
+.cellValue:hover {
+  color: var(--ds-color-accent-text);
+  text-decoration: underline;
+}
+.cellValue:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
+}
+.cellIcon {
+  flex: none;
+  color: var(--ds-color-text-secondary);
+}
+.cellOff {
+  color: var(--ds-color-text-muted);
+}
+.cellOff .cellIcon {
+  color: var(--ds-color-text-muted);
+}
+.cellOverridden .cellValue {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.cellSource {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-6);
+}
+
+/* ---- CapabilityChip: MachineChip's grammar. */
+.chip {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  max-width: 100%;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+.chip:hover,
+.chip[data-state$="open"] {
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+}
+.chip:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
+}
+.chipIcon {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
+.chipText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

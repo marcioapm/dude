@@ -1,0 +1,53 @@
+/* The pages' own layout: where DS pieces sit beside each other. No component is restyled here. */
+
+/* A value's source and, on a wider override, the Beyond mark, on one line under the control. */
+.source {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+}
+/* A SettingRow block stacks its parts; space them as the row's own gap does. */
+[data-block="true"] > .source,
+[data-block="true"] > [role="alert"] {
+  margin-top: var(--ds-space-8);
+}
+
+/* Proposed for SettingRow itself (README: "SettingRow stacks on a phone"): under 720px, where
+   SettingsLayout already puts its menu above the page, the label goes over the control. Without it
+   the label column's 180px floor and 40px gap leave a phone's control column a few pixels wide. */
+@media (max-width: 719.98px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+  }
+}
+
+.hintList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+
+.roleCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.roleName {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+/* The session's header meta: the model and what it may do, in one wrapping line. */
+.meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.railNote {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
