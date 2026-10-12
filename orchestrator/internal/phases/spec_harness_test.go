@@ -312,6 +312,18 @@ func TestClaudeCodeSkipsTheWebFetchPreflightOnEveryRole(t *testing.T) {
 	}
 }
 
+// OpenCode never fetches models.opencode.ai, on any role: the image and the
+// Run declare every model it uses.
+func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
+	for role, edit := range everyRole {
+		c, in := goldenInput("claude-sonnet-5")
+		edit(&in)
+		if got := buildSpec(c, in).Env["OPENCODE_DISABLE_MODELS_FETCH"]; got != "1" {
+			t.Errorf("%s: OPENCODE_DISABLE_MODELS_FETCH = %q, want 1", role, got)
+		}
+	}
+}
+
 // A resumed Run goes on with the harness it was submitted on.
 func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	if got := submittedHarness(delivery.HarnessCodex, delivery.HarnessClaudeCode); got != delivery.HarnessCodex {

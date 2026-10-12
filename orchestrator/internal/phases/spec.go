@@ -406,12 +406,15 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 // reading the URL and key from DUDE_LLM_URL and DUDE_LLM_KEY; the Run adds
 // its model, declared under the provider its name goes through with its
 // tier's options and headers, all of which OpenCode deep-merges over that
-// file (OPENCODE_CONFIG_CONTENT).
+// file (OPENCODE_CONFIG_CONTENT). With every model declared there, OpenCode's
+// fetch of models.opencode.ai at start is never needed, and egress refuses
+// it: OPENCODE_DISABLE_MODELS_FETCH turns it off.
 func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if c.LLMURL != "" {
 		spec.Env["DUDE_LLM_URL"] = c.LLMURL
 	}
 	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
+	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}

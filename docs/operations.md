@@ -631,7 +631,11 @@ its model:
   (`phases.openCodeConfig`; the mapping per provider is in
   [`design/model-tiers.md`](design/model-tiers.md)). OpenCode deep-merges it
   over its file config, so a model the file declares keeps its `limit` and
-  `reasoning`.
+  `reasoning`;
+- `OPENCODE_DISABLE_MODELS_FETCH=1`: OpenCode otherwise fetches
+  `models.opencode.ai` at start, which egress refuses and which nothing
+  needs, since the image's file and the Run's inline config declare every
+  model the Run uses.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read

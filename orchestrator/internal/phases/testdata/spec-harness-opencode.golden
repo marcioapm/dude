@@ -63,6 +63,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -192,6 +193,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"effort\":\"high\",\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -321,6 +323,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"type\":\"disabled\"}}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -449,6 +452,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -578,6 +582,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningEffort\":\"high\",\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -707,6 +712,7 @@
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
       "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_DISABLE_MODELS_FETCH": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
