@@ -569,13 +569,13 @@ describe("a steer read at the agent's next step", () => {
 describe("an ask's tool row and the question it asked", () => {
   // As prod writes them: dude's handler records the question and its own
   // call, then the harness reports the call that made them.
-  const ask = (questionId: string, call: string, tool = "ask_person", recorded = "ask_person") => [
-    asked(questionId), dudeRecord(questionId, recorded), called(call, tool),
+  const ask = (questionId: string, call: string, tool = "ask_person", recorded = "ask_person", args: Record<string, unknown> = {}) => [
+    asked(questionId), dudeRecord(questionId, recorded, args), called(call, tool),
     ev(EventTypes.ToolCompleted, { tool, callId: call, status: "completed" }),
   ];
   const asked = (questionId: string) => ev(EventTypes.QuestionAsked, { kind: "agent", questionId, prompt: `Q ${questionId}?` });
-  const dudeRecord = (questionId: string, tool = "ask_person") =>
-    ev("agent.tool.dude", { tool, arguments: {}, result: { questionId, next: "End your turn now." } });
+  const dudeRecord = (questionId: string, tool = "ask_person", args: Record<string, unknown> = {}) =>
+    ev("agent.tool.dude", { tool, arguments: args, result: { questionId, next: "End your turn now." } });
   const called = (call: string, tool = "ask_person") => ev(EventTypes.ToolCalled, { tool, callId: call, input: {} });
   const order = (events: PersistedEvent[]) =>
     project(events).turns.map((t) => (t.kind === "tool" ? `tool:${t.id}` : t.kind === "question" ? `q:${t.questionId}` : t.kind));
@@ -602,7 +602,26 @@ describe("an ask's tool row and the question it asked", () => {
   });
 
   test("a conductor's decide(ask_person) pairs with its question the same way", () => {
-    expect(order(ask("q_1", "c_1", "decide", "decide"))).toEqual(["tool:c_1", "q:q_1"]);
+    expect(order(ask("q_1", "c_1", "decide", "decide", { action: "ask_person", note: "Open it?" }))).toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("a dude tool that names a question it did not ask does not pair with it", () => {
+    // decide_escalation answers the escalation its question asked about: q_1 is already answered.
+    const events = [...ask("q_1", "c_1"), ev(EventTypes.QuestionAnswered, { questionId: "q_1", answer: "Retry" }),
+      ev("agent.tool.dude", { tool: "decide_escalation", arguments: { action: "retry" }, result: { decided: "retry", questionId: "q_1" } }),
+      called("c_2", "decide_escalation")];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+    // A question already answered is not paired, even by an ask's own name.
+    const answered = [asked("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes" }), dudeRecord("q_2"), called("c_3")];
+    expect(order(answered)).toEqual(["q:q_2", "tool:c_3"]);
+    // Nor an open one named by a tool that does not ask.
+    expect(order([asked("q_3"), dudeRecord("q_3", "remember"), called("c_4", "remember")])).toEqual(["q:q_3", "tool:c_4"]);
+  });
+
+  test("a record that names no projected question pairs with nothing", () => {
+    const other = ev("agent.tool.dude", { tool: "remember", arguments: {}, result: { saved: true } });
+    expect(order([...ask("q_1", "c_1"), other, called("c_2", "remember")])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+    expect(order([asked("q_4"), dudeRecord("q_unknown"), called("c_5")])).toEqual(["q:q_4", "tool:c_5"]);
   });
 
   test("a call reported before its question stays where it is", () => {

@@ -961,10 +961,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case "agent.tool.dude": {
         // dude's record of one of its tools, written while handling the
-        // call: an ask names the question it just asked.
+        // call: an ask (ask_person, or a conductor's decide, which returns a
+        // question only when it asks) names the open question it just
+        // asked. decide_escalation names the answered one it acts on.
+        const name = String(payload.tool ?? "");
+        const asks = name === "ask_person" || name === "decide";
         const result = payload.result as Record<string, unknown> | null | undefined;
-        const question = typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
-        state.pendingAsk = question ? { tool: String(payload.tool ?? ""), question } : null;
+        const question = asks && typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
+        const open = question !== undefined && question.answeredAt === null && question.closedAt === null;
+        state.pendingAsk = open ? { tool: name, question } : null;
         break;
       }
 
