@@ -9,7 +9,7 @@
  * the orchestrator wakes, or replaces once it ended.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
@@ -102,7 +102,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   }, [client, task.id, version]);
   const conductorCost = conductorId ? runCosts.get(conductorId) ?? null : null;
 
-  const line = taskHistory(task, findings, pullRequests, costUsd, formatUsd);
+  const line = taskHistory(task, findings, pullRequests, costUsd, formatUsd, events);
   const lineKey = [line.lead, ...line.steps, "|", ...line.facts].join("\u0000");
   const head = useMemo(() => (
     <TaskHistory data-testid="chat-history" lead={line.lead} steps={line.steps} facts={line.facts} />
@@ -236,7 +236,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
               to={first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>}
             />
           }
-        />
+        >
+          {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+        </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
     </div>
