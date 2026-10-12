@@ -155,7 +155,8 @@ type specInput struct {
 	// What it may reach besides the operator's floor (RunEgress).
 	Egress []string
 	// Any host, whatever Egress and the operator's floor say: a brainstorm
-	// of an organisation that lets them read the web (brainstorm_anywhere).
+	// whose network is unrestricted (Syncer.brainstormAnywhere), from
+	// brainstorm_anywhere or "*" in either list.
 	Anywhere bool
 }
 

@@ -369,8 +369,9 @@ const brainstormToolsNote = "The dude tools read the linked projects: list_tasks
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
 	"and what others say meanwhile reaches you with the answer."
 
-// brainstormWebNote is said only to a brainstorm that may reach any host
-// (brainstorm_anywhere). It is dude's, after the instructions, so an
+// brainstormWebNote is said only to a brainstorm whose network is
+// unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
+// or "*" in either list. It is dude's, after the instructions, so an
 // organisation's own prompt does not drop it.
 const brainstormWebNote = "You can read the web: search for and fetch public pages when the conversation needs " +
 	"facts from outside the linked repositories. Say where each fact came from, with its URL."
