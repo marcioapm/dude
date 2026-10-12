@@ -37,8 +37,8 @@ card and the epic should show that order.
 | `duplicates` *(later)* | A → B | Duplicates B | Duplicated by A | not mocked; it would close A |
 
 **"Depends on" is not stored.** It is `blocks` read from B's side. The
-tools accept `dependsOn` / `blockedBy` as a convenience, and both write the
-reverse `blocks` edge, so there is exactly one row per fact.
+tools accept `blockedBy` and write the reverse `blocks` edge, so there is
+exactly one row per fact.
 
 ### Wording: "Blocked by" / "Blocks"
 
@@ -118,11 +118,11 @@ epic's counts say "merged" and "done, nothing merged" apart.
 Both are refused at write time, in the same transaction as the insert:
 
 - `from_task = to_task` is a `CHECK`.
-- A cycle is refused by a recursive walk from `to_task` along `blocks` edges
-  looking for `from_task`, run under `SELECT … FOR UPDATE` on the
-  organisation's relation lock (`pg_advisory_xact_lock(hashtext('task_relations:' || org))`),
-  so two concurrent inserts can't each close half a loop. Chains are short
-  (tens of edges), so the walk is cheap. The refusal names the loop:
+- A cycle is refused by deduplicated reachability from `to_task` along
+  `blocks` edges, looking for `from_task`, under the organisation's
+  advisory relation lock (`pg_advisory_xact_lock(hashtext('task_relations:' || org))`).
+  Two concurrent inserts cannot each close half a loop. Only a reachable
+  source triggers breadth-first witness reconstruction. The refusal names the loop:
   `CP-40 → CP-41 → CP-44 → CP-40` (screen *cycle*). The person is offered a
   one-click fix, "Make it Related instead" (`Input`'s `errorAction`
   grammar). An agent gets the same words as a tool refusal.
@@ -155,9 +155,9 @@ project face on the chip would crowd the one line it has.
   (the edge A → B is B's: it is B's start that it holds), whichever page it
   is removed from: on CP-41's page, the "Blocks CP-44" row is Márcio's to
   remove, not Ana's. A `related` edge belongs to both tasks, so either
-  owner may remove it. The orchestrator's `ownerOnly` (`api/api.go:412`)
-  already says this for picking a task back up and answering its agents,
-  and the route reuses it with the verb "remove a relation from".
+  owner may remove it; when a task has no owner, any member may remove its
+  relation. The backend's `removal` helper computes the same permission for
+  DELETE and for `canRemove` in the reader's view.
 - **Anyone else sees no remove.** The DS's rule is that a way to act is
   **disabled with its reason, never missing**, when the reader could act
   but not now (README, *Brainstorm sessions*: "the way to act is never
@@ -190,13 +190,14 @@ project face on the chip would crowd the one line it has.
 ## Gating: every start path
 
 "Start" here means anything that moves a not-started task (`received`,
-`intake`, `awaiting_confirmation`, `queued`: `notStarted` in
-`orchestrator/internal/api/chat.go:251`) toward running an agent on it.
+`intake`, `awaiting_confirmation`, `queued`: `delivery.NotStarted` in
+`orchestrator/internal/delivery/unblock.go`) toward running an agent on it.
 Every path found in the code is listed below, with where its guard sits.
 **One function owns the rule**: `delivery.RefuseBlockedTx(ctx, tx, taskID)
 error`. It locks the task row, reads the task's open blockers through
 `task_blocked_by` (every `blocks` edge whose `from` has not merged), and
-returns a `Refusal` (`fail(409, "blocked", …)` from the API) whose words
+returns a `BlockedError` (mapped to 409 `blocked` by the API and to a
+`Refusal` by path 4) whose words
 are the same on every path:
 
 > CP-44 is blocked by CP-41 (in review) and CP-43 (in progress): it can
@@ -209,19 +210,16 @@ are the same on every path:
 | 3 | **A first message in an unstarted task's Chat**. It is Talk it through without the button | `chat` `chat.go:31` → `decideFor` → `talkThrough` | the same guard as 2. The message is refused with the reason, and the composer keeps the words (`onSubmit` resolving `false`) |
 | 4 | **The conductor's first `start_phase implement`** (or `decide next` at `PointStart`) on a conducted delivery | agent tool `start_phase` `orchestrator/internal/agenttools/conductor.go:279` → `delivery.ConductStartPhase` `orchestrator/internal/delivery/conduct.go:185`; `decide` → `ConductDecide` `conduct.go:336`; carried out by `implementRun` `delivery/workflow.go:398` | in `ConductStartPhase` and `ConductDecide` when the decision point is `PointStart` (`decisions.go:34`). The conductor gets the refusal as a tool error, and its prompt tells it to tell the person and stop. Paths 2 and 3 already refuse to make the delivery, so this guard covers only a relation added *while* the conductor plans (screen *history*: "Ana's conductor added blocked by CP-40") |
 | 5 | **The workflow's own `implement` step** (Deliver's first step, and a conducted delivery after its first decision) | `steps.implement` `delivery/workflow.go:380` → `implementRun` `workflow.go:398` → `CreatePhaseRun` | `RefuseBlockedTx` at the top of `implementRun`, **only when no implementer has run on this attempt** (`st.Retries == 0` and no implement Run in `st`). A refusal here doesn't fail the workflow: it parks on a new signal `relations.unblocked` and sets the task back to `queued` with reason "blocked by CP-41". This is the backstop for an edge added between Deliver and the step running |
-| 6 | **Start over** (a new attempt) | web `PickUpDialog` → `recoverTask` `work.ts:251` → `recoverTask` `orchestrator/internal/api/recover.go:205` → `startOver` `recover.go:325` | **not guarded**, as mocked. Still open (*open question 1*); the proposal pending Márcio is to guard it |
-| 7 | **Resume / Try again** | `recoverTask` → `pickUp` `recover.go:294` | **not guarded**, as mocked. Still open (*open question 1*); the proposal pending Márcio is to keep it so |
+| 6 | **Start over** (a new attempt) | web `PickUpDialog` → `recoverTask` `work.ts:251` → `recoverTask` `orchestrator/internal/api/recover.go:205` → `startOver` `recover.go:325` | **guarded**: `GuardStartTx` in `recoverTask` before `startOver`, refused with the same 409 and recorded as `task.start_refused {path: "start_over"}`. A person's **Start over anyway** (`override: true`) records `task.start_overridden` and marks the new attempt overridden, so its implement step does not park (see *Start over and Try again*) |
+| 7 | **Resume / Try again** | `recoverTask` → `pickUp` `recover.go:294` | **not guarded**: they carry on the same attempt, whose blockers were merged or overridden at its first start (see *Start over and Try again*) |
 | 8 | **`POST /v1/tasks/:id/runs`** (a bare Run, status `queued`) | backend `createRun` `work.ts:301`, task set `queued` at `work.ts:326`; used by tests (`tests/helpers.py:145`) and `ApiClient.createRun` `apps/web/src/api/client.ts:641` (no screen calls it) | refused with the same 409 in the backend, in the `withOrg` transaction before the insert, by a SQL function `task_blocked_by(task_id)` that both processes call, so the backend need not reimplement the rule. Raw SQL is needed for this: neither `Bun.sql` nor pgx has a query builder for a recursive CTE here, and the repo writes its SQL raw by convention (CONTRIBUTING, *Decisions*) |
 | 9 | **Filing a proposal** | `fileProposal` `orchestrator/internal/api/sessions.go:664` → `fileItem` `sessions.go:785` → `delivery.CreateTaskTx` `delivery/filing.go:57` | filing never starts work ("Nothing starts", `ProposalCard`), so there is nothing to gate. Filing does **write** the proposal's relations (see *Propose work*) |
 | 10 | **`create_task`** by an agent | `createTask` `agenttools/tools.go:219`, status `received` (`tools.go:256`) | creates, never starts. It may write relations, and nothing is gated |
-| 11 | **Start when unblocked** *(new)*: the owner's standing request, fired by the merge that releases the task's last blocker | `task.unblocked` in `RecordStatusTx` (see *Start when unblocked*) → `delivery.StartWhenUnblockedTx` → the same start as path 1 (Deliver) or path 2 (Talk it through), in that transaction | `RefuseBlockedTx` again, **at fire time**, re-reading every blocker: an edge added since it was set, or a second blocker still open, means nothing starts and the request stays set. It goes through the same guard as 1 and 2, not around it |
+| 11 | **Start when unblocked** *(new)*: the owner's standing request, released by the merge of the task's last blocker | the merge (`RecordStatusTx` → `releaseDependantsTx`) only marks the request due (`due_at`); **after it commits**, the auto-start worker (`delivery.AutoStarts.Sweep`, `delivery/unblock.go`) takes each due request `FOR UPDATE SKIP LOCKED`, in a transaction of its own, and starts it through `delivery.StartTx`, the same start as path 1 (Deliver) or path 2 (Talk it through), as dude for the person who set it | `RefuseBlockedTx` again, **at fire time**, re-reading every blocker: an edge added since it was set, or a second blocker still open, means nothing starts and the request stays set, no longer due. `StartTx`'s own guard follows. A start that fails for any other reason ends the request (`task.auto_start_cancelled {why: "failed", error}`) and says so in Chat. Never in the merge's transaction: a failed start must not roll a merge back |
 
-No auto-start exists today: nothing in the orchestrator moves a `received`
-or `queued` task to running on its own, because the workflow only begins
-from paths 1 to 5. Path 11 is the one this proposal adds, and it is opt-in
-per task. Confirming a plan (`awaiting_confirmation`) isn't
-reachable from any route today (`chat.go:253` only lists it), so it has no
-path of its own. When it is built, it goes through the same guard.
+Path 11 is the opt-in auto-start added by this build. Confirming a plan
+(`awaiting_confirmation`) has no route of its own; any future route must
+use the same guard.
 
 ### Start over and Try again
 
@@ -235,12 +233,11 @@ Start over is guarded, with Start anyway.
 - **Start over is a fresh attempt from `main`** (`startOver`,
   `recover.go:325`, a new branch `dude/<task>/attempt-N`). It is a start in
   every sense that matters to the rule: its agents read a `main` that must
-  hold what the task waits on. It gets **the same guard** (`RefuseBlockedTx`
-  in `startOver`, before the new branch is named) and the **same Start
-  anyway escape**: in `PickUpDialog`, Start over is then a `ChoiceList`
-  option disabled with the reason ("Blocked by CP-38 (failed): it can start
-  once that's merged") and, for a person, "Start over anyway…" opens the
-  Start anyway dialog with the start way preset to the task's last.
+  hold what the task waits on. It gets **the same guard** (`GuardStartTx`
+  in `recoverTask`, before the new attempt starts) and the **Start over
+  anyway escape** in `PickUpDialog`: a refused
+  confirmation names the blockers and offers Start over anyway in its
+  footer, sending the same request with `override: true`. No second dialog.
 
 ### Override: "Start anyway"
 
@@ -276,7 +273,8 @@ Start over is guarded, with Start anyway.
 ### Unblocking
 
 - **The event fires on a merge, not on every move to done.** In
-  `delivery.RecordStatusTx` (`delivery/store.go:497`), the one place every
+  `delivery.RecordStatusTx` (`delivery/store.go:498`, which calls
+  `releaseDependantsTx` in `delivery/unblock.go`), the one place every
   status change is recorded: when `status = 'done'` **and** the task has a
   pull request whose `state = 'merged'` (the `pull_requests` rows are
   written by the PR syncer before `pullRequestEnded` reads them, so they are
@@ -305,7 +303,8 @@ Start over is guarded, with Start anyway.
   `relations.unblocked` there too, and **resumes**: a person already chose
   its way when they pressed Deliver, and the park was only the guard
   catching a late edge. It re-runs `RefuseBlockedTx` before it resumes, as a
-  request does.
+  request does. Removing its last blocker signals it too, from either
+  writer (the backend's route, an agent's `update_task`).
 
 ### Start when unblocked
 
@@ -364,25 +363,37 @@ would help says so in Chat, and the owner sets it.
 
 **When it fires** (path 11).
 
-1. The merge's transaction (`RecordStatusTx`, above) appends `task.unblocked`
-   on the released task and, if the task has a row in `task_auto_starts`,
-   marks it due (`due_at = now()`). **Nothing starts in that transaction**:
-   a start that fails (a project with several repositories and none named,
-   `NameOnlyRepository`) must never roll back a merge's status.
-2. The orchestrator's worker loop (the one `s.kick()` wakes) takes due rows
-   `FOR UPDATE SKIP LOCKED`, one transaction per task, which makes the
-   request durable across a restart and run exactly once.
+1. The merge's transaction (`RecordStatusTx` → `releaseDependantsTx`)
+   first locks the dependants' task rows in id order (`FOR NO KEY UPDATE`,
+   the lock `RefuseBlockedTx` takes), so two blockers merging in
+   overlapping transactions are serialised and the second sees the first;
+   then it appends `task.unblocked` on a released task and, if the task has
+   a row in `task_auto_starts`, marks it due (`due_at = now()`). **Nothing
+   starts in that transaction**: a start that fails must never roll back a
+   merge's status.
+2. The orchestrator's auto-start loop (`delivery.AutoStarts.Sweep`, every
+   second in `cmd/dude-orchestrator`) takes due rows `FOR UPDATE SKIP
+   LOCKED`, one transaction per task, which makes the request durable
+   across a restart and run exactly once.
 3. In that transaction, **`RefuseBlockedTx` runs again and re-checks every
    blocker**, not only the one that merged: an edge added since the request
    was set, or a second blocker still open, refuses it. A refusal leaves the
    row in place (no longer due), so the request waits for the next merge.
-4. If it passes, it starts through **the same function the routes use**:
-   the bodies of `deliver` (`api.go:270`) and `talkThrough` (`chat.go:262`)
-   move into `delivery.StartTx(ctx, tx, org, taskID, how, writer)`, which
-   both routes and the worker call, so a fired start is the same start a
-   person makes, with the same guard (`RefuseBlockedTx`) at its top. The
-   writer is the system actor, and the person who set it is carried in the
-   payload. The row is deleted.
+   (`StartTx`'s guard reads them again, but it skips that when joining a
+   live delivery, which a delivery parked at path 5 is; the fire-time check
+   does not.)
+4. If it passes, it starts through **the same function the routes use**,
+   `delivery.StartTx(ctx, tx, starter, StartInput{…})`, which `deliver`,
+   `talkThrough` and the worker all call, so a fired start is the same start
+   a person makes, with the same guard at its top. The writer is the system
+   actor, and the person who set it is carried in the payload. The row is
+   deleted.
+5. If the start fails for any other reason than a blocker (a policy that
+   does not decode, for one), nothing retries it: the request ends
+   (`task.auto_start_cancelled {why: "failed", error}`), and Chat says "CP-41
+   merged, but CP-42 could not start: <error>. Start it from its page."
+   Kept standing, hidden behind a task that shows as startable, it would
+   fire on some unrelated later merge.
 
 **What it says when it fires** (screens *history-chat*, *history*):
 
@@ -395,13 +406,17 @@ would help says so in Chat, and the owner sets it.
   unblocked — Deliver" stays below it.
 - Refused at fire time: "CP-41 merged, but CP-42 is still blocked by CP-40
   (in review): it starts when that merges, as Ana asked." Nothing else.
+- Failed at fire time: "CP-41 merged, but CP-42 could not start: <error>.
+  Start it from its page." Activity: "Start when unblocked could not start
+  it: <error>. It is no longer set: start it from here."
 
 **What ends a request without firing.** The owner's Cancel
 (`task.auto_start_cancelled`); any start of the task (Deliver, Talk it
 through, Start anyway: the request is consumed); the task changing owner (the
-new owner didn't ask for it; Activity says it was dropped); and removing the
+new owner didn't ask for it; Activity says it was dropped); removing the
 task's last open blocker relation (the owner is present and acting, so the
-task becomes startable and the request ends, saying so).
+task becomes startable and the request ends, saying so); and a start that
+failed at fire time for a reason other than a blocker.
 
 ### With agent comms
 
@@ -833,16 +848,17 @@ CREATE INDEX task_auto_starts_due_idx ON task_auto_starts (due_at) WHERE due_at 
 -- RLS as above.
 ```
 
-`task_blocked_by(task text) RETURNS TABLE(key text, status task_status)`
+`task_blocked_by(task text) RETURNS TABLE(key text, status task_status, id text)`
 is a `STABLE` SQL function returning the **open blockers**: every `blocks`
 edge into `task` whose `from` task is not *merged*, where merged means
 `status = 'done'` and at least one of its `pull_requests` rows has
 `state = 'merged'`:
 
 ```sql
-SELECT b.key, b.status
+SELECT p.key_prefix || '-' || b.number AS key, b.status, b.id
   FROM task_relations r
   JOIN tasks b ON b.id = r.from_task_id
+  JOIN projects p ON p.id = b.project_id
  WHERE r.to_task_id = $1 AND r.kind = 'blocks'
    AND NOT (b.status = 'done'
             AND EXISTS (SELECT 1 FROM pull_requests p
@@ -854,9 +870,13 @@ A blocker marked done with nothing merged is therefore returned with status
 "done, nothing merged". Both processes call it (path 8 in the backend, `RefuseBlockedTx` in the
 orchestrator, and the fire-time re-check of path 11), so the rule lives in
 one place. The cycle check is
-`task_relation_would_cycle(from text, to text) RETURNS text[]`, a recursive
-CTE returning the loop's keys or NULL, called after taking the advisory
-lock above. Both are raw SQL because neither `Bun.sql` nor pgx gives this
+`task_relation_would_cycle(from text, to text) RETURNS text[]`, returning
+the loop's keys or NULL, called after taking the advisory lock above. It
+visits each task once: a `UNION` reachability walk from `to`, and only when
+`from` is reached a breadth-first pass keeping one parent per task to name
+the shortest loop. (Walking every path instead is exponential on a plan
+shaped like a ladder, and would hold the organisation's lock while it
+ran.) Both are raw SQL because neither `Bun.sql` nor pgx gives this
 repo a query builder for a function body or a recursive CTE, and the repo
 writes its SQL raw by convention (CONTRIBUTING, *Decisions*).
 
@@ -871,8 +891,9 @@ writes its SQL raw by convention (CONTRIBUTING, *Decisions*).
   Any member.
 - `DELETE /v1/tasks/:id/relations/:kind/:other`: the edge's owner only
   (the blocked task's for `blocks`, either task's for `related`); anyone
-  else gets 403 `not_owner` "only Ana can remove this relation — it holds
-  up her task".
+  else gets 403 `not_owner`: "only Ana can remove this relation — it holds
+  up their task" for `blocks`, "… — it's on their task" for `related`, which
+  holds nothing up.
 - `PUT /v1/tasks/:id/auto-start {how: "deliver"|"talk"}` and `DELETE
   /v1/tasks/:id/auto-start`: the task's owner only (403 `not_owner`); 409
   `not_blocked` on a task with nothing open in front of it ("it can start
@@ -894,10 +915,10 @@ them only through agent tools and filing, in the same SQL.
 | `task.relation_removed` | `{kind, from, to}` on both | the edge's owner, or an agent Run of the task whose agents added it |
 | `task.unblocked` | `{by: key, pr: number, blockers: []}` (the blocker whose merge released it last, and that none is left) | system, from `RecordStatusTx`, **only on a merge**: never on a move to `done` with nothing merged |
 | `task.auto_start_set` | `{how}` | the task's owner |
-| `task.auto_start_cancelled` | `{how, why: "owner"\|"started"\|"owner_changed"\|"unblocked_by_removal"}` | the owner, or system |
-| `task.auto_started` | `{how, by: key, setBy: person, setAt}` | system, for the person who set it; the start's own events follow in the same transaction |
-| `task.auto_start_refused` | `{blockers}` (still open at fire time) | system |
-| `task.start_refused` | `{path: "deliver"\|"talk"\|"chat"\|"start_phase"\|"implement"\|"create_run"\|"start_over"\|"auto_start", blockers}` | whoever tried; makes refusals auditable, never shown as a line |
+| `task.auto_start_cancelled` | `{how, why: "owner"\|"started"\|"owner_changed"\|"unblocked_by_removal"\|"failed", error?}` (`error` with `failed`: the start failed at fire time for a reason other than a blocker) | the owner, or system |
+| `task.auto_started` | `{how, by: key, pr?, setBy: person, setByName, setAt}` | system, for the person who set it; the start's own events follow in the same transaction |
+| `task.auto_start_refused` | `{by, blockers}` (still open at fire time) | system |
+| `task.start_refused` | `{path: "deliver"\|"talk"\|"chat"\|"start_phase"\|"implement"\|"create_run"\|"start_over"\|"auto_start", blockers}` | whoever tried; makes refusals auditable, never shown as a line. A refusal that rolls its call back (paths 1–4, 6) is recorded in a transaction of its own; `start_phase` covers both the conductor's `start_phase` and `decide next` |
 | `task.start_overridden` | `{blockers: [{key, status}], how, note}` (later: `mode`, `base`, `channel`) | person |
 
 The live stream (`relations.changed`, browser-only) tells a board or task
@@ -920,10 +941,12 @@ page to read again, as `servers.changed` does.
 
 ## Design-system changes
 
-Everything below is built in the mockup folder at DS quality (tokens only,
-both themes, both densities, accessible names). Nothing in
-`packages/design-system` changes in this branch. Each piece gets a gallery
-`Block` with every state in both themes (`Panes mode`).
+The pieces below were drawn in the mockup folder at DS quality (tokens
+only, both themes, both densities, accessible names) and are built in
+`packages/design-system` in this branch (`components/Relations.tsx`,
+`RelationDialogs.tsx`, the board's marks and card start in `Board.tsx`).
+Each has a gallery `Block` with every state in both themes (`Panes mode`),
+in the gallery's `relations` section.
 
 ### `Icon`: `lock`, `blocks`
 
@@ -989,6 +1012,11 @@ interface BoardProps {
   not a triage bucket: blocked needs nobody."
 - `test/borders.test.ts` needs no entry: the lit card reuses `selected`'s
   inset bar.
+- A hover re-renders only the cards whose lit state changes: each card is
+  memoised, its handlers stable and keyed, and `cardMarks`/`cardStart` are
+  called inside it. The web app keeps the lit card out of its top-level
+  state (`useLitCard`), so a hover redraws the epic's order and nothing
+  else of the shell.
 - Gallery, *Board*: the relations fixture lit on a blocker, on a blocked
   task, and on a card with none; the filter on each value; swimlanes with a
   chain across two epics; a Backlog with an unblocked card, a blocked card
@@ -1130,6 +1158,10 @@ interface StartGateProps {
   and **Start anyway…**, which opens a `Dialog tone="attention"` naming
   each blocker and what starting now means. Keep waiting has the focus. An
   agent has no way to override or to set a start for later."
+- Each disabled way sits in a focusable wrapper (a disabled button takes
+  no focus, so its tooltip would never open). The wrapper is the control
+  assistive tech meets: `role="button" aria-disabled="true"`, the way's
+  label, and the reason as its one description.
 - Gallery: one blocker, two, a failed blocker, a blocker done with nothing
   merged, as owner and not, and without `onStartAnyway`. The override
   dialog is shown in both start ways.
@@ -1221,8 +1253,9 @@ Where the build departs from the text above:
   minutes) and sets the task queued, "blocked by …". A person's Start anyway
   releases it (`OverrideParkedTx`).
 - **The conductor's first implementer (path 4)** is refused inside the
-  tool's transaction, which rolls back, so no `task.start_refused` is kept
-  for it.
+  tool's transaction, which rolls back; the tools server then records
+  `task.start_refused {path: "start_phase"}` as the conductor's, in a
+  transaction of its own, as the API's refusals are.
 - **Mark done with nothing merged** records `task.blocker_unmerged {by,
   person?}` on each dependant, for Activity's "marked done by Tom with
   nothing merged" line.
