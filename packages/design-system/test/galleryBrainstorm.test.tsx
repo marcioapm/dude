@@ -142,7 +142,11 @@ test("the rail's Model: the owner's chip, chosen and read only, each with when a
     expect(readOnly.querySelectorAll("button").length).toBe(0);
     expect(readOnly.textContent).toContain("Model: Coder on Claude Code");
     for (const block of [chosen, readOnly]) expect(block.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
+    const applied = pane.querySelector("[data-testid=model-applied]")!;
+    expect(applied.getAttribute("role")).toBe("note");
+    expect(applied.textContent).toContain("Started a fresh agent on Sol · Codex; it has the conversation so far.");
   }
+  expect(new Set(panes.map((p) => p.getAttribute("data-theme")))).toEqual(new Set(["dark", "light"]));
   for (const pane of el.querySelectorAll("#bs-rail [data-theme][data-density]")) {
     expect(pane.querySelector("[data-testid=rail-model]")!.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
   }

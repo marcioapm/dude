@@ -232,7 +232,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-rail-model" title="The rail's Model"
-        note="The owner's chip on a chosen pair (no default mark), and a member's read-only chip on the hover wash with nothing to open. Under each, muted: when a change applies.">
+        note="The owner's chip on a chosen pair (no default mark), and a member's read-only chip on the hover wash with nothing to open. Under each, muted: when a change applies. Below, the Chat's two lines for a change: who set it, then the fresh agent that took over at the next message.">
         <Panes mode={mode}>
           <div style={{ width: 300 }}>
             <SessionRail>
@@ -245,6 +245,8 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
                 <span className={styles["railNote"]}>{RAIL_MODEL_NOTE}</span>
               </SessionRailBlock>
             </SessionRail>
+            <ChatNotice kind="notice" text="Ana set the model to Sol · Codex; it applies from the next message." at={Date.now() - 120_000} />
+            <ChatNotice kind="notice" data-testid="model-applied" text="Started a fresh agent on Sol · Codex; it has the conversation so far." at={Date.now()} />
           </div>
         </Panes>
       </Block>
