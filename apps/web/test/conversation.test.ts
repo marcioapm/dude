@@ -611,16 +611,23 @@ describe("an ask's tool row and the question it asked", () => {
       ev("agent.tool.dude", { tool: "decide_escalation", arguments: { action: "retry" }, result: { decided: "retry", questionId: "q_1" } }),
       called("c_2", "decide_escalation")];
     expect(order(events)).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
-    // A question already answered is not paired, even by an ask's own name.
+  });
+
+  test("a question already answered does not pair, even with an ask's own record", () => {
     const answered = [asked("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes" }), dudeRecord("q_2"), called("c_3")];
     expect(order(answered)).toEqual(["q:q_2", "tool:c_3"]);
-    // Nor an open one named by a tool that does not ask.
+  });
+
+  test("an open question named by a tool that does not ask does not pair", () => {
     expect(order([asked("q_3"), dudeRecord("q_3", "remember"), called("c_4", "remember")])).toEqual(["q:q_3", "tool:c_4"]);
   });
 
   test("a record that names no projected question pairs with nothing", () => {
     const other = ev("agent.tool.dude", { tool: "remember", arguments: {}, result: { saved: true } });
     expect(order([...ask("q_1", "c_1"), other, called("c_2", "remember")])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+  });
+
+  test("an ask's record naming an unknown question pairs with nothing", () => {
     expect(order([asked("q_4"), dudeRecord("q_unknown"), called("c_5")])).toEqual(["q:q_4", "tool:c_5"]);
   });
 
@@ -642,7 +649,9 @@ describe("an ask's tool row and the question it asked", () => {
   test("an unrelated tool after a question is not moved", () => {
     expect(order([...ask("q_1", "c_1"), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c_2", input: {} })]))
       .toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
-    // A different tool reported first is not the ask's, and ends the pairing.
+  });
+
+  test("a different tool reported first is not the ask's, and ends the pairing", () => {
     expect(order([asked("q_1"), dudeRecord("q_1"), called("c_2", "bash"), called("c_1")]))
       .toEqual(["q:q_1", "tool:c_2", "tool:c_1"]);
   });
@@ -650,6 +659,9 @@ describe("an ask's tool row and the question it asked", () => {
   test("a person's turn after the question keeps the question where it is", () => {
     expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.RunSteered, { text: "Also check X.", directiveId: "d_1" }), called("c_1")]))
       .toEqual(["q:q_1", "human", "tool:c_1"]);
+  });
+
+  test("an answer's note after the question keeps the question where it is", () => {
     expect(order([asked("q_2"), dudeRecord("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes", note: "And hurry." }),
       called("c_2")])).toEqual(["q:q_2", "human", "tool:c_2"]);
   });
@@ -658,7 +670,9 @@ describe("an ask's tool row and the question it asked", () => {
     const first = ask("q_1", "c_1");
     const refused = [called("c_2"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_2", status: "error" })];
     expect(order([...first, ...refused])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
-    // Asked through the dude CLI: the bash call's completion ends the pairing.
+  });
+
+  test("an ask through the dude CLI is ended by the bash call's completion", () => {
     const cli = [called("b_1", "bash"), asked("q_2"), dudeRecord("q_2"), ev(EventTypes.ToolCompleted, { tool: "bash", callId: "b_1" }), called("c_3")];
     expect(order(cli)).toEqual(["tool:b_1", "q:q_2", "tool:c_3"]);
   });
