@@ -339,6 +339,21 @@ describe("a brainstorm session's page", () => {
     await until(() => (waiting() === 1 ? true : null), "the composer stepped back for q_2");
   });
 
+  test("an epic's notes go on its card; a note replacing one says which, with its words", async () => {
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
+        { kind: "epic", project: "BL", title: "Run ingest v2", description: "d", notes: ["Ids are ULIDs.", "Docs live in docs/ingest."] },
+        { kind: "note", epic: "Checkout v2", replaces: 3, text: "**Totals.** Read them with `useTotals(country)`." },
+      ], status: [{ canFile: true }, { canFile: true }] }],
+    }));
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.textContent).toContain("Ids are ULIDs.");
+    expect(card.textContent).toContain("Docs live in docs/ingest.");
+    expect(card.textContent).toContain("Replace note 3 on Checkout v2");
+    expect(card.textContent).toContain("Read them with useTotals(country).");
+  });
+
   test("the card files what you tick, as you, and says what was refused", async () => {
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [

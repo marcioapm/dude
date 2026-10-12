@@ -14,7 +14,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
+  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
@@ -558,7 +558,8 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
   };
   switch (item.kind) {
     case "epic":
-      return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common };
+      return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common,
+        ...(item.notes?.length ? { notes: item.notes } : {}) };
     case "task":
       return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common };
     case "edit":
@@ -566,6 +567,10 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
         before: textOf(item.before), after: textOf(item.after), ...common };
     case "comment":
       return { kind: "comment", title: `Comment on ${item.task ?? ""}`, taskKey: item.task, detail: item.text ? `“${item.text}”` : undefined, ...common };
+    case "note":
+      // The note it replaces is the epic's, read when it is filed: the card says which, and the new words.
+      return { kind: "note", title: item.replaces ? `Replace note ${item.replaces} on ${item.epic ?? ""}` : `Note on ${item.epic ?? ""}`,
+        detail: item.text ? <Markdown source={item.text} unmeasured /> : undefined, project, child: epics.has(item.epic), ...common };
   }
 }
 

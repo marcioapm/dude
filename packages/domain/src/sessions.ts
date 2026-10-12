@@ -86,17 +86,23 @@ export interface SessionMemberView {
 }
 
 export interface ProposalItem {
-  kind: "epic" | "task" | "edit" | "comment";
+  kind: "epic" | "task" | "edit" | "comment" | "note";
   project?: string;
+  /** A task's or a note's epic: an existing one's title, or a new epic's of this proposal. */
   epic?: string;
   title?: string;
   goal?: string;
   acceptanceCriteria?: string[];
   description?: string;
+  /** An epic's notes, pinned on it when it is filed, in order. */
+  notes?: string[];
   task?: string;
   before?: { goal?: string; acceptanceCriteria?: string[] };
   after?: { goal?: string; acceptanceCriteria?: string[] };
+  /** A comment's words, or a note's. */
   text?: string;
+  /** A note: the number of the note it replaces on its epic. */
+  replaces?: number;
 }
 
 /** An item's state for the person looking. */
