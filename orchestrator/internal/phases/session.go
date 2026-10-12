@@ -26,10 +26,10 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 
 // brainstormAnywhere is whether a brainstorm may reach any host, the one
 // answer its spec (its network, and Codex's search forced live over the
-// tier's) and its prompt both take:
-// once submitted, the network recorded on the Run, which its resumes keep;
-// before that, the network its submit will compute (runNetwork), so the
-// organisation's brainstorm_anywhere or "*" in either list both count.
+// tier's) and its prompt both take: once submitted, the network recorded
+// on the Run, which its resumes keep; before that, the network its submit
+// will compute (runNetwork), so the organisation's brainstorm_anywhere or
+// "*" in either list both count.
 func (s *Syncer) brainstormAnywhere(ctx context.Context, tx pgx.Tx, run string) (bool, error) {
 	var submitted, recorded bool
 	var in specInput

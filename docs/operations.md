@@ -228,25 +228,24 @@ Run's list, recorded in `runs.network` with the rest.
 admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
 on, a brainstorm Run of the organisation is submitted unrestricted,
 whatever its list or the operator's says, so it can read the web. The
-brainstorm is also told, after its instructions and
-whatever the organisation's prompt says: "You can read the web: search for
-and fetch public pages when the conversation needs facts from outside the
-linked repositories. Say where each fact came from, with its URL." Off, it
-is told nothing about the web. A brainstorm made unrestricted by `*` in the
+brainstorm is also told, after its instructions and whatever the
+organisation's prompt says: "You can read the web: search for and fetch
+public pages when the conversation needs facts from outside the linked
+repositories. Say where each fact came from, with its URL." Off, it is told
+nothing about the web. A brainstorm made unrestricted by `*` in the
 operator's or the organisation's list, with the setting off, gets the same
-(any host, the web line and Codex's search forced live). Every other role keeps the
-lists. The settings API carries it as
-`network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
-a project's); `network.effective` stays what other roles get. What it
-risks: anything a page says can steer the agent, and a brainstorm holds
-read-only checkouts of its session's repositories and the model key, which
-a malicious page could talk it into sending out. Like the lists, a change
-reaches brainstorm Runs submitted after it, either way: a brainstorm already
-started, running or parked, keeps the network it had (any host or the
-list) through its resumes until its session
-starts a new agent. A resume keeps the Run's recorded network
-(`runs.network`); briefed again after a lost conversation, the brainstorm
-is told what that network allows.
+(any host, the web line and Codex's search forced live). Every other role
+keeps the lists. The settings API carries it as `network.brainstorm`
+(`{anywhere}` on read, a boolean in a patch, refused on a project's);
+`network.effective` stays what other roles get. What it risks: anything a
+page says can steer the agent, and a brainstorm holds read-only checkouts
+of its session's repositories and the model key, which a malicious page
+could talk it into sending out. Like the lists, a change reaches brainstorm
+Runs submitted after it, either way: a brainstorm already started, running
+or parked, keeps the network recorded on its Run (`runs.network`: any host
+or the list) through its resumes until its session starts a new agent;
+briefed again after a lost conversation, it is told what that network
+allows.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
@@ -772,8 +771,9 @@ container is the sandbox), `model_reasoning_summary = "auto"`,
 `model_supports_reasoning_summaries = true` (Codex does not know the
 proxy's model names, and otherwise sends no reasoning) and
 `model_reasoning_effort` unless the effort is `none` or unset, and
-`web_search = "live"` (see [Agent network](#agent-network)). These are both `-c` overrides on the
-command and a `$HOME/.codex/config.toml` file secret (`CODEX_CONFIG`):
+`web_search = "live"` (see [Agent network](#agent-network)). These are
+both `-c` overrides on the command and a `$HOME/.codex/config.toml` file
+secret (`CODEX_CONFIG`):
 Codex 0.144 drops every `-c` given before `app-server` once one follows it,
 and lux's adapter adds its MCP servers there.
 
@@ -794,8 +794,7 @@ any other key is logged as ignored. What the args do differs:
   string, number, boolean or a list of those) or a bare word, taken as a
   string. Every other argument is dropped and logged, as is an override of a
   key inside or above one dude sets as a table (`model_providers.dude`), and
-  of `web_search` on a Run that may reach any host, where it stays live;
-  on any other Run a tier's `web_search` replaces dude's.
+  of `web_search` on a Run that may reach any host, where it stays live.
   They cannot go on the command: lux adds its MCP servers as `-c` after
   `app-server`, and Codex 0.144 then ignores everything given before the
   subcommand, `-m` included.
