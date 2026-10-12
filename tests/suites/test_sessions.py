@@ -546,10 +546,10 @@ def test_a_tier_and_harness_chosen_in_the_welcomes_composer_are_what_its_agent_r
 @pytest.mark.ui
 def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
         client: ApiClient, env, page: Page, web_url: str, org: dict, owner_dsn: str):
-    """A change in the rail is recorded in the Chat and reaches the agent's next start; a member who
-    is not the owner is refused it, and reads it from the API. That a resumed Run keeps what it was
-    submitted with is the orchestrator's TestAChangeAppliesAtTheNextStartAndAResumeKeepsItsHarness,
-    which reads the resume's secrets."""
+    """A change in the rail is recorded in the Chat and reaches the next agent; a member who
+    is not the owner is refused it, and reads it from the API. That the next message hands a parked
+    agent's conversation to a fresh agent on the new choice is the orchestrator's
+    TestAHarnessChangeHandsTheNextMessageToAFreshAgent and its siblings."""
     _scripted_brainstorm(client)
     chosen = client.tier_for("fake/hang")
     name = next(t["name"] for t in client.get("/v1/models/tiers").json()["tiers"] if t["id"] == chosen)
@@ -572,9 +572,9 @@ def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
     page.get_by_role("menuitemradio", name="Codex", exact=True).click()
     page.keyboard.press("Escape")
     expect(rail.get_by_role("button", name=f"Model: {name} on Codex")).to_be_visible()
-    # Each pick is a change of its own, said in the Chat; the last says what the next start uses.
+    # Each pick is a change of its own, said in the Chat; the last says when it applies.
     expect(page.get_by_test_id("session-notice").filter(has_text="set the model to").last).to_contain_text(
-        f"{name} · Codex; it applies the next time the agent starts.", timeout=15_000)
+        f"{name} · Codex; it applies from the next message.", timeout=15_000)
     # Once it has ended, the next message's agent starts on the new choice.
     execute(owner_dsn, "UPDATE runs SET status = 'completed', ended_at = now() WHERE id = %s", (first["id"],))
     assert client.post(f"/v1/brainstorms/{session}/chat", {"text": "a fresh start"}).status_code in (200, 201)

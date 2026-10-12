@@ -221,12 +221,22 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   is disabled ("names no model yet"), and the orchestrator refuses it, an
   unknown tier or another organisation's, or an unknown harness, with a
   400, on create and on `/model`.
-- **A change applies at the agent's next start, never mid-turn.** The
+- **A change applies from the next message, never mid-turn.** The
   rail's **Model** block carries the same picker for the owner (everyone
   else reads it); a change records `session.model.changed`, which the Chat
-  shows ("Ana set the model to Opus (High) · Claude Code; it applies the
-  next time the agent starts"). A live or parked agent resumes on what it
-  was submitted with. The owner's chip is a button at once; its menu reads
+  shows ("Ana set the model to Opus (High) · Claude Code; it applies from
+  the next message"). A turn in progress finishes on the old model. The
+  next member's message (a message, an aside, an answer, by message or
+  form) that finds the agent between turns (parked, or its turn done or
+  waiting on a person) on another model, effort or harness than the
+  session resolves to now ends it and starts a fresh agent briefed with
+  the conversation, the message (or the answer, its question in the
+  replay) its first input; what the old one never read is handed on
+  after it (`delivery.BrainstormSwap`, `ReplaceBrainstorm`;
+  `session.model.applied`, "Started a fresh agent on … ; it has the
+  conversation so far."). A message held for another member's answer
+  swaps nothing; any other wake (a repository linked, dude telling it
+  something) resumes it on what it was submitted with. The owner's chip is a button at once; its menu reads
   the organisation's tiers when it first opens, and says "Could not load
   the tiers" when it cannot. A pick shows at once and the detail takes
   over once the last pick is answered; a failed pick cancels the picks

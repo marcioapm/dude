@@ -367,9 +367,12 @@ func replayEntries(events []replayEvent) []replayEntry {
 			}
 			add(ev, line)
 		case EvQuestionClosed:
-			if str("by") == "withdrawn" {
+			switch str("by") {
+			case "withdrawn":
 				add(ev, "dude: your question was withdrawn; nobody answered it.")
-			} else {
+			case QuestionReplaced:
+				add(ev, "dude: your question was left open when a fresh agent took over; nobody answered it. Ask again if you still need it.")
+			default:
 				add(ev, "dude: your question was settled elsewhere, unanswered.")
 			}
 		case evSessionTold, EvConductorWoken:

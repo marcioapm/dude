@@ -260,52 +260,252 @@ func TestTheOwnersChangeIsRecordedAndNullsClearIt(t *testing.T) {
 	}
 }
 
-// A change reaches the agent's next start, not the one running: a parked
-// agent resumed after the change keeps its harness, and once it has ended
-// the next message's agent runs on the new choice.
-func TestAChangeAppliesAtTheNextStartAndAResumeKeepsItsHarness(t *testing.T) {
-	s := newSessionWorld(t)
+// parkedOn starts a session on Claude Code over the Thinker tier (a
+// Claude model), its agent never ending a turn on its own, and parks it
+// as its warm period's end does. Returns the session and its agent.
+func (s *sessionWorld) parkedOn() (session, run string) {
+	s.t.Helper()
 	s.syncer.ConductorWarm = time.Hour
 	s.lux.Decide = hang
-	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
-	gpt := s.tierOn("Sol", "gpt-6-sol")
-	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": "claude-code"})["id"].(string)
-	run, _, _, harness := s.submitted(id)
+	mustExec(s.t, s.owner, `UPDATE model_tiers SET model = 'claude-sonnet-5' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	session = s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": "claude-code"})["id"].(string)
+	run, _, _, harness := s.submitted(session)
 	if harness != "claude-code" {
-		t.Fatalf("first start on %s", harness)
+		s.t.Fatalf("first start on %s", harness)
 	}
-	s.until("the brainstorm running", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, run) == 1
-	})
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": "opencode"})
-	mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours', agent_busy_at = now() - interval '3 hours',
-		agent_active_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours',
-		stall_reported_at = now() - interval '3 hours' WHERE id = $1`, run)
+	s.runningIdle(run)
+	mustExec(s.t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours' WHERE id = $1`, run)
 	s.until("the session parked", func() bool {
 		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
 	})
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
-	s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
-	var secrets []lux.Secret
-	for _, r := range s.lux.Runs() {
-		if r.Resumed == 1 {
-			secrets = r.ResumeSecrets[0]
-		}
+	return session, run
+}
+
+// runningIdle waits for the agent to run, then ends its turn as the
+// agent's idle would, long enough ago that nothing reports it stalled.
+func (s *sessionWorld) runningIdle(run string) {
+	s.t.Helper()
+	s.until("the brainstorm running", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, run) == 1
+	})
+	mustExec(s.t, s.owner, `UPDATE runs SET turn_done_at = now(), agent_busy_at = now() - interval '3 hours',
+		agent_active_at = now() - interval '3 hours', files_changed_at = now() - interval '3 hours',
+		stall_reported_at = now() - interval '3 hours' WHERE id = $1`, run)
+}
+
+// prompt is a Run's briefing as dude stored it.
+func (s *sessionWorld) prompt(run string) string {
+	var p string
+	_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, run).Scan(&p)
+	return p
+}
+
+// freshAgent waits for the session's agent after old, and checks old was
+// ended for the model and a session.model.applied names both.
+func (s *sessionWorld) freshAgent(session, old string) string {
+	s.t.Helper()
+	s.until("a fresh agent", func() bool { r, _ := s.brainstorm(session); return r != old })
+	next, _ := s.brainstorm(session)
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND control_reason = 'the session''s model changed'`, old); n != 1 {
+		s.t.Errorf("the old agent was not ended for the model")
 	}
-	if names := secretNames(secrets); !slices.Contains(names, "ANTHROPIC_API_KEY") {
-		t.Errorf("resume secrets = %v, want Claude Code's key", names)
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'
+		AND payload->>'from' = $2 AND payload->>'to' = $3`, session, old, next); n != 1 {
+		s.t.Errorf("no session.model.applied from %s to %s", old, next)
 	}
-	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness = 'claude-code' AND model = 'claude-sonnet-5'`, run); n != 1 {
-		t.Errorf("the resumed Run's recorded model or harness changed")
+	return next
+}
+
+// conversationThenFirst says the briefing carries before in the
+// conversation so far, and first as its first message.
+func conversationThenFirst(t *testing.T, prompt, before, first string) {
+	t.Helper()
+	so, msg := strings.Index(prompt, "## The conversation so far"), strings.Index(prompt, "## The first message\n\n"+first)
+	if so < 0 || msg < 0 || !strings.Contains(prompt[so:msg], before) {
+		t.Errorf("the briefing lacks %q in the conversation or %q as its first message:\n%s", before, first, prompt)
+	}
+}
+
+// A harness change to a parked agent: the next message ends it and a
+// fresh agent on the new harness takes over, briefed with the
+// conversation and the message. lux's Run of the old one is cancelled.
+func TestAHarnessChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	id, run := s.parkedOn()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "opencode"})
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+	next := s.freshAgent(id, run)
+	if out["runId"] != next {
+		t.Errorf("answered %v, want the fresh agent %s", out, next)
+	}
+	if _, model, _, harness := s.submitted(id); model != "claude-sonnet-5" || harness != "opencode" {
+		t.Errorf("the fresh agent runs on %s · %s, want claude-sonnet-5 · opencode", model, harness)
+	}
+	conversationThenFirst(t, s.prompt(next), "Márcio Martins: hello", "Márcio Martins: carry on")
+	if v := s.luxRun(run); v == nil || v.resumed != 0 {
+		t.Errorf("the old agent was resumed")
+	}
+	s.until("the old lux Run cancelled", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, run) == 1
+	})
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message' AND payload->>'text' = 'carry on'`, next); n != 1 {
+		t.Errorf("the message is not shown on the fresh agent")
+	}
+}
+
+// A tier change likewise, to an agent running between turns.
+func TestATierChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	gpt := s.tierOn("Sol", "gpt-6-sol")
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
+	run, _, _, _ := s.submitted(id)
+	s.runningIdle(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": nil})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "now on Sol"})
+	next := s.freshAgent(id, run)
+	if _, model, tier, _ := s.submitted(id); model != "gpt-6-sol" || tier != "Sol" {
+		t.Errorf("the fresh agent runs on %s (%s), want gpt-6-sol (Sol)", model, tier)
+	}
+	conversationThenFirst(t, s.prompt(next), "Márcio Martins: hello", "Márcio Martins: now on Sol")
+}
+
+// A change set back to what the agent runs on, and no change at all, swap
+// nothing: the parked agent is resumed with the message, on what it was
+// submitted with.
+func TestAChangeSetBackOrNoneResumesTheSameAgent(t *testing.T) {
+	for _, back := range []bool{true, false} {
+		t.Run(map[bool]string{true: "set back", false: "no change"}[back], func(t *testing.T) {
+			s := newSessionWorld(t)
+			id, run := s.parkedOn()
+			if back {
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "claude-code"})
+			}
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+			s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
+			var secrets []lux.Secret
+			for _, r := range s.lux.Runs() {
+				if r.Resumed == 1 {
+					secrets = r.ResumeSecrets[0]
+				}
+			}
+			if names := secretNames(secrets); !slices.Contains(names, "ANTHROPIC_API_KEY") {
+				t.Errorf("resume secrets = %v, want Claude Code's key", names)
+			}
+			if now, _ := s.brainstorm(id); now != run {
+				t.Errorf("a fresh agent %s, want %s resumed", now, run)
+			}
+			if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 0 {
+				t.Errorf("a swap was recorded")
+			}
+		})
+	}
+}
+
+// A change while the agent is mid-turn interrupts nothing: a message then
+// is queued on it as a steer; the first message after its turn ends hands
+// the conversation to a fresh agent.
+func TestAChangeMidTurnQueuesTheMessageOnTheSameAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
+	run, _, _, _ := s.submitted(id)
+	s.until("the brainstorm running", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, run) == 1
+	})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "also this"})
+	if out["runId"] != run || out["created"] != false {
+		t.Errorf("answered %v, want queued on %s", out, run)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = 'Márcio Martins: also this'`, run); n != 1 {
+		t.Errorf("the message is not queued on the agent mid-turn")
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+		t.Errorf("%d Runs, want the one mid-turn", n)
 	}
 
-	s.endRun(run)
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "a fresh start"})
-	s.until("a second agent", func() bool { r, _ := s.brainstorm(id); return r != run })
-	_, model, tier, harness := s.submitted(id)
-	if model != "gpt-6-sol" || tier != "Sol" || harness != "opencode" {
-		t.Errorf("the next start ran on %s (%s) · %s, want gpt-6-sol (Sol) · opencode", model, tier, harness)
+	s.runningIdle(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "and now"})
+	s.freshAgent(id, run)
+	if _, _, _, harness := s.submitted(id); harness != "codex" {
+		t.Errorf("the fresh agent runs on %s, want codex", harness)
 	}
+}
+
+// An answer to the agent's open question after a change, as a message or
+// through the form, is the fresh agent's first message, its briefing
+// carrying the question asked; the question is answered, not cancelled.
+func TestAnAnswerAfterAChangeBriefsAFreshAgentWithTheQuestion(t *testing.T) {
+	for _, form := range []bool{false, true} {
+		t.Run(map[bool]string{false: "message", true: "form"}[form], func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.withTools()
+			id := s.session()
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "how long is the window?"})
+			run := s.started(id)
+			status, out := s.tool(run, "ask_person", `{"question":"Grow the 24h window for every kind?","choices":["Every kind","Only runs"]}`)
+			if status != 200 {
+				t.Fatalf("ask_person: %d %v", status, out)
+			}
+			qid := out["questionId"].(string)
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+			if form {
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/questions/"+qid+"/answer", map[string]any{"text": "Only runs"})
+			} else {
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "Only runs"})
+			}
+			next := s.freshAgent(id, run)
+			conversationThenFirst(t, s.prompt(next), "You asked: Grow the 24h window for every kind?",
+				"Márcio Martins answered your question \"Grow the 24h window for every kind?\":\n\nOnly runs")
+			if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered' AND answer = 'Only runs'`, qid); n != 1 {
+				t.Errorf("the question is not answered")
+			}
+			if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'question.answered' AND payload->>'questionId' = $2`, run, qid); n != 1 {
+				t.Errorf("the answer is not recorded on the question's Run")
+			}
+			if _, _, _, harness := s.submitted(id); harness != "codex" {
+				t.Errorf("the fresh agent runs on %s, want codex", harness)
+			}
+		})
+	}
+}
+
+// What the old agent never read goes to the fresh one after the answer:
+// a message held for another member's answer is not lost when that
+// answer, after a change, hands the conversation over.
+func TestTheOldAgentsUnreadMessagesAreHandedOn(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "how long is the window?"})
+	run := s.started(id)
+	status, out := s.tool(run, "ask_person", `{"question":"Grow the 24h window for every kind?","choices":["Every kind","Only runs"],"to":"Ana"}`)
+	if status != 200 {
+		t.Fatalf("ask_person: %d %v", status, out)
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	// Held for Ana's answer: it swaps nothing.
+	held := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "also cost estimates?"})
+	if held["runId"] != run {
+		t.Fatalf("the held message went to %v, want %s", held["runId"], run)
+	}
+	s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "Only runs"})
+	next := s.freshAgent(id, run)
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = 'Márcio Martins: also cost estimates?'`, next); n != 1 {
+		t.Errorf("the held message was not handed to the fresh agent")
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL AND error LIKE '%' || $2 || '%'`,
+		held["directiveId"], next); n != 1 {
+		t.Errorf("the old copy does not say the fresh agent has it")
+	}
+	conversationThenFirst(t, s.prompt(next), "Grow the 24h window", `Ana Nunes answered your question`)
+	s.until("the fresh agent reads it", func() bool {
+		v := s.luxRun(next)
+		return v != nil && slices.Contains(append(v.inputs, v.resumes...), "Márcio Martins: also cost estimates?")
+	})
 }
 
 // A tier a session chose that is then removed: the session follows the

@@ -899,6 +899,14 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
+		// Held for another member's answer, a message swaps nothing: the
+		// answer does, and the message goes on after it.
+		var swap *delivery.SessionModelApplied
+		if qerr != nil || to == "" || to == p.Person {
+			if swap, err = delivery.BrainstormSwap(r.Context(), tx, runID, id); err != nil {
+				return err
+			}
+		}
 		// The question's own: their message answers one question. Several
 		// are answered through the form (sessionAnswer); a message beside
 		// them is an aside, as in a task's Chat, and reaches the agent now.
@@ -907,12 +915,24 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			if err != nil {
 				return err
 			}
+			if swap != nil {
+				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+				out = map[string]any{"runId": next, "created": true, "questionId": questionID}
+				created = true
+				return err
+			}
 			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
 			if err != nil {
 				return err
 			}
 			out = map[string]any{"runId": runID, "created": false, "questionId": questionID, "directiveId": directiveID}
 			return nil
+		}
+		if swap != nil {
+			created = true
+			runID, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, delivery.Attributed(name, body.Text), body.Text)
+			out = map[string]any{"runId": runID, "created": true}
+			return err
 		}
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
 		if err != nil {
@@ -989,6 +1009,32 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 	return directiveID, err
 }
 
+// answerByFreshAgent settles the agent's open question with a member's
+// answer when the session's model changed since it started: the answer is
+// the fresh agent's first message, its briefing's replay carrying the
+// question asked. The answer is recorded on the old Run after the
+// briefing, with no directive, so the briefing has it once and later
+// replays read it as heard. Returns the fresh agent.
+func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to delivery.SessionModelApplied, questionID, prompt string,
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	answers, _ := json.Marshal(a.Answers)
+	// Answered before the old Run ends, so runs_cancel_open_questions leaves it be.
+	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $4::jsonb, answered_at = now(),
+		answered_by_person = $3 WHERE id = $1`, questionID, a.Text, p.Person, answers); err != nil {
+		return "", err
+	}
+	next, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(), delivery.AnswerDirective(prompt, items, a, name, true), "")
+	if err != nil {
+		return "", err
+	}
+	payload := answeredPayload(questionID, "", a)
+	delete(payload, "directiveId")
+	ev := ref.Event("question.answered", p.writer().ActorType, payload)
+	ev.ActorID = p.Actor
+	_, err = ledger.Append(ctx, tx, ev)
+	return next, err
+}
+
 // sessionAnswer is a member answering the session agent's open question
 // through its form: one answer per question, and a note (answerBody; no
 // images, which a session does not take). Only the member it is put to,
@@ -1036,6 +1082,16 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}
+		swap, err := delivery.BrainstormSwap(r.Context(), tx, runID, id)
+		if err != nil {
+			return err
+		}
+		if swap != nil {
+			next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+			out = map[string]any{"id": questionID, "runId": next, "status": "answered", "answer": answered.Text,
+				"answers": answered.Answers}
+			return err
+		}
 		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
 		if err != nil {
 			return err
