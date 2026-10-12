@@ -129,6 +129,7 @@ describe("an organisation's Network page", () => {
     const toggle = () => container.querySelector<HTMLButtonElement>("[data-testid=network-brainstorm-switch]")!;
     expect(toggle().getAttribute("aria-checked")).toBe("false");
     expect(container.textContent).toContain("Off — the list above applies to them too");
+    expect(container.textContent).toContain("one already started, running or parked, keeps any host until its session starts a new agent");
     expect(container.querySelector("[data-testid=network-brainstorm-anywhere]")).toBeNull();
     await click(toggle());
     await settle(150);

@@ -223,7 +223,9 @@ a project's); `network.effective` stays what other roles get. What it
 risks: anything a page says can steer the agent, and a brainstorm holds
 read-only checkouts of its session's repositories and the model key, which
 a malicious page could talk it into sending out. Like the lists, a change
-reaches brainstorm Runs submitted after it; a resumed one keeps its network.
+reaches brainstorm Runs submitted after it: turning it off does not reach a
+brainstorm already started, running or parked, which keeps any host (and
+Exa) through its resumes until its session starts a new agent.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a

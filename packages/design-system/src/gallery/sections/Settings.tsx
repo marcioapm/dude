@@ -5,7 +5,7 @@ import { PromptHistory, type PromptHistoryVersion } from "../../components/Promp
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.tsx";
 import { Segmented } from "../../components/ScreenHeader.tsx";
-import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
+import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsMeta, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -199,6 +199,7 @@ function BrainstormDemo() {
       <SettingRow label="Brainstorm sessions" help="Let a brainstorm read documentation, competitors’ pages and anything else it finds while it researches. Other agents keep the list.">
         <Switch checked={on} onCheckedChange={setOn}
           label={on ? "On — brainstorm agents may reach any host, to read the web" : "Off — the list above applies to them too"} />
+        <SettingsMeta>Turning it off reaches brainstorm agents started after it; one already started, running or parked, keeps any host until its session starts a new agent.</SettingsMeta>
         {on ? (
           <Callout tone="danger">
             <b>Anything a page says can steer the agent.</b> A brainstorm has read-only checkouts of the repositories linked to its session, and the model’s key, in its container. A malicious page could talk it into sending them to any host.

@@ -1794,7 +1794,9 @@ MarkdownCheatsheet.
   open, with Allow for the project and Settings. A switch that lifts the
   list for one kind of agent (an organisation's **Brainstorm sessions**:
   any host, to read the web) is a `Switch` in a `SettingRow`, its label
-  saying both states in words ("On — …" / "Off — …"); while on, a
+  saying both states in words ("On — …" / "Off — …"), and a `SettingsMeta`
+  line under it saying who a change reaches (agents started after it; one
+  already started keeps what it had); while on, a
   `Callout tone="danger"` under it says in plain words what it risks (what
   a page can steer the agent into, and what the container holds that could
   be sent out). Never a badge or an icon alone.
