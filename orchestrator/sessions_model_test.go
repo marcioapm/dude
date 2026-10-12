@@ -730,6 +730,37 @@ func TestAnAsideWhileAQuestionIsOpenWaitsForTheAnswerToSwap(t *testing.T) {
 			}
 		})
 	}
+
+	// A plain message from the one asked, beside a question of several
+	// items, answers none of them (they go through the form): it is an
+	// aside too, and swaps nothing.
+	t.Run("beside a multi-item question", func(t *testing.T) {
+		s := newSessionWorld(t)
+		s.withTools()
+		id := s.session()
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "how long is the window?"})
+		run := s.started(id)
+		status, out := s.tool(run, "ask_person", `{"questions":[{"header":"Window","question":"Grow the 24h window?"},`+
+			`{"header":"Scope","question":"For every kind?"}],"to":"Márcio"}`)
+		if status != 200 {
+			t.Fatalf("ask_person: %d %v", status, out)
+		}
+		qid := out["questionId"].(string)
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+		msg := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "x"})
+		if msg["runId"] != run || msg["created"] != false {
+			t.Errorf("answered %v, want queued on %s", msg, run)
+		}
+		if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+			t.Errorf("%d Runs, want the one that asked", n)
+		}
+		if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, qid); n != 1 {
+			t.Errorf("the question is no longer open")
+		}
+		if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.model.applied'`, id); n != 0 {
+			t.Errorf("a swap was recorded")
+		}
+	})
 }
 
 // Two messages at once after a change: one swaps the agent, the other
