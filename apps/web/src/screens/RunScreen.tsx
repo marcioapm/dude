@@ -48,7 +48,7 @@ import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { WaitingForHost } from "../waiting.tsx";
-import { StartHeaderChip, StartRow } from "../startCue.tsx";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
@@ -104,6 +104,8 @@ export interface ChatVariant {
   send: (text: string, aside?: boolean) => Promise<unknown>;
   /** The conductor's question answered through its form. */
   answer: (questionId: string, answers: ReadonlyArray<QuestionAnswer>, note: string) => Promise<unknown>;
+  /** Try again on a conductor that failed: a fresh one takes what it never read. */
+  retry?: (() => Promise<unknown>) | undefined;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
@@ -188,6 +190,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // It remembers the status it was about: once the Run moves on, it has said its piece.
   const [notice, setNotice] = useState<(Notice & { about: RunDetail["status"] | undefined }) | null>(null);
   const [confirmAbort, setConfirmAbort] = useState(false);
+  // The failed start whose Try again a newer conductor had already made moot.
+  const [retryTaken, setRetryTaken] = useState<string | null>(null);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
   // A task's Chat keeps its draft by task, as ChatSection does before the
@@ -463,11 +467,24 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const restartedText = runRestartedText(run, events, people);
   // Try again on a phase that did not start: the task's own way back (its restart dialog), where the page offers one.
+  // A conductor's: a fresh conductor takes what it never read; refused once a newer one took it, and not offered again.
+  const retryConductor = chat?.retry;
+  const conductorRetry = (turnId: string) => retryConductor && !readOnly ? () => {
+    setBusy(true);
+    setProblem(null);
+    void retryConductor().catch((err: unknown) => {
+      const refused = retryRefusal(err, (e) => (e instanceof ApiError ? e.message : "the request failed"));
+      if (refused.taken) setRetryTaken(turnId);
+      else setProblem(refused.text);
+    }).finally(() => setBusy(false));
+  } : undefined;
   const onStartRetry = stopped && "onPickUp" in stopped ? () => stopped.onPickUp("retry") : undefined;
   // The question's form, while the Run can still hear it.
   const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
-    : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role} onRetry={onStartRetry} />
+    : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
+        taken={turn.taken || retryTaken === turn.id}
+        onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
   const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role} /> : null;

@@ -267,6 +267,8 @@ export interface EndedTurn {
   start?: StartState;
   /** That start was tried again: a fresh agent took its message. */
   retried?: boolean;
+  /** A later agent took what it left without Try again (the hand-over, a next message): nothing is left to try again. */
+  taken?: boolean;
 }
 
 /**
@@ -626,6 +628,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.failedStart.turn.retried = true;
           for (const m of state.failedStart.messages) m.failed = null;
           state.startMessages = state.failedStart.messages;
+          state.failedStart = null;
+        } else if (state.failedStart) {
+          // Any other next agent: what the failed one left is that agent's now.
+          state.failedStart.turn.taken = true;
           state.failedStart = null;
         }
         break;

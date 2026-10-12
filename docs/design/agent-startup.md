@@ -345,10 +345,19 @@ Márcio's answers, all as proposed:
 2. `SLOW_AFTER_MS` stands: `waiting` 60s, `image` 120s, `repositories`
    90s, the rest 60s (`apps/web/src/startCue.tsx`).
 3. **Try again**: in a session, `POST /v1/brainstorms/:id/retry` →
-   `delivery.RetryBrainstorm`, a fresh agent briefed with the failed one's
-   briefing (the message it was started for, read once) and its unread
-   messages handed on (`SessionHandOver`); its `run.created` carries
-   `retries`, so Chat shows the message queued again rather than twice.
+   `delivery.RetryBrainstorm`. An agent that never ran gets a fresh one
+   briefed with the failed one's briefing (the message it was started
+   for, read once), its `run.created` carrying `retries`, so Chat shows
+   the message queued again rather than twice. One whose **resume**
+   failed (a talker lux ended while it resumed) hands what it never read
+   to a fresh agent (`SessionHandOver`, #112's path). A task's
+   **conductor** that failed gets the same from `POST /v1/tasks/:id/retry`
+   → `delivery.RetryConductor` (`HandOver`). Either way the messages are
+   settled on the failed Run as they are passed on, so they are delivered
+   once, and the one-live-agent indexes keep it to one agent. When the
+   syncer's hand-over or a next message already gave them to a newer
+   agent, Try again answers 409 `retry_taken`, and the row says "A new
+   agent already took the later messages" and stops offering it.
    On a task's phase it opens the task's restart dialog at *Try again*
    (`StoppedRun.onPickUp("retry")`), where the task page offers one.
 4. The row shows on a conductor's Chat as it wakes ("Resuming" once it

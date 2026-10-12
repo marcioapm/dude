@@ -117,31 +117,50 @@ func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionMod
 			"harness": to.Harness})
 }
 
-// ErrNothingToRetry: the session's latest agent did not fail before it ran.
-var ErrNothingToRetry = errors.New("the session's agent did not fail to start")
+// ErrNothingToRetry: the latest agent did not fail, or failed with nothing
+// left for a fresh one to take.
+var ErrNothingToRetry = errors.New("the agent did not fail, or left nothing unread to take")
 
-// RetryBrainstorm starts a fresh agent for a session whose latest agent
-// failed before it ever ran, with the briefing that one was given: the
-// message it was started for is read by the new one, once. Messages sent
-// to the failed one meanwhile are handed on after it (SessionHandOver).
-// Its run.created names the Run it retries, so Chat shows the message
-// queued again rather than a second copy. The caller holds the session's
-// lock; returns the new Run.
+// ErrRetryTaken: a newer agent already took what the failed one left (the
+// syncer's hand-over, or a person's next message): Try again has nothing
+// to start.
+var ErrRetryTaken = errors.New("a new agent already took the later messages")
+
+// RetryBrainstorm is Try again on a session whose latest agent failed. One
+// that never ran gets a fresh agent with the briefing it was given: the
+// message it was started for is read by the new one, once, and its
+// run.created names the Run it retries, so Chat shows the message queued
+// again rather than a second copy. One that ran and failed (a resume lux
+// refused or ended) hands what it never read to a fresh agent, as the
+// syncer's hand-over would. Either way messages sent to the failed one are
+// handed on after it (SessionHandOver), once: each is settled on the
+// failed Run as it is passed on. The caller holds the session's lock, as
+// the syncer's hand-over does; returns the new Run.
 func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer) (string, error) {
-	var failed, briefing string
-	// The latest brainstorm, failed: none live can be newer, and an older
-	// live one cannot exist (runs_live_brainstorm_idx; a racing start is a
-	// unique violation, which the API answers 409).
-	err := tx.QueryRow(ctx, `SELECT r.id, r.prompt FROM runs r WHERE r.session_id = $1 AND r.role = 'brainstorm' AND r.kind = 'agent'
-			AND r.status = 'failed' AND r.started_at IS NULL
-			AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.session_id = r.session_id AND n.role = 'brainstorm' AND n.created_at > r.created_at)
-		ORDER BY r.created_at DESC LIMIT 1`, sessionID).Scan(&failed, &briefing)
+	var latest, status, briefing string
+	var ran bool
+	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, r.prompt, r.started_at IS NOT NULL FROM runs r
+		WHERE r.session_id = $1 AND r.role = 'brainstorm' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
+		sessionID).Scan(&latest, &status, &briefing, &ran)
 	if db.IsNotFound(err) {
 		return "", ErrNothingToRetry
 	}
 	if err != nil {
 		return "", err
 	}
+	if status != "failed" {
+		return "", retryRefused(ctx, tx, `SELECT EXISTS (SELECT 1 FROM runs WHERE session_id = $1 AND role = 'brainstorm' AND status = 'failed')`, sessionID)
+	}
+	failed := RunRef{Org: org, SessionID: sessionID, RunID: latest}
+	if ran {
+		next, err := SessionHandOver(ctx, tx, failed)
+		if err == nil && next == "" {
+			err = ErrNothingToRetry
+		}
+		return next, err
+	}
+	// No other live agent can exist: runs_live_brainstorm_idx refuses a
+	// second, which the API answers 409.
 	id := ids.New(ids.Run)
 	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, base_refs, prompt, started_by)
 		VALUES ($1, $2, $3, 1, 'pending', 'agent', 'brainstorm', '{}'::jsonb, $4, NULLIF($5, ''))`,
@@ -150,14 +169,28 @@ func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 	}
 	ref := RunRef{Org: org, SessionID: sessionID, RunID: id}
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunCreated, ledger.ActorSystem,
-		map[string]any{"role": RoleBrainstorm, "publishes": false, "retries": failed})); err != nil {
+		map[string]any{"role": RoleBrainstorm, "publishes": false, "retries": latest})); err != nil {
 		return "", err
 	}
 	if err := SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", map[string]any{"text": briefing}); err != nil {
 		return "", err
 	}
-	if _, err := SessionHandOver(ctx, tx, RunRef{Org: org, SessionID: sessionID, RunID: failed}); err != nil {
+	if _, err := SessionHandOver(ctx, tx, failed); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// retryRefused is why Try again has nothing to start once the latest agent
+// is not the failed one: ErrRetryTaken when failedExists (SQL, $1 the
+// session or task) finds an earlier failed one, else ErrNothingToRetry.
+func retryRefused(ctx context.Context, tx pgx.Tx, failedExists, id string) error {
+	var any bool
+	if err := tx.QueryRow(ctx, failedExists, id).Scan(&any); err != nil {
+		return err
+	}
+	if any {
+		return ErrRetryTaken
+	}
+	return ErrNothingToRetry
 }

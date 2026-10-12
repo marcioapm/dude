@@ -115,6 +115,11 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   }, [client, task.id, conductorId, onSent]);
   const answer = useMemo(() => async (questionId: string, answers: ReadonlyArray<SentAnswer>, note: string) =>
     client.chatAnswer(task.id, questionId, answers, note), [client, task.id]);
+  // Try again on a conductor that failed: the page reads the task again, to find the fresh one.
+  const retry = useMemo(() => async () => {
+    await client.retryConductor(task.id);
+    onSent();
+  }, [client, task.id, onSent]);
 
   const feedback = events.filter((e) => e.eventType === "pull_request.commented").length;
   const open = findings.filter((f) => f.status === "open").length;
@@ -184,8 +189,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       action={setAside ? undefined
         : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
   }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
-    [head, send, answer, briefedWith, before, conductorCost, lines, above, gateHeld]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
+    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld]);
 
   if (conductorId) {
     return (

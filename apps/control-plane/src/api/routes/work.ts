@@ -228,6 +228,11 @@ async function chatTask(ctx: RequestContext): Promise<Response> {
     JSON.stringify(input), ctx.principal);
 }
 
+/** Try again on a conductor that failed: a fresh one takes what it never read. */
+async function retryConductor(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/retry`, "{}", ctx.principal);
+}
+
 /**
  * Talk it through: a task not started gets its conductor, and a delivery it
  * decides, waiting on its first decision. No implementer starts until the
@@ -496,6 +501,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
   router.post("/v1/tasks/:id/chat", chatTask);
+  router.post("/v1/tasks/:id/retry", retryConductor);
   router.post("/v1/tasks/:id/talk", talkTask);
   router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);

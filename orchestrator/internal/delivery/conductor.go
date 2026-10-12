@@ -197,6 +197,83 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 	return err
 }
 
+// RetryConductor is Try again on a task whose latest conductor failed. One
+// that never ran gets a fresh conductor with the briefing it was given (a
+// person's message is read by the new one, once; a wake note's reasons are
+// carried by it), its run.created naming the Run it retries; one that ran
+// hands what it never read on. Either way messages queued for the failed
+// one go to the new one (HandOver), each settled on the failed Run as it
+// is passed on. ErrRetryTaken when a newer conductor already has them. The
+// caller holds the task's Chat lock; returns the new Run.
+func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer) (string, error) {
+	var latest, status, briefing string
+	var ran bool
+	var baseRefs map[string]string
+	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, r.prompt, r.started_at IS NOT NULL, r.base_refs FROM runs r
+		WHERE r.task_id = $1 AND r.role = 'conductor' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
+		taskID).Scan(&latest, &status, &briefing, &ran, &baseRefs)
+	if db.IsNotFound(err) {
+		return "", ErrNothingToRetry
+	}
+	if err != nil {
+		return "", err
+	}
+	if status != "failed" {
+		return "", retryRefused(ctx, tx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND role = 'conductor' AND status = 'failed')`, taskID)
+	}
+	failed := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: latest}
+	if ran {
+		next, err := HandOver(ctx, tx, failed, true)
+		if err == nil && next == "" {
+			err = ErrNothingToRetry
+		}
+		return next, err
+	}
+	// A conductor dude woke whose wake note the syncer already put back
+	// (BriefingUnheardTx): its reasons wake the next conductor, which a
+	// copy of the note here would tell them twice.
+	var requeued bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM conductor_wake_attempts
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND failed_at IS NOT NULL)`, latest).Scan(&requeued); err != nil {
+		return "", err
+	}
+	if requeued {
+		return "", ErrRetryTaken
+	}
+	// No other live conductor can exist: runs_live_conductor_idx refuses a
+	// second, which the API answers 409.
+	id := ids.New(ids.Run)
+	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role,
+			base_refs, prompt, started_by)
+		VALUES ($1, $2, $3, $4, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = $4), 1), 'pending', 'agent',
+			'conductor', $5, $6, NULLIF($7, ''))`,
+		id, org, projectID, taskID, baseRefs, briefing, w.Person); err != nil {
+		return "", err
+	}
+	// A wake note the failed one never heard is in the briefing it passes
+	// on: its reasons are the new one's to hear, not handed over again.
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wake_attempts SET conductor_run_id = $2
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL`, latest, id); err != nil {
+		return "", err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunCreated, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: id, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs, "retries": latest}})
+	if err != nil {
+		return "", err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorBriefed, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"text": briefing}})
+	if err != nil {
+		return "", err
+	}
+	if _, err := HandOver(ctx, tx, failed, true); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // Unheard (SQL, a FROM source yielding r with id, organization_id,
 // project_id, task_id, status and ended_at): an ended conductor holding
 // input it never read, or a wake note it was started with and never heard,

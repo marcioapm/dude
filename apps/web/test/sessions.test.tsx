@@ -1623,4 +1623,58 @@ describe("a session's agent starting", () => {
     expect(sent.textContent).toContain("Will be read when the agent starts.");
     expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
   });
+
+  // A parked agent whose resume lux ended while it waited for a host: its message queued, never read.
+  function failedResume() {
+    const at = (ms: number) => ago(60_000 - ms);
+    const e = (type: string, payload: Record<string, unknown>, ms: number, actor?: PersistedEvent["actor"]) =>
+      ({ ...ev(type, payload, actor), occurredAt: at(ms) });
+    return [
+      e("run.created", { role: "brainstorm" }, 0),
+      e("agent.message", { text: "Metering lives in billing." }, 1_000),
+      e("run.parked", { reason: "session", stopped: "stopped" }, 2_000),
+      e("chat.message", { text: "and the tests?", directiveId: "dir_2" }, 3_000, { type: "person", id: YOU } as PersistedEvent["actor"]),
+      e("run.unparked", { reason: "session", epoch: 2 }, 3_100),
+      e("run.stage", { stage: "waiting", since: at(3_100), epoch: 1 }, 3_200),
+      e("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }, 9_000),
+    ];
+  }
+
+  test("a resume that failed: Did not resume, with Try again, which hands its message to a fresh agent", async () => {
+    class Retrying extends SessionClient {
+      retried = 0;
+      override retrySessionAgent() {
+        this.retried += 1;
+        return Promise.resolve({ runId: "run_brainstorm2", created: true });
+      }
+    }
+    const client = new Retrying(detail("owner"), failedResume());
+    const page = await sessionPage(client);
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not resume: failed while waiting for a machine: terminated.");
+    await click(page.querySelector("[data-testid=start-retry]")!);
+    expect(client.retried).toBe(1);
+  });
+
+  test("Try again after a new agent already took the messages: says so, and is not offered again", async () => {
+    class Taken extends SessionClient {
+      override retrySessionAgent(): Promise<{ runId: string; created: boolean }> {
+        return Promise.reject(new ApiError(409, "retry_taken", "a new agent already took the later messages"));
+      }
+    }
+    const page = await sessionPage(new Taken(detail("owner"), failedResume()));
+    await click(await until(() => page.querySelector("[data-testid=start-retry]"), "Try again"));
+    const said = await until(() => page.querySelector("[data-testid=start-retry-taken]"), "the line");
+    expect(said.textContent).toBe("A new agent already took the later messages.");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.textContent).not.toContain("Could not start it again");
+  });
+
+  test("a failed start a later agent took over (no Try again): not offered, and said why", async () => {
+    const later = [...failedResume(), { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(1_000) }];
+    const page = await sessionPage(new SessionClient(detail("owner"), later));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-retry-taken]")!.textContent).toBe("A new agent already took the later messages.");
+  });
 });

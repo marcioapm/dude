@@ -14,6 +14,7 @@ import { NOT_STARTED, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartStat
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
+import { ApiError } from "../src/api/client.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -150,10 +151,11 @@ class StartClient extends FixtureClient {
   }
 }
 
-async function runPage(status: RunStatus, ledger: PersistedEvent[], chat = false, stopped?: Parameters<typeof RunScreen>[0]["stopped"]) {
+async function runPage(status: RunStatus, ledger: PersistedEvent[], chat = false, stopped?: Parameters<typeof RunScreen>[0]["stopped"],
+  retry?: () => Promise<unknown>) {
   const client = new StartClient({ status, role: chat ? "conductor" : "implementer", phase: chat ? null : "implement" }, ledger);
   const { container, unmount } = await mount(<RunScreen runId={RUN_ID} onBack={() => {}} client={client} stopped={stopped}
-    {...(chat ? { chat: { head: null, send: () => Promise.resolve(), answer: () => Promise.resolve(), briefedWith: [] } } : {})} />);
+    {...(chat ? { chat: { head: null, send: () => Promise.resolve(), answer: () => Promise.resolve(), briefedWith: [], retry } } : {})} />);
   mounted.push(unmount);
   await until(() => container.querySelector(chat ? "[data-testid=chat-screen]" : "[data-testid=run-screen]"), "the page");
   return container;
@@ -230,5 +232,26 @@ describe("a conductor's Chat", () => {
     const page = await runPage("running", ledger, true);
     await until(() => page.querySelector("[data-testid=conductor-turn]"), "its first words");
     expect(page.querySelector("[data-testid=start-progress]")).toBeNull();
+  });
+
+  const failedStart = () => [created(), message("what changed?", 1), stage("waiting", 0), stage("container", 3_000),
+    ev("run.failed", { status: "failed", error: "x", stage: "container", reason: "start-failed" }, 5_000)];
+
+  test("a conductor whose start failed: Try again starts a fresh one", async () => {
+    let retried = 0;
+    const page = await runPage("failed", failedStart(), true, undefined, () => { retried += 1; return Promise.resolve(); });
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not start: failed while starting the container: start-failed.");
+    await act(async () => page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!.click());
+    expect(retried).toBe(1);
+  });
+
+  test("Try again after a new conductor already took the messages: says so, and is not offered again", async () => {
+    const page = await runPage("failed", failedStart(), true, undefined,
+      () => Promise.reject(new ApiError(409, "retry_taken", "a new agent already took the later messages")));
+    await act(async () => (await until(() => page.querySelector<HTMLButtonElement>("[data-testid=start-retry]"), "Try again")).click());
+    const said = await until(() => page.querySelector("[data-testid=start-retry-taken]"), "the line");
+    expect(said.textContent).toBe("A new agent already took the later messages.");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
   });
 });

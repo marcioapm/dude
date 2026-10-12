@@ -202,6 +202,41 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 	return nil
 }
 
+// retryConductor is Try again on a task whose conductor failed: a fresh
+// conductor takes what it never read (delivery.RetryConductor), under the
+// Chat lock the syncer's hand-over takes. Refusals as a session's
+// (retryError).
+func (s *Server) retryConductor(w http.ResponseWriter, r *http.Request, org string) error {
+	taskID := r.PathValue("id")
+	p := principalOf(r)
+	writer := delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person}
+	if writer.ActorType == "" {
+		writer.ActorType = ledger.ActorHuman
+	}
+	var runID string
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := delivery.LockChat(r.Context(), tx, taskID); err != nil {
+			return err
+		}
+		var projectID string
+		if err := tx.QueryRow(r.Context(), `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
+			}
+			return err
+		}
+		var err error
+		runID, err = delivery.RetryConductor(r.Context(), tx, org, projectID, taskID, writer)
+		return err
+	})
+	if err := retryError(err, "runs_live_conductor_idx"); err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusCreated, map[string]any{"runId": runID, "taskId": taskID, "created": true})
+	return nil
+}
+
 // decideFor settles who decides the task's delivery as a person writes in
 // its Chat, and says who does: a delivery in progress becomes the
 // conductor's (unless its decisions were handed back to Deliver); a task

@@ -9,6 +9,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
 import { AgentAvatar, StartChip, StartProgress, startSteps, type StartStep } from "@dude/design-system/components";
 import type { StartState } from "./api/conversation.ts";
+import { ApiError } from "./api/client.ts";
 import { instant } from "./instant.ts";
 
 /** Past this long in a stage, a calm line says why it can take a while. Not a failure, not amber. */
@@ -37,6 +38,15 @@ export function startVerbOf(start: StartState): string {
   return start.kind === "move" ? "Moving to another machine" : start.kind === "resume" ? "Resuming" : "Starting";
 }
 
+/** Try again found a newer agent already holding the failed one's messages (the API's 409 retry_taken). */
+export const RETRY_TAKEN = "A new agent already took the later messages.";
+
+/** What a refused Try again says: RETRY_TAKEN, after which it is not offered again, or why it failed. */
+export function retryRefusal(err: unknown, why: (err: unknown) => string): { taken: boolean; text: string } {
+  if (err instanceof ApiError && err.code === "retry_taken") return { taken: true, text: RETRY_TAKEN };
+  return { taken: false, text: `Could not start it again: ${why(err)}` };
+}
+
 const STAGES_OF: Record<StartState["kind"], readonly StartStage[]> = { start: FRESH_START_STAGES, resume: RESUME_STAGES, move: MOVE_STAGES };
 
 export function stepsOf(start: StartState): StartStep[] {
@@ -63,23 +73,28 @@ function useSlowNote(start: StartState): string | null {
   return slowNote(start, now);
 }
 
-/** The row where the agent's first turn will be. */
-export function StartRow({ start, role, onRetry }: { start: StartState; role: AgentRole; onRetry?: (() => void) | undefined }) {
+/** The row where the agent's first turn will be; failed, with Try again or why it is no longer offered. */
+export function StartRow({ start, role, onRetry, taken }: {
+  start: StartState; role: AgentRole; onRetry?: (() => void) | undefined; taken?: boolean | undefined;
+}) {
   const slow = useSlowNote(start);
   return (
-    <StartProgress
-      // A failure is a new element: its stages start folded.
-      key={start.failed ? "failed" : "live"}
-      kind={start.kind}
-      verb={startVerbOf(start)}
-      steps={stepsOf(start)}
-      startedAt={start.startedAt}
-      avatar={<AgentAvatar role={role} size="chat" />}
-      slowNote={slow ?? undefined}
-      slowReason={slow ? start.luxReason : undefined}
-      failure={start.failed ? { reason: start.failed.reason, onRetry } : undefined}
-      data-testid="start-progress"
-    />
+    <>
+      <StartProgress
+        // A failure is a new element: its stages start folded.
+        key={start.failed ? "failed" : "live"}
+        kind={start.kind}
+        verb={startVerbOf(start)}
+        steps={stepsOf(start)}
+        startedAt={start.startedAt}
+        avatar={<AgentAvatar role={role} size="chat" />}
+        slowNote={slow ?? undefined}
+        slowReason={slow ? start.luxReason : undefined}
+        failure={start.failed ? { reason: start.failed.reason, onRetry: taken ? undefined : onRetry } : undefined}
+        data-testid="start-progress"
+      />
+      {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p> : null}
+    </>
   );
 }
 

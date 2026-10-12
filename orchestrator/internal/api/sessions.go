@@ -975,9 +975,10 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	return nil
 }
 
-// retrySessionAgent is Try again on a session whose agent did not start: a
-// fresh agent with the message it was started for (delivery.RetryBrainstorm).
-// 409 when the latest agent did not fail before it ran.
+// retrySessionAgent is Try again on a session whose agent failed, to start
+// or to resume: a fresh agent takes what it never read
+// (delivery.RetryBrainstorm). 409 retry_taken when a newer agent already
+// took it; 409 conflict when there is nothing to retry.
 func (s *Server) retrySessionAgent(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -992,19 +993,31 @@ func (s *Server) retrySessionAgent(w http.ResponseWriter, r *http.Request, org s
 		runID, err = delivery.RetryBrainstorm(r.Context(), tx, org, id, p.writer())
 		return err
 	})
-	if errors.Is(err, delivery.ErrNothingToRetry) {
-		return fail(http.StatusConflict, "conflict", "%s", err.Error())
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.ConstraintName == "runs_live_brainstorm_idx" {
-		return fail(http.StatusConflict, "conflict", "the session's agent was just started")
-	}
-	if err != nil {
+	if err := retryError(err, "runs_live_brainstorm_idx"); err != nil {
 		return err
 	}
 	s.kick()
 	write(w, http.StatusCreated, map[string]any{"runId": runID, "created": true})
 	return nil
+}
+
+// retryError is how Try again's refusals read: retry_taken when a newer
+// agent took what the failed one left, or one was started meanwhile
+// (live, the unique index of one live agent); conflict with nothing to
+// retry.
+func retryError(err error, live string) error {
+	var pgErr *pgconn.PgError
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, delivery.ErrRetryTaken):
+		return fail(http.StatusConflict, "retry_taken", "%s", err.Error())
+	case errors.As(err, &pgErr) && pgErr.ConstraintName == live:
+		return fail(http.StatusConflict, "retry_taken", "%s", delivery.ErrRetryTaken.Error())
+	case errors.Is(err, delivery.ErrNothingToRetry):
+		return fail(http.StatusConflict, "conflict", "%s", err.Error())
+	}
+	return err
 }
 
 // checkChatText refuses a message the session's agent would not be given:

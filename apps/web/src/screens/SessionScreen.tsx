@@ -23,7 +23,7 @@ import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
 import { READ_WHEN_BACK, READ_WHEN_STARTED, apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
-import { StartHeaderChip, StartRow } from "../startCue.tsx";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
 import { DraftedComposer } from "./DraftedComposer.tsx";
@@ -146,16 +146,22 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     }
   }, [client, sessionId]);
 
-  // Try again on an agent that did not start: a fresh one with the message it was started for.
+  // Try again on an agent that failed to start or to resume: a fresh one takes what it never read.
   const [retrying, setRetrying] = useState(false);
-  const retryStart = useCallback(async () => {
+  // The failed turn whose Try again was refused because a newer agent already took its messages: not offered again.
+  const [retryTaken, setRetryTaken] = useState<string | null>(null);
+  const retryStart = useCallback(async (turnId: string) => {
     setProblem(null);
     setRetrying(true);
     try {
       await client.retrySessionAgent(sessionId);
       void load();
     } catch (err) {
-      setProblem(`Could not start it again: ${errorText(err)}`);
+      const refused = retryRefusal(err, errorText);
+      if (refused.taken) {
+        setRetryTaken(turnId);
+        void load();
+      } else setProblem(refused.text);
     } finally {
       setRetrying(false);
     }
@@ -281,8 +287,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     resend: () => undefined,
   } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.start
-    ? <StartRow key={turn.id} start={turn.start} role="brainstorm"
-        onRetry={reader || turn.retried || retrying ? undefined : () => void retryStart()} />
+    ? <StartRow key={turn.id} start={turn.start} role="brainstorm" taken={turn.taken || retryTaken === turn.id}
+        onRetry={reader || turn.retried || retrying ? undefined : () => void retryStart(turn.id)} />
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       undefined, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
