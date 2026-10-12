@@ -159,6 +159,65 @@ func TestTheConductorsRelationsFromTheShell(t *testing.T) {
 	}
 }
 
+// autoStartEndedByRemoval checks TEXT-1's start when unblocked, set by Ana,
+// was ended by removing its last blocker, as the conductor's act.
+func (f *fixture) autoStartEndedByRemoval(t *testing.T) {
+	t.Helper()
+	var rows, events int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM task_auto_starts WHERE task_id = $1`, f.item).Scan(&rows)
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.auto_start_cancelled'
+		AND payload->>'why' = 'unblocked_by_removal' AND actor_id = 'run_cond'`, f.item).Scan(&events)
+	if rows != 0 || events != 1 {
+		t.Fatalf("removing the last blocker: %d requests left, %d task.auto_start_cancelled {why: unblocked_by_removal}", rows, events)
+	}
+}
+
+func (f *fixture) setAutoStart(t *testing.T) {
+	t.Helper()
+	mustExec(t, f.owner, `INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person) VALUES ($1, $2, 'deliver', 'per_ana_'||$2)`,
+		f.item, f.org)
+}
+
+// update_task and --unblock removing the task's last blocker end its start
+// when unblocked: nothing is left in front of it to wait for.
+func TestRemovingTheLastBlockerEndsStartWhenUnblocked(t *testing.T) {
+	f := setup(t)
+	f.relFixture(t)
+	token := f.conductor(t)
+	var out map[string]any
+	if status := f.postAs(t, token, "update_task", `{"addRelations":[{"kind":"blocked_by","task":"TEXT-2"},{"kind":"blocked_by","task":"TEXT-3"}]}`, &out); status != 200 {
+		t.Fatalf("addRelations: %d %v", status, out)
+	}
+	f.setAutoStart(t)
+	if status := f.postAs(t, token, "update_task", `{"removeRelations":[{"kind":"blocked_by","task":"TEXT-2"}]}`, &out); status != 200 {
+		t.Fatalf("removing one blocker: %d %v", status, out)
+	}
+	var rows int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM task_auto_starts WHERE task_id = $1`, f.item).Scan(&rows)
+	if rows != 1 {
+		t.Fatal("removing one of two blockers ended the request")
+	}
+	if status := f.postAs(t, token, "update_task", `{"removeRelations":[{"kind":"blocked_by","task":"TEXT-3"}]}`, &out); status != 200 {
+		t.Fatalf("removing the last blocker: %d %v", status, out)
+	}
+	f.autoStartEndedByRemoval(t)
+
+	// From the shell: --unblock.
+	g := setup(t)
+	g.relFixture(t)
+	gt := g.conductor(t)
+	if status := g.postAs(t, gt, "update_task", `{"addRelations":[{"kind":"blocked_by","task":"TEXT-2"}]}`, &out); status != 200 {
+		t.Fatalf("addRelations: %d %v", status, out)
+	}
+	g.setAutoStart(t)
+	cmd := exec.Command(cli(t), "task", "update", "--unblock", "TEXT-2")
+	cmd.Env = append(os.Environ(), "LUX_SERVICE_DUDE="+luxService(t, g.url, gt), "DUDE_TOOLS_TOKEN=", "DUDE_TOOLS_URL=")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dude task update --unblock: %v\n%s", err, b)
+	}
+	g.autoStartEndedByRemoval(t)
+}
+
 // relate is a brainstorm's: a card item, never an edge.
 func TestABrainstormRelatesByProposingOnly(t *testing.T) {
 	f := setup(t)

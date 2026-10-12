@@ -34,7 +34,8 @@ const (
 	EvRelationsChanged     = "relations.changed"
 	SignalRelationsUnblock = "relations.unblocked"
 	// WakeUnblocked is the conductor's reason when its task can start.
-	WakeUnblocked = "unblocked"
+	WakeUnblocked      = "unblocked"
+	AutoStartEndFailed = "failed"
 )
 
 // Blocker is an open blocker of a task, as task_blocked_by returns it.
@@ -43,10 +44,6 @@ type Blocker struct {
 	Key    string `json:"key"`
 	Status string `json:"status"`
 }
-
-// Unmerged says the blocker is done with nothing merged: settled for its
-// owner, and it will never release anything.
-func (b Blocker) Unmerged() bool { return b.Status == "done" }
 
 // stateWord names a blocker's state the way every refusal does.
 var stateWord = map[string]string{
@@ -167,15 +164,17 @@ func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State) (bool,
 
 // refuseBlockedStart is path 4: the conductor's first implementer on a
 // task that gained an open blocker while it planned. A person's override
-// lets it through; otherwise the conductor is told, as a Refusal. (The
-// refusal rolls the tool call back, so no task.start_refused is kept here.)
+// lets it through; otherwise the conductor is told, as a Refusal carrying
+// the blockers. The refusal rolls the tool call back, so the tools server
+// records task.start_refused {path: "start_phase"} in a transaction of its
+// own, as the API's refusedStart does.
 func refuseBlockedStart(ctx context.Context, tx pgx.Tx, ref RunRef, st *State) error {
 	if st.Overridden {
 		return nil
 	}
 	err := RefuseBlockedTx(ctx, tx, ref.TaskID)
 	if blocked, ok := AsBlocked(err); ok {
-		return Refusal{blocked.AgentRefusal()}
+		return Refusal{Msg: blocked.AgentRefusal(), Blocked: &blocked}
 	}
 	return err
 }

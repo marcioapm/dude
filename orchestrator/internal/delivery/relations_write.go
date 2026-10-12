@@ -250,7 +250,7 @@ func ConductRelationsTx(ctx context.Context, tx pgx.Tx, ref RunRef, add, remove 
 // asRefusal is a relation refused, as the tools say a refusal.
 func asRefusal(err error) error {
 	if r, ok := err.(RelationRefusal); ok {
-		return Refusal{r.Msg}
+		return Refusal{Msg: r.Msg}
 	}
 	return err
 }
@@ -281,9 +281,9 @@ type BlocksOut struct {
 // RelationsOf reads the relations of the given tasks, for list_tasks.
 func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs []string) (map[string]*TaskRelationsOut, error) {
 	out := map[string]*TaskRelationsOut{}
-	rows, err := tx.Query(ctx, `SELECT t.id, t.status IN `+notStartedSQL+` AND NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
+	rows, err := tx.Query(ctx, `SELECT t.id, t.status = ANY($2::task_status[]) AND NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
 			(SELECT a.how FROM task_auto_starts a WHERE a.task_id = t.id)
-		FROM tasks t WHERE t.id = ANY($1)`, taskIDs)
+		FROM tasks t WHERE t.id = ANY($1)`, taskIDs, notStartedStatuses)
 	if err != nil {
 		return nil, err
 	}

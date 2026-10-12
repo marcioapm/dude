@@ -153,6 +153,11 @@ func TestTheConductorsFirstImplementerIsRefusedWhileBlocked(t *testing.T) {
 	if n := w.phaseRuns(task, "implement"); n != 0 {
 		t.Fatalf("a refused start made %d implementers", n)
 	}
+	// Each refusal is kept, as the conductor's, though its call rolled back.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.start_refused'
+		AND payload->>'path' = 'start_phase' AND actor_type = 'agent' AND jsonb_array_length(payload->'blockers') = 1`, task); n != 2 {
+		t.Fatalf("%d task.start_refused {path: start_phase}, want one per refusal", n)
+	}
 	w.mergeByHand(blocker)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("the implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
@@ -268,6 +273,11 @@ func TestOnlyAPersonStartsABlockedTaskAnyway(t *testing.T) {
 	if n := w2.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.start_overridden'`, t2); n != 1 {
 		t.Fatalf("start over anyway was not recorded")
 	}
+	// The new attempt is marked overridden: its implement step does not
+	// park on the blocker it was started past.
+	w2.until("the new attempt's implementer", func() bool {
+		return w2.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND attempt = 2`, t2) >= 1
+	})
 }
 
 // Start anyway on a delivery parked at its implement step: it goes on.

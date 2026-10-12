@@ -22,11 +22,16 @@ import (
 // with a Refusal the conductor can act on.
 
 // Refusal is a conductor's request declined, with what to do instead.
-type Refusal struct{ Msg string }
+type Refusal struct {
+	Msg string
+	// A start refused as blocked (path 4): the caller records it
+	// (task.start_refused) after the refused call rolls back.
+	Blocked *BlockedError
+}
 
 func (r Refusal) Error() string { return r.Msg }
 
-func refusef(format string, a ...any) error { return Refusal{fmt.Sprintf(format, a...)} }
+func refusef(format string, a ...any) error { return Refusal{Msg: fmt.Sprintf(format, a...)} }
 
 // Delivery is a task's latest delivery; LoadDelivery locks it for a decision.
 type Delivery struct {
