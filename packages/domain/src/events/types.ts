@@ -20,6 +20,13 @@ export const EventTypes = {
   RepositoryAdded: "repository.added",
   RepositoryUpdated: "repository.updated",
   RepositoryRemoved: "repository.removed",
+  /**
+   * A repository a resume added to a Run could not be cloned; lux dropped
+   * it and the agent goes on without it. Payload: `{ repository, error,
+   * reason }` (the spec name, git's error, and why in plain words); for a
+   * session's Run also `{ key, name }`, the repository as members know it.
+   */
+  RepositoryCloneFailed: "repository.clone_failed",
   EpicCreated: "epic.created",
   EpicUpdated: "epic.updated",
   EpicDeleted: "epic.deleted",

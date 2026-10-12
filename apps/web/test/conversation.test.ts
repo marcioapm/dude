@@ -1032,6 +1032,24 @@ describe("what happened to a talker's agent", () => {
     expect(html).toContain('data-kind="notice"');
   });
 
+  test("a linked repository whose clone failed is dude's line, in plain words, and never git's error alone", () => {
+    const signIn = "dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it.";
+    const turns = notes([
+      ev(EventTypes.RepositoryCloneFailed, { repository: "bill-billing-1a2b3c4d", key: "BILL", name: "billing",
+        error: "git clone: exit status 128: fatal: could not read Username for 'https://github.com': terminal prompts disabled", reason: signIn }),
+      // A task's names its checkout.
+      ev(EventTypes.RepositoryCloneFailed, { repository: "web", error: "ref not found", reason: "git said: ref not found." }),
+    ]);
+    expect(turns.map((t) => t.text)).toEqual([
+      `BILL/billing could not be checked out: ${signIn}`,
+      "web could not be checked out: git said: ref not found.",
+    ]);
+    const html = renderToStaticMarkup(createElement("div", null, renderTurn(turns[0]!, "brainstorm", 0, false, people, "El Duderino")));
+    expect(html).toContain("BILL/billing could not be checked out: dude couldn&#x27;t sign in to GitHub");
+    expect(html).toContain('data-kind="notice"');
+    expect(html).not.toContain("terminal prompts disabled");
+  });
+
   test("a compaction is a quiet notice that never shows the summary it kept", () => {
     const summary = "SECRET-LONG-SUMMARY ".repeat(500);
     const turns = notes([ev(EventTypes.ContextCompacted, { trigger: "auto", preTokens: 167012, postTokens: 9120, summary })]);

@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ const authFailure = "git clone: exit status 128: error: unable to read askpass r
 // every clone of the web repository with git's authentication error.
 func cloneFailingSession(t *testing.T) (s *sessionWorld, id, run string) {
 	s = newSessionWorld(t)
+	s.withTools()
 	s.lux.CloneError = func(url string) string {
 		if strings.Contains(url, "/web.git") {
 			return authFailure
@@ -97,5 +99,60 @@ func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	})
 	if now, status := s.brainstorm(id); now != run || status == "failed" {
 		t.Errorf("the session's agent is %s %s, want %s running", now, status, run)
+	}
+}
+
+// A linked repository whose clone fails is said: its agent gets dude's
+// line naming it and git's reason (a directive, delivered as any), the
+// members a line in Chat in plain words, and the session no longer links
+// the repository. Its project stays linked, showing nothing checked out,
+// and list_repositories gives the repository no path.
+func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	s.until("the clone failed", func() bool {
+		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 1
+	})
+
+	note := "WC/web could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). " +
+		"It is not in /workspace; a member can check the repository's URL and access and link it again."
+	var directive string
+	if err := s.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1 AND text = $2`, run, note).Scan(&directive); err != nil {
+		t.Fatalf("no directive telling the agent: %v", err)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.told'
+		AND payload->>'text' = $2 AND payload->>'directiveId' = $3`, id, note, directive); n != 1 {
+		t.Errorf("%d session.told for it", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'
+		AND payload->>'key' = 'WC' AND payload->>'name' = 'web' AND payload->>'reason' = $2`, run,
+		"dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."); n != 1 {
+		t.Errorf("the members' line does not name WC/web with the reason in plain words")
+	}
+	s.until("the agent read it", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, directive) == 1
+	})
+	if v := s.luxRun(run); !slices.Contains(v.inputs, note) {
+		t.Errorf("the agent's inputs: %v", v.inputs)
+	}
+
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("%d repositories still linked", n)
+	}
+	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, id, s.webProject); n != 1 {
+		t.Errorf("the project's link went with the repository's")
+	}
+	status, out := s.tool(run, "list_repositories", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("list_repositories: %d %v", status, out)
+	}
+	raw, _ := json.Marshal(out)
+	if strings.Contains(string(raw), "/workspace/repos/WC/web") {
+		t.Errorf("list_repositories still says web is checked out: %s", raw)
+	}
+	if _, status := s.brainstorm(id); status == "failed" {
+		t.Errorf("the session's agent failed")
 	}
 }

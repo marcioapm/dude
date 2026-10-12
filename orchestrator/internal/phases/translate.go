@@ -980,13 +980,26 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		return err
 	}
 	// A session's: unlinked, or the next resume would try it again for good.
-	if _, err := tx.Exec(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
+	// Its project stays linked: its tasks, epics and pull requests are read
+	// without a checkout, and the rail shows it with nothing checked out.
+	var key, name string
+	err := tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
 		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
-		  AND `+delivery.SessionSpecNameSQL+` = $2`, t.run.ID, repo); err != nil {
+		  AND `+delivery.SessionSpecNameSQL+` = $2
+		RETURNING p.key_prefix, repo.name`, t.run.ID, repo).Scan(&key, &name)
+	if err != nil && !db.IsNotFound(err) {
 		return err
 	}
-	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
-		map[string]any{"repository": repo, "error": cloneErr})
+	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(cloneErr)}
+	if t.run.brainstorm() && name != "" {
+		// Said to the agent, which was told the checkout would be there
+		// unless dude said otherwise, and to the members.
+		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key, name, cloneErr)); err != nil {
+			return err
+		}
+		payload["key"], payload["name"] = key, name
+	}
+	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem, payload)
 }
 
 // agentEvent translates the agent's own protocol messages: ACP (OpenCode
