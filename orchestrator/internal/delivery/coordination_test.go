@@ -158,6 +158,80 @@ func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
 	}
 }
 
+func TestTheNoteLimitSerializesOnTheEpic(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	pin := func(tx pgx.Tx) error {
+		_, err := delivery.PinNoteTx(ctx, tx, w.org, delivery.PinInput{EpicID: w.epic, Text: "fact", Run: one})
+		return err
+	}
+	for range 9 {
+		w.in(t, pin)
+	}
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := pin(tx); err != nil {
+		t.Fatal(err)
+	}
+	err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+		if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
+			return err
+		}
+		return pin(other)
+	})
+	var blocked *pgconn.PgError
+	if !errors.As(err, &blocked) || blocked.Code != "55P03" {
+		t.Fatalf("pin did not wait for epic lock: %v", err)
+	}
+	// With no timeout, tx2 waits on tx1; once tx1 commits it must count ten
+	// and refuse. Without the epic lock it waits on UNIQUE (epic_id, n)
+	// instead and fails with 23505.
+	done := make(chan error, 1)
+	go func() { done <- w.app.InOrg(ctx, w.org, pin) }()
+	for w.count(t, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE NOT l.granted AND a.datname = current_database()`) == 0 {
+		select {
+		case err := <-done:
+			t.Fatalf("second pin finished before tx1 committed: %v", err)
+		default:
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	err = <-done
+	var refused delivery.NoteRefusal
+	if !errors.As(err, &refused) || refused.Reason != "limit" {
+		t.Errorf("after commit: %v", err)
+	}
+}
+
+func TestAConductorHearsOnlyRepliesItWaitsOn(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	cond := w.run(t, "run_cond", "ABS-2", "", "conductor", "paused")
+	w.exec(t, `UPDATE runs SET dude_pause = 'conductor', turn_done_at = now() WHERE id = 'run_cond'`)
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	q := w.send(t, cond, "ABS-1", "First?", "")
+	a := w.send(t, one, "ABS-2", "First answer.", q.ID)
+	if a.Lands != delivery.LandsNextRun || w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_cond'`) != 0 {
+		t.Fatal("non-waiting conductor got a reply directive")
+	}
+	q = w.send(t, cond, "ABS-1", "Second?", "")
+	w.in(t, func(tx pgx.Tx) error { _, err := delivery.OpenWaitTx(ctx, tx, cond, q.ID, "wait"); return err })
+	a = w.send(t, one, "ABS-2", "Second answer.", q.ID)
+	if a.Lands != delivery.LandsNextStep || w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_cond'`) != 1 {
+		t.Fatal("waiting conductor did not get exactly one directive")
+	}
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_cond' AND closed_by = 'reply'`); n != 1 {
+		t.Errorf("%d waits closed", n)
+	}
+}
+
 func (w *epicWorld) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {

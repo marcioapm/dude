@@ -344,7 +344,9 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
 // (at once), a person it waited on (once nothing is open for them), a
-// conductor parked after its warm period (once someone wrote to it). An idle
+// conductor parked after its warm period (once someone wrote to it), or a
+// Run parked only on a peer's reply that has peer mail to read (its wait
+// stays open, so its next idle waits again). An idle
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))

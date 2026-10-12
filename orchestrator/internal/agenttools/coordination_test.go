@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // message answers, decoded.
@@ -137,7 +136,7 @@ func TestTheSixthMessageInAnHourIsRefusedAndTheFirstAfterIsAllowed(t *testing.T)
 	status, out := f.post(t, token, "message", `{"to":"TEXT-2","text":"one more"}`)
 	msg, _ := out["error"].(string)
 	if status != 422 || !strings.Contains(msg, "Refused: this Run has sent 5 messages in the last hour, the most a Run may send.") ||
-		!strings.Contains(msg, "The next is allowed at "+time.Now().UTC().Add(time.Minute).Format("15:04")) ||
+		!strings.Contains(msg, "The next is allowed at "+f.one(t, `SELECT to_char((min(created_at) + interval '1 hour') AT TIME ZONE 'UTC', 'HH24:MI') FROM peer_messages`)) ||
 		!strings.Contains(msg, "`dude task list --peers`, `dude diff --task TEXT-2` and the epic notes may already answer it") {
 		t.Fatalf("the sixth: %d %q", status, msg)
 	}
@@ -215,6 +214,10 @@ func TestWaitForReplyWaitsOrReturnsTheReplyAtOnce(t *testing.T) {
 		AND payload->>'how' = 'wait' AND payload->>'parks_at' IS NOT NULL`); n != 1 {
 		t.Errorf("%d agent.peer.waiting events", n)
 	}
+	_, second := f.send(t, me, `{"to":"TEXT-2","text":"Another question?"}`)
+	if status, out := f.post(t, me, "wait_for_reply", `{"message":"`+second.ID+`"}`); status != 422 || !strings.Contains(out["error"].(string), "one wait at a time") {
+		t.Errorf("second wait: %d %v", status, out)
+	}
 	// The reply closes the wait, and is the waiting Run's next input.
 	_, a := f.send(t, two, `{"to":"TEXT-1","text":"/v1/query/estimate","replyTo":"`+q.ID+`"}`)
 	if got := f.one(t, `SELECT closed_by FROM peer_waits WHERE run_id = 'run_me'`); got != "reply" {
@@ -233,6 +236,13 @@ func TestWaitForReplyWaitsOrReturnsTheReplyAtOnce(t *testing.T) {
 		w.Reply.Text != "/v1/query/estimate" {
 		t.Fatalf("wait with the reply in: %d %+v", status, w)
 	}
+	_, self := f.send(t, me, `{"to":"TEXT-2","text":"Going ahead.","replyTo":"`+second.ID+`"}`)
+	if self.ID == "" {
+		t.Fatal("self reply refused")
+	}
+	if status, out := f.post(t, me, "wait_for_reply", `{"message":"`+second.ID+`"}`); status != 422 || !strings.Contains(out["error"].(string), "you closed") {
+		t.Errorf("wait after self close: %d %v", status, out)
+	}
 	if n := f.n(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_me' AND closed_at IS NULL`); n != 0 {
 		t.Errorf("a wait opened on a message already answered")
 	}
@@ -241,27 +251,29 @@ func TestWaitForReplyWaitsOrReturnsTheReplyAtOnce(t *testing.T) {
 // A Run ending closes its open waits, recorded; the messages to its task
 // stay for its next Run.
 func TestARunEndingClosesItsWaits(t *testing.T) {
-	f := setup(t)
-	ids := f.onEpic(t)
-	me := f.runOn(t, "run_me", f.item, "implement", "implementer", "running")
-	two := f.runOn(t, "run_two", ids["TEXT-2"], "implement", "implementer", "running")
-	_, q := f.send(t, me, `{"to":"TEXT-2","text":"Which path?"}`)
-	_, in := f.send(t, two, `{"to":"TEXT-1","text":"a question for TEXT-1"}`)
-	if status, _ := f.post(t, me, "wait_for_reply", `{"message":"`+q.ID+`"}`); status != 200 {
-		t.Fatal("wait")
-	}
-	for _, status := range []string{"aborted"} {
-		mustExec(t, f.owner, `UPDATE runs SET status = $1::run_status WHERE id = 'run_me'`, status)
-	}
-	if got := f.one(t, `SELECT closed_by FROM peer_waits WHERE run_id = 'run_me'`); got != "run_ended" {
-		t.Errorf("the wait closed by %q", got)
-	}
-	if n := f.n(t, `SELECT count(*) FROM events WHERE run_id = 'run_me' AND event_type = 'agent.peer.wait_ended'
+	for _, terminal := range []string{"completed", "failed", "aborted"} {
+		t.Run(terminal, func(t *testing.T) {
+			f := setup(t)
+			ids := f.onEpic(t)
+			me := f.runOn(t, "run_me", f.item, "implement", "implementer", "running")
+			two := f.runOn(t, "run_two", ids["TEXT-2"], "implement", "implementer", "running")
+			_, q := f.send(t, me, `{"to":"TEXT-2","text":"Which path?"}`)
+			_, in := f.send(t, two, `{"to":"TEXT-1","text":"a question for TEXT-1"}`)
+			if status, _ := f.post(t, me, "wait_for_reply", `{"message":"`+q.ID+`"}`); status != 200 {
+				t.Fatal("wait")
+			}
+			mustExec(t, f.owner, `UPDATE runs SET status = $1::run_status WHERE id = 'run_me'`, terminal)
+			if got := f.one(t, `SELECT closed_by FROM peer_waits WHERE run_id = 'run_me'`); got != "run_ended" {
+				t.Errorf("the wait closed by %q", got)
+			}
+			if n := f.n(t, `SELECT count(*) FROM events WHERE run_id = 'run_me' AND event_type = 'agent.peer.wait_ended'
 		AND payload->>'by' = 'run_ended'`); n != 1 {
-		t.Errorf("%d wait_ended events", n)
-	}
-	if n := f.n(t, `SELECT count(*) FROM peer_messages WHERE id = $1 AND read_at IS NULL AND briefed_run_id IS NULL`, in.ID); n != 1 {
-		t.Errorf("the message to the ended Run's task is gone")
+				t.Errorf("%d wait_ended events", n)
+			}
+			if n := f.n(t, `SELECT count(*) FROM peer_messages WHERE id = $1 AND read_at IS NULL AND briefed_run_id IS NULL`, in.ID); n != 1 {
+				t.Errorf("the message to the ended Run's task is gone")
+			}
+		})
 	}
 }
 
