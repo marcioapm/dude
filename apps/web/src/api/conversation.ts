@@ -265,6 +265,8 @@ export interface EndedTurn {
   why: string | null;
   /** A start that failed before the agent ran: where it was, as the row showed it. lux's reason is `why`. */
   start?: StartState;
+  /** That start was tried again: a fresh agent took its message. */
+  retried?: boolean;
 }
 
 /**
@@ -534,6 +536,8 @@ export interface Projection {
   ran: boolean;
   /** Messages its briefing carries, shown queued until the agent is up. */
   startMessages: HumanTurn[];
+  /** The last start that failed, and the messages it never delivered: Try again hands them to a fresh agent. */
+  failedStart: { turn: EndedTurn; messages: HumanTurn[] } | null;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -565,6 +569,7 @@ export function emptyProjection(): Projection {
     startStaged: false,
     ran: false,
     startMessages: [],
+    failedStart: null,
     cursor: 0,
   };
 }
@@ -614,6 +619,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.ran = false;
         state.start = { kind: "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
         state.startStaged = false;
+        // Try again on a start that failed: the fresh agent has its messages, queued again.
+        if (typeof payload.retries === "string" && state.failedStart) {
+          state.failedStart.turn.retried = true;
+          for (const m of state.failedStart.messages) m.failed = null;
+          state.startMessages = state.failedStart.messages;
+          state.failedStart = null;
+        }
         break;
 
       case EventTypes.RunStage: {
@@ -1089,6 +1101,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           starting.failed = { reason: typeof payload.reason === "string" && payload.reason ? payload.reason : null };
           ended.start = starting;
           for (const m of state.startMessages) if (m.deliveredAt === null) m.failed = NOT_STARTED;
+          state.failedStart = { turn: ended, messages: state.startMessages.filter((m) => m.deliveredAt === null) };
           state.startMessages = [];
         }
         if (state.start) state.start = null;

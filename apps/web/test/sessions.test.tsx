@@ -1595,4 +1595,32 @@ describe("a session's agent starting", () => {
     expect(page.querySelector("[data-testid=chat-notice]")!.textContent).toMatch(/Started in \d+s\./);
     expect(page.querySelector("[data-testid=human-turn]")!.textContent).not.toContain("Will be read");
   });
+
+  test("failed: Try again starts a fresh agent with the message, which is queued again until it is up", async () => {
+    const failedAt = () => [ev("run.failed", { status: "failed", error: "x", stage: "repositories", reason: "pull failed: manifest unknown" })];
+    class Retrying extends SessionClient {
+      retried = 0;
+      override retrySessionAgent() {
+        this.retried += 1;
+        this.detail = { ...this.detail, session: { ...this.detail.session,
+          run: { id: "run_brainstorm2", status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } };
+        this.ledger.push(ev("run.created", { role: "brainstorm", retries: RUN }));
+        return Promise.resolve({ runId: "run_brainstorm2", created: true });
+      }
+    }
+    const client = new Retrying(detail("owner"), starting(failedAt));
+    const page = await sessionPage(client);
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not start: failed while checking out repositories: pull failed: manifest unknown.");
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Not delivered:");
+    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
+    await click(page.querySelector("[data-testid=start-retry]")!);
+    expect(client.retried).toBe(1);
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => (page.querySelector("[data-testid=start-retry]") === null ? true : null), "Try again gone once used");
+    const sent = page.querySelector("[data-testid=human-turn]")!;
+    expect(sent.textContent).not.toContain("Not delivered");
+    expect(sent.textContent).toContain("Will be read when the agent starts.");
+    expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
+  });
 });

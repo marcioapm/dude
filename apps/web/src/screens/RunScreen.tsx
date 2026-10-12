@@ -463,7 +463,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const restartedText = runRestartedText(run, events, people);
   // Try again on a phase that did not start: the task's own way back (its restart dialog), where the page offers one.
-  const onStartRetry = undefined;
+  const onStartRetry = stopped && "onPickUp" in stopped ? () => stopped.onPickUp("retry") : undefined;
   // The question's form, while the Run can still hear it.
   const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null

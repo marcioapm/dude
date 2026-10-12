@@ -1086,6 +1086,11 @@ export class ApiClient {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
   }
 
+  /** Try again on a session whose agent did not start: a fresh agent with the message it was started for. */
+  retrySessionAgent(id: string): Promise<{ runId: string; created: boolean }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/retry`, {});
+  }
+
   /** The session agent's question answered through its form. */
   sessionAnswer(id: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = ""): Promise<{ id: string; status: "answered" }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/answer`,

@@ -32,6 +32,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /internal/sessions/{id}", s.auth(s.getSession))
 	mux.Handle("POST /internal/sessions/{id}/title", s.auth(s.renameSession))
 	mux.Handle("POST /internal/sessions/{id}/chat", s.auth(s.sessionChat))
+	mux.Handle("POST /internal/sessions/{id}/retry", s.auth(s.retrySessionAgent))
 	mux.Handle("POST /internal/sessions/{id}/questions/{question}/answer", s.auth(s.sessionAnswer))
 	mux.Handle("POST /internal/sessions/{id}/link", s.auth(s.linkSession))
 	mux.Handle("POST /internal/sessions/{id}/people", s.auth(s.inviteToSession))
@@ -971,6 +972,38 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		status = http.StatusCreated
 	}
 	write(w, status, out)
+	return nil
+}
+
+// retrySessionAgent is Try again on a session whose agent did not start: a
+// fresh agent with the message it was started for (delivery.RetryBrainstorm).
+// 409 when the latest agent did not fail before it ran.
+func (s *Server) retrySessionAgent(w http.ResponseWriter, r *http.Request, org string) error {
+	p, err := sessionPrincipal(r)
+	if err != nil {
+		return err
+	}
+	id := r.PathValue("id")
+	var runID string
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "start the agent again"); err != nil {
+			return err
+		}
+		runID, err = delivery.RetryBrainstorm(r.Context(), tx, org, id, p.writer())
+		return err
+	})
+	if errors.Is(err, delivery.ErrNothingToRetry) {
+		return fail(http.StatusConflict, "conflict", "%s", err.Error())
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "runs_live_brainstorm_idx" {
+		return fail(http.StatusConflict, "conflict", "the session's agent was just started")
+	}
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusCreated, map[string]any{"runId": runID, "created": true})
 	return nil
 }
 

@@ -166,4 +166,14 @@ describe("a task's Run page", () => {
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toBe("Did not start: failed while getting the image ready: pull failed: manifest unknown. Nothing was spent on the model.");
   });
+
+  test("Try again on a phase that did not start opens the task's restart dialog", async () => {
+    let picked: string | null = null;
+    const ledger = [created(), stage("waiting", 0), stage("image", 5_000),
+      ev("run.failed", { status: "failed", error: "x", stage: "image", reason: "pull failed: manifest unknown" }, 50_000)];
+    const page = await runPage("failed", ledger, false, { onPickUp: (a) => { picked = a; }, keptUntil: null });
+    const retry = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=start-retry]"), "Try again");
+    await act(async () => retry.click());
+    expect(picked).toBe("retry");
+  });
 });

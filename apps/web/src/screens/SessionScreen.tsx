@@ -146,6 +146,21 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     }
   }, [client, sessionId]);
 
+  // Try again on an agent that did not start: a fresh one with the message it was started for.
+  const [retrying, setRetrying] = useState(false);
+  const retryStart = useCallback(async () => {
+    setProblem(null);
+    setRetrying(true);
+    try {
+      await client.retrySessionAgent(sessionId);
+      void load();
+    } catch (err) {
+      setProblem(`Could not start it again: ${errorText(err)}`);
+    } finally {
+      setRetrying(false);
+    }
+  }, [client, sessionId, load]);
+
   // The agent's question answered through its form: the whole ask at once.
   const answer = useCallback(async (turn: QuestionTurn, s: QuestionSubmission) => {
     setProblem(null);
@@ -266,7 +281,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     resend: () => undefined,
   } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.start
-    ? <StartRow key={turn.id} start={turn.start} role="brainstorm" />
+    ? <StartRow key={turn.id} start={turn.start} role="brainstorm"
+        onRetry={reader || turn.retried || retrying ? undefined : () => void retryStart()} />
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       undefined, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;

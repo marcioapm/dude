@@ -3,10 +3,13 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
@@ -113,4 +116,47 @@ func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionMod
 	return next, SessionEvent(ctx, tx, RunRef{Org: ref.Org, SessionID: ref.SessionID, RunID: next}, EvSessionModelApplied,
 		ledger.ActorSystem, "dude", map[string]any{"from": ref.RunID, "to": next, "tier": tier, "model": db.Nullable(to.Model),
 			"harness": to.Harness})
+}
+
+// ErrNothingToRetry: the session's latest agent did not fail before it ran.
+var ErrNothingToRetry = errors.New("the session's agent did not fail to start")
+
+// RetryBrainstorm starts a fresh agent for a session whose latest agent
+// failed before it ever ran, with the briefing that one was given: the
+// message it was started for is read by the new one, once. Messages sent
+// to the failed one meanwhile are handed on after it (SessionHandOver).
+// Its run.created names the Run it retries, so Chat shows the message
+// queued again rather than a second copy. The caller holds the session's
+// lock; returns the new Run.
+func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer) (string, error) {
+	var failed, briefing string
+	err := tx.QueryRow(ctx, `SELECT r.id, r.prompt FROM runs r WHERE r.session_id = $1 AND r.role = 'brainstorm' AND r.kind = 'agent'
+			AND r.status = 'failed' AND r.started_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.session_id = r.session_id AND n.role = 'brainstorm' AND n.created_at > r.created_at)
+			AND NOT EXISTS (SELECT 1 FROM runs l WHERE l.session_id = r.session_id AND `+strings.ReplaceAll(LiveBrainstorm, "r.", "l.")+`)
+		ORDER BY r.created_at DESC LIMIT 1`, sessionID).Scan(&failed, &briefing)
+	if db.IsNotFound(err) {
+		return "", ErrNothingToRetry
+	}
+	if err != nil {
+		return "", err
+	}
+	id := ids.New(ids.Run)
+	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, base_refs, prompt, started_by)
+		VALUES ($1, $2, $3, 1, 'pending', 'agent', 'brainstorm', '{}'::jsonb, $4, NULLIF($5, ''))`,
+		id, org, sessionID, briefing, w.Person); err != nil {
+		return "", err
+	}
+	ref := RunRef{Org: org, SessionID: sessionID, RunID: id}
+	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunCreated, ledger.ActorSystem,
+		map[string]any{"role": RoleBrainstorm, "publishes": false, "retries": failed})); err != nil {
+		return "", err
+	}
+	if err := SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", map[string]any{"text": briefing}); err != nil {
+		return "", err
+	}
+	if _, err := SessionHandOver(ctx, tx, RunRef{Org: org, SessionID: sessionID, RunID: failed}); err != nil {
+		return "", err
+	}
+	return id, nil
 }
