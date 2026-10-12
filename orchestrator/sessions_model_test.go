@@ -397,7 +397,8 @@ func TestAnEffortChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
 // swap nothing: the parked agent is resumed with the message, on what it
 // was submitted with.
 func TestAChangeSetBackOrNoneResumesTheSameAgent(t *testing.T) {
-	for _, change := range []string{"set back", "no change", "same model and effort on another tier", "tier renamed"} {
+	for _, change := range []string{"set back", "no change", "same model and effort on another tier", "tier renamed",
+		"the chosen tier's model removed"} {
 		t.Run(change, func(t *testing.T) {
 			s := newSessionWorld(t)
 			id, run := s.parkedOn()
@@ -411,6 +412,11 @@ func TestAChangeSetBackOrNoneResumesTheSameAgent(t *testing.T) {
 				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": twin, "harness": "claude-code"})
 			case "tier renamed":
 				mustExec(t, s.owner, `UPDATE model_tiers SET name = 'Deep thinker' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+			case "the chosen tier's model removed":
+				// A fresh agent on a tier naming no model would only fail.
+				sol := s.tierOn("Sol", "gpt-6-sol")
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": sol, "harness": "claude-code"})
+				mustExec(t, s.owner, `UPDATE model_tiers SET model = NULL WHERE id = $1`, sol)
 			}
 			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
 			s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
@@ -503,9 +509,12 @@ func TestAChangeMidTurnQueuesTheMessageOnTheSameAgent(t *testing.T) {
 // An answer to the agent's open question after a change, as a message or
 // through the form, is the fresh agent's first message, its briefing
 // carrying the question asked; the question is answered, not cancelled.
+// An agent whose turn ended waiting on a person (waiting_since, no
+// turn_done_at) is between turns too.
 func TestAnAnswerAfterAChangeBriefsAFreshAgentWithTheQuestion(t *testing.T) {
-	for _, form := range []bool{false, true} {
-		t.Run(map[bool]string{false: "message", true: "form"}[form], func(t *testing.T) {
+	for _, way := range []string{"message", "form", "message while waiting only"} {
+		t.Run(way, func(t *testing.T) {
+			form := way == "form"
 			s := newSessionWorld(t)
 			s.withTools()
 			id := s.session()
@@ -516,6 +525,9 @@ func TestAnAnswerAfterAChangeBriefsAFreshAgentWithTheQuestion(t *testing.T) {
 				t.Fatalf("ask_person: %d %v", status, out)
 			}
 			qid := out["questionId"].(string)
+			if way == "message while waiting only" {
+				mustExec(t, s.owner, `UPDATE runs SET turn_done_at = NULL, waiting_since = now() WHERE id = $1`, run)
+			}
 			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
 			if form {
 				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/questions/"+qid+"/answer", map[string]any{"text": "Only runs"})
