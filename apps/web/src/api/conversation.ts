@@ -543,11 +543,17 @@ export function toolLabel(name: string): string {
 }
 
 // These sources overlap but have no shared call id: they are not an additive total.
-export const TOOL_USAGE_NOTE = "Harness calls include failures; completed dude actions may also appear above.";
+export const TOOL_USAGE_NOTE = "Harness calls include failures and may repeat the completed dude actions listed here.";
+
+// A harness call to one of dude's tools reads beside its completed row: "dude name session (called)".
+function harnessToolLabel(name: string): string {
+  const own = dudeToolName(name);
+  return own === name ? toolLabel(name) : `dude ${own.replaceAll("_", " ")} (called)`;
+}
 
 export function toolUsage(conversation: Pick<Conversation, "toolCounts" | "dudeToolCounts">): { name: string; count: number }[] {
   return [
-    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: toolLabel(name), count })),
+    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: harnessToolLabel(name), count })),
     ...Array.from(conversation.dudeToolCounts, ([name, count]) => ({ name: `dude ${name.replaceAll("_", " ")} (completed)`, count })),
   ];
 }

@@ -600,28 +600,36 @@ describe("the tools a Run used, for the session rail", () => {
       .toEqual([{ name: "Read", count: 1 }, { name: "dude update task (completed)", count: 1 }, { name: "dude start phase (completed)", count: 2 }]);
   });
 
+  // A prefixed harness name is dude's tool called; a bare one cannot be told from any other tool.
+  const harnessLabel = { decide: "Decide", dude_decide: "dude decide (called)", mcp__dude__decide: "dude decide (called)" } as const;
+
   test("successful MCP overlap stays separately labelled for every harness alias", () => {
-    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"]) {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {
       expect(toolUsage(project([dude("decide"), called(tool, "c_1"), ev(EventTypes.ToolCompleted, { callId: "c_1", status: "completed" })])))
-        .toEqual([{ name: tool.charAt(0).toUpperCase() + tool.slice(1), count: 1 }, { name: "dude decide (completed)", count: 1 }]);
+        .toEqual([{ name: harnessLabel[tool], count: 1 }, { name: "dude decide (completed)", count: 1 }]);
     }
+  });
+
+  test("a prefixed harness call reads as dude's tool called, in words", () => {
+    expect(toolUsage(project([called("mcp__dude__name_session", "c_1"), called("dude_update_task", "c_2")])))
+      .toEqual([{ name: "dude name session (called)", count: 1 }, { name: "dude update task (called)", count: 1 }]);
   });
 
   test("two successful CLI decisions and one refused MCP decision preserve both sources", () => {
     expect(toolUsage(project([called("bash", "cli_1"), dude("decide"), called("bash", "cli_2"), dude("decide"),
       called("dude_decide", "mcp_1"), ev(EventTypes.ToolCompleted, { callId: "mcp_1", status: "error" })])))
-      .toEqual([{ name: "Bash", count: 2 }, { name: "Dude_decide", count: 1 }, { name: "dude decide (completed)", count: 2 }]);
+      .toEqual([{ name: "Bash", count: 2 }, { name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 2 }]);
     expect(toolUsage(project([called("dude_decide", "refused"), ev(EventTypes.ToolCompleted, { callId: "refused", status: "error" })])))
-      .toEqual([{ name: "Dude_decide", count: 1 }]);
+      .toEqual([{ name: "dude decide (called)", count: 1 }]);
   });
 
   test("server records before harness arrival remain complete in incremental projection", () => {
-    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"]) {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {
       const state = apply(emptyProjection(), [dude("decide"), dude("decide")]);
       expect(toolUsage(snapshot(state))).toEqual([{ name: "dude decide (completed)", count: 2 }]);
       apply(state, [called(tool, "c_1")]);
       expect(toolUsage(snapshot(state))).toEqual([
-        { name: tool.charAt(0).toUpperCase() + tool.slice(1), count: 1 }, { name: "dude decide (completed)", count: 2 },
+        { name: harnessLabel[tool], count: 1 }, { name: "dude decide (completed)", count: 2 },
       ]);
     }
   });
