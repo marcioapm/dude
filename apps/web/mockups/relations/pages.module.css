@@ -56,6 +56,9 @@
   margin: var(--ds-space-2) 0 0;
   color: var(--ds-color-text-secondary);
 }
+.callAuto {
+  margin: var(--ds-space-6) 0 0;
+}
 
 /* -- The override dialog's list of blockers -- */
 .blockerList {
@@ -91,6 +94,46 @@
 .dialogBody p {
   margin: 0;
   color: var(--ds-color-text-secondary);
+}
+.dialogBody .dialogNote {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.unmergedWord {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.stackedWord {
+  margin-left: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.laterTitle {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+
+/* -- The board card's start: a sibling of the card in its list item, never
+   inside it, drawn at the right end of the card's foot. -- */
+.cardStart {
+  position: absolute;
+  right: var(--ds-space-card-pad);
+  bottom: var(--ds-space-card-pad);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+}
+/* The foot's words stop short of the start, so neither covers the other. */
+:global([data-board-key][data-has-start] > span:last-child) {
+  padding-right: 76px;
+}
+.cardAuto {
+  display: flex;
+  min-width: 0;
 }
 
 /* -- The relation editor: kind, then the task, then its error; on the chrome shade, under the head. -- */
