@@ -57,12 +57,13 @@ type Note struct {
 
 // PinInput is one note pinned: by an agent's Run (Run) or a person
 // (Person, from a brainstorm session's proposal when Session), replacing
-// note Replaces when it is not 0.
+// note Replaces when it is not 0. Actor is the ledger's actor id for a
+// person's (their key, or themselves).
 type PinInput struct {
-	EpicID, Text            string
-	Replaces                int
-	Run                     RunRef
-	Person, Session, Writer string
+	EpicID, Text           string
+	Replaces               int
+	Run                    RunRef
+	Person, Session, Actor string
 }
 
 // Pinned is a note pinned: its number, the note it replaced, how many live
@@ -116,15 +117,13 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	} else if current >= NotesMax {
 		return Pinned{}, NoteRefusal{Reason: "limit", Msg: NotesLimitText, Current: current}
 	}
-	by := in.Writer
+	var by string
 	if in.Run.RunID != "" {
 		if by, err = RunLabel(ctx, tx, in.Run.RunID); err != nil {
 			return Pinned{}, err
 		}
-	} else if by == "" {
-		if by, err = PersonName(ctx, tx, in.Person); err != nil {
-			return Pinned{}, err
-		}
+	} else if by, err = PersonName(ctx, tx, in.Person); err != nil {
+		return Pinned{}, err
 	}
 	if by == "" {
 		by = "Someone"
@@ -234,7 +233,7 @@ func noteEvent(ctx context.Context, tx pgx.Tx, org, projectID string, in PinInpu
 		_, err := ledger.Append(ctx, tx, ev)
 		return err
 	}
-	actorType, actorID := ledger.ActorHuman, in.Writer
+	actorType, actorID := ledger.ActorHuman, in.Actor
 	if actorID == "" {
 		actorID = in.Person
 	}
