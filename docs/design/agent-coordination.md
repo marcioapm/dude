@@ -907,7 +907,7 @@ sections above, or where they were silent:
 - **Peers are the epic only.** "Depends on" links are not built, so no
   linked peer exists yet. The rule is the SQL function `task_peers(task)`
   (migration 111), returning `(peer_id, via)`; every tool, briefing and the
-  API read it through `delivery.Peers` / `PeerByKey` / `IsPeer`
+  API read it through `delivery.Peers` / `PeerByKey`
   (`orchestrator/internal/delivery/peers.go`). Links join it as a `UNION`
   there, with `via = 'depends_on'`.
 - **A message's bound is `SteerTextMax`** (the brief), not 8 KiB; past it:
@@ -919,7 +919,31 @@ sections above, or where they were silent:
   held, and the task's next implementer, fixer or investigator has it in its
   prompt ("Messages from your peers, sent while no Run of this task was
   going"); reviewers, the simplifier and QA never take a task's mail. A
-  message whose Run ended unread is held again for the next.
+  message whose Run ended unread is held again for the next, and so is one
+  briefed to a Run whose submit then failed (it ended without its agent
+  ever going busy): the next Run is briefed with it and records it read.
+- **An ended task takes no mail and no wait.** A message to a task that is
+  done, failed or aborted is refused: "ABS-2 is done: no Run will read
+  this. Carry on with your assumption, or ask a person." `wait_for_reply`
+  on a message to an ended task opens nothing and answers with the
+  peer-ended line; a turn that ends with its question to an ended task
+  unanswered does not wait.
+- **A wait and its reply serialise on the asked message.** Opening a wait
+  (`wait_for_reply`, or a turn's end) and sending a reply both lock the
+  asked `peer_messages` row (`FOR NO KEY UPDATE`); the wait re-checks "no
+  reply yet" under the lock, so a reply can never commit between that check
+  and the wait's insert and leave the wait open.
+- **A Run parked on a peer's reply still hears its peers.** One parked
+  (`dude_pause = 'person'`) with no person's ask open is resumed when a
+  peer's message is queued on it; it reads it, and at its next idle the
+  wait (still open) holds the turn again. Two agents waiting on each other
+  therefore each read the other's question. The resume's `woken_at` is
+  that message's queueing.
+- **Coordination's tasks** (`GET /v1/epics/:id/peers`) carry each task's
+  branch and head, its top 5 files by churn (from the stored diff of the Run
+  `list_tasks --peers` reads) and its agent's last words, one paragraph, 600
+  characters: one statement, each by a per-task lateral. The tab's open-wait
+  count is `GET /v1/epics/:id/waiting`, never the threads.
 - **Conductors are told nothing at a step.** Note changes are told to live
   phase Runs on the epic (not the pinner), never to a conductor; a message
   is never queued on a conductor it would wake. The conductor reads both in
@@ -928,7 +952,7 @@ sections above, or where they were silent:
   conductor (`conductor_digests.through`), in a briefing or a wake note,
   not the conductor's last turn: what one said is never repeated. It lists
   at most 10 messages to or from the task (newest first, each clipped to 200
-  characters), at most 20 note changes, and peers whose **status** changed
+  characters), at most 20 note changes (each clipped the same), and peers whose **status** changed
   (head changes are not tracked). A live conductor woken for any reason gets
   it appended to its wake note; a new one in its briefing.
 - **Data, as built:** `peer_waits` keeps closed waits (`id`, `closed_at`,
@@ -942,7 +966,7 @@ sections above, or where they were silent:
   "briefing"` when read in a prompt; `agent.message.refused` reasons also
   include `empty` and `reply` (a reply outside its thread);
   `agent.peer.wait_ended` `by` is reply, self, run_ended or peer_ended (with
-  the peer task's `status`). Times in refusals are UTC.
+  the peer task's `status` and the `line` the waiter was told). Times in refusals are UTC.
 - **A peer's task ending releases its waiters** (part B). When a task's
   status becomes done, failed or aborted (`delivery.SetTaskStatusTx`, the
   one writer of a terminal task status), every open `peer_waits` on a
@@ -962,6 +986,14 @@ sections above, or where they were silent:
   `/internal/epics/…`), read `GET /v1/epics/:id/notes`, `/threads` and
   `/peers`. There is no route to write in a thread. A thread is a reply
   chain from its first message, between that message's two tasks.
+- **`list_tasks --peers` reads each peer in its own queries**, about six
+  per peer (status, state Run, wait, heads, files, last words, inbox), each
+  index-driven and sub-millisecond. At today's epic sizes that is
+  round-trip latency, not database work, so it is not batched; batch it if
+  "depends on" links widen the peer set.
+- **The words people read come from Go.** The held-message notice and the
+  peer-ended line are in the events' payloads (`notice`, `line`), and the
+  web app draws those, not its own copy.
 
 ## Open questions
 
