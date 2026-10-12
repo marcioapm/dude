@@ -220,13 +220,25 @@ export const EventTypes = {
    * `firstOutput`. A phase whose end is unknown is absent, never zero.
    */
   RunResumeTimed: "run.resume.timed",
+  /**
+   * Where an agent's Run is while it starts, as lux announced it, once per
+   * change (about six per start). Payload: `{ stage, since, epoch,
+   * reason? }`: `stage` is lux's (`waiting`, `image`, `volumes`,
+   * `repositories`, `container`, `running` while lux's state is not yet
+   * running), or `park` for a move's stop (a drain, a preemption, a
+   * migrate); `since` lux's `stageSince` in UTC. Written only while the Run
+   * starts. A start that fails says its stage in `run.failed`.
+   */
+  RunStage: "run.stage",
 
   // Run lifecycle
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
   /**
-   * The Run failed. Payload: `{ status, error, kept?, failedTurns? }`.
+   * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
+   * reason? }`. `stage`: a start that failed before the agent ran, the
+   * `run.stage` it was in, with `reason` lux's own (its `stateReason`).
    * `kept`: only a conductor's or session agent's turn failed, and the Run
    * goes on (parked, or stopped by a control already pending), so it reads
    * as the turn's failure, not the Run's; `failedTurns`, how many turns in

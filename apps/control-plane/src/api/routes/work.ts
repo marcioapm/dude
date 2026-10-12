@@ -75,6 +75,12 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
       'left', runs.stall_left_at IS NOT NULL)
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
   replaced_by AS "replacedBy",
+  -- Where its start is (run.stage, the ledger's; no column holds it), while
+  -- it is live and lux has not reported it running.
+  (SELECT json_build_object('stage', e.payload->>'stage', 'since', e.payload->>'since', 'epoch', (e.payload->>'epoch')::int)
+   FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
+     AND runs.status IN ('scheduled', 'starting', 'running') AND COALESCE(runs.lux_state, '') <> 'running'
+   ORDER BY e.cursor DESC LIMIT 1) AS "startStage",
   can_run_containers AS "canRunContainers"`;
 
 const SESSION_SELECT = `

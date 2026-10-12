@@ -17,6 +17,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // Brainstorm sessions (delivery/session.go). Every route acts for the
@@ -396,7 +397,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 					FROM session_people sp JOIN people pp ON pp.id = sp.person_id WHERE sp.session_id = s.id),
 				'projects', `+sessionProjectsJSON+`,
 				'run', (SELECT json_build_object('id', r.id, 'status', r.status, 'dudePause', r.dude_pause, 'model', r.model,
-					'modelTier', r.model_tier, 'harness', r.harness, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL)
+					'modelTier', r.model_tier, 'harness', r.harness, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL,
+					'stage', `+phases.StartStageJSON+`)
 					FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1),
 				'runs', (SELECT COALESCE(json_agg(r.id ORDER BY r.created_at), '[]') FROM runs r WHERE r.session_id = s.id),
 				'costUsd', (SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.session_id = s.id),
