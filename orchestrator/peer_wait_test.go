@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -176,6 +177,41 @@ func TestMutualPeerWaitsResumeToReadQueuedQuestions(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = ANY($1) AND woken_at IS NOT NULL`, []string{ar, br}); n != 2 {
 		t.Errorf("%d timed resumes", n)
+	}
+}
+
+// Two scripted agents on one epic, through the tool server and the fake
+// lux alone: A asks B and waits; B reads the question at its next step and
+// replies to it ({{inbox.last}}); A resumes with the reply and completes.
+func TestTwoScriptedPeersAskAndAnswer(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.onModel("implementer", fakeagent.PeerModel)
+	a, b := w.task(), w.task()
+	w.onAnEpic(a, b)
+	w.deliver(b)
+	w.until("B's implementer to run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'
+			AND agent_busy_at IS NOT NULL`, b) == 1
+	})
+	w.deliver(a)
+	w.until("A's implementer to complete", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, a) == 1
+	})
+	var question, answer string
+	if err := w.owner.QueryRow(context.Background(), `SELECT q.id, r.text FROM peer_messages q JOIN peer_messages r ON r.reply_to = q.id
+		WHERE q.from_task_id = $1 AND q.to_task_id = $2`, a, b).Scan(&question, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer != fakeagent.PeerAnswer {
+		t.Errorf("B answered %q", answer)
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE message_id = $1 AND closed_by = 'reply'`, question); n != 1 {
+		t.Errorf("the wait on %s was not closed by the reply", question)
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
+		t.Errorf("%d waits left open", n)
 	}
 }
 
