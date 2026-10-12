@@ -86,6 +86,7 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
 /** Room left above a turn kept in view, so it does not sit flush on the transcript's edge. */
 const HELD_MARGIN = 12;
 const SCROLL_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+const DESCENDANT_SCROLL_KEYS: ReadonlySet<string> = new Set(["PageUp", "PageDown", "Home", "End"]);
 
 /**
  * The transcript: the operator's day-to-day screen. A header states what
@@ -215,7 +216,15 @@ export function ChatTranscript({
       {pinned !== undefined ? <div className={styles["pinned"]}>{pinned}</div> : null}
       <div className={styles["scroller"]}>
         <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} onWheel={release} onTouchMove={release}
-          onKeyDown={(e) => e.target === e.currentTarget && SCROLL_KEYS.has(e.key) && release()}
+          onKeyDown={(e) => {
+            if (e.defaultPrevented || !SCROLL_KEYS.has(e.key)) return;
+            const target = e.target as HTMLElement;
+            const own = target === e.currentTarget;
+            // Descendants own Space and arrows (activation, choice navigation); page/home/end bubble to the log.
+            if (!own && !DESCENDANT_SCROLL_KEYS.has(e.key)) return;
+            if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="slider"], [role="spinbutton"], [role="tree"], [role="grid"], [role="menu"], [role="tablist"]')) return;
+            release();
+          }}
           // A drag of the scrollbar, which is the viewport's own: not a click inside a turn.
           onPointerDown={(e) => e.target === e.currentTarget && release()}
           role="log" aria-live={live ? "polite" : "off"} aria-relevant="additions text" tabIndex={0}>

@@ -47,7 +47,7 @@ const measured = HTMLElement.prototype.getBoundingClientRect;
 function Transcript({ turns, held }: { turns: string[]; held?: string | undefined }) {
   return (
     <ChatTranscript fill keepInView={held} revision={turns.length}>
-      {turns.map((t) => <div key={t} data-turn={t}>{t}</div>)}
+      {turns.map((t) => <div key={t} data-turn={t}>{t}<button>Choice</button><input /><textarea /><span contentEditable /><button onKeyDown={(e) => e.preventDefault()}>Consumed</button></div>)}
     </ChatTranscript>
   );
 }
@@ -122,6 +122,46 @@ describe("ChatTranscript keepInView", () => {
     expect(viewport.scrollTop).toBe(8 * TURN - HEIGHT);
     await render(turns(9));
     expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
+  });
+
+  for (const key of ["PageUp", "PageDown", "Home", "End"]) {
+    test(`unconsumed ${key} from a question button releases the hold`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      const button = viewport.querySelector<HTMLElement>("[data-turn=t3] button")!;
+      await act(async () => {
+        button.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: key === "Home" || key === "End", bubbles: true, cancelable: true }));
+        viewport.scrollTop = viewport.scrollHeight - HEIGHT;
+        viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
+    });
+  }
+
+  for (const [selector, key] of [
+    ["button", " "], ["button", "ArrowDown"], ["input", "End"], ["textarea", "PageDown"],
+    ["[contenteditable]", "Home"], ["button:last-child", "End"],
+  ] as const) {
+    test(`${key} on ${selector} does not release the question hold`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      await act(async () => {
+        viewport.querySelector<HTMLElement>(`[data-turn=t3] ${selector}`)!.dispatchEvent(
+          new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+        );
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(3 * TURN - 12);
+    });
+  }
+
+  test("scroll keys on the viewport still release while clicks on choices do not", async () => {
+    const viewport = await mount(turns(8), "[data-turn=t3]");
+    await act(async () => void viewport.querySelector("button")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    await render(turns(9), "[data-turn=t3]");
+    expect(viewport.scrollTop).toBe(3 * TURN - 12);
+    await act(async () => void viewport.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true })));
+    await render(turns(10), "[data-turn=t3]");
+    expect(viewport.scrollTop).toBe(10 * TURN - HEIGHT);
   });
 
   test("a turn that is not there yet holds nothing, and holds once it is", async () => {
