@@ -157,6 +157,8 @@ describe("StartProgress", () => {
     const timers = [...el.querySelectorAll("[role=timer]")];
     expect(timers.length).toBeGreaterThan(0);
     for (const t of timers) expect(region.contains(t)).toBe(false);
+    // The start's own mark is the line's one live thing: its clocks carry no live dot.
+    for (const t of timers) expect(t.hasAttribute("data-live-dot")).toBe(false);
     const before = timers[0]!.textContent;
     const changes: string[] = [];
     const watch = new MutationObserver(() => changes.push(region.textContent ?? ""));
