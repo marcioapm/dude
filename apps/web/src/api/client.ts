@@ -9,6 +9,7 @@
 
 import type { NavProject, NavTask } from "@dude/design-system";
 import { escalationWords } from "../escalation.ts";
+import { isActive } from "../activity.ts";
 // One question's answer as the form sends it: the choices picked, by index, and the person's own words.
 export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
@@ -401,6 +402,8 @@ export class ApiClient {
         ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
         "content-type": raw ? body.type : "application/json",
         ...(this.#where ? { "x-dude-where": this.#where } : {}),
+        // Only a request from a tab someone is using says they are here.
+        ...(isActive(Date.now()) ? { "x-dude-active": "1" } : {}),
       },
       ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }),
     });
