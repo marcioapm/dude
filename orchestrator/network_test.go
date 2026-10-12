@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -136,6 +137,9 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if got := v.spec.Env["OPENCODE_ENABLE_EXA"]; got != "1" {
 		t.Errorf("OPENCODE_ENABLE_EXA = %q, want 1", got)
 	}
+	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the brainstorm that may reach any host is not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
 	var raw []byte
 	s.until("the brainstorm's network to be recorded", func() bool {
 		_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, id).Scan(&raw)
@@ -162,4 +166,10 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
 		t.Error("OPENCODE_ENABLE_EXA set on the brainstorm started after the setting was turned off")
 	}
+	if strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the brainstorm started after the setting was turned off is told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
 }
+
+// webNote opens what a brainstorm that may reach any host is told.
+const webNote = "You can read the web: search for and fetch public pages"

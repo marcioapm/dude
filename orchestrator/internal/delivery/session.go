@@ -349,6 +349,9 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 		}
 		sections = append(sections, b.String())
 	}
+	if in.Anywhere {
+		sections = append(sections, brainstormWebNote)
+	}
 	if in.Tools {
 		sections = append(sections, brainstormToolsNote, brainstormNamingNote)
 	}
@@ -365,6 +368,12 @@ const brainstormToolsNote = "The dude tools read the linked projects: list_tasks
 	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
 	"and what others say meanwhile reaches you with the answer."
+
+// brainstormWebNote is said only to a brainstorm that may reach any host
+// (brainstorm_anywhere). It is dude's, after the instructions, so an
+// organisation's own prompt does not drop it.
+const brainstormWebNote = "You can read the web: search for and fetch public pages when the conversation needs " +
+	"facts from outside the linked repositories. Say where each fact came from, with its URL."
 
 // brainstormNamingNote is when the agent names its session. The rule
 // that a person's name stays is name_session's own, not only these words.

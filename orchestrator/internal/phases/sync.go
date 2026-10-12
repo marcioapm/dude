@@ -1233,7 +1233,11 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	var models []json.RawMessage
 	if r.brainstorm() {
 		var orgModels json.RawMessage
-		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
+		// Whether it may reach any host: what it was submitted with once
+		// recorded (a rebriefing), else what its submit will read.
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, CASE WHEN r.network IS NULL THEN o.brainstorm_anywhere
+			ELSE COALESCE((r.network->>'unrestricted')::boolean, false) END
+			FROM runs r JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &in.Anywhere); err != nil {
 			return "", fmt.Errorf("load the session's organization: %w", err)
 		}
 		models = []json.RawMessage{orgModels}

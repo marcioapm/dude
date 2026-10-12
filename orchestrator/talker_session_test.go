@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A talker resumed into a new harness session — lux could not reload its
@@ -110,6 +111,53 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 			}
 			if lost < 0 {
 				t.Errorf("no word of the lost conversation:\n%s", text)
+			}
+		})
+	}
+}
+
+// A brainstorm briefed again is told of the web by the network it was
+// submitted with, which its resumes keep, not by the setting as changed
+// since: started able to reach any host, it is still told it can read the
+// web; started on the list, it is not.
+func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
+	for _, anywhere := range []bool{true, false} {
+		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
+			s := newSessionWorld(t)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = $2 WHERE id = $1`, s.org, anywhere)
+			id := s.session()
+			tk := &talking{world: s.world, kind: "brainstorm", park: "session"}
+			tk.write = func(text string) (int, string) {
+				status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+				run, _ := out["runId"].(string)
+				return status, run
+			}
+			tk.latest = func() string { run, _ := s.brainstorm(id); return run }
+			tk.syncer.ConductorWarm = time.Hour
+			tk.write("what do competitors charge?")
+			var run string
+			tk.until("the brainstorm's network to be recorded", func() bool {
+				run = tk.latest()
+				return run != "" && tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND network IS NOT NULL AND turn_done_at IS NOT NULL`, run) == 1
+			})
+			if got := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND (network->>'unrestricted')::boolean IS TRUE`, run) == 1; got != anywhere {
+				t.Fatalf("recorded unrestricted %v, want %v", got, anywhere)
+			}
+			mustExec(t, tk.owner, `UPDATE organizations SET brainstorm_anywhere = $2 WHERE id = $1`, tk.org, !anywhere)
+			tk.lux.LoseSession(tk.luxRunOf(run))
+			tk.stopOnItsOwn(run, "stopped")
+			tk.parked(run)
+			tk.write("still with me?")
+			tk.until("the briefing again queued", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'restarted without') > 0`, run) == 1
+			})
+			var text string
+			if err := tk.owner.QueryRow(t0(), `SELECT text FROM directives WHERE run_id = $1 AND strpos(text, 'restarted without') > 0`,
+				run).Scan(&text); err != nil {
+				t.Fatal(err)
+			}
+			if told := strings.Contains(text, webNote); told != anywhere {
+				t.Errorf("told it can read the web %v, want %v:\n%s", told, anywhere, text)
 			}
 		})
 	}
