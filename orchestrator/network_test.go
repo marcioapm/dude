@@ -145,4 +145,21 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if err := json.Unmarshal(raw, &kept); err != nil || !kept.Unrestricted {
 		t.Errorf("recorded = %s (%v), want unrestricted", raw, err)
 	}
+
+	// Turned off: the session's next agent keeps to the list, with no Exa.
+	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
+	mustExec(t, s.owner, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, id)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": "and their free tiers?"})
+	var next string
+	s.until("the session's next agent to be submitted", func() bool {
+		next, _ = s.brainstorm(session)
+		v = s.luxRun(next)
+		return next != id && v != nil
+	})
+	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+		t.Errorf("the next brainstorm's network = %+v, want %v", v.spec.Network, want)
+	}
+	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
+		t.Error("OPENCODE_ENABLE_EXA set on the brainstorm started after the setting was turned off")
+	}
 }
