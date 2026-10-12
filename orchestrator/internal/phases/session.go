@@ -127,7 +127,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		return lux.Spec{}, runSizes{}, errForge{err}
 	}
 	if gh != nil {
-		if in.ForgeToken, err = gh.Token(); err != nil {
+		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
 			return lux.Spec{}, runSizes{}, errForge{err}
 		}
 	}

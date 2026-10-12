@@ -8,7 +8,6 @@
 package forge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -56,9 +55,13 @@ const (
 
 // Credential is how an organization authenticates to GitHub.
 type Credential struct {
-	Auth       string // "pat" or "github_app"
+	Auth string // "pat" or "github_app"
+	// A PAT, or a GitHub App's PEM private key.
 	Secret     string
 	APIBaseURL string
+	// A GitHub App's: its id (the JWT's issuer), and an installation used
+	// when GitHub names none for an owner; "" resolves every owner's.
+	AppID, InstallationID string
 }
 
 type PullRequestRef struct {
@@ -263,6 +266,13 @@ type GitHub struct {
 	testGitHost string
 	// How the organization wants dude to behave on GitHub.
 	Settings Settings
+	// The clock installation tokens' expiry is read against.
+	now func() time.Time
+}
+
+// WithClock replaces the clock a GitHub App's tokens are judged by.
+func WithClock(now func() time.Time) func(*GitHub) {
+	return func(g *GitHub) { g.now = now }
 }
 
 // WithTestGitHost permits the test git daemon's separate port only on this
@@ -276,21 +286,25 @@ func NewGitHub(c Credential, options ...func(*GitHub)) *GitHub {
 		c.APIBaseURL = "https://api.github.com"
 	}
 	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
-	g := &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
+	g := &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings(), now: time.Now}
 	for _, option := range options {
 		option(g)
 	}
 	return g
 }
 
-// Token is the credential to hand lux for cloning and pushing. With a PAT it
-// is the PAT; with a GitHub App it will be a fresh installation token, which
-// is why callers must never cache it.
-func (g *GitHub) Token() (string, error) {
-	if g.cred.Auth == "pat" || g.cred.Auth == "" {
+// Token is the credential to hand lux for cloning and pushing slug
+// ("owner/repo"). With a PAT it is the PAT; with a GitHub App, a token of
+// the installation covering slug's owner, good for at least
+// tokenRefreshMargin: callers fetch it for each operation and never keep it.
+func (g *GitHub) Token(ctx context.Context, slug string) (string, error) {
+	switch g.cred.Auth {
+	case "pat", "":
 		return g.cred.Secret, nil
+	case "github_app":
+		return g.appToken(ctx, slug)
 	}
-	return "", fmt.Errorf("github_app authentication is not implemented yet")
+	return "", &Error{Status: http.StatusUnauthorized, Message: fmt.Sprintf("unknown GitHub authentication %q", g.cred.Auth)}
 }
 
 // CheckPushAccess discovers receive-pack without publishing a ref. It does not
@@ -337,7 +351,7 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 	}
 	base.Path = "/" + slug + ".git/info/refs"
 	base.RawQuery = "service=git-receive-pack"
-	token, err := g.Token()
+	token, err := g.Token(ctx, slug)
 	if err != nil {
 		return err
 	}
@@ -400,57 +414,31 @@ func markRateLimit(e *Error, h http.Header, prefix string) {
 }
 
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {
-	return g.doURL(ctx, method, g.cred.APIBaseURL+path, body, out)
+	return g.doURL(ctx, scopeOf(path), method, g.cred.APIBaseURL+path, body, out)
 }
 
-func (g *GitHub) doURL(ctx context.Context, method, target string, body, out any) error {
-	token, err := g.Token()
+// scopeOf is the account a REST path is about, which picks a GitHub App's
+// installation: "owner/repo" under /repos/, an organization under /orgs/,
+// else "" (any installation).
+func scopeOf(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	switch {
+	case len(parts) >= 3 && parts[0] == "repos":
+		return parts[1] + "/" + parts[2]
+	case len(parts) >= 2 && parts[0] == "orgs":
+		return parts[1]
+	}
+	return ""
+}
+
+// doURL makes one request authenticated for scope (see Token).
+func (g *GitHub) doURL(ctx context.Context, scope, method, target string, body, out any) error {
+	token, err := g.Token(ctx, scope)
 	if err != nil {
 		return err
 	}
-	var reader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, target, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := g.http.Do(req)
-	if err != nil {
-		return &Unreachable{err}
-	}
-	defer res.Body.Close()
-	data, err := io.ReadAll(res.Body)
-	if err != nil {
-		return &Unreachable{err}
-	}
-	if res.StatusCode >= 300 {
-		var e struct {
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(data, &e)
-		if e.Message == "" {
-			e.Message = fmt.Sprintf("%s %s failed", method, target)
-		}
-		refusal := &Error{Status: res.StatusCode, Message: e.Message}
-		markRateLimit(refusal, res.Header, "rate limit: ")
-		return refusal
-	}
-	if out != nil && len(data) > 0 {
-		return json.Unmarshal(data, out)
-	}
-	return nil
+	return g.send(ctx, method, target, "Bearer "+token, body, out)
 }
 
 type ghPull struct {
@@ -791,7 +779,11 @@ func (g *GitHub) graphql(ctx context.Context, query string, vars map[string]any,
 		Data   json.RawMessage `json:"data"`
 		Errors []gqlError      `json:"errors"`
 	}
-	if err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": vars}, &out); err != nil {
+	scope, _ := vars["owner"].(string)
+	if name, ok := vars["name"].(string); ok && scope != "" {
+		scope += "/" + name
+	}
+	if err := g.doURL(ctx, scope, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": vars}, &out); err != nil {
 		return nil, err
 	}
 	for _, e := range out.Errors {

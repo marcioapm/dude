@@ -1179,7 +1179,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, runSizes{}, nil, errForge{err}
 	}
 	if gh != nil {
-		if in.ForgeToken, err = gh.Token(); err != nil {
+		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
 			return lux.Spec{}, runSizes{}, nil, errForge{err}
 		}
 		if delivery.Publishes[r.Phase] {
@@ -2033,6 +2033,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	} else if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
 		return lux.Run{}, 0, err
 	}
+	in.Secrets = declaredTokens(in.Secrets, lr.Spec, in.AddRepositories)
 	if r.conductor() {
 		if in.Sync, err = s.currentRefs(ctx, r); err != nil {
 			return lux.Run{}, 0, err
@@ -2073,15 +2074,16 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // declares, as lux requires a value for each at every resume. lux keeps an
 // added repository's credential declared even after its failed clone
 // dropped the repository, so the fresh spec, naming no repository, lacks
-// GIT_TOKEN: it is supplied from the forge. Any other declared secret
-// fails the resume, naming it.
+// GIT_TOKEN (or an owner's GIT_TOKEN_<OWNER>): it is minted from the forge
+// now, never reused. Any other declared secret fails the resume, naming it.
 func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
 	out := fresh
 	for _, sec := range stored.Secrets {
 		if slices.ContainsFunc(out, func(f lux.Secret) bool { return f.Name == sec.Name }) {
 			continue
 		}
-		if sec.Name != gitTokenSecret {
+		owner := ownerOfSecret(sec.Name)
+		if sec.Name != gitTokenSecret && owner == "" {
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s, which dude cannot supply on a resume", sec.Name)}
 		}
 		gh, err := s.Forges.For(ctx, r.Org)
@@ -2091,11 +2093,11 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 		if gh == nil {
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s and the organisation has no forge credentials to supply it", sec.Name)}
 		}
-		token, err := gh.Token()
+		token, err := gh.Token(ctx, owner)
 		if err != nil {
 			return nil, errForge{err}
 		}
-		out = append(slices.Clone(out), lux.Secret{Name: gitTokenSecret, Value: token})
+		out = append(slices.Clone(out), lux.Secret{Name: sec.Name, Value: token})
 	}
 	return out, nil
 }

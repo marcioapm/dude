@@ -15,6 +15,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -149,7 +150,11 @@ type specInput struct {
 	// starts from.
 	Repos      []specRepo
 	PushBranch string
+	// The forge token lux clones and pushes with (gitTokenSecret), and, by
+	// spec name, a repository's own where it differs: a GitHub App's token
+	// is its installation's, one per repository owner.
 	ForgeToken string
+	RepoTokens map[string]string
 	// The Run's token for dude's tools; "" gives it none.
 	ToolsToken string
 	// The login for Image's registry; nil when it needs none.
@@ -326,17 +331,16 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	MachineSpec(in.Machine, &spec)
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
+		secrets := credentialSecrets(in)
 		for _, r := range in.Repos {
 			// lux takes only some names (lux.NameRe); everything lux reports
 			// back — checkouts, clones, pushes, syncs — carries this one.
 			repo := lux.Repository{Name: lux.SpecName(r.Name), URL: r.URL, Ref: r.Ref, Path: r.path()}
-			if in.ForgeToken != "" {
-				// Used by lux to clone and push; never placed in the container.
-				// Declared as a secret only with a repository that uses it:
-				// one declared with none would be the workload's, and lux
-				// would refuse it as the credential of one added later.
-				repo.Credential = gitTokenSecret
-			}
+			// Used by lux to clone and push; never placed in the container.
+			// Declared as a secret only with a repository that uses it:
+			// one declared with none would be the workload's, and lux
+			// would refuse it as the credential of one added later.
+			repo.Credential = secrets.name[repo.Name]
 			if r.ReadOnly {
 				repo.Push = new(bool)
 			}
@@ -345,8 +349,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == gitTokenSecret }) {
-			spec.Secrets = append(spec.Secrets, lux.Secret{Name: gitTokenSecret, Value: in.ForgeToken})
+		for _, sec := range secrets.list {
+			if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == sec.Name }) {
+				spec.Secrets = append(spec.Secrets, sec)
+			}
 		}
 	}
 
@@ -408,6 +414,57 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 	spec.Network = runNetwork(c, in)
 	return spec
+}
+
+// repoSecrets are the forge-token secrets a spec declares, and which one
+// each repository (by spec name) clones and pushes with.
+type repoSecrets struct {
+	name map[string]string
+	list []lux.Secret
+}
+
+// credentialSecrets names each repository's token: gitTokenSecret for
+// ForgeToken (every repository, with a PAT), and for a repository whose
+// own token differs (a GitHub App installed on another owner)
+// gitTokenSecret_<OWNER>, a name a resume can supply again from the owner
+// alone (ownerOfSecret).
+func credentialSecrets(in specInput) repoSecrets {
+	out := repoSecrets{name: map[string]string{}}
+	add := func(name, value string) {
+		if !slices.ContainsFunc(out.list, func(s lux.Secret) bool { return s.Name == name }) {
+			out.list = append(out.list, lux.Secret{Name: name, Value: value})
+		}
+	}
+	for _, r := range in.Repos {
+		name := lux.SpecName(r.Name)
+		token, secret := in.ForgeToken, gitTokenSecret
+		if own := in.RepoTokens[name]; own != "" && own != in.ForgeToken {
+			owner, _, _ := strings.Cut(forge.SlugFromURL(r.URL), "/")
+			token, secret = own, ownerSecret(owner)
+		}
+		if token == "" {
+			continue
+		}
+		out.name[name] = secret
+		add(secret, token)
+	}
+	return out
+}
+
+// ownerSecret is the token secret for a repository owner's installation.
+// GitHub logins are letters, digits and hyphens: the hyphen becomes an
+// underscore, which ownerOfSecret reverses.
+func ownerSecret(owner string) string {
+	return gitTokenSecret + "_" + strings.ToUpper(strings.ReplaceAll(owner, "-", "_"))
+}
+
+// ownerOfSecret is the owner an ownerSecret names, or "".
+func ownerOfSecret(name string) string {
+	owner, ok := strings.CutPrefix(name, gitTokenSecret+"_")
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(owner, "_", "-"))
 }
 
 // runNetwork is a Run's network: unrestricted when it may reach any host,

@@ -271,8 +271,10 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, credentialInput);
   const { organizationId } = ctx.principal;
 
-  if (input.auth === "github_app" && !(input.appId && input.installationId)) {
-    throw badRequest("github_app authentication requires appId and installationId");
+  // An App's installation is found per repository owner; installationId is
+  // only the default for an owner GitHub names none for.
+  if (input.auth === "github_app" && !input.appId) {
+    throw badRequest("github_app authentication requires appId");
   }
 
   const saved = await withOrg(organizationId, async (scope) => {

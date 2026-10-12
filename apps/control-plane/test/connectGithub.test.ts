@@ -90,3 +90,17 @@ test("connecting GitHub saves the token and asks for the hooks in the background
   const [cred] = await owner`SELECT secret, public_url FROM forge_credentials WHERE organization_id = ${ORG}`;
   expect(cred).toEqual({ secret: "ghp_new", public_url: "https://dude.example.com" });
 });
+
+test("a GitHub App connects with its App ID alone; the installation is found per repository owner", async () => {
+  const post = (body: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/forge/credential", {
+    method: "POST",
+    headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+  const refused = await post({ auth: "github_app", secret: "-----BEGIN RSA PRIVATE KEY-----" });
+  expect(refused.status).toBe(400);
+  const res = await post({ auth: "github_app", secret: "-----BEGIN RSA PRIVATE KEY-----", appId: "9001" });
+  expect(res.status).toBe(200);
+  const [cred] = await owner`SELECT auth::text, app_id, installation_id FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(cred).toEqual({ auth: "github_app", app_id: "9001", installation_id: null });
+});

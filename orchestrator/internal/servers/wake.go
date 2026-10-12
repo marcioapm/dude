@@ -576,15 +576,12 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		return err
 	}
 	var spec lux.Spec
-	token, err := p.forgeToken(ctx, r.Org)
+	tokens, err := p.resumeCredentials(ctx, r.previewRun, lr.Spec)
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
-	if token != "" {
-		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
-	}
-	spec.Secrets = append(spec.Secrets, projectSecrets...)
+	spec.Secrets = append(tokens, projectSecrets...)
 	login.Apply(&spec)
 	sync, err := p.syncRefs(ctx, r)
 	if err != nil {
