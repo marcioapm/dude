@@ -384,13 +384,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
-		if len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
+		if in.Anywhere || len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
 			// Its tools must be reachable, and what it stands in for may
 			// reach; it needs no model.
-			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in.Egress)
-		}
-		if in.Anywhere {
-			spec.Network = &lux.Network{Unrestricted: true}
+			spec.Network = runNetwork(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in)
 		}
 		return spec
 	}
@@ -404,11 +401,17 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	default:
 		openCodeWorkload(c, in, &spec)
 	}
-	spec.Network = egress(c, in.Egress)
-	if in.Anywhere {
-		spec.Network = &lux.Network{Unrestricted: true}
-	}
+	spec.Network = runNetwork(c, in)
 	return spec
+}
+
+// runNetwork is a Run's network: unrestricted when it may reach any host,
+// else its lists (egress).
+func runNetwork(c AgentConfig, in specInput) *lux.Network {
+	if in.Anywhere {
+		return &lux.Network{Unrestricted: true}
+	}
+	return egress(c, in.Egress)
 }
 
 // openCodeWorkload: the image's OpenCode config defines the two providers,
