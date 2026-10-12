@@ -941,11 +941,22 @@ sections above, or where they were silent:
   `toTaskId` (and `notice` when held); `agent.message.received` has `via:
   "briefing"` when read in a prompt; `agent.message.refused` reasons also
   include `empty` and `reply` (a reply outside its thread);
-  `agent.peer.wait_ended` `by` is reply, self or run_ended. Times in refusals
-  are UTC.
-- **Not built:** resuming a waiting sender when the recipient's task ends
-  without replying ("ABS-2 ended without replying"). The wait stays open
-  until a reply, a self-reply, or the sender's Run ending.
+  `agent.peer.wait_ended` `by` is reply, self, run_ended or peer_ended (with
+  the peer task's `status`). Times in refusals are UTC.
+- **A peer's task ending releases its waiters** (part B). When a task's
+  status becomes done, failed or aborted (`delivery.SetTaskStatusTx`, the
+  one writer of a terminal task status), every open `peer_waits` on a
+  message to it closes with `closed_by = 'peer_ended'` (migration 112),
+  `agent.peer.wait_ended {by: peer_ended, status}` is written on the
+  sender's Run, and the sender gets the directive "ABS-2 ended without
+  replying (status: done). Carry on with your assumption, or ask a
+  person.": read at its next step, or, parked, as the input that resumes
+  it (`delivery.PeerEndedTx`).
+- **The conductor's digest is data too** (part B). `ConductorDigestTx`
+  records `conductor.digest {since, through, where, task, messages[],
+  more, notes[], peers[]}` on the conductor's Run when it says anything,
+  so the task's Chat draws the `SinceDigest` before the briefing or wake
+  note that carried it.
 - **People** pin, replace and retire through `POST /v1/epics/:id/notes` and
   `POST /v1/epics/:id/notes/:n/retire` (the orchestrator's
   `/internal/epics/…`), read `GET /v1/epics/:id/notes`, `/threads` and

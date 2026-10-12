@@ -165,7 +165,7 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, taskID).Scan(&org); err != nil {
 		return "", err
 	}
-	digest, err := ConductorDigestTx(ctx, tx, org, taskID)
+	digest, err := ConductorDigestTx(ctx, tx, org, taskID, conductorRunID, "briefing")
 	if err != nil {
 		return "", err
 	}

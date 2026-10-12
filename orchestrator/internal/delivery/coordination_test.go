@@ -342,7 +342,7 @@ func TestTheConductorIsNeverWokenAndItsDigestIsBoundedAndNotRepeated(t *testing.
 	var digest string
 	w.in(t, func(tx pgx.Tx) error {
 		var err error
-		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"])
+		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"], "", "")
 		return err
 	})
 	for _, want := range []string{"## Since you last looked, on this epic", "Messages to or from ABS-2:", "question 11", "question 2 ",
@@ -361,7 +361,7 @@ func TestTheConductorIsNeverWokenAndItsDigestIsBoundedAndNotRepeated(t *testing.
 	// Told: the next says nothing of it.
 	w.in(t, func(tx pgx.Tx) error {
 		var err error
-		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"])
+		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"], "", "")
 		return err
 	})
 	if digest != "" {
@@ -371,7 +371,7 @@ func TestTheConductorIsNeverWokenAndItsDigestIsBoundedAndNotRepeated(t *testing.
 	w.send(t, one, "ABS-2", "one more thing", "")
 	w.in(t, func(tx pgx.Tx) error {
 		var err error
-		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"])
+		digest, err = delivery.ConductorDigestTx(ctx, tx, w.org, w.tasks["ABS-2"], "", "")
 		return err
 	})
 	if !strings.Contains(digest, "one more thing") || strings.Contains(digest, "question") || strings.Contains(digest, "Body is") {

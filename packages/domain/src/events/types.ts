@@ -426,6 +426,14 @@ export const EventTypes = {
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
+  /**
+   * What a conductor's digest told it of its epic, item by item, on its
+   * Run, in the transaction that briefed or woke it. Payload: `{ since,
+   * through, where: "briefing" | "wake", task, messages: [{ message, at,
+   * from, to, text, replyTo, answeredAt }], more, notes: [{ at, n, change,
+   * was?, line }], peers: [{ task, status, at }] }`.
+   */
+  ConductorDigest: "conductor.digest",
 
   // Agents coordinating on an epic (docs/design/agent-coordination.md)
   /**
@@ -450,7 +458,11 @@ export const EventTypes = {
    * "turn_ended", parks_at }`.
    */
   AgentPeerWaiting: "agent.peer.waiting",
-  /** A Run's wait ended. Payload: `{ message, on, by: "reply" | "self" | "run_ended" }`. */
+  /**
+   * A Run's wait ended. Payload: `{ message, on, by: "reply" | "self" |
+   * "run_ended" | "peer_ended", status? }`: `status` the peer task's, when it
+   * ended without replying.
+   */
   AgentPeerWaitEnded: "agent.peer.wait_ended",
   /**
    * A note was pinned on an epic (on the pinning Run for an agent's; the

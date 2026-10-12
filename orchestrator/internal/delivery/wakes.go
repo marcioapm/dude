@@ -127,7 +127,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
 		// A live conductor is not briefed again: what its epic's peers did
 		// since it last looked goes with the note.
-		digest, err := ConductorDigestTx(ctx, tx, org, taskID)
+		digest, err := ConductorDigestTx(ctx, tx, org, taskID, runID, "wake")
 		if err != nil {
 			return "", err
 		}

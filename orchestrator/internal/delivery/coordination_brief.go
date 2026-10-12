@@ -179,11 +179,18 @@ const (
 	digestLine     = 200
 )
 
+// EvConductorDigest records, on the conductor's Run, what its digest told
+// it, item by item: its task's Chat shows it as one folded line before the
+// briefing or wake note that carried it.
+const EvConductorDigest = "conductor.digest"
+
 // ConductorDigestTx is "Since you last looked, on this epic" for taskID's
 // conductor, "" when nothing happened since it was last told (or the task
 // is on no epic); and moves its "since" to now, so the next says only what
-// came after.
-func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (string, error) {
+// came after. With runID (the conductor told it) and something to say, it
+// records the items as conductor.digest on that Run; where says how it was
+// told ("briefing" or "wake").
+func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where string) (string, error) {
 	epic, err := TaskEpic(ctx, tx, taskID)
 	if err != nil || epic == "" {
 		return "", err
@@ -206,6 +213,9 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (stri
 		return "", err
 	}
 	var groups []string
+	// The same items, as data, for conductor.digest.
+	var digestMsgs, digestChanges, digestPeersOut []map[string]any
+	more := 0
 
 	// Messages to or from the task, newest first.
 	var total int
@@ -238,37 +248,47 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (stri
 		fmt.Fprintf(&g, "Messages to or from %s:", key)
 		for _, m := range msgs {
 			fmt.Fprintf(&g, "\n- %s %s → %s (%s): %q", m.At.UTC().Format("15:04"), m.From, m.To, m.ID, clip(oneLine(m.Text), digestLine))
+			item := map[string]any{"message": m.ID, "at": m.At, "from": m.From, "to": m.To, "text": clip(oneLine(m.Text), digestLine),
+				"replyTo": nil, "answeredAt": m.Answered}
 			switch {
 			case m.Reply != "":
 				fmt.Fprintf(&g, " Replies to %s.", m.Reply)
+				item["replyTo"] = m.Reply
 			case m.Answered != nil:
 				fmt.Fprintf(&g, " Answered %s.", m.Answered.UTC().Format("15:04"))
 			default:
 				g.WriteString(" No reply yet.")
 			}
+			digestMsgs = append(digestMsgs, item)
 		}
 		if total > len(msgs) {
-			fmt.Fprintf(&g, "\n- … and %d more: `dude task list --peers`", total-len(msgs))
+			more = total - len(msgs)
+			fmt.Fprintf(&g, "\n- … and %d more: `dude task list --peers`", more)
 		}
 		groups = append(groups, g.String())
 	}
 
 	// Note changes: pins and replacements, and retirements, in full.
-	rows, err := tx.Query(ctx, `SELECT at, line FROM (
+	rows, err := tx.Query(ctx, `SELECT at, line, n, change, was FROM (
 			SELECT n.created_at AS at, 'note ' || n.n || ', ' || n.by_label ||
-				COALESCE(', replaces note ' || (SELECT o.n FROM epic_notes o WHERE o.id = n.replaces_id), '') || ': ' || n.text AS line
+				COALESCE(', replaces note ' || (SELECT o.n FROM epic_notes o WHERE o.id = n.replaces_id), '') || ': ' || n.text AS line,
+				n.n, CASE WHEN n.replaces_id IS NULL THEN 'added' ELSE 'replaced' END AS change,
+				COALESCE((SELECT o.n FROM epic_notes o WHERE o.id = n.replaces_id), 0) AS was
 			FROM epic_notes n WHERE n.epic_id = $1 AND n.created_at > $2 AND n.created_at <= $3
 			UNION ALL
 			SELECT n.retired_at, 'note ' || n.n || ' retired by ' || COALESCE((SELECT p.name FROM people p WHERE p.id = n.retired_by), 'a person') ||
-				': ' || n.text
+				': ' || n.text, n.n, 'retired', 0
 			FROM epic_notes n WHERE n.epic_id = $1 AND n.retired_at > $2 AND n.retired_at <= $3) c
 		ORDER BY at LIMIT $4`, epic, since, now, digestNotes)
 	if err != nil {
 		return "", err
 	}
 	type change struct {
-		At   time.Time
-		Line string
+		At     time.Time
+		Line   string
+		N      int
+		Change string
+		Was    int
 	}
 	changes, err := pgx.CollectRows(rows, pgx.RowToStructByPos[change])
 	if err != nil {
@@ -278,7 +298,13 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (stri
 		var g strings.Builder
 		g.WriteString("Epic notes added, replaced or retired:")
 		for _, c := range changes {
-			fmt.Fprintf(&g, "\n- %s %s", c.At.UTC().Format("15:04"), strings.ReplaceAll(c.Line, "\n", " "))
+			line := strings.ReplaceAll(c.Line, "\n", " ")
+			fmt.Fprintf(&g, "\n- %s %s", c.At.UTC().Format("15:04"), line)
+			item := map[string]any{"at": c.At, "n": c.N, "change": c.Change, "line": clip(line, digestLine)}
+			if c.Was != 0 {
+				item["was"] = c.Was
+			}
+			digestChanges = append(digestChanges, item)
 		}
 		groups = append(groups, g.String())
 	}
@@ -304,6 +330,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (stri
 		g.WriteString("Peers that changed:")
 		for _, p := range peers {
 			fmt.Fprintf(&g, "\n- %s is %s since %s.", p.Key, strings.ReplaceAll(p.Status, "_", " "), p.At.UTC().Format("15:04"))
+			digestPeersOut = append(digestPeersOut, map[string]any{"task": p.Key, "status": p.Status, "at": p.At})
 		}
 		groups = append(groups, g.String())
 	}
@@ -314,6 +341,27 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID string) (stri
 	if len(groups) == 0 {
 		return "", nil
 	}
+	if runID != "" {
+		var projectID string
+		if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
+			return "", err
+		}
+		ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
+		if _, err := ledger.Append(ctx, tx, ref.Event(EvConductorDigest, ledger.ActorSystem, map[string]any{
+			"since": since, "through": now, "where": where, "task": key, "messages": nonNilItems(digestMsgs), "more": more,
+			"notes": nonNilItems(digestChanges), "peers": nonNilItems(digestPeersOut),
+		})); err != nil {
+			return "", err
+		}
+	}
 	return fmt.Sprintf("## Since you last looked, on this epic (%s → %s UTC)\n\n%s", since.UTC().Format("15:04"),
 		now.UTC().Format("15:04"), strings.Join(groups, "\n\n")), nil
+}
+
+// nonNilItems is items, or an empty list: a payload's lists are never null.
+func nonNilItems(items []map[string]any) []map[string]any {
+	if items == nil {
+		return []map[string]any{}
+	}
+	return items
 }
