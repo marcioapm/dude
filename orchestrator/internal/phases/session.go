@@ -145,8 +145,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		}
 		if added, ok := bySpec[name]; ok {
 			in.AddRepositories = append(in.AddRepositories, added)
-			// lux clones before the agent reads this, but it is written
-			// now: true either way, as a failure is told (settleClone).
+			// Written before lux clones it, so hedged: settleClone tells a failure.
 			told = append(told, fmt.Sprintf("A member linked %s/%s; it is checked out at %s (read only) unless dude tells you its clone failed.",
 				repo.Key, repo.Name, added.Path))
 		}

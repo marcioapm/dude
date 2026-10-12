@@ -985,12 +985,12 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	var repoURL string
 	if len(requested) > 0 {
 		repoURL = requested[0].URL
-	}
-	if len(requested) > 0 && !t.run.brainstorm() {
 		// The task's agent was told it is checked out unless dude said otherwise.
-		if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(),
-			delivery.Directive{Text: cloneFailedNote(requested[0].Name, cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
-			return err
+		if !t.run.brainstorm() {
+			if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(),
+				delivery.Directive{Text: cloneFailedNote(requested[0].Name, cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
+				return err
+			}
 		}
 	}
 	// Not checked out after all: the task stops naming it.
@@ -1015,8 +1015,7 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	}
 	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(repoURL, cloneErr)}
 	if t.run.brainstorm() && name != "" {
-		// Said to the agent, which was told the checkout would be there
-		// unless dude said otherwise, and to the members.
+		// The session's agent was told it is checked out unless dude said otherwise.
 		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key+"/"+name, cloneErr, sessionCloneRemedy)); err != nil {
 			return err
 		}

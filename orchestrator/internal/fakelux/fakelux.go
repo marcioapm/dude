@@ -2527,17 +2527,15 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			}
 			event := map[string]any{"requestId": in.RequestID, "repo": name, "status": "cloned", "commit": base}
 			if base == "" {
-				// Dropped from the Run, as lux drops a repository whose
-				// clone failed; its credential stays declared (below).
+				// Dropped from the Run, as lux drops a repository whose clone failed.
 				event = map[string]any{"requestId": in.RequestID, "repo": name, "status": "failed", "error": cloneErr}
 			} else {
 				repos = append(repos, repo)
 				s.luxEvent(run, "git.checkout", map[string]any{"repo": name, "ref": ref, "base": base})
 			}
 			s.luxEvent(run, "git.clone", event)
-			// As lux's addRepositories: an added repository's credential
-			// becomes a secret of the Run, kept for every later resume to
-			// supply whether or not the clone succeeded.
+			// As lux's addRepositories: the credential stays declared for
+			// every later resume, whether or not the clone succeeded.
 			spec["secrets"] = keepCredential(spec["secrets"], added[i].Credential)
 		}
 		git["repositories"] = repos

@@ -441,10 +441,10 @@ func runnerOnlySecrets(rawSpec json.RawMessage) map[string]bool {
 // lux's addRepositories declares an added repository's: valueless and
 // runner-only, so every later resume must supply it.
 func keepCredential(secrets any, credential string) any {
-	list, _ := secrets.([]any)
 	if credential == "" {
 		return secrets
 	}
+	list, _ := secrets.([]any)
 	for _, sec := range list {
 		if m, _ := sec.(map[string]any); m["name"] == credential {
 			return secrets

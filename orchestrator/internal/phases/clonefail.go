@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-// A repository a resume added to a Run whose clone failed: what members
-// are told on any Run (cloneReason), and what the agent is told
-// (cloneFailedNote) (settleClone).
+// What settleClone says of a repository a resume added whose clone failed:
+// cloneReason to the members, cloneFailedNote to the agent.
 
 // cloneAuthFailure is git's word for a clone it could not authenticate.
 // GitHub answers a private repository it cannot see "not found"; ssh
@@ -73,9 +72,9 @@ func onGitHub(repoURL string) bool {
 	return strings.EqualFold(host, "github.com")
 }
 
-// cloneFailedNote is what the agent is told of it: repository is KEY/name
-// on a session's Run, the bare name on a task's (task repositories have no
-// project key), and remedy what can be done about it there.
+// cloneFailedNote is what the agent is told: repository is KEY/name on a
+// session's Run, the bare name on a task's (task repositories have no
+// project key), and remedy one of the two below.
 func cloneFailedNote(repository, err, remedy string) string {
 	return fmt.Sprintf("%s could not be checked out (%s). It is not in /workspace; %s", repository, shortCloneError(err), remedy)
 }

@@ -2070,13 +2070,12 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	return resumed, foreseen, err
 }
 
-// resumeSecrets are fresh's secrets and every other one lux's stored spec
-// declares, which lux requires a value for at every resume. lux keeps a
-// repository's credential declared once a resume added the repository,
-// even when its clone failed and the repository was dropped: then the
-// Run's spec today names no repository and so no GIT_TOKEN, and it is
-// supplied here with the forge's token. A declared secret dude has no
-// value for fails the resume naming it.
+// resumeSecrets are fresh's secrets plus every other one lux's stored spec
+// declares, as lux requires a value for each at every resume. lux keeps an
+// added repository's credential declared even after its failed clone
+// dropped the repository, so the fresh spec, naming no repository, lacks
+// GIT_TOKEN: it is supplied from the forge. Any other declared secret
+// fails the resume, naming it.
 func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
 	out := fresh
 	for _, sec := range stored.Secrets {
@@ -2220,8 +2219,7 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 		if q.Access == "write" {
 			note = "you may change it; commit there and it gets its own pull request"
 		}
-		// Said before lux clones it: true either way, as a failure is
-		// told (settleClone).
+		// Written before lux clones it, so hedged: settleClone tells a failure.
 		told = append(told, fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", q.Name, repo.Path, note))
 	}
 	if len(failed) > 0 {
