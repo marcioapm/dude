@@ -2,21 +2,29 @@ package phases
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
-// A repository a resume added to a session's Run whose clone failed: what
-// its agent and members are told (settleClone).
+// A repository a resume added to a Run whose clone failed: what members
+// are told on any Run (cloneReason), and what the agent is told
+// (cloneFailedNote) (settleClone).
 
 // cloneAuthFailure is git's word for a clone it could not authenticate.
-// GitHub answers a private repository it cannot see "not found".
+// GitHub answers a private repository it cannot see "not found"; ssh
+// refuses a key it does not accept with "Permission denied (publickey)".
 var cloneAuthFailure = []string{"could not read Username", "could not read Password", "Authentication failed",
-	"terminal prompts disabled", "Repository not found", "returned error: 403", "returned error: 401"}
+	"terminal prompts disabled", "Repository not found", "returned error: 403", "returned error: 401",
+	"Permission denied (publickey)"}
 
-// cloneSignInReason is what members are told of a clone git could not
-// authenticate: the usual cause is the URL (a host GitHub redirects, where
-// git sends no credentials) or the token's access.
-const cloneSignInReason = "dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."
+// cloneSignInReason is what members are told of a clone of a github.com
+// repository git could not authenticate: the usual cause is the URL (a
+// host GitHub redirects, where git sends no credentials) or the token's
+// access. cloneHostSignInReason is the same for any other host.
+const (
+	cloneSignInReason     = "dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."
+	cloneHostSignInReason = "dude couldn't sign in to the repository's host: check its URL and that dude's access covers it."
+)
 
 // shortCloneError is lux's clone error as one line: git's last fatal
 // message when it has one (lux joins git's stderr after "git clone: exit
@@ -36,14 +44,33 @@ func shortCloneError(err string) string {
 	return short
 }
 
-// cloneReason is why the clone failed, in plain words for the members.
-func cloneReason(err string) string {
+// cloneReason is why the clone of the repository at repoURL failed, in
+// plain words for the members.
+func cloneReason(repoURL, err string) string {
 	for _, s := range cloneAuthFailure {
 		if strings.Contains(err, s) {
-			return cloneSignInReason
+			if onGitHub(repoURL) {
+				return cloneSignInReason
+			}
+			return cloneHostSignInReason
 		}
 	}
 	return "git said: " + shortCloneError(err) + "."
+}
+
+// onGitHub says whether a repository URL's host is github.com: a URL with
+// a scheme, or scp-like ssh (git@github.com:acme/web.git).
+func onGitHub(repoURL string) bool {
+	host := ""
+	if u, err := url.Parse(repoURL); err == nil && u.Host != "" {
+		host = u.Hostname()
+	} else if before, _, ok := strings.Cut(repoURL, ":"); ok && !strings.Contains(before, "/") {
+		_, host, _ = strings.Cut(before, "@")
+		if host == "" {
+			host = before
+		}
+	}
+	return strings.EqualFold(host, "github.com")
 }
 
 // cloneFailedNote is what the agent is told of it: repository is KEY/name

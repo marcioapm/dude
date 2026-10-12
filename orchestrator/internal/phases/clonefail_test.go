@@ -25,12 +25,28 @@ func TestAFailedCloneIsSaidInPlainWords(t *testing.T) {
 		"git clone: exit status 128: fatal: unable to access 'https://github.com/a/b/': The requested URL returned error: 403",
 		"git clone: exit status 128: fatal: unable to access 'https://github.com/a/b/': The requested URL returned error: 401",
 		"git clone: exit status 128: fatal: could not read Password for 'https://x@github.com': No such device or address",
+		"git clone: exit status 128: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
 	} {
-		if got := cloneReason(err); got != cloneSignInReason {
+		if got := cloneReason("https://github.com/acme/web", err); got != cloneSignInReason {
 			t.Errorf("an auth failure %q: %s", err, got)
 		}
 	}
-	if got := cloneReason("ref not found"); got != "git said: ref not found." {
+	// GitHub is named only for a repository on github.com.
+	for url, want := range map[string]string{
+		"https://GitHub.com/acme/web.git":       cloneSignInReason,
+		"ssh://git@github.com/acme/web.git":     cloneSignInReason,
+		"git@github.com:acme/web.git":           cloneSignInReason,
+		"https://gitlab.com/acme/web.git":       cloneHostSignInReason,
+		"https://gitlab.com/github.com/web.git": cloneHostSignInReason,
+		"git@gitlab.com:acme/web.git":           cloneHostSignInReason,
+		"git://127.0.0.1/acme/web.git":          cloneHostSignInReason,
+		"":                                      cloneHostSignInReason,
+	} {
+		if got := cloneReason(url, auth); got != want {
+			t.Errorf("an auth failure at %q: %s", url, got)
+		}
+	}
+	if got := cloneReason("https://github.com/acme/web", "ref not found"); got != "git said: ref not found." {
 		t.Errorf("another failure: %s", got)
 	}
 	long := make([]byte, 500)

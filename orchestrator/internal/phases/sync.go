@@ -2000,7 +2000,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 
 // resume is the one call to lux's resume. lux keeps no secret (every resume
 // supplies all of them again, lux internal/server/api.go resumeRun), so
-// the secrets come from s.spec, fresh: a Run parked for a day needs a new
+// the secrets come from s.spec, fresh, plus any lux kept declared that the
+// fresh spec lacks (resumeSecrets): a Run parked for a day needs a new
 // registry login and forge token, not the ones it started with. Its
 // timing's row is in before lux is asked (resumeAsked); foreseen is the
 // epoch it is under, 0 when lux was not asked.
@@ -2021,7 +2022,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
-	secrets, err := s.storedSecrets(ctx, r, lr.Spec, spec.Secrets)
+	secrets, err := s.resumeSecrets(ctx, r, lr.Spec, spec.Secrets)
 	if err != nil {
 		return lux.Run{}, 0, err
 	}
@@ -2069,14 +2070,14 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	return resumed, foreseen, err
 }
 
-// storedSecrets are fresh's secrets and every other one lux's stored spec
+// resumeSecrets are fresh's secrets and every other one lux's stored spec
 // declares, which lux requires a value for at every resume. lux keeps a
 // repository's credential declared once a resume added the repository,
 // even when its clone failed and the repository was dropped: then the
 // Run's spec today names no repository and so no GIT_TOKEN, and it is
 // supplied here with the forge's token. A declared secret dude has no
 // value for fails the resume naming it.
-func (s *Syncer) storedSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
+func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
 	out := fresh
 	for _, sec := range stored.Secrets {
 		if slices.ContainsFunc(out, func(f lux.Secret) bool { return f.Name == sec.Name }) {

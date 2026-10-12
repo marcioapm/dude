@@ -29,7 +29,7 @@ func TestAResumeSuppliesEverySecretLuxDeclares(t *testing.T) {
 	}
 	fresh := []lux.Secret{{Name: "DUDE_TOOLS_AUTH", Value: "Bearer t"}}
 
-	got, err := s.storedSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", "GIT_TOKEN"), fresh)
+	got, err := s.resumeSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", "GIT_TOKEN"), fresh)
 	if err != nil || !slices.Equal(got, []lux.Secret{fresh[0], {Name: "GIT_TOKEN", Value: "ghp_now"}}) {
 		t.Errorf("GIT_TOKEN declared, none fresh: %v, %v", got, err)
 	}
@@ -38,28 +38,28 @@ func TestAResumeSuppliesEverySecretLuxDeclares(t *testing.T) {
 	}
 	// Carried by the fresh spec already: sent once, as it is.
 	withToken := append(slices.Clone(fresh), lux.Secret{Name: "GIT_TOKEN", Value: "ghp_spec"})
-	if got, err := s.storedSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), withToken); err != nil || !slices.Equal(got, withToken) {
+	if got, err := s.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), withToken); err != nil || !slices.Equal(got, withToken) {
 		t.Errorf("GIT_TOKEN fresh: %v, %v", got, err)
 	}
 
 	// Not declared by lux, none fresh: not supplied, or lux would declare it
 	// on the resume and hand the forge's token to the agent's environment.
-	if got, err := s.storedSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH"), fresh); err != nil || !slices.Equal(got, fresh) {
+	if got, err := s.resumeSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH"), fresh); err != nil || !slices.Equal(got, fresh) {
 		t.Errorf("GIT_TOKEN undeclared: %v, %v, want exactly %v", got, err, fresh)
 	}
 
 	var cannot errCannotResume
-	_, err = s.storedSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", "NPM_TOKEN"), fresh)
+	_, err = s.resumeSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", "NPM_TOKEN"), fresh)
 	if !errors.As(err, &cannot) || err.Error() != "lux's Run declares the secret NPM_TOKEN, which dude cannot supply on a resume" {
 		t.Errorf("an unknown secret: %v", err)
 	}
 
 	none := &Syncer{Forges: forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })}
-	if _, err := none.storedSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !errors.As(err, &cannot) {
+	if _, err := none.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !errors.As(err, &cannot) {
 		t.Errorf("GIT_TOKEN with no forge: %v, want errCannotResume", err)
 	}
 	down := &Syncer{Forges: forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, errors.New("db down") })}
-	if _, err := down.storedSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !passing(err) {
+	if _, err := down.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !passing(err) {
 		t.Errorf("GIT_TOKEN with the forge unreadable: %v, want a passing error", err)
 	}
 }

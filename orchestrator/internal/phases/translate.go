@@ -973,18 +973,23 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	rows, err := tx.Query(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
 		FROM repositories repo WHERE repo.id = q.repository_id AND q.run_id = $1 AND lux_name(repo.name) = $2
 		  AND q.status = 'approved'
-		RETURNING repo.name`, t.run.ID, repo, cloneErr)
+		RETURNING repo.name, repo.url`, t.run.ID, repo, cloneErr)
 	if err != nil {
 		return err
 	}
-	requested, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	type requestedRepo struct{ Name, URL string }
+	requested, err := pgx.CollectRows(rows, pgx.RowToStructByPos[requestedRepo])
 	if err != nil {
 		return err
+	}
+	var repoURL string
+	if len(requested) > 0 {
+		repoURL = requested[0].URL
 	}
 	if len(requested) > 0 && !t.run.brainstorm() {
 		// The task's agent was told it is checked out unless dude said otherwise.
 		if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(),
-			delivery.Directive{Text: cloneFailedNote(requested[0], cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
+			delivery.Directive{Text: cloneFailedNote(requested[0].Name, cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
 			return err
 		}
 	}
@@ -997,15 +1002,18 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	// A session's: unlinked, or the next resume would try it again for good.
 	// Its project stays linked: its tasks, epics and pull requests are read
 	// without a checkout, and the rail shows it with nothing checked out.
-	var key, name string
+	var key, name, linkedURL string
 	err = tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
 		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
 		  AND `+delivery.SessionSpecNameSQL+` = $2
-		RETURNING p.key_prefix, repo.name`, t.run.ID, repo).Scan(&key, &name)
+		RETURNING p.key_prefix, repo.name, repo.url`, t.run.ID, repo).Scan(&key, &name, &linkedURL)
 	if err != nil && !db.IsNotFound(err) {
 		return err
 	}
-	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(cloneErr)}
+	if linkedURL != "" {
+		repoURL = linkedURL
+	}
+	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(repoURL, cloneErr)}
 	if t.run.brainstorm() && name != "" {
 		// Said to the agent, which was told the checkout would be there
 		// unless dude said otherwise, and to the members.

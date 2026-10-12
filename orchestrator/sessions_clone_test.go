@@ -158,7 +158,7 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'
 		AND payload->>'key' = 'WC' AND payload->>'name' = 'web' AND payload->>'reason' = $2`, run,
-		"dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."); n != 1 {
+		"dude couldn't sign in to the repository's host: check its URL and that dude's access covers it."); n != 1 {
 		t.Errorf("the members' line does not name WC/web with the reason in plain words")
 	}
 	s.until("the agent read it", func() bool {
