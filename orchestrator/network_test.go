@@ -173,3 +173,25 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 
 // webNote opens what a brainstorm that may reach any host is told.
 const webNote = "You can read the web: search for and fetch public pages"
+
+// "*" in its organisation's list makes a brainstorm unrestricted with the
+// setting off, and that counts as reaching any host from its first prompt:
+// it is told it can read the web, and Codex is pinned to search live.
+func TestABrainstormMadeUnrestrictedByAStarIsToldItCanReadTheWeb(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org,*}', brainstorm_anywhere = false WHERE id = $1`, s.org)
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?", "harness": "codex"})["id"].(string)
+	run, _, _, harness := s.submitted(id)
+	v := s.luxRun(run)
+	if harness != "codex" || v.spec.Network == nil || !v.spec.Network.Unrestricted {
+		t.Fatalf("submitted on %s with network %+v, want codex unrestricted", harness, v.spec.Network)
+	}
+	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
+	if !codexSearchesLive(t, v.spec.Secrets) {
+		t.Error("Codex not pinned to search live")
+	}
+}

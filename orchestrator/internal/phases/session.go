@@ -27,15 +27,21 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 // brainstormAnywhere is whether a brainstorm may reach any host, the one
 // answer its spec (Exa, Codex's pinned search) and its prompt both take:
 // once submitted, the network recorded on the Run, which its resumes keep;
-// before that, the organisation's brainstorm_anywhere, which its submit reads.
+// before that, the network its submit will compute (runNetwork), so the
+// organisation's brainstorm_anywhere or "*" in either list both count.
 func (s *Syncer) brainstormAnywhere(ctx context.Context, tx pgx.Tx, run string) (bool, error) {
-	var anywhere bool
-	if err := tx.QueryRow(ctx, `SELECT CASE WHEN r.network IS NULL THEN o.brainstorm_anywhere
-		ELSE COALESCE((r.network->>'unrestricted')::boolean, false) END
-		FROM runs r JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, run).Scan(&anywhere); err != nil {
+	var submitted, recorded bool
+	var in specInput
+	if err := tx.QueryRow(ctx, `SELECT r.network IS NOT NULL, COALESCE((r.network->>'unrestricted')::boolean, false),
+		o.brainstorm_anywhere, o.agent_egress
+		FROM runs r JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, run).
+		Scan(&submitted, &recorded, &in.Anywhere, &in.Egress); err != nil {
 		return false, fmt.Errorf("load the brainstorm's network: %w", err)
 	}
-	return anywhere, nil
+	if submitted {
+		return recorded, nil
+	}
+	return runNetwork(s.Agent, in).Unrestricted, nil
 }
 
 func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, error) {
