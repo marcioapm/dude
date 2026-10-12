@@ -569,8 +569,8 @@ describe("a steer read at the agent's next step", () => {
 describe("an ask's tool row and the question it asked", () => {
   // As prod writes them: dude's handler records the question and its own
   // call, then the harness reports the call that made them.
-  const ask = (questionId: string, call: string, tool = "ask_person", recorded = "ask_person", args: Record<string, unknown> = {}) => [
-    asked(questionId), dudeRecord(questionId, recorded, args), called(call, tool),
+  const ask = (questionId: string, call: string, tool = "ask_person", args: Record<string, unknown> = {}) => [
+    asked(questionId), dudeRecord(questionId, tool, args), called(call, tool),
     ev(EventTypes.ToolCompleted, { tool, callId: call, status: "completed" }),
   ];
   const asked = (questionId: string) => ev(EventTypes.QuestionAsked, { kind: "agent", questionId, prompt: `Q ${questionId}?` });
@@ -602,7 +602,7 @@ describe("an ask's tool row and the question it asked", () => {
   });
 
   test("a conductor's decide(ask_person) pairs with its question the same way", () => {
-    expect(order(ask("q_1", "c_1", "decide", "decide", { action: "ask_person", note: "Open it?" }))).toEqual(["tool:c_1", "q:q_1"]);
+    expect(order(ask("q_1", "c_1", "decide", { action: "ask_person", note: "Open it?" }))).toEqual(["tool:c_1", "q:q_1"]);
   });
 
   test("a dude tool that names a question it did not ask does not pair with it", () => {
