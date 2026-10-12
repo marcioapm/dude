@@ -548,7 +548,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       event.eventType === EventTypes.ToolCalled || event.eventType === EventTypes.ToolCompleted;
     const tool = isToolEvent ? String(payload.tool ?? "tool") : "";
     // Only the harness's next report of a tool can be the ask's own.
-    const ask = isToolEvent ? state.pendingAsk : null;
+    const ask = state.pendingAsk;
     if (isToolEvent) state.pendingAsk = null;
 
     switch (event.eventType) {
