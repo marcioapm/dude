@@ -139,9 +139,8 @@ export function MachineRaises({ raises, where }: { readonly raises: readonly Mac
 /**
  * Reset's confirmation: a `Dialog size="sm"` whose description is the one
  * consequence, and an optional note to the agent in a `Textarea`, whose hint
- * shows the line the agent is told. In the same pool nothing is lost, so the
- * confirm is primary; across pools the running agent is replaced, so the
- * dialog takes the danger tone and the confirm is `danger solid`.
+ * shows the line the agent is told. Every move keeps the agent's work, in
+ * its pool or across, so there is one plain variant with a primary confirm.
  */
 export function ResetMachineConfirm({ open, onOpenChange, label, from, to, defaultNote, onConfirm }: {
   readonly open: boolean;
@@ -153,20 +152,16 @@ export function ResetMachineConfirm({ open, onOpenChange, label, from, to, defau
   readonly defaultNote?: string | undefined;
   readonly onConfirm: (note: string) => void;
 }) {
-  const otherPool = from.poolId !== to.poolId;
   const [note, setNote] = useState(defaultNote ?? "");
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} size="sm" tone={otherPool ? "danger" : undefined}
+    <Dialog open={open} onOpenChange={onOpenChange} size="sm"
       title={`Move the ${label} back to ${to.name} now?`}
-      description={otherPool
-        ? `${from.name} is in another pool: a fresh ${label} starts from what it pushed; what it has not pushed is lost.`
-        : `It keeps its work (same pool). Later ${label} Runs in this task run on ${to.name} too.`}
+      description={`It keeps its conversation and checkout; running processes stop. Later ${label} Runs in this task run on ${to.name} too.`}
       footer={
         <>
           <DialogClose asChild><Button variant="quiet">Keep {from.name}</Button></DialogClose>
-          <Button data-testid="confirm-reset" {...(otherPool ? { variant: "danger", solid: true } : { variant: "primary" })}
-            onClick={() => { onConfirm(note); onOpenChange(false); }}>
-            {otherPool ? `Replace it on ${to.name}` : `Move it to ${to.name}`}
+          <Button data-testid="confirm-reset" variant="primary" onClick={() => { onConfirm(note); onOpenChange(false); }}>
+            Move it to {to.name}
           </Button>
         </>
       }>
@@ -248,13 +243,22 @@ function Clock({ since, muted }: { since: number; muted?: boolean }) {
 }
 
 /**
- * Stand-in for the design system's shared helper: the steps for a list of
- * stage ids, words from STAGE_WORDS, `done` of them finished (with their
- * times) and the next current for 4s.
+ * Stand-in for the design system's shared helper, with the proposed `pool`:
+ * the steps for a list of stage ids, words from STAGE_WORDS, all pending.
+ * With `pool`, `waiting` says which pool ("Waiting for a machine in highmem").
  */
-export function startSteps(ids: readonly StageId[], done: number, at: number, took: readonly number[]): StartStep[] {
-  return ids.map((id, i) => ({
-    id, ...STAGE_WORDS[id],
+export function startSteps(ids: readonly StageId[], opts: { readonly pool?: string | undefined } = {}): StartStep[] {
+  return ids.map((id) => {
+    const w = STAGE_WORDS[id];
+    const words = id === "waiting" && opts.pool ? STAGE_WORDS.waiting.pooled(opts.pool) : { label: w.label, doneLabel: w.doneLabel };
+    return { id, ...words, state: "pending" };
+  });
+}
+
+/** The mockup's frozen moment: `done` steps finished with their times, the next current for 4s. */
+export function atStage(steps: readonly StartStep[], done: number, at: number, took: readonly number[]): StartStep[] {
+  return steps.map((st, i) => ({
+    ...st,
     state: i < done ? "done" : i === done ? "current" : "pending",
     tookMs: took[i], since: i === done ? at - 4_000 : undefined,
   }));

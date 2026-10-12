@@ -27,7 +27,7 @@ function Screen({ scenario }: { scenario: Scenario }) {
   switch (scenario) {
     case "move": return <TaskChat otherPool={false} />;
     case "move-pool": return <TaskChat otherPool />;
-    case "refused": return <RunPage view="refused" />;
+    case "refused-platform": return <RunPage view="refused-platform" />;
     case "refused-largest": return <RunPage view="refused-largest" />;
     case "refused-moves": return <RunPage view="refused-moves" />;
     case "conductor": return <ConductorChat />;
@@ -35,7 +35,6 @@ function Screen({ scenario }: { scenario: Scenario }) {
     case "start-over": return <RunPage view="start-over" />;
     case "task": return <TaskOverview />;
     case "reset": return <TaskOverview confirm />;
-    case "reset-pool": return <TaskOverview confirm onXL />;
     case "session": return <SessionPage />;
   }
 }

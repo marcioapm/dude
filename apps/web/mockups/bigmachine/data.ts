@@ -46,10 +46,7 @@ export const TASK = {
   key: "BILL-42",
   title: "Faster invoice export",
   run: "run_7f3k",
-  fresh: "run_q8w2",
   branch: "dude/BILL-42/attempt-1",
-  runBranch: "dude/BILL-42/run-run_7f3k",
-  commit: "a41c9e2",
 };
 
 export const REASON_LARGE =
@@ -64,23 +61,43 @@ export const REASON_CONDUCTOR =
   "Márcio asked me to run the backend suite before I hand over. It needs 4 jest workers rendering PDFs; " +
   "my Standard (8 GiB) is the size the implementer was OOM-killed on with --maxWorkers 4.";
 
+/** What every move keeps and loses, the same for a same-pool and a cross-pool move. */
+const KEEPS =
+  "Your conversation and your checkout are kept, committed or not, with everything else on /workspace and your home. " +
+  "Running processes and /tmp are not: start your servers and watchers again.";
+
 /** The tool's answers, as the agent reads them. */
 export const ANSWER_LARGE =
-  "Moved: you run on Large (4 CPUs · 16 GiB · 40 GiB) from your next step; your conversation and checkout are kept. " +
+  `Moved: you run on Large (4 CPUs · 16 GiB · 40 GiB) from your next step. ${KEEPS} ` +
   "Later implementer and fixer Runs in this task run on Large too. End your turn now; you are resumed on Large.";
 
 export const ANSWER_XL =
-  "Pushed 2 commits (a41c9e2) to dude/BILL-42/run-run_7f3k, then: XL is in another pool, so you will be replaced by a fresh implementer " +
-  "starting from a41c9e2, with your reason as its note. Later implementer and fixer Runs in this task run on XL too. End your turn now.";
+  `Moved: you run on XL (8 CPUs · 32 GiB · 80 GiB) in the highmem pool from your next step. ${KEEPS} ` +
+  "Later implementer and fixer Runs in this task run on XL too. End your turn now; you are resumed on XL.";
 
 export const ANSWER_CONDUCTOR =
-  "Moved: you run on Large (4 CPUs · 16 GiB · 40 GiB) from your next step; your conversation and checkout are kept. " +
+  `Moved: you run on Large (4 CPUs · 16 GiB · 40 GiB) from your next step. ${KEEPS} ` +
   "Later conductors in this task run on Large too. End your turn now; you are resumed on Large.";
 
-export const REFUSED_UNCOMMITTED =
-  "XL is in another pool: you would be replaced by a fresh implementer starting from your last commit. " +
-  "Uncommitted: src/export/stream.ts (M +42 −7), src/export/sort.test.ts (A +88). " +
-  "Commit them first; what you commit is pushed for you. Then ask again.";
+export const ANSWER_SESSION =
+  `Moved: you run on XL (8 CPUs · 32 GiB · 80 GiB) in the highmem pool from your next step. ${KEEPS} ` +
+  "End your turn now; you are resumed on XL.";
+
+export const REASON_TESTER =
+  "Playwright with 4 workers against the export page crashed Chromium twice (\"Target crashed\", the renderer OOM-killed) while the 2.1M-row preview rendered; " +
+  "each worker's browser peaks at about 5 GiB, so 4 need about 20 GiB, more than Standard's 8 or Large's 16.";
+
+export const REASON_TESTER_LARGE =
+  "Same crash as above; XL is refused for this image. Large (16 GiB) fits 3 browser workers at about 5 GiB each.";
+
+export const ANSWER_TESTER_LARGE =
+  `Moved: you run on Large (4 CPUs · 16 GiB · 40 GiB) from your next step. ${KEEPS} ` +
+  "Later tester Runs in this task run on Large too. End your turn now; you are resumed on Large.";
+
+/** lux's 422 platform_mismatch, passed through in plain words. */
+export const REFUSED_PLATFORM =
+  "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only. " +
+  "Ask for another size, or ask a person to add an arm64 image.";
 
 export const REFUSED_LARGEST =
   "You run on XL (8 CPUs · 32 GiB · 80 GiB), Acme's largest size: there is none larger to ask for. " +
@@ -104,10 +121,14 @@ export const SESSION = {
 /**
  * Stand-in for the design system's shared stage-words map (agent-startup,
  * with its `park` entry): what each stage says while current and once done.
+ * `waiting` names the pool when the move changes it (`startSteps(ids, {pool})`).
  */
 export const STAGE_WORDS = {
   park: { label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept" },
-  waiting: { label: "Waiting for a machine", doneLabel: "Machine found" },
+  waiting: {
+    label: "Waiting for a machine", doneLabel: "Machine found",
+    pooled: (pool: string) => ({ label: `Waiting for a machine in ${pool}`, doneLabel: `Machine found in ${pool}` }),
+  },
   image: { label: "Getting the image ready", doneLabel: "Image ready" },
   volumes: { label: "Restoring its workspace", doneLabel: "Workspace restored" },
   repositories: { label: "Checking out repositories", doneLabel: "Repositories checked out" },
@@ -117,27 +138,23 @@ export const STAGE_WORDS = {
 
 export type StageId = keyof typeof STAGE_WORDS;
 
-/** A resize in place: lux parks the container, keeping its state, and resumes it with the new resources. */
+/** Every move, in its pool or to another: lux parks the container, keeping its state, and resumes it with the new resources. */
 export const MOVE_STAGES: readonly StageId[] = ["park", "waiting", "volumes", "container", "running"];
 
-/** A fresh Run's start, the startup design's list unchanged. */
-export const START_STAGES: readonly StageId[] = ["waiting", "image", "volumes", "repositories", "container", "running"];
-
 export type Scenario =
-  | "move" | "move-pool" | "refused" | "refused-largest" | "refused-moves" | "conductor" | "run" | "task" | "reset" | "reset-pool"
+  | "move" | "move-pool" | "refused-platform" | "refused-largest" | "refused-moves" | "conductor" | "run" | "task" | "reset"
   | "session" | "start-over";
 
 export const SCENARIOS: ReadonlyArray<{ readonly value: Scenario; readonly label: string; readonly note: string }> = [
-  { value: "move", label: "1 · Moves, same pool", note: "BILL-42's implementer ran out of memory on Standard and asked for Large. Every agent may ask: it moves at once, in place, keeping its conversation and checkout." },
-  { value: "move-pool", label: "2 · Moves, another pool", note: "It needs XL, which is in another lux pool. The tool pushed its 2 commits itself, then a fresh implementer starts on XL from a41c9e2, with its reason as its note. The old Run is Replaced." },
-  { value: "refused", label: "3 · Refused: uncommitted", note: "In the implementer's own Run: it asks for XL across pools with two files uncommitted. The tool names them; the agent commits, asks again, and the tool pushes and moves it." },
+  { value: "move", label: "1 · Moves, same pool", note: "BILL-42's implementer ran out of memory on Standard and asked for Large. Every agent may ask: it is parked and resumed on Large, keeping its conversation and checkout." },
+  { value: "move-pool", label: "2 · Moves, another pool", note: "It needs XL, in lux's highmem pool. The same move: parked, then resumed on XL with the new pool. Its conversation and checkout, committed or not, come with it." },
+  { value: "refused-platform", label: "3 · Refused: platform", note: "The tester's image is linux/amd64 only and highmem is arm64. This lux's pool list does not say highmem's platform, so the tool's list still offered XL; lux refuses the pool (platform_mismatch) and the tool says why in plain words. It stays on Standard." },
   { value: "refused-largest", label: "3 · Refused: largest", note: "The implementer on XL asks again. XL is Acme's largest: the tool says so." },
   { value: "refused-moves", label: "3 · Refused: 3 moves", note: "An implementer that moved to Large 3 times, and was Reset to Standard after each, asks again: 3 moves is the limit per Run, and a Reset gives none back." },
   { value: "conductor", label: "4 · The conductor moves", note: "In the task's Chat, the conductor asks Standard → Large to run the backend suite. Same pool, so it is resized in place, keeping the Chat's conversation." },
   { value: "run", label: "5 · Run header", note: "The fixer's Run later in the task: its machine chip says Large, raised for this task. The tooltip says who asked and why. Nobody approved: the agent decided." },
   { value: "task", label: "6 · Task", note: "The task's Overview: the machines raised in this task, beside the pull request. Anyone in the project may Reset." },
-  { value: "reset", label: "6 · Reset", note: "Reset moves the running implementer back down now, with an optional note it is told. Same pool: resized in place, keeping its work." },
-  { value: "reset-pool", label: "6 · Reset, other pool", note: "The implementer runs on XL in highmem: Reset replaces it with a fresh implementer on Standard, from what it pushed, with the note." },
-  { value: "session", label: "7 · Session", note: "A brainstorm on Small needs XL, in another pool: a fresh brainstorm takes over with the conversation. It has no push branch, so its scratch files are not kept." },
+  { value: "reset", label: "6 · Reset", note: "Reset moves the running implementer back down now, with an optional note it is told. One plain confirm for any move: it keeps its work, in its pool or across." },
+  { value: "session", label: "7 · Session", note: "A brainstorm on Small needs XL, in the highmem pool. It moves like any Run: parked, resumed on XL, with its conversation and archive.db." },
   { value: "start-over", label: "8 · After Start over", note: "Attempt 2's first implementer Run: Start over keeps the task, so it starts on Large, raised for this task." },
 ];

@@ -12,9 +12,9 @@ import {
   StepList, StepRow, TaskHistory,
 } from "@dude/design-system/components";
 import { Button, Callout, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { MachineRaises, MachineRequestCall, ResetMachineConfirm, StartProgress, startSteps } from "./components.tsx";
+import { MachineRaises, MachineRequestCall, ResetMachineConfirm, StartProgress, atStage, startSteps } from "./components.tsx";
 import {
-  ANSWER_CONDUCTOR, ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_CONDUCTOR, REASON_LARGE, REASON_XL, RESET_NOTE, START_STAGES, TASK, size,
+  ANSWER_CONDUCTOR, ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_CONDUCTOR, REASON_LARGE, REASON_XL, RESET_NOTE, TASK, size,
 } from "./data.ts";
 
 const MIN = 60_000;
@@ -64,10 +64,12 @@ function TaskChrome({ tab, children }: { tab: "chat" | "overview"; children: Rea
 
 const WHAT = "Implement: stream the CSV export instead of building it in memory";
 
-/** Task Chat: the implementer moves, in its pool (resized in place) or to another (a fresh Run). */
+/** Task Chat: the implementer moves, in its pool or to another; either is a park and a sized resume. */
 export function TaskChat({ otherPool }: { otherPool: boolean }) {
   const t0 = useRef(Date.now()).current;
   const asked = t0 - 50_000;
+  const to = otherPool ? xl : large;
+  const steps = startSteps(MOVE_STAGES, otherPool ? { pool: xl.pool } : {});
   return (
     <TaskChrome tab="chat">
       <div className="taskChat" data-testid="task-chat">
@@ -84,32 +86,18 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
               content="The export times out for Globex (2.1M invoices). Stream it instead of building the CSV in memory, and keep the PDF path as it is." />
             <ChatMessage role="conductor" startedAt={t0 - 40 * MIN} costUsd={0.12}
               content="Agreed. I'll start the implementer on streaming the CSV through `pg-cursor`; the PDF renderer stays. It runs the backend suite before it pushes." />
-            {otherPool ? (
-              <>
-                <ChatRunLine data-testid="chat-run" role="implementer" status="aborted" statusLabel="Replaced" what={WHAT}
-                  facts={["Standard", "38m", "$1.72"]} onOpen={() => undefined} />
-                <ChatAside>
-                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={9_800} defaultExpanded />
-                </ChatAside>
-                <ChatNotice kind="restart" by={DUDE} at={asked + 10_000} data-testid="move-notice"
-                  text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, which the move pushed, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
-                <ChatRunLine role="implementer" status="starting" statusLabel="Starting" what={WHAT} facts={["XL", TASK.fresh]} onOpen={() => undefined} />
-                <StartProgress verb="Starting" steps={startSteps(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 10_000} defaultOpen
-                  avatar={<AgentAvatar role="implementer" size="chat" />} />
-              </>
-            ) : (
-              <>
-                <ChatRunLine data-testid="chat-run" role="implementer" status="starting" statusLabel="Moving to Large" what={WHAT}
-                  facts={["Large", "38m", "$1.72"]} onOpen={() => undefined} />
-                <ChatAside>
-                  <MachineRequestCall from={standard} to={large} reason={REASON_LARGE} answer={ANSWER_LARGE} startedAt={asked} durationMs={700} defaultExpanded />
-                </ChatAside>
-                <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
-                  text="Moving the implementer to Large: it keeps its conversation and work. Later implementer Runs in this task run on Large too." />
-                <StartProgress verb="Moving to Large" steps={startSteps(MOVE_STAGES, 2, Date.now(), [6_400, 11_200])} startedAt={asked + 1_000} defaultOpen
-                  avatar={<AgentAvatar role="implementer" size="chat" />} />
-              </>
-            )}
+            <ChatRunLine data-testid="chat-run" role="implementer" status="starting" statusLabel={`Moving to ${to.name}`} what={WHAT}
+              facts={[otherPool ? `${to.name} · ${to.pool}` : to.name, "38m", "$1.72"]} onOpen={() => undefined} />
+            <ChatAside>
+              <MachineRequestCall from={standard} to={to} reason={otherPool ? REASON_XL : REASON_LARGE} answer={otherPool ? ANSWER_XL : ANSWER_LARGE}
+                startedAt={asked} durationMs={otherPool ? 900 : 700} defaultExpanded />
+            </ChatAside>
+            <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
+              text={otherPool
+                ? "Moving the implementer to XL, in the highmem pool: it keeps its conversation and checkout; running processes stop. Later implementer Runs in this task run on XL too."
+                : "Moving the implementer to Large: it keeps its conversation and checkout; running processes stop. Later implementer Runs in this task run on Large too."} />
+            <StartProgress verb={`Moving to ${to.name}`} steps={atStage(steps, otherPool ? 1 : 2, Date.now(), otherPool ? [6_100] : [6_400, 11_200])}
+              startedAt={asked + 1_000} defaultOpen avatar={<AgentAvatar role="implementer" size="chat" />} />
           </ChatTranscript>
         </div>
       </div>
@@ -142,8 +130,8 @@ export function ConductorChat() {
               <MachineRequestCall from={standard} to={large} reason={REASON_CONDUCTOR} answer={ANSWER_CONDUCTOR} startedAt={asked} durationMs={600} defaultExpanded />
             </ChatAside>
             <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
-              text="Moving the conductor to Large: it keeps this conversation and its checkout. Later conductors in this task run on Large too." />
-            <StartProgress verb="Moving to Large" steps={startSteps(MOVE_STAGES, 3, Date.now(), [5_900, 10_300, 7_800])} startedAt={asked + 1_000} defaultOpen
+              text="Moving the conductor to Large: it keeps this conversation and its checkout; running processes stop. Later conductors in this task run on Large too." />
+            <StartProgress verb="Moving to Large" steps={atStage(startSteps(MOVE_STAGES), 3, Date.now(), [5_900, 10_300, 7_800])} startedAt={asked + 1_000} defaultOpen
               avatar={<AgentAvatar role="conductor" size="chat" />} />
           </ChatTranscript>
         </div>
@@ -152,12 +140,12 @@ export function ConductorChat() {
   );
 }
 
-/** The Overview's machines; `confirm` opens Reset's confirmation, `onXL` puts the implementer on XL. */
-export function TaskOverview({ confirm, onXL }: { confirm?: boolean; onXL?: boolean }) {
+/** The Overview's machines; `confirm` opens Reset's confirmation. */
+export function TaskOverview({ confirm }: { confirm?: boolean }) {
   const [open, setOpen] = useState(confirm ?? false);
   const [reset, setReset] = useState(false);
-  const raised = onXL ? xl : large;
-  const reason = onXL ? "the 2.1M-row fixture's sort needs about 20 GiB" : "jest OOM-killed with --maxWorkers 4 on 8 GiB";
+  const raised = large;
+  const reason = "jest OOM-killed with --maxWorkers 4 on 8 GiB";
   return (
     <TaskChrome tab="overview">
       <div className="taskOverview">
@@ -180,14 +168,13 @@ export function TaskOverview({ confirm, onXL }: { confirm?: boolean; onXL?: bool
           <MachineRaises where="raised in this task"
             raises={reset ? [] : [
               { role: "implementer", label: "Implementer", size: raised, settings: standard, onReset: () => setOpen(true),
-                detail: <>Asked for by {onXL ? TASK.fresh : TASK.run}, 1h ago: {reason}</> },
+                detail: <>Asked for by {TASK.run}, 1h ago: {reason}</> },
               { role: "implementer", label: "Fixer", size: raised, settings: standard,
                 detail: <>Follows the implementer: it names no size of its own</> },
             ]} />
           {reset ? (
             <Callout tone="neutral" data-testid="reset-done">
-              {onXL ? "A fresh implementer is starting on Standard from what the last one pushed, with your note."
-                : "The implementer is moving back to Standard, keeping its work, with your note."} Later implementer and fixer Runs in this task run on billing's Standard.
+              The implementer is moving back to Standard, keeping its work, with your note. Later implementer and fixer Runs in this task run on billing's Standard.
             </Callout>
           ) : null}
         </aside>
