@@ -19,10 +19,6 @@ import (
 // model. Payload: { from, to, tier: { name } | null, model, harness }.
 const EvSessionModelApplied = "session.model.applied"
 
-// QuestionReplaced is question.closed's by for a question left open when
-// a fresh agent took over.
-const QuestionReplaced = "replaced"
-
 // betweenTurns (SQL, over runs r): a submitted session agent not in a
 // turn: parked or paused, or running with its turn over (done, or waiting
 // on a person); and holding no unsent message that is not held for an
@@ -75,29 +71,13 @@ type SessionModelApplied struct{ Tier, Model, Harness string }
 
 // ReplaceBrainstorm ends the session's agent ref for the model it no
 // longer matches and starts a fresh one briefed with the conversation and
-// message (shown in Chat as shown, if any); what the old one never read is
-// handed on after it. A question it left open is closed, said so in the
-// ledger before the briefing is built, so the new agent reads that it went
-// unanswered. Returns the new Run. The caller holds the session's lock and
-// has settled any question the message answers.
+// message (shown, the text Chat shows, if any); what the old one never
+// read is handed on after it. Returns the new Run. The caller holds the
+// session's lock and has settled the question the message answers: while
+// a question is open, nothing else swaps the agent.
 func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionModelApplied, w Writer, message, shown string) (string, error) {
-	rows, err := tx.Query(ctx, `SELECT id FROM questions WHERE run_id = $1 AND status = 'open' ORDER BY asked_at`, ref.RunID)
-	if err != nil {
-		return "", err
-	}
-	open, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return "", err
-	}
-	for _, q := range open {
-		if _, err := ledger.Append(ctx, tx, ref.Event(EvQuestionClosed, ledger.ActorSystem,
-			map[string]any{"questionId": q, "by": QuestionReplaced})); err != nil {
-			return "", err
-		}
-	}
 	// Aborted, not completed: the syncer then cancels its lux Run, idle or
-	// parked (Syncer.end), and never keeps a talker. Its open questions are
-	// cancelled by runs_cancel_open_questions.
+	// parked (Syncer.end), and never keeps a talker.
 	const why = "the session's model changed"
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 		control_reason = $2, ended_at = now(), keep = false WHERE id = $1 AND status IN ('scheduled', 'starting', 'running', 'paused')`,

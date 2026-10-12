@@ -544,6 +544,74 @@ func TestTheOldAgentsUnreadMessagesAreHandedOn(t *testing.T) {
 	})
 }
 
+// While the agent's question is open, only its answer swaps the agent: an
+// aside after a change, from another member (held for the answer) or from
+// the one it is put to, is queued on the agent that asked, and the
+// question stays open. The answer then hands the conversation over, the
+// question and the answer in the briefing once, and the aside with it.
+func TestAnAsideWhileAQuestionIsOpenWaitsForTheAnswerToSwap(t *testing.T) {
+	for _, byAna := range []bool{false, true} {
+		t.Run(map[bool]string{false: "another member's", true: "the asked member's"}[byAna], func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.withTools()
+			id := s.session()
+			s.join(id, s.ana, "chat")
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "how long is the window?"})
+			run := s.started(id)
+			status, out := s.tool(run, "ask_person", `{"question":"Grow the 24h window for every kind?","choices":["Every kind","Only runs"],"to":"Ana"}`)
+			if status != 200 {
+				t.Fatalf("ask_person: %d %v", status, out)
+			}
+			qid := out["questionId"].(string)
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+			who, said := s.marcio, "Márcio Martins: also cost estimates?"
+			if byAna {
+				who, said = s.ana, "Ana Nunes: also cost estimates?"
+			}
+			aside := s.ok(who, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "also cost estimates?", "aside": true})
+			if aside["runId"] != run || aside["created"] != false {
+				t.Fatalf("the aside answered %v, want queued on %s", aside, run)
+			}
+			if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND run_id = $2`, aside["directiveId"], run); n != 1 {
+				t.Errorf("the aside is not queued on the agent that asked")
+			}
+			if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+				t.Errorf("%d Runs after the aside, want the one that asked", n)
+			}
+			if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, qid); n != 1 {
+				t.Errorf("the question is no longer open")
+			}
+			if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type IN ('session.model.applied', 'question.closed')`, id); n != 0 {
+				t.Errorf("the aside swapped the agent or closed the question")
+			}
+			if byAna {
+				// Not held: the agent that asked reads it, and its turn ends.
+				s.until("the aside read", func() bool {
+					return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, aside["directiveId"]) == 1
+				})
+				s.runningIdle(run)
+			}
+
+			s.ok(s.ana, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "Only runs"})
+			next := s.freshAgent(id, run)
+			prompt := s.prompt(next)
+			conversationThenFirst(t, prompt, "You asked Ana Nunes: Grow the 24h window for every kind?",
+				"Ana Nunes answered your question \"Grow the 24h window for every kind?\":\n\nOnly runs")
+			if a, q := strings.Count(prompt, "Ana Nunes answered"), strings.Count(prompt, "You asked Ana Nunes: Grow the 24h window"); a != 1 || q != 1 {
+				t.Errorf("the briefing has the answer %d times and the question %d, want once each:\n%s", a, q, prompt)
+			}
+			if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered'`, qid); n != 1 {
+				t.Errorf("the question is not answered")
+			}
+			if byAna {
+				conversationThenFirst(t, prompt, said, "Ana Nunes answered")
+			} else if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2`, next, said); n != 1 {
+				t.Errorf("the held aside was not handed to the fresh agent")
+			}
+		})
+	}
+}
+
 // A tier a session chose that is then removed: the session follows the
 // organisation's again, its members are told on the session, and its next
 // agent runs on the organisation's tier.

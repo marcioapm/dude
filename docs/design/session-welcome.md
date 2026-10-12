@@ -234,9 +234,14 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   replay) its first input; what the old one never read is handed on
   after it (`delivery.BrainstormSwap`, `ReplaceBrainstorm`;
   `session.model.applied`, "Started a fresh agent on … ; it has the
-  conversation so far."). A message held for another member's answer
-  swaps nothing; any other wake (a repository linked, dude telling it
-  something) resumes it on what it was submitted with. The owner's chip is a button at once; its menu reads
+  conversation so far."). While the agent's question is open, only its
+  answer swaps it: an aside, or a message held for another member's
+  answer, is queued on the agent that asked. An agent still holding a
+  message it was not sent is not swapped either, so a fresh agent never
+  reads a newer message before an older one; a later message swaps it.
+  Any other wake (a repository linked, dude telling it something)
+  resumes it on what it was submitted with. The owner's chip is a button
+  at once; its menu reads
   the organisation's tiers when it first opens, and says "Could not load
   the tiers" when it cannot. A pick shows at once and the detail takes
   over once the last pick is answered; a failed pick cancels the picks

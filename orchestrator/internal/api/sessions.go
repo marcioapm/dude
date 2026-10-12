@@ -899,18 +899,20 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if qerr != nil && !db.IsNotFound(qerr) {
 			return qerr
 		}
-		// Held for another member's answer, a message swaps nothing: the
-		// answer does, and the message goes on after it.
+		// The question's own: their message answers one question. Several
+		// are answered through the form (sessionAnswer); a message beside
+		// them is an aside, as in a task's Chat, and reaches the agent now.
+		answers := qerr == nil && !body.Aside && len(items) == 1 && (to == "" || to == p.Person)
+		// While a question is open only its answer swaps the agent: an
+		// aside, or a message held for another member's answer, is queued
+		// on the agent that asked.
 		var swap *delivery.SessionModelApplied
-		if qerr != nil || to == "" || to == p.Person {
+		if qerr != nil || answers {
 			if swap, err = delivery.BrainstormSwap(r.Context(), tx, runID, id); err != nil {
 				return err
 			}
 		}
-		// The question's own: their message answers one question. Several
-		// are answered through the form (sessionAnswer); a message beside
-		// them is an aside, as in a task's Chat, and reaches the agent now.
-		if qerr == nil && !body.Aside && len(items) == 1 && (to == "" || to == p.Person) {
+		if answers {
 			answered, err := answerBody{Text: body.Text}.check(items)
 			if err != nil {
 				return err
