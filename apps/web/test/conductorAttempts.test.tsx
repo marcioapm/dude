@@ -15,7 +15,7 @@ import type { PersistedEvent, Run } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
-import { attemptStarts, attemptStatus, attemptsOf, eventAttempts, setAsideOf } from "../src/attempts.ts";
+import { WAITING_ON_CHAT, attemptMark, attemptStarts, attemptStatus, attemptsOf, eventAttempts, setAsideOf } from "../src/attempts.ts";
 import { formatPlace, inTree, parsePlace } from "../src/place.ts";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -107,6 +107,35 @@ describe("a conductor's Run and the attempts", () => {
     const of = eventAttempts([...RESTARTED_RUNS, conductor(1)], [], 2);
     expect(of({ eventType: "chat.message", runId: COND, occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBeNull();
     expect(of({ eventType: "run.steered", runId: "run_a1_fix", occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(1);
+  });
+});
+
+describe("the header's mark of a task its conductor decides", () => {
+  // Talk it through: running from the start, waiting on the conductor to start building, no phase yet.
+  const talked = (...runs: Run[]) => ({ status: "running", decider: "conductor", awaitingDecision: { point: "start" }, runs } as unknown as Task);
+
+  test("waiting on a parked conductor, nothing working: paused, waiting on Chat", () => {
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" })), 1, 1))
+      .toEqual({ status: "paused", label: WAITING_ON_CHAT });
+    // Its conductor ended: the next message starts another.
+    expect(attemptMark(talked(conductor(1, { status: "failed" })), 1, 1).status).toBe("paused");
+    // A phase it started that ended, and is not at work.
+    const implemented = { ...RESTARTED_RUNS.find((r) => r.id === "run_a2_fix")!, attempt: 1, phase: "implement", role: "implementer",
+      status: "completed" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), implemented), 1, 1).status).toBe("paused");
+  });
+
+  test("a conductor or a phase at work keeps it running", () => {
+    expect(attemptMark(talked(conductor(1)), 1, 1)).toEqual({ status: "running" });
+    const fixing = { ...RESTARTED_RUNS.find((r) => r.id === "run_a2_fix")!, attempt: 1, status: "running" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), fixing), 1, 1)).toEqual({ status: "running" });
+  });
+
+  test("Deliver's task, or one waiting on no decision, keeps its status", () => {
+    const parked = conductor(1, { status: "paused", dudePause: "conductor" });
+    expect(attemptMark({ ...talked(parked), decider: "policy" }, 1, 1)).toEqual({ status: "running" });
+    expect(attemptMark({ ...talked(parked), awaitingDecision: null }, 1, 1)).toEqual({ status: "running" });
+    expect(attemptMark({ ...talked(parked), status: "review" }, 1, 1)).toEqual({ status: "review" });
   });
 });
 

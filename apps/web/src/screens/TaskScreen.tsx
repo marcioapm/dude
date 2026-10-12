@@ -80,7 +80,7 @@ import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refus
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptStatus, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -500,7 +500,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <h1 className="taskTitle">{item.title}</h1>
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
-            <StatusMark status={attemptStatus(item, shown, current)} size="sm" data-testid="header-status" />
+            <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -803,7 +803,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
       const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
       return {
         value: String(n),
-        label: <span className="attemptPickLabel"><StatusMark status={attemptStatus(item, n, current)} size="sm" iconOnly />Attempt {n}</span>,
+        label: <span className="attemptPickLabel"><StatusMark {...attemptMark(item, n, current)} size="sm" iconOnly />Attempt {n}</span>,
         meta: n === current ? "current" : "set aside",
         description: (
           <>
