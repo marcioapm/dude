@@ -138,8 +138,8 @@ export const STAGE_WORDS = {
 
 export type StageId = keyof typeof STAGE_WORDS;
 
-/** Every move, in its pool or to another: lux parks the container, keeping its state, and resumes it with the new resources. */
-export const MOVE_STAGES: readonly StageId[] = ["park", "waiting", "volumes", "container", "running"];
+/** Every move, in its pool or to another: lux parks the container, keeping its state, and resumes it with the new resources. The park, then the shared resume list (RESUME_STAGES, which shows image and repositories: lux announces both on every resume). */
+export const MOVE_STAGES: readonly StageId[] = ["park", "waiting", "image", "volumes", "repositories", "container", "running"];
 
 export type Scenario =
   | "move" | "move-pool" | "refused-platform" | "refused-largest" | "refused-moves" | "conductor" | "run" | "task" | "reset"

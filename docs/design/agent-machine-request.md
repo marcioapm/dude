@@ -545,12 +545,13 @@ the pool changes, the pool's name:
 
 | Case | `verb` | stage ids | `pool` |
 |---|---|---|---|
-| Raised, same pool (any role, the conductor and a session included) | `"Moving to Large"` | `park, waiting, volumes, container, running` | — |
+| Raised, same pool (any role, the conductor and a session included) | `"Moving to Large"` | `park, waiting, image, volumes, repositories, container, running` | — |
 | Raised, another pool | `"Moving to XL"` | the same | `"highmem"` |
 | Reset | `"Moving to Standard"` | the same | the pool's name when it changes |
 
-`image` and `repositories` don't occur on a resume, so the list leaves them
-out.
+That is `park` followed by the shared `RESUME_STAGES` (the helper's
+`MOVE_STAGES`): lux announces `image` and `repositories` on every resume, and
+they are shown (Márcio, 2026-10-12).
 
 **Proposed addition to the shared helper:** `startSteps(ids, {pool})`. With
 `pool`, the `waiting` stage reads "Waiting for a machine in highmem" while
