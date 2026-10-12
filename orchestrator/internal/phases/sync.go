@@ -2219,7 +2219,9 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 		if q.Access == "write" {
 			note = "you may change it; commit there and it gets its own pull request"
 		}
-		told = append(told, fmt.Sprintf("%s is now checked out at %s (%s).", q.Name, repo.Path, note))
+		// Said before lux clones it: true either way, as a failure is
+		// told (settleClone).
+		told = append(told, fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", q.Name, repo.Path, note))
 	}
 	if len(failed) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {

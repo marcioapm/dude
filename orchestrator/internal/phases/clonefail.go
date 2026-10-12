@@ -46,8 +46,14 @@ func cloneReason(err string) string {
 	return "git said: " + shortCloneError(err) + "."
 }
 
-// cloneFailedNote is what the session's agent is told of it.
-func cloneFailedNote(key, name, err string) string {
-	return fmt.Sprintf("%s/%s could not be checked out (%s). It is not in /workspace; a member can check the "+
-		"repository's URL and access and link it again.", key, name, shortCloneError(err))
+// cloneFailedNote is what the agent is told of it: repository is KEY/name
+// on a session's Run, the bare name on a task's (task repositories have no
+// project key), and remedy what can be done about it there.
+func cloneFailedNote(repository, err, remedy string) string {
+	return fmt.Sprintf("%s could not be checked out (%s). It is not in /workspace; %s", repository, shortCloneError(err), remedy)
 }
+
+const (
+	sessionCloneRemedy = "a member can check the repository's URL and access and link it again."
+	taskCloneRemedy    = "carry on without it, or ask a person to check the repository's URL and access."
+)

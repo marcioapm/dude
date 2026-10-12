@@ -968,10 +968,25 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 			WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, repo)
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
+	// The approved request's repository by name: none when this git.clone
+	// was translated before (the request is failed already).
+	rows, err := tx.Query(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
 		FROM repositories repo WHERE repo.id = q.repository_id AND q.run_id = $1 AND lux_name(repo.name) = $2
-		  AND q.status = 'approved'`, t.run.ID, repo, cloneErr); err != nil {
+		  AND q.status = 'approved'
+		RETURNING repo.name`, t.run.ID, repo, cloneErr)
+	if err != nil {
 		return err
+	}
+	requested, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if len(requested) > 0 && !t.run.brainstorm() {
+		// The task's agent was told it is checked out unless dude said otherwise.
+		if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(),
+			delivery.Directive{Text: cloneFailedNote(requested[0], cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
+			return err
+		}
 	}
 	// Not checked out after all: the task stops naming it.
 	if _, err := tx.Exec(ctx, `DELETE FROM task_repositories wr USING repository_requests q, repositories repo
@@ -983,7 +998,7 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	// Its project stays linked: its tasks, epics and pull requests are read
 	// without a checkout, and the rail shows it with nothing checked out.
 	var key, name string
-	err := tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
+	err = tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
 		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
 		  AND `+delivery.SessionSpecNameSQL+` = $2
 		RETURNING p.key_prefix, repo.name`, t.run.ID, repo).Scan(&key, &name)
@@ -994,7 +1009,7 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	if t.run.brainstorm() && name != "" {
 		// Said to the agent, which was told the checkout would be there
 		// unless dude said otherwise, and to the members.
-		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key, name, cloneErr)); err != nil {
+		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key+"/"+name, cloneErr, sessionCloneRemedy)); err != nil {
 			return err
 		}
 		payload["key"], payload["name"] = key, name

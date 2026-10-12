@@ -775,7 +775,8 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 		t.Errorf("the Run's repositories after resume: %v", names)
 	}
 	w.until("the agent to hear it", func() bool {
-		return len(r.Inputs) > 0 && strings.Contains(r.Inputs[0], "web is now checked out at /workspace/repos/web")
+		return len(r.Inputs) > 0 && strings.HasPrefix(r.Inputs[0], "A person approved your request. web is checked out at "+
+			"/workspace/repos/web (read only) unless dude tells you its clone failed. Carry on.")
 	})
 	// The task names it now, read only, for every later phase.
 	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND access = 'read'`, wi); n != 1 {
@@ -821,6 +822,25 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi); n != 1 {
 		t.Fatalf("approval failure events: %d", n)
+	}
+	// The agent was told it is checked out unless dude said otherwise; dude
+	// says so, once.
+	note := "web could not be checked out (ref not found). It is not in /workspace; " +
+		"carry on without it, or ask a person to check the repository's URL and access."
+	w.until("the agent told its clone failed", func() bool {
+		return w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id
+			WHERE r.task_id = $1 AND d.text = $2 AND d.delivered_at IS NOT NULL`, wi, note) == 1
+	})
+	r := w.lux.Runs()[0]
+	if len(r.ResumeInputs) != 1 || !strings.HasPrefix(r.ResumeInputs[0], "A person approved your request. web is checked out at "+
+		"/workspace/repos/web (read only) unless dude tells you its clone failed. Carry on.") {
+		t.Errorf("the resume told %q", r.ResumeInputs)
+	}
+	if !slices.Contains(r.Inputs, note) {
+		t.Errorf("the agent's inputs: %q", r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id WHERE r.task_id = $1`, wi); n != 1 {
+		t.Errorf("%d directives, want the one note", n)
 	}
 }
 
@@ -1464,7 +1484,7 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, reqID) == 1 &&
 			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
-	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is now checked out") {
+	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is checked out at") {
 		t.Errorf("resumed %d times, told %q", r.Resumed, r.Inputs)
 	}
 }
