@@ -1813,4 +1813,36 @@ describe("Try again hands each unread message on as the directive it replaces, n
       [YOU, "ok", "dir_na", true, null],
     ]);
   });
+
+  // An aside held for the question the agent put to Ana, and a message the old harness accepted but never
+  // read; the resume fails, and Try again hands the aside on as the fresh agent's briefing, the other queued.
+  const heldThenRetried = () => [
+    ...failedWith(() => [ev("question.asked", { kind: "agent", questionId: "q_1", prompt: "Which table?", to: ANA.id })], () => [
+      ev("chat.message", { text: "use jobs", directiveId: "dir_held", heldFor: "q_1" }, by(YOU)),
+      ev("chat.message", { text: "and the tests?", directiveId: "dir_acc" }, by(YOU)),
+      ev("run.directive.accepted", { directiveId: "dir_acc", lands: "next_turn" }),
+    ]),
+    retried(),
+    on(ev("chat.message", { text: "use jobs", supersedes: "dir_held" }, by(YOU))),
+    on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_held" })),
+    on(ev("chat.message", { text: "and the tests?", directiveId: "dir_n", supersedes: "dir_acc" }, by(YOU))),
+    settled("dir_held"), settled("dir_acc"),
+  ];
+
+  test("a held aside and an accepted message handed on take the fresh attempt's state: no hold, no old receipt", () => {
+    const c = project(heldThenRetried(), "pending");
+    expect(c.turns.flatMap((t) => t.kind === "human" ? [[t.text, t.directiveId, t.heldFor, t.acceptedAt, t.lands, t.deliveredAt, t.failed]] : []))
+      .toEqual([
+        ["use jobs", null, null, null, null, null, null],
+        ["and the tests?", "dir_n", null, null, null, null, null],
+      ]);
+  });
+
+  test("the held aside handed to a fresh agent reads as waiting for it to start, not for the old question's answer", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
+      run: { id: NEXT, status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } }), heldThenRetried()));
+    const aside = await until(() => [...page.querySelectorAll("[data-testid=human-turn]")].find((t) => t.textContent?.includes("use jobs")) ?? null, "the aside");
+    expect(aside.textContent).toContain("Will be read when the agent starts.");
+    expect(aside.textContent).not.toContain("goes after the answer");
+  });
 });

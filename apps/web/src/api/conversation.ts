@@ -1491,12 +1491,19 @@ function numberOf(value: unknown): number {
 /**
  * A copy of a message the failed Run never read, handed on by Try again: the event names the directive it
  * replaces (`supersedes`), and that directive's turn becomes the new copy's (`directiveId`, or with none the
- * fresh agent's start message). False when it names no such unread turn: it is a turn of its own.
+ * fresh agent's start message). False when it names no such unread turn: it is a turn of its own. The turn takes
+ * the new attempt's state: its hold (none when the copy names none) and no receipt from the dead agent's harness.
  */
 function handedOn(state: Projection, payload: Record<string, unknown>, directiveId: string | null): boolean {
   const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
   if (!earlier || !state.retrying.delete(earlier)) return false;
   earlier.directiveId = directiveId;
+  earlier.heldFor = typeof payload.heldFor === "string" ? payload.heldFor : null;
+  earlier.acceptedAt = null;
+  earlier.lands = null;
+  earlier.read = false;
+  earlier.after = null;
+  earlier.interrupting = false;
   if (directiveId) state.steersByDirective.set(directiveId, earlier);
   else if (state.start && !state.ran) state.startMessages.push(earlier);
   return true;
