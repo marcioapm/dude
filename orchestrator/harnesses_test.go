@@ -256,7 +256,9 @@ func TestAResumedRunKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	}
 }
 
-// So does a session's agent, parked and resumed by a message.
+// So does a session's agent, parked and woken by something other than a
+// member's message (which would hand the conversation to a fresh agent on
+// the new harness): here, dude telling it who owns the session now.
 func TestAResumedSessionKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	s := newSessionWorld(t)
 	s.syncer.ConductorWarm = time.Hour
@@ -268,6 +270,7 @@ func TestAResumedSessionKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	}
 	brainstormOn("claude-code")
 	id := s.session()
+	s.join(id, s.ana, "chat")
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
 	var run string
 	s.until("the brainstorm running", func() bool {
@@ -282,7 +285,7 @@ func TestAResumedSessionKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	s.until("the session parked", func() bool {
 		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
 	})
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.ana, "keep": "chat"})
 	s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
 	var secrets []lux.Secret
 	for _, r := range s.lux.Runs() {

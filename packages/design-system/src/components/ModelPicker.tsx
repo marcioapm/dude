@@ -63,7 +63,7 @@ export function modelWords(tier: PickerTier | null, harness: Harness): string {
  * with a muted "default" while both follow the organisation), opening a
  * float with two groups, Model tier and Harness, each led by
  * "Organisation default (…)". A tier naming no model is disabled and says
- * so. A change applies at the agent's next start; the app says so.
+ * so. A change applies from the next message; the app says so.
  */
 export function ModelPicker({ tiers, organization, value, onChange, readOnly, onOpenChange, menuNote, previewMenu, "data-testid": testId = "model-picker" }: ModelPickerProps): ReactElement {
   const [open, setOpen] = useState(false);

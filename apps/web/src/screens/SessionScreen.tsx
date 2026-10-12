@@ -46,6 +46,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
+  EventTypes.BrainstormModelApplied,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
@@ -356,7 +357,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                     onChange={isOwner ? chooseModel : undefined}
                     onOpenChange={(open) => open && setMenuOpenings((n) => n + 1)}
                     menuNote={tierOptions === "failed" ? "Could not load the tiers" : tierOptions === null && menuOpenings > 0 ? "Loading the tiers…" : undefined} />
-                  <span className="muted sessionModelNote">Applies the next time the agent starts.</span>
+                  <span className="muted sessionModelNote">Applies from your next message: a fresh agent takes over with the conversation so far.</span>
                 </SessionRailBlock>
               ) : null}
               <SessionRailBlock data-testid="session-files" label={<span className="sessionRailHead">
@@ -472,16 +473,26 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
       const tier = p.tier && typeof p.tier === "object" && typeof (p.tier as { name?: unknown }).name === "string" ? p.tier as { name: string } : null;
       const harness = harnessSchema.safeParse(p.harness);
       const who = firstName(name(p.by ?? e.actor?.id));
-      if (!tier && !harness.success) return `${who} set the model back to the organisation's default; it applies the next time the agent starts.`;
-      return `${who} set the model to ${modelChangeWords(tier, harness.success ? harness.data : null)}; it applies the next time the agent starts.`;
+      if (!tier && !harness.success) return `${who} set the model back to the organisation's default; it applies from the next message.`;
+      return `${who} set the model to ${modelChangeWords(tier, harness.success ? harness.data : null)}; it applies from the next message.`;
     }
-    case EventTypes.BrainstormModelFallback: {
-      const tier = p.tier && typeof p.tier === "object" ? (p.tier as { name?: unknown }).name : null;
-      return `The tier ${typeof tier === "string" ? tier : "this session chose"} was removed: the session follows the organisation's from the agent's next start.`;
+    case EventTypes.BrainstormModelApplied: {
+      const harness = harnessSchema.safeParse(p.harness);
+      const model = tierName(p.tier) ?? (typeof p.model === "string" ? p.model : null);
+      const words = [model, harness.success ? HARNESS_LABEL[harness.data] : null].filter(Boolean).join(" · ");
+      return `Started a fresh agent${words ? ` on ${words}` : ""}; it has the conversation so far.`;
     }
+    case EventTypes.BrainstormModelFallback:
+      return `The tier ${tierName(p.tier) ?? "this session chose"} was removed: the session follows the organisation's from the next message.`;
     default:
       return null;
   }
+}
+
+/** The name of a payload's `tier: { name }`, if it has one. */
+function tierName(tier: unknown): string | null {
+  const name = tier && typeof tier === "object" ? (tier as { name?: unknown }).name : null;
+  return typeof name === "string" ? name : null;
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */

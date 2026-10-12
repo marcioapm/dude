@@ -2102,7 +2102,7 @@ func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
 	}
 }
 
-// A steer lux took and never reported is waited on for unreadGraceSecs
+// A steer lux took and never reported is waited on for delivery.UnreadGraceSecs
 // only: then the Run is collected, and the steer is marked failed.
 func TestASteerNeverReadStopsHoldingTheRunAfterTheCap(t *testing.T) {
 	w := newWorld(t)

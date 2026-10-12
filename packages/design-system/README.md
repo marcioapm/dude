@@ -528,9 +528,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   model, read with the item ("names no model yet"). After the first
   send the rail's **Model** block carries the
   same picker: its owner changes it, everyone else reads it
-  (`readOnly`). **A change applies at the agent's next start**, never
-  mid-turn; the Chat says so (`ChatNotice`, "Ana set the model to … ; it
-  applies the next time the agent starts").
+  (`readOnly`). **A change applies from the next message**, never
+  mid-turn: the app then has a fresh agent take over with the
+  conversation so far, and the rail says so under the picker ("Applies
+  from your next message: a fresh agent takes over with the conversation
+  so far."). The Chat says so too (`ChatNotice`, "Ana set the model to … ; it
+  applies from the next message", then "Started a fresh agent on … ; it has
+  the conversation so far.").
 - **A starter fills the composer; it never sends.** `StarterPills` write
   the start of a sentence ("I want to plan an epic for ") with the caret at
   its end, for the person to finish.
