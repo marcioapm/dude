@@ -409,6 +409,16 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 			}
 		}
 	}
+	// The scripted agent with no lists and no tools to reach still may
+	// reach any host when its Run may.
+	for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+		c, in := goldenInput("fake/scripted")
+		everyRole["brainstorm"](&in)
+		c.ToolsURL, in.Egress, in.Harness, in.Anywhere = "", nil, harness, true
+		if spec := buildSpec(c, in); len(spec.Workload.MCPServers) > 0 || !reflect.DeepEqual(spec.Network, &lux.Network{Unrestricted: true}) {
+			t.Errorf("fake/scripted on %s, anywhere, no lists or MCP: mcp = %v, network = %+v", harness, spec.Workload.MCPServers, spec.Network)
+		}
+	}
 }
 
 // A resumed Run goes on with the harness it was submitted on.
