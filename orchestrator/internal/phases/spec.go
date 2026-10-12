@@ -547,9 +547,9 @@ func anthropicBaseURL(llmURL string) string {
 //
 // Codex's web search is the Responses API's hosted web_search tool: OpenAI
 // runs the search, through the proxy, so egress never sees it. Codex 0.144
-// sends it by default on every Run ("cached", which full access promotes to
-// live). A Run that may reach any host pins it "live", whatever a later
-// default or its tier says; the rest keep Codex's default.
+// sends it by default ("cached", which full access promotes to live); dude
+// pins "live" on every Run so a later default cannot turn it off. A tier's
+// -c web_search replaces the pin, except on a Run that may reach any host.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
@@ -572,8 +572,8 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // string, number, boolean or array of those, or else a bare word, taken as
 // a string, as Codex takes an unparseable value. An override inside or
 // above a table dude sets (model_providers.dude.*) would rewrite it, and is
-// dropped, as is web_search on a Run that may reach any host (dude pins it
-// live) and every other argument.
+// dropped, as is web_search on a Run that may reach any host (live there
+// whatever the tier says) and every other argument.
 func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
 		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
@@ -598,9 +598,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
-	if in.Anywhere {
-		settings = append(settings, "web_search="+tomlString("live"))
-	}
+	settings = append(settings, "web_search="+tomlString("live"))
 	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""

@@ -416,13 +416,14 @@ func TestATierChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
 
 // The fresh agent a change hands over to takes the setting as it is at the
 // swap: with brainstorm_anywhere turned on, a swap to Codex is told it can
-// read the web and searches live; with it turned off again, the next swap
-// gets neither.
+// read the web and searches live over its tier's web_search=disabled; with
+// it turned off again, the next swap gets neither.
 func TestAFreshAgentAfterAChangeTakesTheSettingAsItIsNow(t *testing.T) {
 	s := newSessionWorld(t)
 	s.lux.Decide = hang
 	sol := s.tierOn("Sol", "gpt-6-sol")
 	opus := s.tierOn("Opus", "claude-opus-5")
+	mustExec(t, s.owner, `UPDATE model_tiers SET options = '{"args":["-c","web_search=disabled"]}' WHERE id IN ($1, $2)`, sol, opus)
 	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
 	run, _, _, _ := s.submitted(id)
 	s.runningIdle(run)

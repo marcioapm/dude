@@ -167,11 +167,9 @@ func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
 	}
 }
 
-// A Codex brainstorm resumed after the setting changed keeps the search it
-// was submitted with: started able to reach any host, its resume's
-// config.toml still pins web_search live; started on the list, the resume
-// pins nothing.
-func TestAResumedCodexBrainstormKeepsTheSearchItWasSubmittedWith(t *testing.T) {
+// A Codex brainstorm resumed after the setting changed still searches live,
+// as it did when submitted, whichever way the setting went.
+func TestAResumedCodexBrainstormStillSearchesLive(t *testing.T) {
 	for _, anywhere := range []bool{true, false} {
 		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
 			s := newSessionWorld(t)
@@ -184,8 +182,8 @@ func TestAResumedCodexBrainstormKeepsTheSearchItWasSubmittedWith(t *testing.T) {
 			if harness != "codex" {
 				t.Fatalf("submitted on %s", harness)
 			}
-			if live := codexSearchesLive(t, s.luxRun(run).spec.Secrets); live != anywhere {
-				t.Fatalf("submitted pinned live %v, want %v", live, anywhere)
+			if !codexSearchesLive(t, s.luxRun(run).spec.Secrets) {
+				t.Fatal("submitted without web_search live")
 			}
 			s.runningIdle(run)
 			mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = $2 WHERE id = $1`, s.org, !anywhere)
@@ -201,8 +199,8 @@ func TestAResumedCodexBrainstormKeepsTheSearchItWasSubmittedWith(t *testing.T) {
 					secrets = r.ResumeSecrets[0]
 				}
 			}
-			if live := codexSearchesLive(t, secrets); live != anywhere {
-				t.Errorf("the resume pins live %v, want %v as submitted", live, anywhere)
+			if !codexSearchesLive(t, secrets) {
+				t.Error("the resume does not pin web_search live")
 			}
 		})
 	}

@@ -177,7 +177,7 @@ const webNote = "You can read the web: search for and fetch public pages"
 // "*" in the organisation's or the operator's list makes a brainstorm
 // unrestricted with the setting off, and that counts as reaching any host
 // from its first prompt: it is told it can read the web, and Codex is
-// pinned to search live.
+// pinned to search live over its tier's web_search=disabled.
 func TestABrainstormMadeUnrestrictedByAStarIsToldItCanReadTheWeb(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -191,7 +191,8 @@ func TestABrainstormMadeUnrestrictedByAStarIsToldItCanReadTheWeb(t *testing.T) {
 			s := newSessionWorld(t)
 			s.syncer.Agent.Egress = c.operator
 			s.lux.Decide = hang
-			mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+			mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol', options = '{"args":["-c","web_search=disabled"]}'
+				WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
 			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = $2, brainstorm_anywhere = false WHERE id = $1`, s.org, c.org)
 			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?", "harness": "codex"})["id"].(string)
 			run, _, _, harness := s.submitted(id)

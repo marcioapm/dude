@@ -423,11 +423,10 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 	}
 }
 
-// On every role, a Codex Run that may reach any host searches live, pinned
-// in config.toml and on the command, and a tier's -c web_search is dropped.
-// Any other Codex Run gets no web_search line from dude (Codex's own
-// default), and a tier's -c web_search is kept as it wrote it.
-func TestACodexRunThatMayReachAnyHostSearchesLive(t *testing.T) {
+// On every role, a Codex Run searches live, pinned in config.toml and on
+// the command. A tier's -c web_search replaces the pin on a Run that may
+// not reach any host, and is dropped on one that may.
+func TestEveryCodexRunSearchesLiveUnlessItsTierSaysOtherwise(t *testing.T) {
 	for role, edit := range everyRole {
 		for _, anywhere := range []bool{false, true} {
 			for _, tier := range []string{"", `"live"`, "disabled"} {
@@ -443,7 +442,7 @@ func TestACodexRunThatMayReachAnyHostSearchesLive(t *testing.T) {
 				if i < 0 {
 					t.Fatalf("%s: no CODEX_CONFIG secret", name)
 				}
-				got, has := parsedCodexTOML(t, spec.Secrets[i].Value)["web_search"]
+				got := parsedCodexTOML(t, spec.Secrets[i].Value)["web_search"]
 				var onCommand []string
 				for j, a := range spec.Workload.Command {
 					if strings.HasPrefix(a, "web_search=") && j > 0 && spec.Workload.Command[j-1] == "-c" {
@@ -452,16 +451,12 @@ func TestACodexRunThatMayReachAnyHostSearchesLive(t *testing.T) {
 				}
 				_, dropped := codexSettings(c, in)
 				switch {
-				case anywhere:
+				case anywhere || tier == "":
 					if got != "live" || !slices.Equal(onCommand, []string{`web_search="live"`}) {
 						t.Errorf("%s: config.toml web_search = %v, command %q, want live alone", name, got, onCommand)
 					}
 					if tier != "" && !slices.Equal(dropped, []string{"-c web_search=" + tier}) {
 						t.Errorf("%s: dropped = %q, want the tier's web_search", name, dropped)
-					}
-				case tier == "":
-					if has || len(onCommand) != 0 {
-						t.Errorf("%s: dude wrote web_search (%v, command %q), want Codex's default", name, got, onCommand)
 					}
 				default:
 					want := strings.Trim(tier, `"`)
