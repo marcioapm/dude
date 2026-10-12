@@ -38,8 +38,6 @@ export function createActivity(doc: DocumentLike, loadedAt: number): Activity {
       const opts = { passive: true } as const;
       const mark = () => markActive(clock());
       for (const type of INPUT) win.addEventListener(type, mark, opts);
-      // scroll does not bubble, and the app scrolls its panes, not the window.
-      win.addEventListener("scroll", mark, { passive: true, capture: true });
       d.addEventListener("visibilitychange", () => {
         if (d.visibilityState === "visible") mark();
       }, opts);

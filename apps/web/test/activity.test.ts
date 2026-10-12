@@ -46,7 +46,7 @@ describe("activity", () => {
     const { win, activity, at } = setup();
     expect(activity.isActive(ACTIVE_WINDOW_MS - 1)).toBe(true);
     expect(activity.isActive(ACTIVE_WINDOW_MS)).toBe(false);
-    const inputs = ["pointerdown", "keydown", "wheel", "touchstart", "scroll"];
+    const inputs = ["pointerdown", "keydown", "wheel", "touchstart"];
     for (const [i, type] of inputs.entries()) {
       // Each input well past the window of the one before.
       const t = at(ACTIVE_WINDOW_MS * (3 + 2 * i));
@@ -54,6 +54,28 @@ describe("activity", () => {
       win.dispatchEvent(new Event(type));
       expect([type, activity.isActive(t)]).toEqual([type, true]);
       expect([type, activity.isActive(t + ACTIVE_WINDOW_MS)]).toEqual([type, false]);
+    }
+  });
+
+  test("automatic scrolling of a nested pane does not revive activity; initiating input does", () => {
+    const pane = document.createElement("div");
+    const nested = document.createElement("div");
+    pane.append(nested);
+    document.body.append(pane);
+    let now = 0;
+    const activity = createActivity({ visibilityState: "visible", hasFocus: () => true }, now);
+    activity.install(window, document, () => now);
+    try {
+      for (const type of ["wheel", "pointerdown", "keydown", "touchstart"]) {
+        now += ACTIVE_WINDOW_MS + 1;
+        expect(activity.isActive(now)).toBe(false);
+        nested.dispatchEvent(new Event("scroll", { bubbles: false }));
+        expect(activity.isActive(now)).toBe(false);
+        nested.dispatchEvent(new Event(type, { bubbles: true }));
+        expect(activity.isActive(now)).toBe(true);
+      }
+    } finally {
+      pane.remove();
     }
   });
 

@@ -318,7 +318,7 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   Previews and agents share the rule; an agent's list is its organisation's
   and project's (operations, "Agent network").
 - **Online and last seen mean a person used dude**: a shown, focused tab
-  that had a pointer, key, wheel, scroll or touch, focus, or being shown
+  that had a pointer, key, wheel or touch, focus, or being shown
   again, in the last five minutes (`ACTIVE_WINDOW_MS`, apps/web
   `activity.ts`; opening the page counts). Only then does the web app send
   `x-dude-active: 1`, and only a request carrying it touches
