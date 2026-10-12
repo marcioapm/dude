@@ -130,6 +130,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
 			return lux.Spec{}, runSizes{}, errForge{err}
 		}
+		if in.Bot, err = botOf(ctx, gh); err != nil {
+			return lux.Spec{}, runSizes{}, errForge{err}
+		}
 	}
 	if s.Agent.ToolsURL != "" {
 		if in.ToolsToken, err = s.toolsToken(ctx, r); err != nil {

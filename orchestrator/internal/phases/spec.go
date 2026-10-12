@@ -155,6 +155,9 @@ type specInput struct {
 	// is its installation's, one per repository owner.
 	ForgeToken string
 	RepoTokens map[string]string
+	// Who the agent's commits are by: a GitHub App's bot. nil keeps the
+	// image's own git identity (a PAT's Run).
+	Bot *forge.BotIdentity
 	// The Run's token for dude's tools; "" gives it none.
 	ToolsToken string
 	// The login for Image's registry; nil when it needs none.
@@ -400,6 +403,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			// reach; it needs no model.
 			spec.Network = runNetwork(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in)
 		}
+		commitIdentity(&spec, in.Bot)
 		return spec
 	}
 
@@ -413,7 +417,22 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		openCodeWorkload(c, in, &spec)
 	}
 	spec.Network = runNetwork(c, in)
+	commitIdentity(&spec, in.Bot)
 	return spec
+}
+
+// commitIdentity makes a GitHub App's bot the author and committer of every
+// commit in the Run: git reads GIT_AUTHOR_* and GIT_COMMITTER_* over any
+// user.name and user.email, the image's system config included.
+func commitIdentity(spec *lux.Spec, bot *forge.BotIdentity) {
+	if bot == nil || bot.Name == "" {
+		return
+	}
+	if spec.Env == nil {
+		spec.Env = map[string]string{}
+	}
+	spec.Env["GIT_AUTHOR_NAME"], spec.Env["GIT_AUTHOR_EMAIL"] = bot.Name, bot.Email
+	spec.Env["GIT_COMMITTER_NAME"], spec.Env["GIT_COMMITTER_EMAIL"] = bot.Name, bot.Email
 }
 
 // repoSecrets are the forge-token secrets a spec declares, and which one

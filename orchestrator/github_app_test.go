@@ -68,7 +68,11 @@ func TestEveryPushCarriesAFreshAppToken(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	pushes := 0
 	for _, r := range w.lux.Runs() {
-		submitted := secretValue(submitted(t, r), "GIT_TOKEN")
+		spec := submitted(t, r)
+		if spec.Env["GIT_AUTHOR_NAME"] != "dude-bot-test[bot]" || spec.Env["GIT_COMMITTER_EMAIL"] != "4242+dude-bot-test[bot]@users.noreply.github.com" {
+			t.Errorf("run %s commits as %q <%s>, want the App's bot", r.ID, spec.Env["GIT_AUTHOR_NAME"], spec.Env["GIT_COMMITTER_EMAIL"])
+		}
+		submitted := secretValue(spec, "GIT_TOKEN")
 		if app.Installation(submitted) != 71 {
 			t.Errorf("run %s submitted with GIT_TOKEN %q, not an installation token", r.ID, submitted)
 		}
@@ -97,6 +101,9 @@ func TestEveryPushCarriesThePAT(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	pushes := 0
 	for _, r := range w.lux.Runs() {
+		if _, ok := submitted(t, r).Env["GIT_AUTHOR_NAME"]; ok {
+			t.Errorf("a PAT's run %s sets a commit identity", r.ID)
+		}
 		for _, creds := range r.PushCredentials {
 			pushes++
 			if len(creds) != 1 || creds["target"] != "ghp_test" {

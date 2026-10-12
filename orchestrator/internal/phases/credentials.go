@@ -49,6 +49,18 @@ func forgeTokens(ctx context.Context, gh *forge.GitHub, repos []specRepo) (strin
 	return first, perRepo, nil
 }
 
+// botOf is a GitHub App's bot identity for a Run's commits; nil for a PAT.
+func botOf(ctx context.Context, gh *forge.GitHub) (*forge.BotIdentity, error) {
+	if !gh.IsApp() {
+		return nil, nil
+	}
+	bot, err := gh.Bot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &bot, nil
+}
+
 // RepoCredentials are, for a spec built outside this package (a branch
 // preview), the credential secret each repository names, by spec name, and
 // the secrets to declare: the same scheme as a phase Run's

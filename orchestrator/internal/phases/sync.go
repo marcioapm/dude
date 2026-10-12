@@ -1182,6 +1182,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos); err != nil {
 			return lux.Spec{}, runSizes{}, nil, errForge{err}
 		}
+		if in.Bot, err = botOf(ctx, gh); err != nil {
+			return lux.Spec{}, runSizes{}, nil, errForge{err}
+		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
 				if repo.Access == "read" {
