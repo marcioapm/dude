@@ -22,7 +22,8 @@ import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harnes
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { READ_WHEN_BACK, READ_WHEN_STARTED, apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { StartHeaderChip, StartRow } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
 import { DraftedComposer } from "./DraftedComposer.tsx";
@@ -261,11 +262,15 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
   const dude = dudeName(sessionId);
   const steer: SteerActions | undefined = live ? {
-    wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands),
+    wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands, conversation.start),
     resend: () => undefined,
   } : undefined;
-  const render = (turn: Turn) => renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
-    undefined, undefined, live && !reader ? { answer } : undefined);
+  const render = (turn: Turn) => turn.kind === "ended" && turn.start
+    ? <StartRow key={turn.id} start={turn.start} role="brainstorm" />
+    : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
+      undefined, undefined, live && !reader ? { answer } : undefined);
+  const starting = conversation.start;
+  const startHint = starting && !starting.failed ? (starting.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK) : null;
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
@@ -284,6 +289,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
+          {starting ? <StartHeaderChip start={starting} /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
@@ -326,6 +332,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   onSubmit={({ text }) => send(text, yours !== null)}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
+                  toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
                   data-testid="session-composer"
                 />
               }
@@ -335,6 +342,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 : Array.isArray(item.group)
                   ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
                   : render(item.group))}
+              {starting ? <StartRow start={starting} role="brainstorm" /> : null}
               {conversation.activity ? (
                 <ChatMessage role="brainstorm" activity={conversation.activity}
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />

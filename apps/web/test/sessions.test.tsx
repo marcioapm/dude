@@ -1560,3 +1560,39 @@ describe("a session's URL", () => {
     expect(parsePlace("#/session/ses_1")).toEqual({ view: "tree", ref: { kind: "session", id: "ses_1" } });
   });
 });
+
+describe("a session's agent starting", () => {
+  // Times near now, so the clocks read believably; the stage's since is lux's.
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  function starting(extra: () => PersistedEvent[] = () => []) {
+    const created = { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(20_000) };
+    const msg = { ...ev("chat.message", { text: "plan the epic" }, { type: "person", id: YOU } as PersistedEvent["actor"]), occurredAt: ago(19_000) };
+    const waiting = ev("run.stage", { stage: "waiting", since: ago(20_000), epoch: 1 });
+    const repos = ev("run.stage", { stage: "repositories", since: ago(12_000), epoch: 1 });
+    return [created, msg, waiting, repos, ...extra()];
+  }
+  const startingDetail = () => detail("owner", { session: { ...detail("owner").session,
+    run: { id: RUN, status: "scheduled", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } });
+
+  test("the header's chip, the row where its first turn will be, the queued message and the composer agree", async () => {
+    const page = await sessionPage(new SessionClient(startingDetail(), starting()));
+    const chip = await until(() => page.querySelector("[data-testid=start-chip]"), "the chip");
+    expect(chip.querySelector("[data-status=starting]")!.textContent).toContain("Starting");
+    expect(chip.textContent).toContain("Checking out repositories");
+    const row = page.querySelector("[data-testid=start-progress]")!;
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Starting: Checking out repositories.");
+    expect(row.textContent).toContain("in all");
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Will be read when the agent starts.");
+    expect(page.querySelector("[data-testid=composer-start-hint]")!.textContent).toBe("· Will be read when the agent starts.");
+  });
+
+  test("once it is up the cue goes, the message is read, and a line says how long it took", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), starting(() => [ev("agent.session.started", { role: "brainstorm" })])));
+    await until(() => page.querySelector("[data-testid=chat-notice]"), "the summary line");
+    expect(page.querySelector("[data-testid=start-progress]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
+    expect(page.querySelector("[data-testid=composer-start-hint]")).toBeNull();
+    expect(page.querySelector("[data-testid=chat-notice]")!.textContent).toMatch(/Started in \d+s\./);
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).not.toContain("Will be read");
+  });
+});

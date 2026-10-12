@@ -14,11 +14,12 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus } from "@dude/domain";
-import { EventTypes, TERMINAL_RUN_STATUSES, askItems, itemAnswers } from "@dude/domain";
+import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus, StartStage } from "@dude/domain";
+import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStartStage, itemAnswers } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
+import { instant } from "../instant.ts";
 
 /**
  * What a finished tool call produced. Agents report one merged stream or
@@ -262,6 +263,27 @@ export interface EndedTurn {
   by: ActorRef | null;
   /** The reason given, when there was one. */
   why: string | null;
+  /** A start that failed before the agent ran: where it was, as the row showed it. lux's reason is `why`. */
+  start?: StartState;
+}
+
+/**
+ * Where an agent is while it starts, from its `run.stage` events: a fresh
+ * agent, one taken back up, or one moved to another machine (led by
+ * `park`). `stage` is null while lux has named none (an older lux).
+ */
+export interface StartState {
+  kind: "start" | "resume" | "move";
+  stage: StartStage | null;
+  stageSince: string | null;
+  /** When this start began: the Run's creation, the resume's request, or the move's stop. */
+  startedAt: string;
+  /** Stages passed in this start, with how long each took (consecutive `since`s, both lux's). */
+  done: Array<{ stage: StartStage; tookMs: number }>;
+  /** lux's reason with its latest stage (why it waits for a machine), when it gave one. */
+  luxReason: string | null;
+  /** It failed in `stage`: lux's reason, when it gave one. */
+  failed: { reason: string | null } | null;
 }
 
 export type Turn =
@@ -317,13 +339,13 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   },
 };
 
-/** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
+/** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them: lux's in the stages' words, dude's in its own. */
 const RESUME_PHASES: ReadonlyArray<readonly [key: string, label: string]> = [
   ["react", "dude asked lux"],
-  ["schedule", "lux placed it"],
-  ["image", "image ready"],
-  ["restore", "restored"],
-  ["start", "started"],
+  ["schedule", START_STAGE_WORDS.waiting.done],
+  ["image", START_STAGE_WORDS.image.done],
+  ["restore", START_STAGE_WORDS.volumes.done],
+  ["start", START_STAGE_WORDS.container.done],
   ["reload", "agent reloaded"],
   ["take", "took its input"],
   ["firstOutput", "first words"],
@@ -356,10 +378,18 @@ export const CUSTOM_EVENT_PREFIX = "agent.custom.";
  * until the turn ends, and is described so.
  */
 export type SteerWait =
-  | { kind: "paused" } | { kind: "starting" } | { kind: "next_turn" }
+  | { kind: "paused" } | { kind: "starting"; back?: boolean } | { kind: "next_turn" }
   | { kind: "tool"; tool: string } | { kind: "next_step" };
 
-export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): SteerWait {
+/** What a message waits on while its agent starts: one sentence for the queued turn and the composer. */
+export const READ_WHEN_STARTED = "Will be read when the agent starts.";
+export const READ_WHEN_BACK = "Will be read when the agent is back.";
+/** A message whose agent never started: why it was not delivered, and what Try again does with it. */
+export const NOT_STARTED = "the agent did not start. Try again starts it with this message.";
+
+export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null,
+  start: StartState | null = null): SteerWait {
+  if (start && !start.failed) return { kind: "starting", back: start.kind !== "start" };
   if (runStatus === "paused") return { kind: "paused" };
   if (runStatus === "pending" || runStatus === "scheduled" || runStatus === "starting") return { kind: "starting" };
   const where = turn.lands ?? lands;
@@ -368,7 +398,8 @@ export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: str
 }
 
 /** The composer's hint for a steer sent now, following the same capability. */
-export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): string | null {
+export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null, start: StartState | null = null): string | null {
+  if (start && !start.failed) return (start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK).replace(/\.$/, "");
   if (runStatus !== "running") return null;
   if (lands !== "next_step") return "Lands when the turn ends";
   return activeTool ? "Lands after the current tool" : "Lands at the agent's next step";
@@ -419,6 +450,8 @@ export interface Conversation {
    * holds a steer until the turn ends).
    */
   lands: SteerLands | null;
+  /** Where its agent is while it starts, resumes or moves; null once it runs (or ended). */
+  start: StartState | null;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -493,6 +526,14 @@ export interface Projection {
   pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
+  /** Where the current Run's agent is while it starts; null once it runs. */
+  start: StartState | null;
+  /** The current start has had a `run.stage`: a lux that reports stages, so its end gets a summary line. */
+  startStaged: boolean;
+  /** The current Run's agent has run: a later start is a resume. */
+  ran: boolean;
+  /** Messages its briefing carries, shown queued until the agent is up. */
+  startMessages: HumanTurn[];
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -520,6 +561,10 @@ export function emptyProjection(): Projection {
     standaloneTimings: new Map(),
     pendingAsk: null,
     briefed: false,
+    start: null,
+    startStaged: false,
+    ran: false,
+    startMessages: [],
     cursor: 0,
   };
 }
@@ -560,6 +605,59 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     // Only the harness's next report of a tool can be the ask's own.
     const ask = state.pendingAsk;
     if (isToolEvent) state.pendingAsk = null;
+    // The agent's own records (or lux reporting it running) end a start: it is up.
+    if (AGENT_UP.has(event.eventType)) endStart(state, event);
+
+    switch (event.eventType) {
+      case EventTypes.RunCreated:
+        // A new Run of this ledger (a session's next agent, a task's next conductor): it starts afresh.
+        state.ran = false;
+        state.start = { kind: "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
+        state.startStaged = false;
+        break;
+
+      case EventTypes.RunStage: {
+        if (!isStartStage(payload.stage)) break;
+        const stage = payload.stage;
+        const since = typeof payload.since === "string" ? payload.since : event.occurredAt;
+        const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : null;
+        let start = state.start;
+        if (stage === "park") {
+          // A move: stopped with its work kept, then started on another machine.
+          start = { kind: "move", stage: null, stageSince: null, startedAt: since, done: [], luxReason: null, failed: null };
+        } else if (!start) {
+          start = { kind: state.ran ? "resume" : "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
+        }
+        if (start.stage && start.stage !== stage && start.stageSince) {
+          start.done.push({ stage: start.stage, tookMs: Math.max(0, instantMs(since) - instantMs(start.stageSince)) });
+        }
+        if (start.stage !== stage) {
+          start.stage = stage;
+          start.stageSince = since;
+        }
+        start.luxReason = reason;
+        state.start = start;
+        state.startStaged = true;
+        break;
+      }
+
+      case EventTypes.RunResumed:
+      case "run.unparked": {
+        // Taken back up: what follows is a resume (its stages may already have come).
+        const at = typeof payload.requestedAt === "string" ? payload.requestedAt : event.occurredAt;
+        if (state.start) {
+          if (state.start.kind === "start" && state.ran) state.start.kind = "resume";
+        } else {
+          state.start = { kind: "resume", stage: null, stageSince: null, startedAt: at, done: [], luxReason: null, failed: null };
+          state.startStaged = false;
+        }
+        break;
+      }
+
+      case EventTypes.RunStarted:
+        endStart(state, event);
+        break;
+    }
 
     switch (event.eventType) {
       case EventTypes.PlanUpdated: {
@@ -702,6 +800,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         };
         if (github?.login) turn.by = { id: `github:${github.login}`, name: `${github.login} (GitHub)` };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
+        // The message a starting agent's briefing carries: read once the agent is up, not as it was written.
+        if (!directiveId && state.start && !state.ran && !turn.conductor) {
+          turn.deliveredAt = null;
+          state.startMessages.push(turn);
+        }
         turns.push(turn);
         break;
       }
@@ -913,6 +1016,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = null;
           state.activeTool = null;
           state.untimedUnpark = null;
+          state.start = null;
         }
         if (notice === "unparked") {
           if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
@@ -923,6 +1027,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunPaused:
         state.untimedUnpark = null;
+        if (state.start && !state.start.failed) state.start = null;
+        break;
+
+      case EventTypes.ServersChanged:
+        // lux reports the Run running (after a wait for a host, a resume or a move): it is up.
+        if (payload.change === "state" && payload.luxState === "running") endStart(state, event);
         break;
 
       case EventTypes.RunResumeTimed: {
@@ -958,13 +1068,31 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const why = String((failed ? payload.error : payload.reason) ?? "").trim();
         // A conductor's or session agent's failed turn that parked it (kept): its turn failed, not the Run.
         const failedText = payload.kept === true ? "Its turn failed" : "Failed";
-        turns.push({
+        const ended: EndedTurn = {
           kind: "ended", id: event.eventId, outcome: failed ? "failed" : "aborted",
           text: failed ? (why ? `${failedText}: ${why}` : `${failedText}.`) : why ? `Aborted: ${why}` : "Aborted.",
           at: event.occurredAt,
           by: failed ? null : humanActor(event),
           why: why || null,
-        });
+        };
+        // A start that failed before the agent ran: the row's stages, failed in the one it was in, with lux's own reason.
+        const starting = state.start;
+        if (failed && starting && payload.kept !== true) {
+          const stage = isStartStage(payload.stage) ? payload.stage : starting.stage;
+          if (stage && starting.stage && stage !== starting.stage && starting.stageSince) {
+            starting.done.push({ stage: starting.stage, tookMs: Math.max(0, instantMs(event.occurredAt) - instantMs(starting.stageSince)) });
+          }
+          if (stage && stage !== starting.stage) {
+            starting.stage = stage;
+            starting.stageSince = event.occurredAt;
+          }
+          starting.failed = { reason: typeof payload.reason === "string" && payload.reason ? payload.reason : null };
+          ended.start = starting;
+          for (const m of state.startMessages) if (m.deliveredAt === null) m.failed = NOT_STARTED;
+          state.startMessages = [];
+        }
+        if (state.start) state.start = null;
+        turns.push(ended);
         state.activity = null;
         state.activeTool = null;
         break;
@@ -1057,6 +1185,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
       lands: state.lands,
+      start: shownStart(state.start, runStatus),
     };
   }
 
@@ -1087,7 +1216,21 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activeTool: null,
     toolCounts: state.toolCounts,
     lands: state.lands,
+    start: null,
   };
+}
+
+/**
+ * The start as the screens show it. A fresh Run is running to dude only
+ * once lux has reported it running (the stream's state event), which can
+ * come before any record of its agent: it has started. A resume or a move
+ * is running to dude from its request, so only the ledger ends it.
+ */
+function shownStart(start: StartState | null, runStatus: RunStatus | undefined): StartState | null {
+  if (!start || start.failed) return start;
+  if (start.kind === "start" && runStatus === "running") return null;
+  if (runStatus === "paused") return null;
+  return start;
 }
 
 /** The Run's model cost: lux's latest once it reported one, else the harness's sum. */
@@ -1276,4 +1419,39 @@ export function actorName(by: ActorRef | null, people: ReadonlyMap<string, strin
 
 function numberOf(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function instantMs(at: string): number {
+  return instant(at);
+}
+
+/** Events that say the agent is up: what it wrote or took, or the harness taking its input. */
+const AGENT_UP: ReadonlySet<string> = new Set([
+  EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted, EventTypes.PlanUpdated,
+  EventTypes.ModelRequestCompleted, EventTypes.SessionStarted, EventTypes.PromptDelivered, EventTypes.DirectiveAccepted,
+  EventTypes.DirectiveDelivered, EventTypes.RunResumeTimed,
+]);
+
+/**
+ * The agent is up: its start is over. A fresh start that lux staged ends in
+ * a line of its own ("Started in 31s.", its stages in the hover, the resume
+ * line's words); a resume has its "Taken back up" line already. The
+ * messages its briefing carried are read now.
+ */
+function endStart(state: Projection, event: PersistedEvent): void {
+  const start = state.start;
+  state.ran = true;
+  if (!start || start.failed) return;
+  state.start = null;
+  for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
+  state.startMessages = [];
+  if (start.kind !== "start" || !state.startStaged) return;
+  const lines = [...start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`)];
+  if (start.stage && start.stageSince) {
+    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(Math.max(0, instantMs(event.occurredAt) - instantMs(start.stageSince)))}`);
+  }
+  state.turns.push({
+    kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
+    text: `Started in ${formatDuration(Math.max(0, instantMs(event.occurredAt) - instantMs(start.startedAt)))}.`,
+  });
 }

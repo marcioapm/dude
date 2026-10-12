@@ -1301,9 +1301,10 @@ def test_a_parked_agent_is_answered_from_its_chat(
     assert console_errors == []
 
 
-# A resume's phases, in order, as the notice's hover names them.
-_RESUME_LABELS = (("react", "dude asked lux"), ("schedule", "lux placed it"), ("image", "image ready"),
-                  ("restore", "restored"), ("start", "started"), ("reload", "agent reloaded"),
+# A resume's phases, in order, as the notice's hover names them: lux's in
+# the start stages' words (START_STAGE_WORDS), dude's in its own.
+_RESUME_LABELS = (("react", "dude asked lux"), ("schedule", "Machine found"), ("image", "Image ready"),
+                  ("restore", "Workspace restored"), ("start", "Container started"), ("reload", "agent reloaded"),
                   ("take", "took its input"), ("firstOutput", "first words"))
 
 
