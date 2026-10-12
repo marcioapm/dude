@@ -19,6 +19,7 @@ import type { FileResult } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { App } from "../src/App.tsx";
 import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { project } from "../src/api/conversation.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
 
@@ -1654,6 +1655,49 @@ describe("a session's agent starting", () => {
     expect(failed.textContent).toContain("Did not resume: failed while waiting for a machine: terminated.");
     await click(page.querySelector("[data-testid=start-retry]")!);
     expect(client.retried).toBe(1);
+  });
+
+  test("a resume that failed, then Try again as the server records it: retried, its message one turn, now the fresh agent's", () => {
+    const next = "run_brainstorm2";
+    const on = (e: PersistedEvent) => ({ ...e, runId: next, occurredAt: ago(1_000) });
+    const directive = failedResume().find((e) => e.eventType === "chat.message")!.payload.directiveId;
+    // What RetryBrainstorm's hand-over writes: the fresh agent naming the Run it retries, briefed with the
+    // message (shown again, no directive), then the failed Run's copy settled naming it.
+    const ledger = [
+      ...failedResume(),
+      on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
+      on(ev("chat.message", { text: "and the tests?" }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …\n\n## The first message\n\nMárcio: and the tests?" })),
+      { ...ev("run.directive.failed", { directiveId: directive, error: `the session's agent stopped before reading it; the next one, ${next}, has it`,
+        nextRunId: next }), occurredAt: ago(1_000) },
+    ];
+    const c = project(ledger, "pending");
+    const ended = c.turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && [ended.retried, ended.taken]).toEqual([true, undefined]);
+    const human = c.turns.filter((t) => t.kind === "human");
+    expect(human.map((t) => t.kind === "human" && [t.text, t.failed, t.deliveredAt])).toEqual([["and the tests?", null, null]]);
+    // Read once the fresh agent is up.
+    const up = project([...ledger, on(ev("agent.session.started", { role: "brainstorm" }))], "running");
+    expect(up.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && t.deliveredAt !== null)).toEqual([true]);
+  });
+
+  test("a resume that failed, then Try again as the server records it: no 'a new agent took them' line, one copy", async () => {
+    const next = "run_brainstorm2";
+    const on = (e: PersistedEvent) => ({ ...e, runId: next, occurredAt: ago(1_000) });
+    const directive = failedResume().find((e) => e.eventType === "chat.message")!.payload.directiveId;
+    const ledger = [
+      ...failedResume(),
+      on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
+      on(ev("chat.message", { text: "and the tests?" }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …" })),
+      { ...ev("run.directive.failed", { directiveId: directive, error: "x", nextRunId: next }), occurredAt: ago(1_000) },
+    ];
+    const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
+      run: { id: next, status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } }), ledger));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry-taken]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect([...page.querySelectorAll("[data-testid=human-turn]")].filter((t) => t.textContent?.includes("and the tests?")).length).toBe(1);
   });
 
   test("Try again after a new agent already took the messages: says so, and is not offered again", async () => {

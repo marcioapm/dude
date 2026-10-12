@@ -94,6 +94,10 @@ func TestTryAgainOnASessionWhoseResumeFailedHandsTheMessageToAFreshAgentOnce(t *
 	if status != 201 || next == "" || next == run {
 		t.Fatalf("Try again: %d %v, want a fresh agent", status, out)
 	}
+	// Chat reads the fresh agent as Try again on the failed one, not a newer agent that took its messages.
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'retries' = $2`, next, run); n != 1 {
+		t.Errorf("the fresh agent's run.created names the one it retries %d times, want 1", n)
+	}
 	if n := s.liveTalkers("session_id", id); n != 1 {
 		t.Errorf("%d live agents after Try again, want 1", n)
 	}

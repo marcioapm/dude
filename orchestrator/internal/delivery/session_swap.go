@@ -132,7 +132,8 @@ var ErrRetryTaken = errors.New("a new agent already took the later messages")
 // run.created names the Run it retries, so Chat shows the message queued
 // again rather than a second copy. One that ran and failed (a resume lux
 // refused or ended) hands what it never read to a fresh agent, as the
-// syncer's hand-over would. Either way messages sent to the failed one are
+// syncer's hand-over would, its run.created naming the Run it retries too.
+// Either way messages sent to the failed one are
 // handed on after it (SessionHandOver), once: each is settled on the
 // failed Run as it is passed on. The caller holds the session's lock, as
 // the syncer's hand-over does; returns the new Run.
@@ -153,7 +154,7 @@ func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 	}
 	failed := RunRef{Org: org, SessionID: sessionID, RunID: latest}
 	if ran {
-		next, err := SessionHandOver(ctx, tx, failed)
+		next, err := sessionHandOver(ctx, tx, failed, latest)
 		if err == nil && next == "" {
 			err = ErrNothingToRetry
 		}

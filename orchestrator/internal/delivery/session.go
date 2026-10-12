@@ -219,6 +219,12 @@ const LiveBrainstorm = `r.role = 'brainstorm' AND r.kind = 'agent' AND r.status 
 // StartBrainstorm creates the session's agent, briefed by dude with the
 // member's message (already attributed).
 func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown string) (string, error) {
+	return startBrainstorm(ctx, tx, org, sessionID, w, message, shown, "")
+}
+
+// With retries, the new Run is Try again on that failed one: its
+// run.created names it, so Chat reads its message as the same turn.
+func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown, retries string) (string, error) {
 	id := ids.New(ids.Run)
 	briefing, err := sessionBriefing(ctx, tx, sessionID, message)
 	if err != nil {
@@ -230,8 +236,11 @@ func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 		return "", err
 	}
 	ref := RunRef{Org: org, SessionID: sessionID, RunID: id}
-	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunCreated, ledger.ActorSystem,
-		map[string]any{"role": RoleBrainstorm, "publishes": false})); err != nil {
+	created := map[string]any{"role": RoleBrainstorm, "publishes": false}
+	if retries != "" {
+		created["retries"] = retries
+	}
+	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunCreated, ledger.ActorSystem, created)); err != nil {
 		return "", err
 	}
 	if shown != "" {
@@ -398,6 +407,12 @@ const brainstormPublishNote = "To give the members a document — a design note,
 // carried by a briefing; such a message fails saying to send it again.
 // The caller holds the session's lock.
 func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
+	return sessionHandOver(ctx, tx, ref, "")
+}
+
+// sessionHandOver is SessionHandOver; a new agent it starts names retries
+// in its run.created (startBrainstorm).
+func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, ''), COALESCE(e.payload->>'text', '')
 		FROM directives d
@@ -445,7 +460,7 @@ func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error)
 				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
 				continue
 			}
-			if next, err = StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown); err != nil {
+			if next, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown, retries); err != nil {
 				return "", err
 			}
 			continue

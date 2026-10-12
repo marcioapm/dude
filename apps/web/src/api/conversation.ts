@@ -540,6 +540,8 @@ export interface Projection {
   startMessages: HumanTurn[];
   /** The last start that failed, and the messages it never delivered: Try again hands them to a fresh agent. */
   failedStart: { turn: EndedTurn; messages: HumanTurn[] } | null;
+  /** After Try again (run.created with retries): the failed Run's unread messages, which the new Run sends again as the same turns. */
+  retrying: HumanTurn[];
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -572,6 +574,7 @@ export function emptyProjection(): Projection {
     ran: false,
     startMessages: [],
     failedStart: null,
+    retrying: [],
     cursor: 0,
   };
 }
@@ -623,6 +626,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startStaged = false;
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
+        state.retrying = [];
         // Try again on a start that failed: the fresh agent has its messages, queued again.
         if (typeof payload.retries === "string" && state.failedStart) {
           state.failedStart.turn.retried = true;
@@ -633,6 +637,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           // Any other next agent: what the failed one left is that agent's now.
           state.failedStart.turn.taken = true;
           state.failedStart = null;
+        }
+        // What the failed Run was sent and never read: Try again sends it to the fresh agent, the same turn again.
+        if (typeof payload.retries === "string") {
+          state.retrying = turns.filter((t): t is HumanTurn =>
+            t.kind === "human" && t.directiveId !== null && t.deliveredAt === null && t.failed === null);
         }
         break;
 
@@ -814,9 +823,19 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // a pull request is signed by its GitHub login; the conductor's
         // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const text = String(payload.text ?? "");
+        // Try again re-sending a message the failed Run never read: the same turn, now the fresh agent's to read.
+        const again = state.retrying.findIndex((t) => t.text === text);
+        if (again >= 0) {
+          const earlier = state.retrying.splice(again, 1)[0]!;
+          earlier.directiveId = directiveId;
+          if (directiveId) state.steersByDirective.set(directiveId, earlier);
+          else if (state.start && !state.ran) state.startMessages.push(earlier);
+          break;
+        }
         const github = githubOf(payload.github);
         const turn: HumanTurn = {
-          ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
+          ...humanTurn(event, "message", text, directiveId ? null : event.occurredAt),
           directiveId,
           conductor: payload.by === "conductor",
           github,
@@ -863,6 +882,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.DirectiveFailed: {
         const id = String(payload.directiveId ?? "");
         const steer = state.steersByDirective.get(id);
+        // The hand-over's failures on the old Run close it: a later message with the same words is a new one.
+        state.retrying = [];
         // Only its latest attempt's failure fails the turn: an Interrupt now
         // that carries the words still may deliver them.
         if (steer && steer.deliveredAt === null && steer.directiveId === id) {

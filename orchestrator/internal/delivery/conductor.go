@@ -45,11 +45,13 @@ type Writer struct {
 // conductor, from the task's head in each repository (the default branch
 // where nothing was published), briefed by dude with the message.
 func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string) (string, error) {
-	return startConductor(ctx, tx, org, projectID, taskID, w, message, false)
+	return startConductor(ctx, tx, org, projectID, taskID, w, message, false, "")
 }
 
-// With woken, the message is dude's wake note, not a person's.
-func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool) (string, error) {
+// With woken, the message is dude's wake note, not a person's. With
+// retries, the new Run is Try again on that failed one: its run.created
+// names it, so Chat reads its message as the same turn.
+func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool, retries string) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
 	if w.Person != "" {
@@ -77,9 +79,13 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		id, org, projectID, taskID, baseRefs, briefing, w.Person); err != nil {
 		return "", err
 	}
+	created := map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs}
+	if retries != "" {
+		created["retries"] = retries
+	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunCreated, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: id, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator,
-		CorrelationID: taskID, Payload: map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs}})
+		CorrelationID: taskID, Payload: created})
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +207,7 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 // that never ran gets a fresh conductor with the briefing it was given (a
 // person's message is read by the new one, once; a wake note's reasons are
 // carried by it), its run.created naming the Run it retries; one that ran
-// hands what it never read on. Either way messages queued for the failed
+// hands what it never read on, to a fresh conductor that names it too. Either way messages queued for the failed
 // one go to the new one (HandOver), each settled on the failed Run as it
 // is passed on. ErrRetryTaken when a newer conductor already has them. The
 // caller holds the task's Chat lock; returns the new Run.
@@ -223,7 +229,7 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	}
 	failed := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: latest}
 	if ran {
-		next, err := HandOver(ctx, tx, failed, true)
+		next, err := handOver(ctx, tx, failed, true, latest)
 		if err == nil && next == "" {
 			err = ErrNothingToRetry
 		}
@@ -301,6 +307,12 @@ const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL
 // that has them, "" for none. The caller holds the task's Chat lock, and
 // the Run has ended.
 func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string, error) {
+	return handOver(ctx, tx, ref, replace, "")
+}
+
+// handOver is HandOver; a new conductor it starts names retries in its
+// run.created (startConductor).
+func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries string) (string, error) {
 	// The wake note it was started with and never heard is told again.
 	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
 		return "", err
@@ -335,7 +347,7 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 			if d.Interrupt {
 				continue
 			}
-			to, err := handTo(ctx, tx, ref, next, d.ID, Writer{ActorType: d.ActorType, ActorID: d.ActorID}, d.Text)
+			to, err := handTo(ctx, tx, ref, next, d.ID, Writer{ActorType: d.ActorType, ActorID: d.ActorID}, d.Text, retries)
 			if err != nil {
 				return "", err
 			}
@@ -382,8 +394,9 @@ const evDirectiveFailed = "run.directive.failed"
 // to, once an earlier message reached it; else the task's live conductor;
 // else a new one it starts, briefed with the message. Queued, the message
 // takes its images with it. Returns the conductor, or "" when the message
-// has images and would have to be a new conductor's briefing.
-func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Writer, text string) (string, error) {
+// has images and would have to be a new conductor's briefing. A new one
+// names retries in its run.created, when given.
+func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Writer, text, retries string) (string, error) {
 	if w.ActorType == "" {
 		w.ActorType = ledger.ActorSystem
 	}
@@ -404,7 +417,7 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 			(SELECT person_id FROM api_keys WHERE id = $1), '')`, w.ActorID).Scan(&w.Person); err != nil {
 			return "", err
 		}
-		return StartConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text)
+		return startConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text, false, retries)
 	}
 	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: to}
 	// Superseding from with the same words, the copy resolves from's images
