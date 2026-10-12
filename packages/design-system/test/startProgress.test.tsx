@@ -45,14 +45,17 @@ describe("startSteps", () => {
     expect(steps[2]!.tookMs).toBeUndefined();
   });
 
-  test("a resume's list draws no image or repositories, unless lux reports one", () => {
-    expect(startSteps({ stage: "volumes", stages: RESUME_STAGES }).map((s) => s.id)).toEqual(["waiting", "volumes", "container", "running"]);
-    expect(startSteps({ stage: "image", stages: RESUME_STAGES }).map((s) => s.id)).toEqual(["waiting", "image", "volumes", "container", "running"]);
+  test("a resume's list draws the image and repositories, which lux announces on every resume", () => {
+    expect(startSteps({ stage: "volumes", stages: RESUME_STAGES }).map((s) => s.id)).toEqual(["waiting", "image", "volumes", "repositories", "container", "running"]);
   });
 
-  test("a move leads with park, in its own words", () => {
+  test("a stage lux reports that the list leaves out is drawn in its place", () => {
+    expect(startSteps({ stage: "image", stages: ["waiting", "container"] }).map((s) => s.id)).toEqual(["waiting", "image", "container"]);
+  });
+
+  test("a move leads with park, in its own words, then a resume's stages", () => {
     const steps = startSteps({ stage: "park", stages: MOVE_STAGES });
-    expect(steps.map((s) => s.id)).toEqual(["park", "waiting", "volumes", "container", "running"]);
+    expect(steps.map((s) => s.id)).toEqual(["park", "waiting", "image", "volumes", "repositories", "container", "running"]);
     expect(steps[0]).toMatchObject({ label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept", state: "current" });
     expect(START_STAGE_WORDS.park).toEqual({ now: "Stopping it, keeping its work", done: "Stopped, work kept" });
   });
@@ -217,7 +220,7 @@ test("the gallery's Starting blocks render in dark and light, comfortable and co
   }
   for (const move of el.querySelectorAll("[data-testid=start-move]")) {
     expect(move.querySelector("[role=status]")!.textContent).toBe("Moving to Large: Waiting for a machine.");
-    expect([...move.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending", "pending", "pending"]);
+    expect([...move.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending", "pending", "pending", "pending", "pending"]);
     expect(move.querySelector("li")!.textContent).toContain("Stopped, work kept");
   }
   expect(el.querySelectorAll("[data-testid=start-failed]").length).toBe(4);

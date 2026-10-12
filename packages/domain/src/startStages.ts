@@ -24,8 +24,8 @@ export const START_STAGE_WORDS: Record<StartStage, { readonly now: string; reado
 
 /** A fresh agent's stages. */
 export const FRESH_START_STAGES: readonly StartStage[] = ["waiting", "image", "volumes", "repositories", "container", "running"];
-/** A parked agent taken back up: its image and checkouts are already on its volumes. */
-export const RESUME_STAGES: readonly StartStage[] = ["waiting", "volumes", "container", "running"];
+/** A parked agent taken back up: lux announces every stage on a resume, the image and checkouts included. */
+export const RESUME_STAGES: readonly StartStage[] = ["waiting", "image", "volumes", "repositories", "container", "running"];
 /** A Run moved to another machine: stopped with its work kept, then resumed there. */
 export const MOVE_STAGES: readonly StartStage[] = ["park", ...RESUME_STAGES];
 

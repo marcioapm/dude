@@ -334,9 +334,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   lux's stage and a **stage list** from the caller and the words from one
   map, `START_STAGE_WORDS` in `@dude/domain`, shared with branch previews:
   `FRESH_START_STAGES` (waiting, image, volumes, repositories, container,
-  running), `RESUME_STAGES` (no image or repositories) or `MOVE_STAGES`
+  running), `RESUME_STAGES` (the same six, as lux announces each on every
+  resume) or `MOVE_STAGES`
   (led by `park`, "Stopping it, keeping its work" / "Stopped, work kept");
-  a stage that does not occur is not drawn. Its line opens the stages as a
+  a stage lux reports that the list leaves out is drawn in its place. Its line opens the stages as a
   stepper (done with their times, the current one live, the rest hollow,
   `aria-current="step"`). With no stage (an older lux) it is the verb and
   the total clock, nothing to open. Past the app's threshold, one calm

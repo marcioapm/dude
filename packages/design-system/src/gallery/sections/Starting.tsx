@@ -51,7 +51,8 @@ function Example({ kind, verb, stage, since, startedAt, done, stages, slow, fail
   );
 }
 
-const RESUME_DONE = [{ stage: "waiting" as const, tookMs: 9_400 }, { stage: "volumes" as const, tookMs: 8_600 }];
+const RESUME_DONE = [{ stage: "waiting" as const, tookMs: 9_400 }, { stage: "image" as const, tookMs: 600 },
+  { stage: "volumes" as const, tookMs: 8_000 }, { stage: "repositories" as const, tookMs: 900 }];
 
 export function StartingSection({ mode }: { readonly mode: PaneMode }) {
   return (
@@ -62,7 +63,7 @@ export function StartingSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>{() => <Playing />}</Panes>
       </Block>
       <Block id="st-states" title="StartProgress: resumed, slow, older lux"
-        note={`A resume's stages have no image or repositories. Past the app's threshold, one calm line in secondary ink, lux's reason in muted mono; never amber. An older lux names no stage: "Starting" and the total clock, nothing to open.`}>
+        note={`A resume shows every stage, the image and repositories included, as lux announces them on each resume. Past the app's threshold, one calm line in secondary ink, lux's reason in muted mono; never amber. An older lux names no stage: "Starting" and the total clock, nothing to open.`}>
         <Panes mode={mode}>
           <Label>resumed, open</Label>
           <Example id="start-resume" kind="resume" stage="container" since={ago(4)} startedAt={ago(22)} done={RESUME_DONE} stages={RESUME_STAGES} open />

@@ -371,9 +371,9 @@ Where it differs from the proposal:
   them. The DS's `startSteps` builds `StartStep[]` from them and a
   caller's stage list; a stage lux reports that the list leaves out is
   drawn in lux's order.
-- **The resume's stage list** is `waiting → volumes → container →
-  running`; the fake lux (like lux) still announces `image` and
-  `repositories` on a resume, and those are then drawn.
+- **The resume's stage list has all six stages**, `image` and
+  `repositories` included: lux (and the fake lux) announce both on every
+  resume. `MOVE_STAGES` is `park` and then those six.
 - **A resume's `waiting` carries the epoch it left** (lux moves the epoch
   at assignment); the projection follows the stream's order, not the
   epoch, so this changes nothing on screen.
