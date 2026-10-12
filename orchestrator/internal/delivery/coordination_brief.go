@@ -117,8 +117,10 @@ func EpicBriefing(ctx context.Context, tx pgx.Tx, org, taskID, runID, role strin
 // recorded once.
 func heldForTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) (string, error) {
 	rows, err := tx.Query(ctx, `WITH held AS (
-			SELECT u.id, u.briefed_run_id IS NULL AS fresh FROM peer_messages u
-			WHERE u.to_task_id = $1 AND u.read_at IS NULL AND (u.briefed_run_id IS NULL OR u.briefed_run_id = $2)
+			SELECT u.id, u.briefed_run_id IS DISTINCT FROM $2 AS fresh FROM peer_messages u
+			WHERE u.to_task_id = $1 AND u.read_at IS NULL AND (u.briefed_run_id IS NULL OR u.briefed_run_id = $2
+			  OR EXISTS (SELECT 1 FROM runs b WHERE b.id = u.briefed_run_id
+			    AND b.status IN ('failed', 'aborted') AND b.agent_busy_at IS NULL))
 			  AND (u.delivered_run_id IS NULL OR u.briefed_run_id = $2 OR EXISTS (SELECT 1 FROM runs d WHERE d.id = u.delivered_run_id
 			       AND d.status IN ('completed', 'failed', 'aborted')))
 			ORDER BY u.created_at LIMIT $3 FOR UPDATE)

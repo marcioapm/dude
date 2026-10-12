@@ -113,6 +113,51 @@ func TestRepliesAndWaitsSerializeOnTheAskedMessage(t *testing.T) {
 	}
 }
 
+func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
+	for _, briefed := range []bool{false, true} {
+		t.Run(fmt.Sprint("briefed=", briefed), func(t *testing.T) {
+			w := newEpicWorld(t)
+			ctx := context.Background()
+			one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+			if !briefed {
+				w.run(t, "run_old", "ABS-2", "implement", "implementer", "running")
+			}
+			q := w.send(t, one, "ABS-2", "Do not lose this.", "")
+			brief := func(run string) string {
+				var text string
+				w.in(t, func(tx pgx.Tx) error {
+					var err error
+					text, err = delivery.EpicBriefing(ctx, tx, w.org, w.tasks["ABS-2"], run, "implementer")
+					return err
+				})
+				return text
+			}
+			if briefed {
+				w.run(t, "run_old", "ABS-2", "implement", "implementer", "pending")
+				if !strings.Contains(brief("run_old"), q.ID) {
+					t.Fatal("not briefed")
+				}
+			}
+			w.exec(t, `UPDATE runs SET status = 'failed' WHERE id = 'run_old'`)
+			w.run(t, "run_new", "ABS-2", "implement", "implementer", "pending")
+			for range 2 {
+				if !strings.Contains(brief("run_new"), q.ID) {
+					t.Error("new Run lost unread mail")
+				}
+			}
+			if n := w.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_new' AND event_type = 'agent.message.received'
+				AND payload->>'message' = $1 AND payload->>'via' = 'briefing'`, q.ID); n != 1 {
+				t.Errorf("%d received events on new Run", n)
+			}
+			w.exec(t, `UPDATE runs SET agent_busy_at = now(), status = 'completed' WHERE id = 'run_new'`)
+			w.run(t, "run_later", "ABS-2", "fix", "implementer", "pending")
+			if strings.Contains(brief("run_later"), q.ID) {
+				t.Error("successfully briefed mail repeated")
+			}
+		})
+	}
+}
+
 func (w *epicWorld) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {
