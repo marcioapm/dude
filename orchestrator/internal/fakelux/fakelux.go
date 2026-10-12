@@ -1649,9 +1649,11 @@ func conductorAsked(input string, first bool) string {
 
 // callTool calls one of dude's tools as the agent's container would through
 // lux's service proxy: the spec's "dude" service, its header filled in from
-// the spec's secret. (The CLI's own path through a socket is tested in
-// agenttools.) Callers hold s.mu; the call is made without it, since dude
-// may be slow. A failure is said in the agent's reply.
+// the secret's value lux holds for the current placement, which a resume
+// replaces, as lux's shim starts its service proxies with the placement's
+// values. (The CLI's own path through a socket is tested in agenttools.)
+// Callers hold s.mu; the call is made without it, since dude may be slow. A
+// failure is said in the agent's reply.
 func (s *Server) callTool(run *Run, tool, args string) {
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
@@ -1681,11 +1683,11 @@ func (s *Server) callTool(run *Run, tool, args string) {
 
 // withDude gives fn a way to call dude's tools as the Run's container
 // would, through the spec's "dude" service with its header filled in from
-// the spec's secret; nothing when the spec has no such service. Callers
+// the secret's value lux holds for the current placement; nothing when the
+// spec has no such service. Callers
 // hold s.mu; each call is made without it.
 func (s *Server) withDude(run *Run, fn func(send func(tool, args string) (*http.Response, error))) {
 	var spec struct {
-		Secrets  []lux.Secret `json:"secrets"`
 		Workload struct {
 			Services []lux.Service `json:"services"`
 		} `json:"workload"`
@@ -1701,10 +1703,8 @@ func (s *Server) withDude(run *Run, fn func(send func(tool, args string) (*http.
 				return nil, err
 			}
 			for _, h := range svc.Headers {
-				for _, sec := range spec.Secrets {
-					if sec.Name == h.Secret {
-						req.Header.Set(h.Name, sec.Value)
-					}
+				if v, ok := run.secretValues[h.Secret]; ok {
+					req.Header.Set(h.Name, v)
 				}
 			}
 			s.mu.Unlock()
