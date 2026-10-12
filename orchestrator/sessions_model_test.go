@@ -528,11 +528,25 @@ func TestAnAnswerAfterAChangeBriefsAFreshAgentWithTheQuestion(t *testing.T) {
 			if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered' AND answer = 'Only runs'`, qid); n != 1 {
 				t.Errorf("the question is not answered")
 			}
-			if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'question.answered' AND payload->>'questionId' = $2`, run, qid); n != 1 {
-				t.Errorf("the answer is not recorded on the question's Run")
+			if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'question.answered' AND payload->>'questionId' = $2
+				AND NOT (payload ? 'directiveId')`, run, qid); n != 1 {
+				t.Errorf("the answer is not recorded on the question's Run, with no directive")
 			}
 			if _, _, _, harness := s.submitted(id); harness != "codex" {
 				t.Errorf("the fresh agent runs on %s, want codex", harness)
+			}
+
+			// Another change: the agent after next reads the answer once, as
+			// said in the conversation.
+			s.runningIdle(next)
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "opencode"})
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "and then?"})
+			third := s.freshAgent(id, next)
+			conversationThenFirst(t, s.prompt(third), "Márcio Martins answered: Only runs", "Márcio Martins: and then?")
+			// The scripted agent's reply quotes its first message; the
+			// replayed answer is the line "Márcio Martins answered: …".
+			if n := strings.Count(s.prompt(third), "Márcio Martins answered: Only runs"); n != 1 {
+				t.Errorf("the answer is in the third agent's briefing %d times, want once:\n%s", n, s.prompt(third))
 			}
 		})
 	}
