@@ -343,7 +343,7 @@ def test_the_cli_and_the_event_stream_are_not_someone_using_dude(client: ApiClie
     now = ana_now()
     assert now["online"] is False and now["lastSeenAt"] is None and now["lastSeenWhere"] is None
 
-    # Not the once-a-minute limit: from a tab in use, she is online at once.
+    # From an active person session she is online at once, so nothing above was suppressed.
     presence_session.get(ana_client, "/v1/navigation", where="TEXT-14")
     now = ana_now()
     assert now["online"] is True and now["lastSeenWhere"] == "TEXT-14"

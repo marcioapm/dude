@@ -114,7 +114,7 @@ test("a request from a tab in use says where its person is, and announces it", a
     people: Array<{ id: string; online: boolean }> }).people.find((p) => p.id === ana.personId)?.online).toBe(true);
 });
 
-test("an API key's request without the header (the CLI, a script, MCP) changes nothing", async () => {
+test("an API key's request, with or without the header (the CLI, a script, MCP), changes nothing", async () => {
   const cli = await someone("Cli");
   for (const active of [undefined, "0", "true", "", "yes", "1"]) {
     const headers: Record<string, string> = { authorization: `Bearer ${cli.key}`, "x-dude-where": "TEXT-9" };
