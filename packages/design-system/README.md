@@ -418,6 +418,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   out. The reader's own scroll, or Jump to latest, lets it go; the next
   question named is scrolled to again. Editable fields and control activation
   keys do not release it; unconsumed scrolling keys from descendants do.
+  In the live gallery, Show held question opens an ask with later notices;
+  Add later turn demonstrates the hold, manual scrolling releases it, and
+  Next question selects a new ask.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. In grayscale it is still the only barred, tinted turn.

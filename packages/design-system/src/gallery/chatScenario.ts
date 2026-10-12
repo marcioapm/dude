@@ -422,10 +422,17 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       upd(s.turns, "o3", { shown, activity: last ? "completed" : "streaming", activitySince: T(47), endedAt: last ? T(48) : undefined });
       if (last) {
         s.status = "awaiting_input";
-        s.question = { id: "q_44a1", text: QUESTION, askedBy: "Orchestrator", options: [...QUESTION_OPTIONS] };
+        s.question = { id: "q1", text: QUESTION, askedBy: "Orchestrator", options: [...QUESTION_OPTIONS] };
         s.turns.push({ id: "q1", kind: "question", role: "conductor", text: QUESTION, options: QUESTION_OPTIONS, answeredAt: null, shown: 999, startedAt: T(48), tools: [] });
       }
     }),
+    {
+      label: "Waiting after the question",
+      at: 49,
+      apply: (s) => {
+        for (let i = 0; i < 5; i++) s.turns.push({ id: `waiting-${i}`, kind: "system", role: "system", text: "Waiting for your answer above. The implementer has finished its checks; the pull request will wait for your decision.", shown: 999, startedAt: T(49 + i), tools: [] });
+      },
+    },
   ];
 }
 
@@ -437,10 +444,11 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
       label: "Answered",
       at: 0,
       apply: (s) => {
+        const questionId = s.question?.id;
         s.question = null;
         s.status = "running";
         // The question's turn is the record now: the answer is under it, not a turn of its own.
-        upd(s.turns, "q1", { answeredAt: T(0), answer });
+        if (questionId) upd(s.turns, questionId, { answeredAt: T(0), answer });
         s.turns.push({ id: "o4", kind: "agent", role: "conductor", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
       },
     },

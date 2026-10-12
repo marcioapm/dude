@@ -675,7 +675,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-transcript"
         title="ChatTranscript — live scenario"
-        note="The whole thing, played back: a task arrives, the orchestrator thinks (a ThinkingBlock streams above its first message), writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails with a capped output and exit 1, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in the composer to let it finish; steer it while it runs — the steer shows as queued until the agent's next step reads it, then moves to where it was read. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable."
+        note="The whole thing, played back: a task arrives, the orchestrator thinks (a ThinkingBlock streams above its first message), writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails with a capped output and exit 1, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in its question turn to let it finish; steer it while it runs — the steer shows as queued until the agent's next step reads it, then moves to where it was read. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable. Show held question skips to an open question with later notices. Add later turn preserves its position; scroll or use Ctrl+End from a choice to release, then add another turn. Next question holds the new ask again."
       >
         <Panes mode={mode}>
           <LiveTranscriptDemo />
@@ -949,6 +949,31 @@ function LiveTranscriptDemo() {
     }
   };
 
+  const showQuestion = () => {
+    stop();
+    draftRef.current = initialDraft();
+    const steps = buildScenario(Date.now());
+    runSteps(draftRef.current, steps, Infinity, 0);
+    setState(snapshot(draftRef.current, "Question held in view", false));
+    setRev((r) => r + 1);
+  };
+  const laterTurn = () => {
+    const draft = draftRef.current;
+    draft.turns.push({ id: `later-${draft.turns.length}`, kind: "system", role: "system", text: "Waiting for your answer. Later activity does not move the held question. Scroll up or use Ctrl+End from a choice to release it, then add another turn.", shown: 999, startedAt: Date.now(), tools: [] });
+    setState(snapshot(draft, "Later turn arrived", false));
+    setRev((r) => r + 1);
+  };
+  const nextQuestion = () => {
+    const draft = draftRef.current;
+    draft.turns = draft.turns.map((t) => t.id === draft.question?.id ? { ...t, answeredAt: Date.now(), answer: "Continue to the next question" } : t);
+    const id = `q-${draft.turns.length}`;
+    const text = "Should I open the pull request now?";
+    const options = ["Open it", "Wait for another review"];
+    draft.question = { id, text, askedBy: "Orchestrator", options };
+    draft.turns.push({ id, kind: "question", role: "conductor", text, options, answeredAt: null, shown: 999, startedAt: Date.now(), tools: [] });
+    laterTurn();
+  };
+
   const s = state;
   const running = s?.status === "running";
   const startedAt = useMemo(() => (s ? s.turns[0]?.startedAt : undefined), [s]);
@@ -962,6 +987,9 @@ function LiveTranscriptDemo() {
         <Button size="sm" variant="quiet" onClick={reset} disabled={!s}>
           Reset
         </Button>
+        <Button size="sm" variant="secondary" onClick={showQuestion} disabled={playing}>Show held question</Button>
+        <Button size="sm" variant="secondary" onClick={laterTurn} disabled={playing || !s?.question}>Add later turn</Button>
+        <Button size="sm" variant="secondary" onClick={nextQuestion} disabled={playing || !s?.question}>Next question</Button>
         {s ? <Caption>{playing ? `▶ ${s.stepLabel}` : s.question ? "⏸ waiting for your answer" : s.done ? "■ finished" : "⏸ paused"}</Caption> : null}
       </Row>
       <ChatTranscript
@@ -994,6 +1022,7 @@ function LiveTranscriptDemo() {
         pinned={s && s.plan.length > 0 ? <AgentPlan items={s.plan} meta="conductor" defaultCollapsed /> : undefined}
         footer={<ChatComposer waitingFor={s?.question ? "Orchestrator" : undefined} waitingKey={s?.question?.id} running={running} disabled={!s || s.status === "completed"} disabledReason={s?.status === "completed" ? "This session completed." : "Press Play to start the scenario."} onSubmit={onSubmit} />}
         revision={rev}
+        keepInView={s?.question ? `[data-question="${s.question.id}"]` : undefined}
         live={playing}
         maxHeight={640}
         emptyMessage="Press Play to watch a run unfold."
@@ -1035,7 +1064,7 @@ function TurnNode({ turn, depth, onAnswer }: { readonly turn: ScenarioTurn; read
   if (turn.kind === "question" && turn.role !== "human" && turn.role !== "system") {
     const options = turn.options ?? [];
     const answers = turn.answer !== undefined ? [options.includes(turn.answer) ? { choices: [options.indexOf(turn.answer)], text: "" } : { choices: [], text: turn.answer }] : null;
-    return <QuestionCard role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt}
+    return <QuestionCard data-question={turn.id} role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt}
       answers={answers} answeredBy="marcio" isNew
       onSubmit={onAnswer ? ({ answers: [a] }) => onAnswer(a!.choices.length > 0 ? options[a!.choices[0]!]! : a!.text) : undefined} />;
   }
