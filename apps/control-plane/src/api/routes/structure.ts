@@ -49,7 +49,8 @@ function record(scope: OrgScope, ctx: RequestContext, eventType: string, project
 /**
  * What a repository may be. The URL reaches `git clone`, so only the forms a
  * git server serves: https, git://, or ssh (scp-like or ssh://). No
- * `file://`, no `ext::`, nothing git could read as an option.
+ * `file://`, no `ext::`, nothing git could read as an option. Stored
+ * canonical (canonicalRepositoryUrl).
  */
 export const repositoryFields = {
   name: z.string().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "name must be a plain directory name"),
@@ -57,10 +58,22 @@ export const repositoryFields = {
     .string()
     .min(1)
     .max(2000)
-    .regex(/^((https|ssh|git):\/\/[^\s]+|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+)$/, "url must be an https, ssh or git:// URL"),
+    .regex(/^((https|ssh|git):\/\/[^\s]+|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+)$/, "url must be an https, ssh or git:// URL")
+    .transform(canonicalRepositoryUrl),
   defaultBranch: z.string().min(1).max(200),
   trust: z.enum(["trusted_internal", "untrusted_external"]),
 };
+/**
+ * An https `url` at GitHub's host `www.github.com` written at `github.com`,
+ * nothing else changed. GitHub redirects the one to the other, and git
+ * does not send lux's Authorization header (`http.extraHeader`) to the
+ * redirected host: a private repository then clones as anonymous, and
+ * fails. Migration 109 rewrote the URLs stored before.
+ */
+export function canonicalRepositoryUrl(url: string): string {
+  return url.replace(/^https:\/\/www\.github\.com\//i, "https://github.com/");
+}
+
 const addRepositoryInput = z.object({
   ...repositoryFields,
   defaultBranch: repositoryFields.defaultBranch.default("main"),
