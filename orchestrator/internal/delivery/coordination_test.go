@@ -439,3 +439,54 @@ func TestAMessageNeverReachesAPeersConductor(t *testing.T) {
 		t.Errorf("a message reached a conductor: %+v", sent)
 	}
 }
+
+// A task that ends with a peer waiting on its reply releases the peer: its
+// wait closes by peer_ended, with the event, and it is told, as a
+// directive on its Run, that no reply is coming. A wait on another task
+// stays open, and a status that is not an end releases nobody.
+func TestATaskEndingWithoutReplyingReleasesItsWaiters(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	three := w.run(t, "run_three", "ABS-3", "implement", "implementer", "running")
+	toTwo := w.send(t, one, "ABS-2", "Which body?", "")
+	toOne := w.send(t, three, "ABS-1", "Which path?", "")
+	w.in(t, func(tx pgx.Tx) error {
+		if _, err := delivery.OpenWaitTx(ctx, tx, one, toTwo.ID, "wait"); err != nil {
+			return err
+		}
+		_, err := delivery.OpenWaitTx(ctx, tx, three, toOne.ID, "wait")
+		return err
+	})
+	setStatus := func(status string) {
+		w.in(t, func(tx pgx.Tx) error {
+			_, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, w.tasks["ABS-2"], "", status, "test")
+			return err
+		})
+	}
+	setStatus("review")
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 2 {
+		t.Fatalf("a status that is no end closed waits: %d open", n)
+	}
+	setStatus("aborted")
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_one' AND closed_by = 'peer_ended' AND closed_at IS NOT NULL`); n != 1 {
+		t.Errorf("the wait on the ended task is not closed by peer_ended")
+	}
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_three' AND closed_at IS NULL`); n != 1 {
+		t.Errorf("a wait on another task was closed")
+	}
+	if n := w.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_one' AND event_type = 'agent.peer.wait_ended'
+		AND payload->>'by' = 'peer_ended' AND payload->>'status' = 'aborted' AND payload->>'on' = 'ABS-2'`); n != 1 {
+		t.Errorf("%d peer_ended events", n)
+	}
+	var text string
+	if err := w.owner.QueryRow(ctx, `SELECT text FROM directives WHERE run_id = 'run_one' AND text LIKE 'ABS-2 %'`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if text != "ABS-2 ended without replying (status: aborted). Carry on with your assumption, or ask a person." {
+		t.Errorf("the sender is told %q", text)
+	}
+	if n := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_three' AND text LIKE '%ended without replying%'`); n != 0 {
+		t.Errorf("a Run waiting on another task was told")
+	}
+}

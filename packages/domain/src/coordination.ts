@@ -125,7 +125,7 @@ export interface PeerWaitView {
   since: string;
   parksAt: string | null;
   closedAt: string | null;
-  closedBy: "reply" | "self" | "run_ended" | null;
+  closedBy: "reply" | "self" | "run_ended" | "peer_ended" | null;
 }
 
 export type PeerThreadState = "waiting" | "open" | "answered";

@@ -489,6 +489,12 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
+	if Ended(status) {
+		// Its peers waiting on a reply from it would wait for ever.
+		if _, err := PeerEndedTx(ctx, tx, org, taskID, status); err != nil {
+			return false, err
+		}
+	}
 	return true, RecordStatusTx(ctx, tx, org, projectID, taskID, status, reason)
 }
 

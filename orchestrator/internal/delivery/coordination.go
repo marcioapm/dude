@@ -293,6 +293,52 @@ func closeWaitsTx(ctx context.Context, tx pgx.Tx, org, message, by string) ([]st
 	return runs, nil
 }
 
+// PeerEndedTx releases the Runs waiting on a reply from taskID, which just
+// ended (status done, failed or aborted) without giving it: each open wait
+// on a message to the task is closed by "peer_ended", with its event, and
+// the waiting Run is told, at its next step or as the input that resumes
+// it from a park, that no reply is coming. Returns the Runs released.
+func PeerEndedTx(ctx context.Context, tx pgx.Tx, org, taskID, status string) ([]string, error) {
+	rows, err := tx.Query(ctx, `UPDATE peer_waits w SET closed_at = now(), closed_by = 'peer_ended'
+		FROM peer_messages m, runs r
+		WHERE m.id = w.message_id AND m.to_task_id = $1 AND w.closed_at IS NULL AND r.id = w.run_id
+		RETURNING w.run_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''), w.message_id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	type closed struct{ Run, Project, Task, Message string }
+	done, err := pgx.CollectRows(rows, pgx.RowToStructByPos[closed])
+	if err != nil || len(done) == 0 {
+		return nil, err
+	}
+	var key string
+	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.id = $1`, taskID).Scan(&key); err != nil {
+		return nil, err
+	}
+	line := PeerEndedLine(key, status)
+	runs := make([]string, 0, len(done))
+	for _, c := range done {
+		ref := RunRef{Org: org, ProjectID: c.Project, TaskID: c.Task, RunID: c.Run}
+		if _, err := ledger.Append(ctx, tx, ref.Event(EvPeerWaitEnded, ledger.ActorSystem,
+			map[string]any{"message": c.Message, "on": key, "by": "peer_ended", "status": status})); err != nil {
+			return nil, err
+		}
+		if _, _, err := QueueDirective(ctx, tx, ref, Directive{Text: line, Scope: "run"}); err != nil {
+			return nil, err
+		}
+		runs = append(runs, c.Run)
+	}
+	return runs, nil
+}
+
+// PeerEndedLine is what a Run waiting on a peer is told when the peer's
+// task ends without replying.
+func PeerEndedLine(key, status string) string {
+	return fmt.Sprintf("%s ended without replying (status: %s). Carry on with your assumption, or ask a person.",
+		key, strings.ReplaceAll(status, "_", " "))
+}
+
 // Waiting is a Run's wait on a peer's reply.
 type Waiting struct {
 	Message string     `json:"message"`

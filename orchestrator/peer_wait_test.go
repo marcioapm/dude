@@ -176,6 +176,48 @@ func TestASelfReplyLetsTheTurnComplete(t *testing.T) {
 	}
 }
 
+// A task that ends without replying releases the agent waiting on it: the
+// parked sender is resumed with the line saying so, and finishes.
+func TestAPeerEndingWithoutReplyingResumesTheParkedSender(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	wi, peer := w.task(), w.task()
+	w.onAnEpic(wi, peer)
+	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
+			Reply: "Went ahead on my assumption.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	w.deliver(wi)
+	var runID string
+	w.until("the agent to wait on its peer and be parked", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
+			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, peer, "", "aborted", "a person stopped it")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("the sender to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	want := w.key(peer) + " ended without replying (status: aborted). Carry on with your assumption, or ask a person."
+	if lr := w.lux.Runs()[0]; lr.Resumed != 1 || len(lr.Inputs) != 1 || lr.Inputs[0] != want {
+		t.Errorf("resumed %d times with %q, want %q", lr.Resumed, lr.Inputs, want)
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_by = 'peer_ended'`, runID); n != 1 {
+		t.Errorf("the wait was not closed by the peer's end")
+	}
+}
+
 // A message to a task whose Run is not going is in its next Run's prompt:
 // the implementer that delivery starts is briefed with it (its text is
 // EpicBriefing's, delivery's TestAHeldMessageIsInTheTasksNextBriefing).
