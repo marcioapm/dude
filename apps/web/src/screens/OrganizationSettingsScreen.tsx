@@ -18,8 +18,8 @@ import {
   CardHeader,
   Input,
   KeyValueList,
+  SecretField,
   Spinner,
-  Textarea,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection, ForgeVerification, Member } from "../api/client.ts";
 import { MembersSection } from "./MembersSection.tsx";
@@ -312,9 +312,9 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           <Input label="Installation ID (optional)" mono autoComplete="off" value={installationId} inputMode="numeric"
             hint="Leave empty: dude finds the installation for each repository's owner."
             onChange={(e) => setInstallationId(e.target.value)} data-testid="forge-installation-id" />
-          <Textarea label="Private key" rows={6} mono spellCheck={false} autoComplete="off" value={privateKey}
-            placeholder="-----BEGIN RSA PRIVATE KEY-----" hint="The whole .pem file GitHub generated for the App."
-            onChange={(e) => setPrivateKey(e.target.value)} data-testid="forge-private-key" />
+          <SecretField label="Private key" value={privateKey} onChange={setPrivateKey}
+            placeholder="Paste the whole .pem file" hint="The whole .pem file GitHub generated for the App."
+            data-testid="forge-private-key" />
         </>
       ) : (
         <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}

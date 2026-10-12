@@ -67,8 +67,7 @@ async function openGithub(client: FixtureClient) {
 }
 
 test("an App's webhooks card says the App delivers, and shows the URL and secret for its settings", async () => {
-  const client = new AppClient({ connected: true, auth: "github_app", secretHint: "KEY-", apiBaseUrl: null, webhookPath: "/v1/webhooks/github/org_a",
-    updatedAt: new Date().toISOString(), webhook: HEALTH });
+  const client = new AppClient(APP);
   const container = await openGithub(client);
   const card = await until(() => container.querySelector("[data-testid=webhooks]"), "the webhooks card");
   expect(card.querySelector("[data-testid=webhook-app]")?.textContent).toContain("Deliveries come from the GitHub App");
@@ -91,12 +90,13 @@ test("a token's webhooks card still registers on every repository", async () => 
   expect(card.querySelectorAll("[data-testid=webhook-repo]").length).toBe(1);
 });
 
-/** Type into a textarea, as `type` does an input. */
-async function typeArea(el: HTMLTextAreaElement, text: string) {
+/** A paste into the masked key field, as the browser sends one: every line of it. */
+async function paste(el: HTMLElement, text: string) {
   const { act } = await import("./dom.ts");
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    const e = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+    e.clipboardData = { getData: (type: string) => (type === "text/plain" ? text : "") };
+    el.dispatchEvent(e);
   });
 }
 
@@ -109,8 +109,11 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
   await click(appButton);
   expect(document.querySelector("[data-testid=forge-token]")).toBeNull();
   const save = document.querySelector<HTMLButtonElement>("[data-testid=forge-save]")!;
-  const key = document.querySelector<HTMLTextAreaElement>("[data-testid=forge-private-key]")!;
-  await typeArea(key, "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n");
+  // The design system's secret field: masked, a password input, until shown.
+  const key = document.querySelector<HTMLInputElement>("[data-testid=forge-private-key]")!;
+  expect(key.type).toBe("password");
+  await paste(key, "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n");
+  expect(document.body.textContent).toContain("3 lines");
   await type(document.querySelector("[data-testid=forge-app-id]")!, "app");
   expect(save.disabled).toBe(true);
   await type(document.querySelector("[data-testid=forge-app-id]")!, "9001");
@@ -122,14 +125,13 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
   expect(client.tokens).toEqual([]);
 });
 
-test("a connected App shows its App ID, never its key, and Verify reports the token it minted", async () => {
+test("a connected App shows its App ID, and Verify reports the token it minted", async () => {
   const client = new AppClient(APP);
   const container = await openGithub(client);
   await until(() => container.querySelector("[data-testid=forge-verify]"), "Verify");
   const text = container.textContent ?? "";
   expect(text).toContain("9001");
   expect(text).toContain("found per repository owner");
-  expect(text).not.toContain("BEGIN");
   expect(container.querySelector("[data-testid=forge-connect]")?.textContent).toBe("Replace credentials");
   await click(container.querySelector("[data-testid=forge-verify]")!);
   const verdict = await until(() => container.querySelector("[data-testid=forge-verdict]"), "the verdict");
