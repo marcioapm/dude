@@ -553,15 +553,11 @@ That is `park` followed by the shared `RESUME_STAGES` (the helper's
 `MOVE_STAGES`): lux announces `image` and `repositories` on every resume, and
 they are shown (Márcio, 2026-10-12).
 
-**Proposed addition to the shared helper:** `startSteps(ids, {pool})`. With
-`pool`, the `waiting` stage reads "Waiting for a machine in highmem" while
-current and "Machine found in highmem" once done; the words stay in the
-shared stage map, with the pool name as a parameter, not in this design.
-Without `pool`, nothing changes. **This is a change to coordinate with the
-startup build**, which owns the helper and the map; until it lands, a
-cross-pool move would read the plain "Waiting for a machine". The mockup's
-`StartProgress`, `startSteps` and `STAGE_WORDS.waiting.pooled` stand in for
-them with the same props.
+**`startSteps(ids, {pool})` (the shared helper, taken by the startup
+build's fix round).** An optional `pool` turns the `waiting` stage's label
+into "Waiting for a machine in highmem" while current; its done label stays
+"Machine found". Without `pool`, nothing changes. The words stay in the
+shared stage map; this design passes only the pool's name.
 
 ### `ChatNotice`
 

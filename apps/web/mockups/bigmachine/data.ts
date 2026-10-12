@@ -127,7 +127,7 @@ export const STAGE_WORDS = {
   park: { label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept" },
   waiting: {
     label: "Waiting for a machine", doneLabel: "Machine found",
-    pooled: (pool: string) => ({ label: `Waiting for a machine in ${pool}`, doneLabel: `Machine found in ${pool}` }),
+    pooled: (pool: string) => ({ label: `Waiting for a machine in ${pool}`, doneLabel: "Machine found" }),
   },
   image: { label: "Getting the image ready", doneLabel: "Image ready" },
   volumes: { label: "Restoring its workspace", doneLabel: "Workspace restored" },
