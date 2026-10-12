@@ -718,7 +718,7 @@ function OpenWaits({ client, epicId, version }: { client: ApiClient; epicId: str
   const [waiting, setWaiting] = useState(0);
   useEffect(() => {
     let current = true;
-    client.epicThreads(epicId).then((t) => current && setWaiting(t.waiting), () => undefined);
+    client.epicWaiting(epicId).then((t) => current && setWaiting(t.waiting), () => undefined);
     return () => {
       current = false;
     };

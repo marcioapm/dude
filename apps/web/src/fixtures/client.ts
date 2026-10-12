@@ -249,6 +249,9 @@ export class FixtureClient extends ApiClient {
   override epicThreads(epicId: string): Promise<EpicThreads> {
     return Promise.resolve(this.#peers && epicId === EPIC.id ? PEER_THREADS : { epicId, threads: [], waiting: 0 });
   }
+  override epicWaiting(epicId: string): Promise<{ epicId: string; waiting: number }> {
+    return Promise.resolve({ epicId, waiting: this.#peers && epicId === EPIC.id ? PEER_THREADS.waiting : 0 });
+  }
   override epicPeers(epicId: string): Promise<EpicPeers> {
     return Promise.resolve(this.#peers && epicId === EPIC.id ? PEER_STATES : { epicId, tasks: [] });
   }

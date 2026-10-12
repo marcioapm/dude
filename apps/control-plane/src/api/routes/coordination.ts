@@ -100,9 +100,10 @@ async function listThreads(ctx: RequestContext): Promise<Response> {
     await epicOr404(scope, epicId);
     const messages = (await scope.sql`
       WITH RECURSIVE onEpic AS (
-        SELECT m.* FROM peer_messages m JOIN tasks f ON f.id = m.from_task_id JOIN tasks t ON t.id = m.to_task_id
-        WHERE f.epic_id = ${epicId} OR t.epic_id = ${epicId}
-        ORDER BY m.created_at DESC LIMIT ${THREADS_MESSAGES}),
+        SELECT m.* FROM peer_messages m WHERE m.from_task_id IN (SELECT id FROM tasks WHERE epic_id = ${epicId})
+        UNION
+        SELECT m.* FROM peer_messages m WHERE m.to_task_id IN (SELECT id FROM tasks WHERE epic_id = ${epicId})
+        ORDER BY created_at DESC LIMIT ${THREADS_MESSAGES}),
       chain (id, root, depth) AS (
         SELECT id, id, 0 FROM peer_messages WHERE id IN (SELECT id FROM onEpic) AND reply_to IS NULL
         UNION ALL
@@ -164,9 +165,23 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
           FROM peer_waits w JOIN peer_messages m ON m.id = w.message_id JOIN tasks wt ON wt.id = m.to_task_id
           JOIN projects wp ON wp.id = wt.project_id
           WHERE w.run_id = r.id AND w.closed_at IS NULL AND r.status IN ${scope.sql.unsafe(LIVE)}) AS "waitingOn",
-        (SELECT count(*)::int FROM peer_messages m WHERE m.to_task_id = t.id AND m.read_at IS NULL AND m.briefed_run_id IS NULL) AS inbox
+         r.branch, (SELECT h.value->>'sha' FROM jsonb_each(r.heads) h ORDER BY h.key LIMIT 1) AS head,
+         COALESCE((SELECT jsonb_agg(f.file ORDER BY f.churn DESC, f.path) FROM (
+           SELECT jsonb_build_object('path', f->>'path', 'additions', COALESCE((f->>'additions')::int, 0),
+             'deletions', COALESCE((f->>'deletions')::int, 0)) AS file, f->>'path' AS path,
+             COALESCE((f->>'additions')::int, 0) + COALESCE((f->>'deletions')::int, 0) AS churn
+           FROM run_diffs d CROSS JOIN LATERAL jsonb_array_elements(d.files) f
+           WHERE d.run_id = (SELECT dr.id FROM runs dr WHERE dr.task_id = t.id AND dr.phase IS NOT NULL AND dr.kind = 'agent'
+             ORDER BY dr.phase IN ('implement', 'fix', 'simplify') DESC,
+               dr.status IN ${scope.sql.unsafe(LIVE)} DESC, dr.created_at DESC LIMIT 1)
+           ORDER BY churn DESC, path LIMIT 5) f), '[]'::jsonb) AS files,
+         (SELECT last.text FROM runs sr CROSS JOIN LATERAL (
+           SELECT e.payload->>'text' AS text, e.cursor FROM events e WHERE e.run_id = sr.id AND e.event_type = 'agent.message'
+           ORDER BY e.cursor DESC LIMIT 1) last
+           WHERE sr.task_id = t.id AND sr.phase IS NOT NULL ORDER BY last.cursor DESC LIMIT 1) AS "lastSaid",
+         (SELECT count(*)::int FROM peer_messages m WHERE m.to_task_id = t.id AND m.read_at IS NULL AND m.briefed_run_id IS NULL) AS inbox
       FROM tasks t JOIN projects p ON p.id = t.project_id
-      LEFT JOIN LATERAL (SELECT r.id, r.phase::text AS phase,
+      LEFT JOIN LATERAL (SELECT r.id, r.branch, r.heads, r.phase::text AS phase,
           (CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
             WHEN 'simplify' THEN 'simplifier' WHEN 'test' THEN 'qa_browser' WHEN 'investigate' THEN 'investigator' END) AS role,
           r.status FROM runs r
@@ -174,7 +189,24 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
         ORDER BY r.status IN ${scope.sql.unsafe(LIVE)} DESC, r.created_at DESC LIMIT 1) r ON true
       WHERE t.epic_id = ${epicId} ORDER BY p.key_prefix, t.number`) as Array<Record<string, unknown>>;
   });
+  for (const task of tasks) {
+    const text = String(task.lastSaid ?? "").trim().split("\n\n")[0]!.replace(/\s+/g, " ");
+    const chars = Array.from(text);
+    task.lastSaid = chars.length > 600 ? `${chars.slice(0, 599).join("")}…` : text || null;
+  }
   return json({ epicId, tasks });
+}
+
+async function countWaits(ctx: RequestContext): Promise<Response> {
+  const epicId = ctx.params.id!;
+  const waiting = await withOrg(ctx.principal.organizationId, async (scope) => {
+    await epicOr404(scope, epicId);
+    const [row] = await scope.sql`SELECT count(*)::int AS waiting FROM tasks t JOIN runs r ON r.task_id = t.id
+      JOIN peer_waits w ON w.run_id = r.id AND w.closed_at IS NULL
+      WHERE t.epic_id = ${epicId} AND r.status IN ${scope.sql.unsafe(LIVE)}`;
+    return row.waiting;
+  });
+  return json({ epicId, waiting });
 }
 
 export function registerCoordinationRoutes(router: Router): void {
@@ -182,5 +214,6 @@ export function registerCoordinationRoutes(router: Router): void {
   router.post("/v1/epics/:id/notes", pinNote);
   router.post("/v1/epics/:id/notes/:n/retire", retireNote);
   router.get("/v1/epics/:id/threads", listThreads);
+  router.get("/v1/epics/:id/waiting", countWaits);
   router.get("/v1/epics/:id/peers", listPeers);
 }

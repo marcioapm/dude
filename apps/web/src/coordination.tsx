@@ -80,6 +80,7 @@ export function peerRows(peers: readonly PeerState[]): PeerRow[] {
   return peers.map((p) => ({
     key: p.key, title: p.title, status: asStatus(p.status), role: asRole(p.role), live: p.run === "live", phase: p.phase, run: p.run,
     waitingOn: p.waitingOn?.task.key ?? null,
+    branch: p.branch, head: p.head, files: p.files?.map((f) => ({ path: f.path, add: f.additions, del: f.deletions })), lastSaid: p.lastSaid,
   }));
 }
 

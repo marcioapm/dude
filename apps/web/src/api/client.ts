@@ -954,6 +954,10 @@ export class ApiClient {
     return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/threads`);
   }
 
+  epicWaiting(epicId: string): Promise<{ epicId: string; waiting: number }> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/waiting`);
+  }
+
   /** Each task on an epic as its peers see it: phase, live or parked, whom it waits on. */
   epicPeers(epicId: string): Promise<EpicPeers> {
     return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/peers`);

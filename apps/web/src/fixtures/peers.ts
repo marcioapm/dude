@@ -70,7 +70,7 @@ export const PEER_NOTES: EpicNotes = {
 
 export const PEER_STATES: EpicPeers = {
   epicId: EPIC.id,
-  tasks: [
+  tasks: ([
     { ...WC211, status: "done", phase: null, role: null, run: "none", runId: null, waitingOn: null, inbox: 0 },
     { ...WC212, status: "review", phase: "fix", role: "implementer", run: "live", runId: "run_WC-212", waitingOn: null, inbox: 1 },
     { ...WC214, status: "running", phase: "implement", role: "implementer", run: "live", runId: RUN_ID,
@@ -78,7 +78,10 @@ export const PEER_STATES: EpicPeers = {
     { ...WC215, status: "awaiting_input", phase: "implement", role: "implementer", run: "parked", runId: "run_WC-215", waitingOn: null, inbox: 0 },
     { ...WC216, status: "queued", phase: null, role: null, run: "none", runId: null, waitingOn: null, inbox: 0 },
     { ...WC217, status: "received", phase: null, role: null, run: "none", runId: null, waitingOn: null, inbox: 0 },
-  ],
+  ] as const).map((t) => ({ ...t, branch: t.runId ? `dude/${t.taskId}/attempt-1` : null,
+    head: t.runId ? "5c1e9a0b7d" : null,
+    files: t.runId ? [{ path: "apps/web/src/checkout/AddressForm.tsx", additions: 142, deletions: 38 }] : [],
+    lastSaid: t.runId ? "Moving the country field's write to onBlur." : null })),
 };
 
 const dude = { type: "system" as const, id: "dude" };

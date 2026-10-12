@@ -88,6 +88,11 @@ beforeAll(async () => {
     ('epn_3', ${ORG}, 'epc_c', 3, 'Read the docs.', 'per_m', 'Márcio Martins', 'per_m', now())`;
   await owner`INSERT INTO epic_note_reads (note_id, run_id, change, organization_id, read_at) VALUES
     ('epn_2', 'run_2', 'briefing', ${ORG}, now()), ('epn_2', 'run_1', 'briefing', ${ORG}, now())`;
+  await owner`UPDATE runs SET branch = 'dude/wi_2/attempt-1', heads = '{"web":{"sha":"abcdef123"}}'::jsonb WHERE id = 'run_2'`;
+  await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_2', ${ORG}, 'main',
+    '[{"path":"low.ts","additions":1,"deletions":0},{"path":"high.ts","additions":20,"deletions":5}]'::jsonb, 'test')`;
+  await owner`INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, correlation_id, payload)
+    VALUES ('evt_said', ${ORG}, 'run_2', 'agent.message', 'agent', 'run_2', 'lux', 'wi_2', '{"text":"Newest words.\\n\\nNot this paragraph."}'::jsonb)`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = await createApiKey({ organizationId: ORG, name: "Ana" });
@@ -155,6 +160,14 @@ test("threads: a reply chain answered and its closed wait, and a question to a t
   expect(answered!.wait).toMatchObject({ closedBy: "reply", how: "wait" });
 });
 
+test("the waiting count is small and agrees with live open waits", async () => {
+  const res = await call("GET", "/v1/epics/epc_c/waiting");
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ epicId: "epc_c", waiting: 1 });
+  expect((await call("GET", "/v1/epics/epc_o/waiting")).status).toBe(404);
+  expect((await call("GET", "/v1/epics/epc_c/waiting", undefined, false)).status).toBe(401);
+});
+
 test("peer state: each task's phase, live or parked or no Run, whom it waits on and its unread messages", async () => {
   const res = await call("GET", "/v1/epics/epc_c/peers");
   expect(res.status).toBe(200);
@@ -163,6 +176,8 @@ test("peer state: each task's phase, live or parked or no Run, whom it waits on 
   expect(Object.keys(by)).toEqual(["ABS-1", "ABS-2", "ABS-4"]);
   expect(by["ABS-1"]).toMatchObject({ run: "none", runId: null, phase: "implement", inbox: 1, waitingOn: null });
   expect(by["ABS-2"]).toMatchObject({ run: "live", runId: "run_2", role: "implementer", inbox: 0, waitingOn: null });
+  expect(by["ABS-2"]).toMatchObject({ branch: "dude/wi_2/attempt-1", head: "abcdef123", lastSaid: "Newest words.",
+    files: [{ path: "high.ts", additions: 20, deletions: 5 }, { path: "low.ts", additions: 1, deletions: 0 }] });
   expect(by["ABS-4"]).toMatchObject({ run: "parked", runId: "run_4", inbox: 1,
     waitingOn: { task: { key: "ABS-1" }, messageId: "pm_h", how: "turn_ended" } });
 });

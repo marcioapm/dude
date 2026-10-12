@@ -163,6 +163,10 @@ export interface PeerState extends TaskRef {
   waitingOn: { task: TaskRef; messageId: string; how: "wait" | "turn_ended"; since: string; parksAt: string | null } | null;
   /** Messages to it not yet read or briefed. */
   inbox: number;
+  branch: string | null;
+  head: string | null;
+  files: Array<{ path: string; additions: number; deletions: number }>;
+  lastSaid: string | null;
 }
 
 export interface EpicPeers {
