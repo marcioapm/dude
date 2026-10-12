@@ -566,6 +566,70 @@ describe("a steer read at the agent's next step", () => {
   });
 });
 
+describe("an ask's tool row and the question it asked", () => {
+  // As prod writes them: dude's handler records the question and its own
+  // call, then the harness reports the call that made them.
+  const ask = (questionId: string, call: string, tool = "ask_person", recorded = "ask_person") => [
+    asked(questionId), dudeRecord(questionId, recorded), called(call, tool),
+    ev(EventTypes.ToolCompleted, { tool, callId: call, status: "completed" }),
+  ];
+  const asked = (questionId: string) => ev(EventTypes.QuestionAsked, { kind: "agent", questionId, prompt: `Q ${questionId}?` });
+  const dudeRecord = (questionId: string, tool = "ask_person") =>
+    ev("agent.tool.dude", { tool, arguments: {}, result: { questionId, next: "End your turn now." } });
+  const called = (call: string, tool = "ask_person") => ev(EventTypes.ToolCalled, { tool, callId: call, input: {} });
+  const order = (events: PersistedEvent[]) =>
+    project(events).turns.map((t) => (t.kind === "tool" ? `tool:${t.id}` : t.kind === "question" ? `q:${t.questionId}` : t.kind));
+
+  test("the harness's later report of the call goes before the question, by each harness's name", () => {
+    for (const tool of ["ask_person", "mcp__dude__ask_person", "dude_ask_person"]) {
+      expect(order([ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1", tool)]))
+        .toEqual(["message", "tool:c_1", "q:q_1"]);
+    }
+  });
+
+  test("a conductor's decide(ask_person) pairs with its question the same way", () => {
+    expect(order(ask("q_1", "c_1", "decide", "decide"))).toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("a call reported before its question stays where it is", () => {
+    const events = [called("c_1"), asked("q_1"), dudeRecord("q_1"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_1" })];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("two asks in a row each keep their own question", () => {
+    const events = [
+      ...ask("q_1", "c_1"),
+      ev(EventTypes.QuestionAnswered, { questionId: "q_1", answer: "Yes" }),
+      ev(EventTypes.AgentMessage, { text: "Thanks." }),
+      ...ask("q_2", "c_2"),
+    ];
+    expect(order(events)).toEqual(["tool:c_1", "q:q_1", "message", "tool:c_2", "q:q_2"]);
+  });
+
+  test("an unrelated tool after a question is not moved", () => {
+    expect(order([...ask("q_1", "c_1"), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c_2", input: {} })]))
+      .toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+    // A different tool reported first is not the ask's, and ends the pairing.
+    expect(order([asked("q_1"), dudeRecord("q_1"), called("c_2", "bash"), called("c_1")]))
+      .toEqual(["q:q_1", "tool:c_2", "tool:c_1"]);
+  });
+
+  test("nothing moves past a turn that came after the question", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentMessage, { text: "Asked." }), called("c_1")]))
+      .toEqual(["q:q_1", "message", "tool:c_1"]);
+  });
+
+  test("folded one event at a time, the order is the same, and the progress row stays found", () => {
+    const events = [ev("agent.custom.progress", { data: { done: 1, of: 2 } }), ...ask("q_1", "c_1"),
+      ev("agent.custom.progress", { data: { done: 2, of: 2 } })];
+    const state = emptyProjection();
+    for (const e of events) apply(state, [e]);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+    expect(order(events)).toEqual(["progress", "tool:c_1", "q:q_1"]);
+    expect(snapshot(state).turns[0]).toMatchObject({ kind: "progress", done: 2 });
+  });
+});
+
 describe("what a queued steer waits for, and what the composer promises", () => {
   const queued = (lands: "next_step" | "next_turn" | null = null) =>
     ({ ...(project([ev(EventTypes.RunSteered, { text: "S", directiveId: "d" })]).turns[0] as HumanTurn), lands });

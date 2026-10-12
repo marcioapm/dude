@@ -475,6 +475,12 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /**
+   * The question a dude ask tool (`agent.tool.dude`) just asked, by the
+   * tool's name, until the next harness tool event: dude records the call
+   * before the harness reports it, so that report's row goes before it.
+   */
+  pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
@@ -502,6 +508,7 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    pendingAsk: null,
     briefed: false,
     cursor: 0,
   };
@@ -540,6 +547,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     const isToolEvent =
       event.eventType === EventTypes.ToolCalled || event.eventType === EventTypes.ToolCompleted;
     const tool = isToolEvent ? String(payload.tool ?? "tool") : "";
+    // Only the harness's next report of a tool can be the ask's own.
+    const ask = isToolEvent ? state.pendingAsk : null;
+    if (isToolEvent) state.pendingAsk = null;
 
     switch (event.eventType) {
       case EventTypes.PlanUpdated: {
@@ -585,7 +595,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           result: null,
         };
         toolsByCall.set(callId, turn);
-        turns.push(turn);
+        addToolTurn(state, turn, ask);
 
         state.activity = "tool";
         state.activeTool = { name: tool, since: event.occurredAt };
@@ -619,7 +629,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             result,
           };
           toolsByCall.set(turn.id, turn);
-          turns.push(turn);
+          addToolTurn(state, turn, ask);
         }
 
         if (state.activeTool?.name === tool) {
@@ -949,6 +959,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "agent.tool.dude": {
+        // dude's record of one of its tools, written while handling the
+        // call: an ask names the question it just asked.
+        const result = payload.result as Record<string, unknown> | null | undefined;
+        const question = typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
+        state.pendingAsk = question ? { tool: String(payload.tool ?? ""), question } : null;
+        break;
+      }
+
       case "repository.requested": {
         const turn: RepositoryRequestTurn = {
           kind: "repositoryRequest", id: event.eventId, requestId: String(payload.requestId ?? ""),
@@ -1155,6 +1174,34 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
     if (turn.kind !== "thought" && turn.kind !== "usage" && turn.kind !== "progress" && turn.kind !== "event") return null;
   }
   return null;
+}
+
+/**
+ * Add a tool call's row. dude writes an ask's question while handling the
+ * call, before the harness reports the call, so the row of the call that
+ * asked (`ask`: dude's record of it, by the tool's name) goes just before
+ * its question — while nothing but questions has come after that.
+ */
+function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
+  const { turns } = state;
+  if (ask && dudeToolName(turn.tool) === ask.tool) {
+    const at = turns.indexOf(ask.question);
+    // Only questions follow `at`, so the progress row (if any) is before it: its index holds.
+    if (at >= 0 && turns.slice(at).every((t) => t.kind === "question")) {
+      turns.splice(at, 0, turn);
+      return;
+    }
+  }
+  turns.push(turn);
+}
+
+/**
+ * A harness's name for a dude tool as dude names it: Claude Code's and
+ * Codex's are recorded by the tool's own name already; OpenCode prefixes an
+ * MCP server's tools with the server's name.
+ */
+function dudeToolName(name: string): string {
+  return name.replace(/^(?:mcp__dude__|dude_)/, "");
 }
 
 /**
