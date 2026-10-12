@@ -5,6 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A talker resumed into a new harness session — lux could not reload its
@@ -161,6 +165,62 @@ func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Codex brainstorm resumed after the setting changed keeps the search it
+// was submitted with: started able to reach any host, its resume's
+// config.toml still pins web_search live; started on the list, the resume
+// pins nothing.
+func TestAResumedCodexBrainstormKeepsTheSearchItWasSubmittedWith(t *testing.T) {
+	for _, anywhere := range []bool{true, false} {
+		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.syncer.ConductorWarm = time.Hour
+			s.lux.Decide = hang
+			mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = $2 WHERE id = $1`, s.org, anywhere)
+			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": "codex"})["id"].(string)
+			run, _, _, harness := s.submitted(id)
+			if harness != "codex" {
+				t.Fatalf("submitted on %s", harness)
+			}
+			if live := codexSearchesLive(t, s.luxRun(run).spec.Secrets); live != anywhere {
+				t.Fatalf("submitted pinned live %v, want %v", live, anywhere)
+			}
+			s.runningIdle(run)
+			mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = $2 WHERE id = $1`, s.org, !anywhere)
+			mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours' WHERE id = $1`, run)
+			s.until("the session parked", func() bool {
+				return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
+			})
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+			s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
+			var secrets []lux.Secret
+			for _, r := range s.lux.Runs() {
+				if r.Resumed == 1 {
+					secrets = r.ResumeSecrets[0]
+				}
+			}
+			if live := codexSearchesLive(t, secrets); live != anywhere {
+				t.Errorf("the resume pins live %v, want %v as submitted", live, anywhere)
+			}
+		})
+	}
+}
+
+// codexSearchesLive says whether CODEX_CONFIG among secrets, parsed as
+// TOML, pins web_search "live".
+func codexSearchesLive(t *testing.T, secrets []lux.Secret) bool {
+	t.Helper()
+	i := slices.IndexFunc(secrets, func(s lux.Secret) bool { return s.Name == "CODEX_CONFIG" })
+	if i < 0 {
+		t.Fatalf("no CODEX_CONFIG among %v", secretNames(secrets))
+	}
+	var config map[string]any
+	if err := toml.Unmarshal([]byte(secrets[i].Value), &config); err != nil {
+		t.Fatalf("CODEX_CONFIG: %v", err)
+	}
+	return config["web_search"] == "live"
 }
 
 // A resume that keeps its session records nothing more.

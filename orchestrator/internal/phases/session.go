@@ -24,6 +24,20 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
 	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
+// brainstormAnywhere is whether a brainstorm may reach any host, the one
+// answer its spec (Exa, Codex's pinned search) and its prompt both take:
+// once submitted, the network recorded on the Run, which its resumes keep;
+// before that, the organisation's brainstorm_anywhere, which its submit reads.
+func (s *Syncer) brainstormAnywhere(ctx context.Context, tx pgx.Tx, run string) (bool, error) {
+	var anywhere bool
+	if err := tx.QueryRow(ctx, `SELECT CASE WHEN r.network IS NULL THEN o.brainstorm_anywhere
+		ELSE COALESCE((r.network->>'unrestricted')::boolean, false) END
+		FROM runs r JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, run).Scan(&anywhere); err != nil {
+		return false, fmt.Errorf("load the brainstorm's network: %w", err)
+	}
+	return anywhere, nil
+}
+
 func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, error) {
 	var in specInput
 	var orgModels json.RawMessage
@@ -38,10 +52,14 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var settings delivery.RoleSettings
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// A session spans projects: its organisation's list alone, or any
-		// host when the organisation lets brainstorms read the web.
-		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, ''), o.agent_egress, o.brainstorm_anywhere FROM runs r
-			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress, &in.Anywhere); err != nil {
+		// host when the brainstorm may reach any (brainstormAnywhere).
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, ''), o.agent_egress FROM runs r
+			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress); err != nil {
 			return fmt.Errorf("load the session's run: %w", err)
+		}
+		var err error
+		if in.Anywhere, err = s.brainstormAnywhere(ctx, tx, r.ID); err != nil {
+			return err
 		}
 		// The session's own tier and harness, each in place of the
 		// organisation's; a resume below keeps what it was submitted with.
