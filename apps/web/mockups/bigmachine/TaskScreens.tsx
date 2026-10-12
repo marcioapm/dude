@@ -1,18 +1,19 @@
 /*
  * BILL-42's task page as TaskScreen lays it out (breadcrumb, head, tabs),
  * with its Chat (ChatSection's transcript: the conductor, the
- * implementer's run line, the machine request, notices and the move) and
- * its Overview (the pipeline, and the machines raised in the aside).
+ * implementer's run line, its request_machine call, dude's notice and the
+ * move) and its Overview (the pipeline, and the machines raised in the
+ * aside, with Reset and its confirmation).
  */
 
 import { useRef, useState, type ReactNode } from "react";
 import {
-  AgentAvatar, Breadcrumb, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, Markdown, PersonLine, StatusMark,
-  StepList, StepRow, TaskHistory,
+  AgentAvatar, Breadcrumb, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, Markdown, PersonLine, StatusMark,
+  StepList, StepRow, TaskHistory, ToolCallCard,
 } from "@dude/design-system/components";
 import { Button, Callout, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { MachineRaises, MachineRequestCard, MoveProgress, type MoveStep } from "./components.tsx";
-import { DECLINE_NOTE, MOVE_STAGES, P, PROJECT, REASON_LARGE, REASON_XL, TASK, size, type Scenario } from "./data.ts";
+import { MachineRaises, MachineRequestCall, MoveProgress, ResetMachineConfirm, stepsAt } from "./components.tsx";
+import { ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_LARGE, REASON_XL, START_STAGES, TASK, size } from "./data.ts";
 
 const MIN = 60_000;
 const DUDE = "El Duderino";
@@ -59,28 +60,12 @@ function TaskChrome({ tab, children }: { tab: "chat" | "overview"; children: Rea
   );
 }
 
-const implLine = (status: "running" | "paused" | "starting", label: string, facts: string[]) => (
-  <ChatRunLine data-testid="chat-run" role="implementer" status={status} statusLabel={label} what="Implement: stream the CSV export instead of building it in memory"
-    facts={facts} onOpen={() => undefined} />
-);
+const WHAT = "Implement: stream the CSV export instead of building it in memory";
 
-/** The stages of the move, at a moment: two done, the third live. */
-function moveSteps(at: number): MoveStep[] {
-  const took = [6_400, 11_200];
-  return MOVE_STAGES.map((st, i) => ({
-    id: st.id, label: st.now, doneLabel: st.done,
-    state: i < 2 ? "done" : i === 2 ? "current" : "pending",
-    tookMs: took[i], since: i === 2 ? at - 4_000 : undefined,
-  }));
-}
-
-export function TaskChat({ scenario, onDecide }: { scenario: Scenario; onDecide: (approve: boolean) => void }) {
+/** Task Chat: the implementer moves, in its pool (resized in place) or to another (a fresh Run). */
+export function TaskChat({ otherPool }: { otherPool: boolean }) {
   const t0 = useRef(Date.now()).current;
-  const asked = t0 - 3 * MIN;
-  const decidedAt = t0 - 40_000;
-  const fresh = scenario === "ask-fresh";
-  const waiting = scenario === "ask" || scenario === "ask-fresh";
-  const to = fresh ? xl : large;
+  const asked = t0 - 50_000;
   return (
     <TaskChrome tab="chat">
       <div className="taskChat" data-testid="task-chat">
@@ -90,44 +75,43 @@ export function TaskChat({ scenario, onDecide }: { scenario: Scenario; onDecide:
             footer={
               <>
                 <DeciderLine decider="conductor" action={<Button variant="quiet" size="sm">Let Deliver finish it</Button>} />
-                <ChatComposer mode="chat" onSubmit={() => true} sentAs="Márcio" to={<>To <b>Conductor</b></>}
-                  {...(waiting ? { waitingFor: "Implementer", waitingKey: "mreq_1" } : {})} />
+                <ChatComposer mode="chat" onSubmit={() => true} sentAs="Márcio" to={<>To <b>Conductor</b></>} />
               </>
             }>
             <ChatMessage role="human" person={P["marcio"]} name="Márcio Martins" intent="message" startedAt={t0 - 41 * MIN}
               content="The export times out for Globex (2.1M invoices). Stream it instead of building the CSV in memory, and keep the PDF path as it is." />
             <ChatMessage role="conductor" startedAt={t0 - 40 * MIN} costUsd={0.12}
               content="Agreed. I'll start the implementer on streaming the CSV through `pg-cursor`; the PDF renderer stays. It runs the backend suite before it pushes." />
-            {implLine(scenario === "resizing" ? "starting" : scenario === "auto" ? "running" : waiting ? "paused" : "running",
-              scenario === "resizing" ? "Moving to Large" : waiting ? "Waiting for you" : "Running",
-              [scenario === "resizing" || scenario === "auto" ? "Large" : "Standard", "38m", "$1.72"])}
-            {scenario === "auto" ? (
+            {otherPool ? (
               <>
-                <ChatNotice kind="notice" by={DUDE} at={t0 - 2 * MIN} data-testid="auto-notice"
-                  text="The implementer asked for Large (4 CPUs · 16 GiB): its jest run was OOM-killed at 7.9 of 8 GiB. billing lets agents go up to Large, so it moves now, and later implementer and fixer Runs in this task run on Large." />
-                <ChatNotice kind="unparked" by={DUDE} at={t0 - 80_000} text="The implementer moved to Large in 41s, with its conversation and uncommitted work."
-                  title={MOVE_STAGES.map((st, i) => `${st.done} ${[6.4, 11.2, 9.8, 3.1, 10.5][i]}s`).join("\n")} />
-              </>
-            ) : (
-              <MachineRequestCard role="implementer" who="Implementer" from={standard} to={to} peakGiB={7.9} showCost
-                reason={fresh ? REASON_XL : REASON_LARGE} askedAt={asked}
-                fresh={fresh ? { pushed: TASK.commit, uncommitted: { files: ["src/export/stream.ts"], added: 42, removed: 7 } } : undefined}
-                decision={scenario === "declined" ? { approved: false, by: "Márcio", at: decidedAt, note: DECLINE_NOTE }
-                  : scenario === "resizing" ? { approved: true, by: "Márcio", at: decidedAt } : undefined}
-                onDecide={waiting ? (approve) => onDecide(approve) : undefined} onAskToPush={() => undefined} />
-            )}
-            {scenario === "resizing" ? (
-              <>
-                <ChatNotice kind="notice" by={DUDE} at={decidedAt} data-testid="approved-notice"
-                  text="Márcio approved Large for the implementer. It is moving now, with its conversation and uncommitted work; later implementer and fixer Runs in this task run on Large." />
-                <MoveProgress verb="Moving to Large" steps={moveSteps(Date.now())} startedAt={decidedAt} defaultOpen
+                <ChatRunLine data-testid="chat-run" role="implementer" status="aborted" statusLabel="Replaced" what={WHAT}
+                  facts={["Standard", "38m", "$1.72"]} onOpen={() => undefined}
+                  replacement={<a href="#run_q8w2">Open replacement Run</a>} />
+                <ChatAside>
+                  <ToolCallCard name="push" icon="git-branch" status="completed" startedAt={asked - 30_000} endedAt={asked - 21_000}
+                    summary={<><code>dude push</code> · 1 commit to <code>{TASK.runBranch}</code></>}
+                    result={`Pushed ${TASK.commit} “Stream the CSV through pg-cursor” to ${TASK.runBranch}. Nothing uncommitted.`} />
+                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={900} />
+                </ChatAside>
+                <ChatNotice kind="restart" by={DUDE} at={asked + 2_000} data-testid="move-notice"
+                  text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
+                <ChatRunLine role="implementer" status="starting" statusLabel="Starting on XL" what={WHAT} facts={["XL", TASK.fresh]} onOpen={() => undefined} />
+                <MoveProgress verb="Starting on XL" steps={stepsAt(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 2_000} defaultOpen
                   avatar={<AgentAvatar role="implementer" size="chat" />} />
               </>
-            ) : null}
-            {scenario === "declined" ? (
-              <ChatNotice kind="notice" by={DUDE} at={decidedAt + 2_000} data-testid="declined-notice"
-                text="Told the implementer: declined, with Márcio's note. It carries on on Standard." />
-            ) : null}
+            ) : (
+              <>
+                <ChatRunLine data-testid="chat-run" role="implementer" status="starting" statusLabel="Moving to Large" what={WHAT}
+                  facts={["Large", "38m", "$1.72"]} onOpen={() => undefined} />
+                <ChatAside>
+                  <MachineRequestCall from={standard} to={large} reason={REASON_LARGE} answer={ANSWER_LARGE} startedAt={asked} durationMs={700} />
+                </ChatAside>
+                <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
+                  text="Moving the implementer to Large: it keeps its conversation and work. Later implementer Runs in this task run on Large too." />
+                <MoveProgress verb="Moving to Large" steps={stepsAt(MOVE_STAGES, 2, Date.now(), [6_400, 11_200])} startedAt={asked + 1_000} defaultOpen
+                  avatar={<AgentAvatar role="implementer" size="chat" />} />
+              </>
+            )}
           </ChatTranscript>
         </div>
       </div>
@@ -135,8 +119,12 @@ export function TaskChat({ scenario, onDecide }: { scenario: Scenario; onDecide:
   );
 }
 
-export function TaskOverview() {
+/** The Overview's machines; `confirm` opens Reset's confirmation, `onXL` puts the implementer on XL. */
+export function TaskOverview({ confirm, onXL }: { confirm?: boolean; onXL?: boolean }) {
+  const [open, setOpen] = useState(confirm ?? false);
   const [reset, setReset] = useState(false);
+  const raised = onXL ? xl : large;
+  const reason = onXL ? "the 2.1M-row fixture's sort needs about 20 GiB" : "jest OOM-killed with --maxWorkers 4 on 8 GiB";
   return (
     <TaskChrome tab="overview">
       <div className="taskOverview">
@@ -148,26 +136,30 @@ export function TaskOverview() {
           <section className="taskBlock" aria-label="Pipeline">
             <h2 className="ds-label">Pipeline</h2>
             <StepList data-testid="pipeline">
-              <StepRow avatar={<AgentAvatar role="implementer" size="md" />} label="Implement" status={<StatusMark status="completed" size="sm" />}
-                meta="Large ↑" metaTitle="Large, raised for this task" duration="52m" onOpen={() => undefined} />
-              <StepRow avatar={<AgentAvatar role="reviewer" size="md" />} label="Review · correctness, performance" status={<StatusMark status="completed" size="sm" />}
-                meta="Standard" duration="9m" onOpen={() => undefined} />
-              <StepRow avatar={<AgentAvatar role="implementer" size="md" />} label="Fix · 2 findings" status={<StatusMark status="running" size="sm" />}
-                meta="Large ↑" metaTitle="Large: the fixer follows the implementer" duration="6m" onOpen={() => undefined} />
+              <StepRow avatar={<AgentAvatar role="implementer" size="md" />} label="Implement" status={<StatusMark status={reset ? "starting" : "running"} size="sm" />}
+                meta={reset ? "Standard" : `${raised.name} ↑`} metaTitle={reset ? "Standard, billing's size" : `${raised.name}, raised for this task`} duration="52m" onOpen={() => undefined} />
+              <StepRow avatar={<AgentAvatar role="reviewer" size="md" />} label="Review" status={<StatusMark status="pending" size="sm" />}
+                meta="Standard" onOpen={() => undefined} />
             </StepList>
           </section>
         </div>
         <aside className="taskAside" aria-label="Machines">
           <MachineRaises where="raised in this task"
             raises={reset ? [] : [
-              { role: "implementer", label: "Implementer", size: large, settings: standard, onReset: () => setReset(true),
-                detail: <>Asked by {TASK.run} (jest OOM-killed at 7.9 of 8 GiB) · approved by Márcio, 1h ago</> },
-              { role: "implementer", label: "Fixer", size: large, settings: standard,
+              { role: "implementer", label: "Implementer", size: raised, settings: standard, onReset: () => setOpen(true),
+                detail: <>Asked for by {onXL ? TASK.fresh : TASK.run}, 1h ago: {reason}</> },
+              { role: "implementer", label: "Fixer", size: raised, settings: standard,
                 detail: <>Follows the implementer: it names no size of its own</> },
             ]} />
-          {reset ? <Callout tone="neutral">Implementer and fixer back to Standard, billing's size for them. The fixer running now keeps Large until it ends.</Callout> : null}
+          {reset ? (
+            <Callout tone="neutral" data-testid="reset-done">
+              {onXL ? "A fresh implementer is starting on Standard from what the last one pushed; it was told why."
+                : "The implementer is moving back to Standard, keeping its work; it was told why."} Later implementer and fixer Runs in this task run on billing's Standard.
+            </Callout>
+          ) : null}
         </aside>
       </div>
+      <ResetMachineConfirm open={open} onOpenChange={setOpen} label="implementer" from={raised} to={standard} onConfirm={() => setReset(true)} />
     </TaskChrome>
   );
 }

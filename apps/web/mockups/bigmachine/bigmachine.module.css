@@ -1,205 +1,14 @@
 /*
- * The proposal's additions, tokens only. The request card reuses
- * QuestionCard's stylesheet (the turn, wash, bar, header, tags) and adds
- * only its body; the raised chip reuses MachineChip's; the task's machines
- * reuse ServersSummary's. MoveProgress is the startup design's row.
+ * The proposal's additions, tokens only. The raised chip reuses
+ * MachineChip's stylesheet and the task's machines reuse ServersSummary's;
+ * the request is a ToolCallCard, which needs only the pool's ink here.
+ * MoveProgress is the startup design's row.
  */
 
-/* ---- SizeChange ---------------------------------------------------------- */
+/* ---- MachineRequestCall -------------------------------------------------- */
 
-.change {
-  margin: var(--ds-space-4) 0 var(--ds-space-8);
-  padding: var(--ds-space-8) var(--ds-space-12);
-  max-width: 560px;
-  background: var(--ds-color-raised);
-  --ds-avatar-bed: var(--ds-color-raised);
-  font-size: var(--ds-text-sm);
-  line-height: var(--ds-leading-snug);
-}
-.changeHead {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  margin-bottom: var(--ds-space-4);
-}
-.changeGlyph,
-.changeArrow {
-  flex: none;
+.callPool {
   color: var(--ds-color-text-muted);
-}
-.changeFrom {
-  color: var(--ds-color-text-secondary);
-}
-.changeTo {
-  font-weight: var(--ds-weight-semibold);
-  color: var(--ds-color-text-strong);
-}
-/* Settled: the change in one line, as the record. */
-.changeLine {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ds-space-6);
-  margin: var(--ds-space-2) 0 var(--ds-space-4);
-  font-size: var(--ds-text-sm);
-  font-variant-numeric: tabular-nums;
-}
-.changeLine > svg {
-  flex: none;
-  translate: 0 1px;
-}
-.changeLineFacts {
-  color: var(--ds-color-text-secondary);
-}
-.facts {
-  display: grid;
-  grid-template-columns: max-content max-content max-content minmax(0, 1fr);
-  column-gap: var(--ds-space-12);
-  margin: 0;
-}
-.fact {
-  display: contents;
-}
-.fact > * {
-  margin: 0;
-  min-height: var(--ds-size-row-item-sm);
-  display: flex;
-  align-items: center;
-}
-.factLabel {
-  color: var(--ds-color-text-muted);
-}
-.factValue {
-  gap: var(--ds-space-6);
-  font-variant-numeric: tabular-nums;
-}
-.mono {
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-mono);
-}
-.was {
-  color: var(--ds-color-text-secondary);
-}
-.factArrow {
-  color: var(--ds-color-text-muted);
-}
-.now {
-  color: var(--ds-color-text-strong);
-  font-weight: var(--ds-weight-medium);
-}
-.factDiff {
-  justify-content: flex-end;
-  font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-secondary);
-}
-.factExtra {
-  min-width: 0;
-}
-.poolNote {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-4);
-  color: var(--ds-color-text-secondary);
-}
-.poolGlyph {
-  color: var(--ds-tone-attention-mark);
-}
-
-/* The peak against the new limit: FitBar's track, a mark where the old limit was. */
-.peak {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-width: 0;
-}
-.peakTrack {
-  position: relative;
-  display: inline-block;
-  width: 64px;
-  height: 3px;
-  flex: none;
-  background: var(--ds-color-border);
-}
-.peakFill {
-  display: block;
-  height: 100%;
-  background: var(--ds-tone-attention-solid);
-}
-.peakTick {
-  position: absolute;
-  top: -3px;
-  width: 1px;
-  height: 9px;
-  background: var(--ds-color-text-secondary);
-}
-.peakWords {
-  color: var(--ds-color-text-secondary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* On a phone the deltas and the meter go under the values. */
-@container (max-width: 420px) {
-  .facts {
-    grid-template-columns: max-content minmax(0, 1fr);
-  }
-  .factDiff {
-    display: none;
-  }
-  .factExtra {
-    grid-column: 2;
-    min-height: 0;
-  }
-  .factExtra:empty {
-    display: none;
-  }
-}
-
-/* ---- MachineRequestCard -------------------------------------------------- */
-
-.requestBody {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  container-type: inline-size;
-}
-.freshLine code,
-.decisionNote code {
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-mono);
-}
-.freshLine b {
-  font-weight: var(--ds-weight-medium);
-}
-.requestBody > [role="note"],
-.requestBody > div[class] + div[class] {
-  margin-top: var(--ds-space-8);
-}
-.decide {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-  margin-top: var(--ds-space-12);
-  max-width: 560px;
-}
-.decideRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
-.decideHint {
-  flex: 1 1 220px;
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-}
-.decisionNote {
-  margin: var(--ds-space-8) 0 0;
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
-}
-.decisionNote b {
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
 }
 
 /* ---- RaisedMachineChip --------------------------------------------------- */
@@ -374,20 +183,14 @@
   gap: var(--ds-space-4) var(--ds-space-12);
   min-width: 0;
 }
-.settingStack {
+.switchStack {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-4);
   min-width: 0;
-  max-width: 560px;
 }
-.ceiling {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  padding-left: var(--ds-space-32);
-}
-.ceilingLabel {
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
+.switchHint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  max-width: 320px;
 }

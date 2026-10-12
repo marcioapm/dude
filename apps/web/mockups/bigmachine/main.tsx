@@ -1,10 +1,10 @@
 /*
- * The bigmachine mockup: an agent asks to be moved to a larger machine.
+ * The bigmachine mockup: an agent moves itself to a larger machine.
  * The app's shell (the design system's Sidebar and main pane) with BILL-42's
- * Chat, its Overview, a later Run's header, a brainstorm session and the
- * Machines settings. A bar above switches scenario, theme and density; it
- * is not part of the proposal. URL parameters set the same
- * (?s=ask-fresh&theme=light&density=compact).
+ * Chat and Overview, its Runs' headers, a brainstorm session and a role's
+ * settings. A bar above switches scenario, theme and density; it is not
+ * part of the proposal. URL parameters set the same
+ * (?s=move-pool&theme=light&density=compact).
  */
 
 import { StrictMode, useState } from "react";
@@ -18,20 +18,35 @@ import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/prim
 import { navProjects } from "../../../../packages/design-system/src/gallery/navFixtures.ts";
 import { TaskChat, TaskOverview } from "./TaskScreens.tsx";
 import { RunPage, SessionPage } from "./RunAndSession.tsx";
-import { MachinesSettings } from "./SettingsPage.tsx";
+import { RoleSettings } from "./SettingsPage.tsx";
 import { P, SCENARIOS, SESSION, type Scenario } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
 const isScenario = (v: string | null): v is Scenario => SCENARIOS.some((x) => x.value === v);
 
+function Screen({ scenario }: { scenario: Scenario }) {
+  switch (scenario) {
+    case "move": return <TaskChat otherPool={false} />;
+    case "move-pool": return <TaskChat otherPool />;
+    case "refused": return <RunPage view="refused" />;
+    case "refused-largest": return <RunPage view="refused-largest" />;
+    case "run": return <RunPage view="fixer" />;
+    case "start-over": return <RunPage view="start-over" />;
+    case "task": return <TaskOverview />;
+    case "reset": return <TaskOverview confirm />;
+    case "reset-pool": return <TaskOverview confirm onXL />;
+    case "role-org": return <RoleSettings where="org" />;
+    case "role-project": return <RoleSettings where="project" />;
+    case "session": return <SessionPage />;
+  }
+}
+
 function Mock() {
   const theme = useTheme();
-  const [scenario, setScenario] = useState<Scenario>(() => (isScenario(params.get("s")) ? (params.get("s") as Scenario) : "ask"));
+  const [scenario, setScenario] = useState<Scenario>(() => (isScenario(params.get("s")) ? (params.get("s") as Scenario) : "move"));
   const [navOpen, setNavOpen] = useState(false);
   const note = SCENARIOS.find((x) => x.value === scenario)!.note;
-  // Approving in the mockup plays on to the next state, as the app would.
-  const decide = (approve: boolean) => setScenario(approve ? "resizing" : "declined");
-  const settings = scenario === "settings-org" || scenario === "settings-project";
+  const settings = scenario === "role-org" || scenario === "role-project";
   // ?bar=0 leaves the switcher out, for a phone's screenshot.
   const bar = params.get("bar") !== "0";
 
@@ -68,11 +83,7 @@ function Mock() {
         />
         <main className={settings ? "main" : "main flush"}>
           <SidebarToggle open={navOpen} onOpenChange={setNavOpen} size="sm" />
-          {scenario === "run" ? <RunPage />
-            : scenario === "task" ? <TaskOverview />
-            : scenario === "session" ? <SessionPage onDecide={decide} />
-            : settings ? <MachinesSettings where={scenario === "settings-org" ? "org" : "project"} />
-            : <TaskChat key={scenario} scenario={scenario} onDecide={decide} />}
+          <Screen key={scenario} scenario={scenario} />
         </main>
       </div>
     </div>

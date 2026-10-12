@@ -1,242 +1,61 @@
 /*
  * What the proposal adds to the design system, built here to its rules:
  * tokens only, both themes, both densities, accessible names. Each reuses
- * the stylesheet of the component it extends (QuestionCard, MachineChip,
- * ServersSummary) rather than copying it; docs/design/agent-machine-request.md
- * lists the props and the README text each would add.
+ * the stylesheet of the component it extends (MachineChip, ServersSummary)
+ * rather than copying it; docs/design/agent-machine-request.md lists the
+ * props and the README text each would add.
  *
- * - SizeChange: current → asked, per resource, with the delta, the pool
- *   when it changes, the memory peak against both limits, and the price
- *   per hour when it is known.
- * - MachineRequestCard: the agent's request, as QuestionCard draws a
- *   request (`kind="machine"` plus a `detail` slot), with a note back and
- *   Approve / Decline; settled, the record of who decided and their note.
+ * - MachineRequestCall: `request_machine` as a ToolCallCard, composed, not new.
  * - RaisedMachineChip: MachineChip with `raised` ("raised for this task").
- * - MachineRaises: the task's (or session's) raised machines, in
- *   ServersSummary's grammar, each with Reset.
+ * - MachineRaises: the task's raised machines, in ServersSummary's grammar,
+ *   each with Reset.
+ * - ResetMachineConfirm: Reset's confirmation, a `Dialog size="sm"`.
  * - MoveProgress: the startup design's StartProgress, verb "Moving to Large".
  */
 
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { formatDuration, formatUsd, Icon } from "@dude/design-system";
-import { AgentAvatar, Duration, Markdown, StatusMark, TextButton, type Person } from "@dude/design-system/components";
-import { Button, Callout, Textarea, Tooltip } from "@dude/design-system/primitives";
-import qc from "../../../../packages/design-system/src/components/QuestionCard.module.css";
+import { formatDuration, Icon } from "@dude/design-system";
+import { AgentAvatar, StatusMark, TextButton, ToolCallCard } from "@dude/design-system/components";
+import { Button, Dialog, DialogClose, Tooltip } from "@dude/design-system/primitives";
 import mc from "../../../../packages/design-system/src/components/Machines.module.css";
 import ss from "../../../../packages/design-system/src/components/ServersSummary.module.css";
 import type { Size } from "./data.ts";
 import s from "./bigmachine.module.css";
 
-type Role = "implementer" | "brainstorm" | "qa_browser" | "simplifier" | "investigator";
+type Role = "implementer" | "brainstorm" | "qa_browser" | "simplifier";
 
 const cx = (...names: Array<string | false | null | undefined>) => names.filter(Boolean).join(" ");
-const n = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
-const delta = (a: number, b: number) => `${b >= a ? "+" : "−"}${n(Math.abs(b - a))}`;
 
-// ---- SizeChange -------------------------------------------------------
-
-export interface SizeChangeProps {
-  readonly from: Size;
-  readonly to: Size;
-  /** The most memory the Run's container used, as lux measured it, in GiB. */
-  readonly peakGiB?: number | undefined;
-  /** Price per hour, both sizes known: a row with the difference. */
-  readonly showCost?: boolean | undefined;
-  /** One line, for a settled request: the names and each "was → now". */
-  readonly compact?: boolean | undefined;
-}
+// ---- MachineRequestCall ----------------------------------------------------
 
 /**
- * A size change in one block: the two names, then CPUs, memory and disk
- * as "2 → 4" with the difference, the pool when it changes, and the
- * memory peak drawn against the new limit with the old one marked. Every
- * number is text; the meter repeats what the words say.
+ * `request_machine` in a transcript: ToolCallCard with the chip glyph and
+ * the change as its summary ("Asked for a larger machine: Standard → Large"),
+ * the arguments and the tool's answer when open. A refusal is a failed call,
+ * open, its first line in the row.
  */
-export function SizeChange({ from, to, peakGiB, showCost, compact }: SizeChangeProps) {
-  const otherPool = from.poolId !== to.poolId;
-  const cost = showCost && from.usdPerHour !== null && to.usdPerHour !== null;
-  const label = `${from.name} to ${to.name}: ${from.cpus} to ${to.cpus} CPUs, ${from.memoryGiB} to ${to.memoryGiB} GiB of memory, ${from.diskGiB} to ${to.diskGiB} GiB of disk`
-    + (otherPool ? `, in another pool, ${to.pool}` : "") + (peakGiB !== undefined ? `. Its memory peaked at ${n(peakGiB)} GiB.` : ".");
-  if (compact) {
-    return (
-      <p className={s.changeLine} aria-label={label} data-testid="size-change">
-        <Icon name="chip" size={12} className={s.changeGlyph} />
-        <span aria-hidden>
-          <span className={s.changeFrom}>{from.name}</span> → <span className={s.changeTo}>{to.name}</span>
-          <span className={s.changeLineFacts}> · {n(from.cpus)} → {n(to.cpus)} CPUs · {n(from.memoryGiB)} → {n(to.memoryGiB)} GiB · {n(from.diskGiB)} → {n(to.diskGiB)} GiB disk{otherPool ? ` · ${from.pool} → ${to.pool} pool` : ""}</span>
-        </span>
-      </p>
-    );
-  }
-  return (
-    <figure className={s.change} aria-label={label} data-testid="size-change">
-      <div className={s.changeHead} aria-hidden>
-        <Icon name="chip" size={14} className={s.changeGlyph} />
-        <span className={s.changeFrom}>{from.name}</span>
-        <Icon name="arrow-right" size={14} className={s.changeArrow} />
-        <span className={s.changeTo}>{to.name}</span>
-      </div>
-      <dl className={s.facts} aria-hidden>
-        <Fact label="CPUs" from={n(from.cpus)} to={n(to.cpus)} diff={delta(from.cpus, to.cpus)} />
-        <Fact label="Memory" from={n(from.memoryGiB)} to={`${n(to.memoryGiB)} GiB`} diff={delta(from.memoryGiB, to.memoryGiB)}
-          extra={peakGiB !== undefined ? <PeakMeter peak={peakGiB} was={from.memoryGiB} now={to.memoryGiB} /> : undefined} />
-        <Fact label="Disk" from={n(from.diskGiB)} to={`${n(to.diskGiB)} GiB`} diff={delta(from.diskGiB, to.diskGiB)} />
-        {otherPool ? (
-          <Fact label="Pool" from={from.pool} to={to.pool} mono
-            extra={<span className={s.poolNote}><Icon name="warning" size={12} className={s.poolGlyph} />another pool: a fresh Run</span>} />
-        ) : null}
-        {cost ? (
-          <Fact label="Price" from={formatUsd(from.usdPerHour!)} to={`${formatUsd(to.usdPerHour!)} an hour`}
-            diff={`+${formatUsd(to.usdPerHour! - from.usdPerHour!)}`} />
-        ) : null}
-      </dl>
-    </figure>
-  );
-}
-
-function Fact({ label, from, to, diff, extra, mono }: { label: string; from: string; to: string; diff?: string; extra?: ReactNode; mono?: boolean }) {
-  return (
-    <div className={s.fact}>
-      <dt className={s.factLabel}>{label}</dt>
-      <dd className={cx(s.factValue, mono && s.mono)}>
-        <span className={s.was}>{from}</span>
-        <span className={s.factArrow}>→</span>
-        <span className={s.now}>{to}</span>
-      </dd>
-      <dd className={s.factDiff}>{diff ?? ""}</dd>
-      <dd className={s.factExtra}>{extra ?? null}</dd>
-    </div>
-  );
-}
-
-/** The peak against the new limit, with a tick where the old one was. */
-function PeakMeter({ peak, was, now }: { peak: number; was: number; now: number }) {
-  return (
-    <span className={s.peak}>
-      <span className={s.peakTrack}>
-        <span className={s.peakFill} style={{ width: `${Math.min(100, (peak / now) * 100)}%` }} />
-        <span className={s.peakTick} style={{ left: `${Math.min(100, (was / now) * 100)}%` }} />
-      </span>
-      <span className={s.peakWords}>peak {n(peak)} of {n(was)} GiB</span>
-    </span>
-  );
-}
-
-// ---- MachineRequestCard --------------------------------------------------
-
-export interface MachineRequestCardProps {
-  readonly role: Role;
-  /** "Implementer", "Brainstorm": who asks. */
-  readonly who: string;
+export function MachineRequestCall({ from, to, reason, answer, refused, fresh, startedAt, durationMs, defaultExpanded }: {
   readonly from: Size;
-  readonly to: Size;
-  /** The agent's words: what ran out. Quoted, so they cannot pass for the card's. */
+  /** The size asked for; a name alone when it is not one of the organisation's. */
+  readonly to: Size | string;
   readonly reason: string;
-  readonly peakGiB?: number | undefined;
-  readonly showCost?: boolean | undefined;
-  readonly askedAt: number;
-  /** Settled: who decided, how, when, and their note to the agent. */
-  readonly decision?: { readonly approved: boolean; readonly by: string; readonly at: number; readonly note?: string | undefined } | undefined;
-  /** Another pool: approving starts a fresh agent. What it would lose, from its last diff. */
-  readonly fresh?: { readonly pushed: string; readonly uncommitted: { readonly files: readonly string[]; readonly added: number; readonly removed: number } | null } | undefined;
-  /** Someone else decides: the card says whom, and offers nothing. */
-  readonly waitingOn?: string | undefined;
-  /** A session's: only that member may decide; nothing to take over. */
-  readonly onlyThey?: boolean | undefined;
-  readonly onDecide?: ((approve: boolean, note: string) => void) | undefined;
-  /** Another pool: ask it to push first; the request stays open. */
-  readonly onAskToPush?: (() => void) | undefined;
-}
-
-/**
- * An agent asks for a larger machine. A request turn in QuestionCard's
- * grammar: while it waits on the reader it is the one loud turn (the
- * attention wash and bar), the size change and the agent's reason in
- * quotes, then a note back and Approve / Decline. Settled, it is a plain
- * row: "Approved · by Márcio, after 2m", and the note.
- */
-export function MachineRequestCard(props: MachineRequestCardProps) {
-  const { role, who, from, to, reason, peakGiB, showCost, askedAt, decision, fresh, waitingOn, onlyThey, onDecide, onAskToPush } = props;
-  const [note, setNote] = useState("");
-  const waiting = !decision;
-  const someoneElse = waiting && waitingOn !== undefined;
-  const form = waiting && !someoneElse && onDecide !== undefined;
-  const state = waiting ? "waiting" : "answered";
-  const noteId = useId();
-  const lost = fresh?.uncommitted;
+  readonly answer: string;
+  readonly refused?: boolean | undefined;
+  readonly fresh?: boolean | undefined;
+  readonly startedAt?: number | undefined;
+  readonly durationMs?: number | undefined;
+  readonly defaultExpanded?: boolean | undefined;
+}) {
+  const name = typeof to === "string" ? to : to.name;
+  const pool = typeof to !== "string" && from.poolId !== to.poolId ? to.pool : null;
   return (
-    <article className={cx(qc["root"], qc[state])} data-state={state} data-testid="machine-request"
-      aria-label={someoneElse ? `${who} asks for a larger machine and is waiting for ${waitingOn} to decide`
-        : waiting ? `${who} asks for a larger machine and is waiting for a decision` : `${who} asked for a larger machine`}>
-      <div className={qc["gutter"]}><AgentAvatar role={role} size="chat" live={waiting} /></div>
-      <div className={qc["main"]}>
-        <header className={qc["header"]}>
-          <span className={qc["name"]}>{who}</span>
-          <span className={qc["verb"]}>{waiting ? "asks" : "asked"} for a larger machine</span>
-          {waiting ? (
-            <span role="status" aria-live="polite" className="ds-sr-only">
-              {someoneElse ? `Blocked until ${waitingOn} decides.` : "Needs you. It waits until you decide."}
-            </span>
-          ) : (
-            <span className={cx(qc["tag"], decision.approved ? qc["tagAnswered"] : qc["tagDismissed"])}>
-              <Icon name={decision.approved ? "check" : "cross"} size={10} strokeWidth={2} />
-              <span className="ds-cap">{decision.approved ? "Approved" : "Declined"}</span>
-            </span>
-          )}
-          {waiting ? (
-            <span className={qc["wait"]}>waiting <Duration since={askedAt} live /></span>
-          ) : (
-            <span className={qc["waited"]}>by {decision.by}, after <Duration since={askedAt} until={decision.at} /></span>
-          )}
-          <time className={qc["time"]} dateTime={new Date(askedAt).toISOString()}>
-            {new Date(askedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
-          </time>
-        </header>
-        <div className={s.requestBody}>
-          <SizeChange from={from} to={to} peakGiB={peakGiB} showCost={showCost} compact={!waiting} />
-          <Markdown source={reason.split("\n").map((l) => `> ${l}`).join("\n")} unmeasured className={qc["body"]} />
-          {fresh && waiting ? (
-            <Callout tone={lost ? "danger" : "attention"} data-testid="fresh-warning">
-              <span className={s.freshLine}>
-                <b>{to.name} is in another pool, so approving starts a fresh {who.toLowerCase()}.</b>{" "}
-                Its conversation is lost{lost ? <>, and so is its uncommitted work: <code>{lost.files.join(", ")}</code> (+{lost.added} −{lost.removed})</> : null}.
-                {" "}What it pushed (<code>{fresh.pushed}</code>) is kept, and the new one starts from it with the reason as its note.
-              </span>
-            </Callout>
-          ) : null}
-          {form ? (
-            <div className={s.decide}>
-              <Textarea id={noteId} label={`Note to the ${who.toLowerCase()} (optional)`} rows={1} maxRows={4} value={note}
-                onChange={(e) => setNote(e.target.value)} placeholder={fresh ? "Commit and push first, then go ahead." : "Use it for the export tests only."} />
-              <div className={s.decideRow}>
-                <Button size="sm" variant="primary" className={qc["answerButton"]} leadingIcon={fresh ? "retry" : "arrow-up"}
-                  onClick={() => onDecide(true, note)} data-testid="approve">
-                  {fresh ? `Approve: start fresh on ${to.name}` : `Approve ${to.name}`}
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => onDecide(false, note)} data-testid="decline">Decline</Button>
-                {fresh && lost && onAskToPush ? (
-                  <Button size="sm" variant="quiet" leadingIcon="git-branch" onClick={onAskToPush} data-testid="ask-push">Ask it to push first</Button>
-                ) : null}
-                <span className={s.decideHint}>
-                  {fresh ? `Later ${who.toLowerCase()} Runs in this task run on ${to.name} too.`
-                    : `It moves now, keeping its conversation and uncommitted work. Later ${who.toLowerCase()} Runs in this ${role === "brainstorm" ? "session" : "task"} run on ${to.name} too.`}
-                </span>
-              </div>
-            </div>
-          ) : null}
-          {someoneElse ? (
-            <p className={qc["waitingOn"]} data-testid="waiting-on">
-              <Icon name="hand" size={12} />
-              Waiting for {waitingOn} to decide
-              {" "}<span className={qc["takeOver"]}>· {onlyThey ? `Only ${waitingOn} can decide this one: it's their session` : "Take over this task to decide"}</span>
-            </p>
-          ) : null}
-          {decision?.note ? (
-            <p className={s.decisionNote} data-testid="decision-note"><b>{decision.by}:</b> “{decision.note}”</p>
-          ) : null}
-        </div>
-      </div>
-    </article>
+    <ToolCallCard name="request_machine" icon="chip" status={refused ? "failed" : "completed"} data-testid="machine-call"
+      summary={<>Asked for a larger machine: {from.name} → <b>{name}</b>
+        {pool ? <span className={s.callPool}> · {pool} pool</span> : null}</>}
+      args={{ size: name, reason, ...(fresh ? { fresh: true } : {}) }}
+      {...(refused ? { error: answer } : { result: answer })}
+      startedAt={startedAt} endedAt={startedAt !== undefined && durationMs !== undefined ? startedAt + durationMs : undefined}
+      defaultExpanded={defaultExpanded} />
   );
 }
 
@@ -252,8 +71,8 @@ export interface RaisedMachineChipProps {
 
 /**
  * MachineChip with `raised`: after the spec, the arrow-up glyph and
- * "raised for this task" in secondary ink. The tooltip says who asked,
- * who approved, and how to reset it.
+ * "raised for this task" in secondary ink. The tooltip says which Run
+ * asked, when and why.
  */
 export function RaisedMachineChip({ size, spec, raised, tooltip }: RaisedMachineChipProps) {
   return (
@@ -274,7 +93,7 @@ export interface MachineRaise {
   readonly role: Role;
   readonly label: string;
   readonly size: Size;
-  /** "follows the implementer", or who asked and who approved. */
+  /** "Follows the implementer", or which Run asked, when and why. */
   readonly detail: ReactNode;
   /** Its settings' size, which Reset goes back to. */
   readonly settings: Size;
@@ -282,9 +101,9 @@ export interface MachineRaise {
 }
 
 /**
- * The machines raised in a task (or a session): one row per role, its
- * face, "Implementer · Large", who asked and approved under it, and Reset.
- * ServersSummary's grammar, on the chrome shade, in the overview's aside.
+ * The machines raised in a task: one row per role, its face,
+ * "Implementer runs on Large", which Run asked under it, and Reset.
+ * ServersSummary's grammar, on the chrome shade, in the Overview's aside.
  */
 export function MachineRaises({ raises, where }: { readonly raises: readonly MachineRaise[]; readonly where: string }) {
   return (
@@ -303,14 +122,50 @@ export function MachineRaises({ raises, where }: { readonly raises: readonly Mac
               <span className={s.raiseDetail}>{r.detail}</span>
             </span>
             {r.onReset ? (
-              <Tooltip content={`Later ${r.label.toLowerCase()} Runs go back to ${r.settings.name}, its settings' size. One running now keeps ${r.size.name} until it ends.`}>
-                <TextButton onClick={r.onReset} aria-label={`Reset the ${r.label.toLowerCase()} to ${r.settings.name}`}>Reset</TextButton>
+              <Tooltip content={`Moves the ${r.label.toLowerCase()} back to ${r.settings.name}, its settings' size, now; later Runs run on ${r.settings.name} too.`}>
+                <TextButton onClick={r.onReset} aria-label={`Reset the ${r.label.toLowerCase()} to ${r.settings.name}`} data-testid="reset">Reset</TextButton>
               </Tooltip>
             ) : null}
           </li>
         ))}
       </ul>
     </aside>
+  );
+}
+
+// ---- ResetMachineConfirm -------------------------------------------------------
+
+/**
+ * Reset's confirmation: a `Dialog size="sm"` whose description is the one
+ * consequence. In the same pool nothing is lost, so the confirm is primary;
+ * across pools the running agent is replaced, so the dialog takes the danger
+ * tone and the confirm is `danger solid`, as the README asks of a loss.
+ */
+export function ResetMachineConfirm({ open, onOpenChange, label, from, to, onConfirm }: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** "implementer". */
+  readonly label: string;
+  readonly from: Size;
+  readonly to: Size;
+  readonly onConfirm: () => void;
+}) {
+  const otherPool = from.poolId !== to.poolId;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} size="sm" tone={otherPool ? "danger" : undefined}
+      title={`Move the ${label} back to ${to.name} now?`}
+      description={otherPool
+        ? `${from.name} is in another pool: a fresh ${label} starts from what it pushed; what it has not pushed is lost.`
+        : `It keeps its work (same pool). Later ${label} Runs in this task run on ${to.name} too.`}
+      footer={
+        <>
+          <DialogClose asChild><Button variant="quiet">Keep {from.name}</Button></DialogClose>
+          <Button data-testid="confirm-reset" {...(otherPool ? { variant: "danger", solid: true } : { variant: "primary" })}
+            onClick={() => { onConfirm(); onOpenChange(false); }}>
+            {otherPool ? `Replace it on ${to.name}` : `Move it to ${to.name}`}
+          </Button>
+        </>
+      } />
   );
 }
 
@@ -381,5 +236,11 @@ function Clock({ since, muted }: { since: number; muted?: boolean }) {
   return <span role="timer" className={cx(s.tick, muted && s.tickMuted)}>{formatDuration(Math.max(0, now - since), { style: "clock" })}</span>;
 }
 
-/** Whom a person is, for a face beside the decision. */
-export type { Person };
+/** The stages at a moment: `done` finished, the next live for 4s. */
+export function stepsAt(stages: ReadonlyArray<{ id: string; now: string; done: string }>, done: number, at: number, took: readonly number[]): MoveStep[] {
+  return stages.map((st, i) => ({
+    id: st.id, label: st.now, doneLabel: st.done,
+    state: i < done ? "done" : i === done ? "current" : "pending",
+    tookMs: took[i], since: i === done ? at - 4_000 : undefined,
+  }));
+}
