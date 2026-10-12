@@ -119,6 +119,7 @@ describe("an organisation's list", () => {
   test("starts empty: a Run gets the operator's list, and the model and tools are always reachable", async () => {
     expect(await orgNetwork(memberKey)).toEqual({
       egress: { value: [], source: "organization" }, operator: ["mirror.internal"], always: ["llm.example", "dude’s tools"], effective: ["mirror.internal"],
+      brainstorm: { anywhere: false },
     });
   });
 
@@ -148,6 +149,52 @@ describe("an organisation's list", () => {
     await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com", "*"] } });
     expect((await orgNetwork()).effective).toEqual(["*"]);
     await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com", "*.github.com"] } });
+  });
+});
+
+describe("brainstorm sessions reaching any host", () => {
+  const stored = async () => (await owner`SELECT brainstorm_anywhere FROM organizations WHERE id = ${ORG}`)[0].brainstorm_anywhere;
+  const recorded = async () => (await owner`SELECT payload FROM events WHERE organization_id = ${ORG} AND event_type = 'settings.updated'
+    AND payload->'changed'->'network' ? 'brainstorm' ORDER BY id`).map((e: Json) => e.payload);
+
+  test("an admin turns it on, recorded, and the list every other Run gets is what it was", async () => {
+    const before = await orgNetwork();
+    const res = await call(adminKey, "PATCH", "/v1/settings/organization", { network: { brainstorm: true } });
+    expect(res.status).toBe(200);
+    const network = (await body(res)).network;
+    expect(network.brainstorm).toEqual({ anywhere: true });
+    expect(network.effective).toEqual(before.effective);
+    expect(network.egress).toEqual(before.egress);
+    expect((await orgNetwork(memberKey)).brainstorm).toEqual({ anywhere: true });
+    expect(await stored()).toBe(true);
+    expect(await recorded()).toEqual([{ scope: "organization", changed: { network: { brainstorm: true } } }]);
+  });
+
+  test("a change to the list leaves it as it is", async () => {
+    const res = await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com"] } });
+    expect(res.status).toBe(200);
+    expect((await body(res)).network).toMatchObject({ egress: { value: ["github.com"] }, brainstorm: { anywhere: true } });
+    const [{ agent_egress }] = await owner`SELECT agent_egress FROM organizations WHERE id = ${ORG}`;
+    expect(agent_egress).toEqual(["github.com"]);
+    expect(await stored()).toBe(true);
+    // The list the tests after this one expect.
+    expect((await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com", "*.github.com"] } })).status).toBe(200);
+  });
+
+  test("a member's change, a project's, or not a boolean, is refused and changes nothing", async () => {
+    const member = await call(memberKey, "PATCH", "/v1/settings/organization", { network: { brainstorm: false } });
+    expect(member.status).toBe(403);
+    expect((await call(adminKey, "PATCH", "/v1/settings/organization", { network: { brainstorm: "yes" } })).status).toBe(400);
+    expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { network: { brainstorm: false } })).status).toBe(400);
+    expect(await stored()).toBe(true);
+    expect((await recorded()).length).toBe(1);
+  });
+
+  test("is not on a project's settings, and off again is off", async () => {
+    expect((await projectNetwork()).brainstorm).toBeUndefined();
+    await call(adminKey, "PATCH", "/v1/settings/organization", { network: { brainstorm: false } });
+    expect((await orgNetwork()).brainstorm).toEqual({ anywhere: false });
+    expect(await stored()).toBe(false);
   });
 });
 
@@ -303,8 +350,8 @@ describe("while the orchestrator is down", () => {
 });
 
 describe("what a Run gets", () => {
-  const layers = (org: string[], project?: string[], mode: "add" | "only" = "add"): Layers => ({
-    org: { id: ORG, name: "Acme", agentModels: {}, deliveryPolicy: {}, agentEgress: org },
+  const layers = (org: string[], project?: string[], mode: "add" | "only" = "add", brainstormAnywhere = false): Layers => ({
+    org: { id: ORG, name: "Acme", agentModels: {}, deliveryPolicy: {}, agentEgress: org, brainstormAnywhere },
     ...(project ? { project: { id: PROJECT, name: "p", agentModels: {}, deliveryPolicy: {}, agentEgress: project, agentEgressMode: mode } } : {}),
   });
   const none = { operator: [], always: ["dude’s tools"], model: null };
@@ -321,5 +368,11 @@ describe("what a Run gets", () => {
     expect(network(layers(["github.com"], ["pypi.org"], "only"), { ...none, operator: ["*"] }).effective).toEqual(["*"]);
     // The organisation's * is left out with the rest of its list.
     expect(network(layers(["*"], ["pypi.org"], "only"), { ...none, model: "llm.example" }).effective).toEqual(["pypi.org"]);
+  });
+
+  test("is the list whether or not brainstorms may reach anywhere, which only the organisation's settings say", () => {
+    const on = network(layers(["github.com"], undefined, "add", true), { ...none, model: "llm.example" });
+    expect([on.effective, on.brainstorm]).toEqual([["github.com"], { anywhere: true }]);
+    expect(network(layers(["github.com"], ["pypi.org"], "add", true), none).brainstorm).toBeUndefined();
   });
 });

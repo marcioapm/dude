@@ -103,4 +103,63 @@ func TestASessionReachesItsOrganisationsList(t *testing.T) {
 	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
 		t.Errorf("egress = %v, want %v", got, want)
 	}
+	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
+		t.Error("OPENCODE_ENABLE_EXA set on a brainstorm on its organisation's list: mcp.exa.ai would be refused")
+	}
+}
+
+// An organisation that lets brainstorms read the web: its session's agent
+// reaches any host, whatever its list says, with OpenCode's websearch on,
+// and records that; a task's Run of the same organisation keeps the list.
+func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
+	s := newSessionWorld(t)
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
+
+	sent, recorded := s.submittedNetwork()
+	if got, want := rules(sent), []string{"llm.example", "pypi.org"}; sent.Unrestricted || !slices.Equal(got, want) || recorded.Unrestricted {
+		t.Errorf("the implementer's network = %+v (recorded %+v), want %v", sent, recorded, want)
+	}
+
+	session := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": "what do competitors charge?"})
+	var v *luxRunView
+	var id string
+	s.until("the session's agent to be submitted", func() bool {
+		id, _ = s.brainstorm(session)
+		v = s.luxRun(id)
+		return v != nil
+	})
+	if n := v.spec.Network; n == nil || !n.Unrestricted || len(n.Egress) != 0 {
+		t.Errorf("the brainstorm's network = %+v, want unrestricted", n)
+	}
+	if got := v.spec.Env["OPENCODE_ENABLE_EXA"]; got != "1" {
+		t.Errorf("OPENCODE_ENABLE_EXA = %q, want 1", got)
+	}
+	var raw []byte
+	s.until("the brainstorm's network to be recorded", func() bool {
+		_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, id).Scan(&raw)
+		return raw != nil
+	})
+	var kept lux.Network
+	if err := json.Unmarshal(raw, &kept); err != nil || !kept.Unrestricted {
+		t.Errorf("recorded = %s (%v), want unrestricted", raw, err)
+	}
+
+	// Turned off: the session's next agent keeps to the list, with no Exa.
+	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
+	mustExec(t, s.owner, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, id)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": "and their free tiers?"})
+	var next string
+	s.until("the session's next agent to be submitted", func() bool {
+		next, _ = s.brainstorm(session)
+		v = s.luxRun(next)
+		return next != id && v != nil
+	})
+	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+		t.Errorf("the next brainstorm's network = %+v, want %v", v.spec.Network, want)
+	}
+	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
+		t.Error("OPENCODE_ENABLE_EXA set on the brainstorm started after the setting was turned off")
+	}
 }

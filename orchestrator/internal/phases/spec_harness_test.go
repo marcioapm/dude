@@ -1,8 +1,10 @@
 package phases
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,6 +275,151 @@ func TestACodexHeaderWithDELIsValidTOML(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no CODEX_CONFIG secret")
+	}
+}
+
+// everyRole turns goldenInput's implementer Run into each kind of Run: a
+// phase that publishes, one that does not, a task's conductor and a
+// session's brainstorm.
+var everyRole = map[string]func(*specInput){
+	"implementer": func(*specInput) {},
+	"reviewer":    func(in *specInput) { in.Phase, in.Role, in.PushBranch = "review", "reviewer", "" },
+	"conductor":   func(in *specInput) { in.Phase, in.Role = "", "conductor" },
+	"brainstorm": func(in *specInput) {
+		in.Phase, in.Role, in.TaskID, in.SessionID, in.PushBranch = "", "brainstorm", "", "ssn_1", ""
+	},
+}
+
+// Claude Code never asks api.anthropic.com about a host before a WebFetch,
+// on any role or effort: its command carries --settings with the check
+// off, as JSON Claude Code parses.
+func TestClaudeCodeSkipsTheWebFetchPreflightOnEveryRole(t *testing.T) {
+	for role, edit := range everyRole {
+		for _, effort := range []string{"", "none", "high"} {
+			c, in := goldenInput("claude-sonnet-5")
+			in.Harness, in.Effort = delivery.HarnessClaudeCode, effort
+			in.Options = map[string]any{"args": []any{"--settings-like", "x"}}
+			edit(&in)
+			cmd := buildSpec(c, in).Workload.Command
+			i := slices.Index(cmd, "--settings")
+			if i < 0 || i+1 >= len(cmd) {
+				t.Errorf("%s effort=%q: no --settings in %v", role, effort, cmd)
+				continue
+			}
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(cmd[i+1]), &settings); err != nil || settings["skipWebFetchPreflight"] != true {
+				t.Errorf("%s effort=%q: --settings %q (%v), want skipWebFetchPreflight true", role, effort, cmd[i+1], err)
+			}
+		}
+	}
+}
+
+// A tier's own --settings would replace dude's (Claude Code keeps the last
+// one): its JSON is merged into dude's, with the preflight still off even
+// where the tier turns it on, and one that is not a JSON object (a path,
+// null, an array) is dropped and named.
+func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
+	c, in := goldenInput("claude-sonnet-5")
+	in.Harness = delivery.HarnessClaudeCode
+	in.Options = map[string]any{"args": []any{"--verbose", "--settings", `{"model":"x","skipWebFetchPreflight":false}`,
+		"--add-dir", "/x", `--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json",
+		"--settings", "null", "--settings", "[1]", "--settings-like", "x", "--extra"}}
+	cmd := buildSpec(c, in).Workload.Command
+	n := slices.Index(cmd, "--settings")
+	if n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
+		slices.ContainsFunc(cmd, func(a string) bool { return strings.HasPrefix(a, "--settings=") || a == "/etc/claude.json" }) {
+		t.Fatalf("command = %q, want dude's --settings alone", cmd)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(cmd[n+1]), &settings); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"model": "y", "env": map[string]any{"A": "1"}, "skipWebFetchPreflight": true}
+	if !reflect.DeepEqual(settings, want) {
+		t.Errorf("settings = %v, want %v", settings, want)
+	}
+	// The tier's other args follow dude's --settings in their order, pairs
+	// kept together; one merely starting with --settings is one of them.
+	tail, wantTail := cmd[n+2:], []string{"--verbose", "--add-dir", "/x", "--settings-like", "x", "--extra"}
+	if !slices.Equal(tail, wantTail) {
+		t.Errorf("command ends %q, want %q", tail, wantTail)
+	}
+	if _, _, dropped := claudeCodeArgs(in.Options); !slices.Equal(dropped, []string{"--settings /etc/claude.json", "--settings null", "--settings [1]"}) {
+		t.Errorf("dropped = %q", dropped)
+	}
+	if _, _, dropped := claudeCodeArgs(map[string]any{"args": []any{"--settings"}}); !slices.Equal(dropped, []string{"--settings"}) {
+		t.Errorf("a --settings with no value: dropped = %q", dropped)
+	}
+}
+
+// A tier's --settings that Claude Code leaves out is the operator's to see:
+// a Run on Claude Code warns with what it dropped. One whose settings are
+// all inline JSON, or a Run on OpenCode, which passes no args, does not.
+func TestClaudeCodeWarnsOfTheTiersSettingsItDropped(t *testing.T) {
+	path := map[string]any{"args": []any{"--settings", "/etc/c.json"}}
+	for _, tc := range []struct {
+		name, harness string
+		options       map[string]any
+		warn          bool
+	}{
+		{"a path on Claude Code", delivery.HarnessClaudeCode, path, true},
+		{"inline JSON on Claude Code", delivery.HarnessClaudeCode, map[string]any{"args": []any{"--settings", `{"model":"y"}`}}, false},
+		{"a path on OpenCode", delivery.HarnessOpenCode, path, false},
+	} {
+		var logs bytes.Buffer
+		s := &Syncer{Log: slog.New(slog.NewTextHandler(&logs, nil))}
+		s.logIgnoredOptions(phaseRun{ID: "run_1"}, specInput{Harness: tc.harness, ModelTier: "T", Options: tc.options})
+		warned := strings.Contains(logs.String(), "level=WARN")
+		if warned != tc.warn || (tc.warn && !strings.Contains(logs.String(), `dropped="[--settings /etc/c.json]"`)) {
+			t.Errorf("%s: logged %q, want a warn naming the path %v", tc.name, logs.String(), tc.warn)
+		}
+	}
+}
+
+// OpenCode never fetches models.opencode.ai, on any role: the image and the
+// Run declare every model it uses.
+func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
+	for role, edit := range everyRole {
+		c, in := goldenInput("claude-sonnet-5")
+		edit(&in)
+		if got := buildSpec(c, in).Env["OPENCODE_DISABLE_MODELS_FETCH"]; got != "1" {
+			t.Errorf("%s: OPENCODE_DISABLE_MODELS_FETCH = %q, want 1", role, got)
+		}
+	}
+}
+
+// A Run that may reach any host is unrestricted whatever the lists say, on
+// every harness and on the scripted agent; on OpenCode it also gets Exa,
+// its websearch tool. A Run on the lists gets neither.
+func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T) {
+	harnesses := []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex}
+	for _, model := range []string{"claude-sonnet-5", "fake/scripted"} {
+		for _, harness := range harnesses {
+			for _, anywhere := range []bool{false, true} {
+				c, in := goldenInput(model)
+				everyRole["brainstorm"](&in)
+				c.Egress, in.Egress, in.Harness, in.Anywhere = []string{"mirror.internal"}, []string{"pypi.org"}, harness, anywhere
+				spec := buildSpec(c, in)
+				name := fmt.Sprintf("%s on %s, anywhere %v", model, harness, anywhere)
+				if spec.Network == nil || spec.Network.Unrestricted != anywhere || anywhere != (len(spec.Network.Egress) == 0) {
+					t.Errorf("%s: network = %+v", name, spec.Network)
+				}
+				exa, has := spec.Env["OPENCODE_ENABLE_EXA"]
+				if want := anywhere && harness == delivery.HarnessOpenCode && model != "fake/scripted"; has != want || (has && exa != "1") {
+					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, want)
+				}
+			}
+		}
+	}
+	// The scripted agent with no lists and no tools to reach still may
+	// reach any host when its Run may.
+	for _, harness := range harnesses {
+		c, in := goldenInput("fake/scripted")
+		everyRole["brainstorm"](&in)
+		c.ToolsURL, in.Egress, in.Harness, in.Anywhere = "", nil, harness, true
+		if spec := buildSpec(c, in); len(spec.Workload.MCPServers) > 0 || !reflect.DeepEqual(spec.Network, &lux.Network{Unrestricted: true}) {
+			t.Errorf("fake/scripted on %s, anywhere, no lists or MCP: mcp = %v, network = %+v", harness, spec.Workload.MCPServers, spec.Network)
+		}
 	}
 }
 

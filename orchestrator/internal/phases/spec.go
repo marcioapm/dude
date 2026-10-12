@@ -154,6 +154,9 @@ type specInput struct {
 	Machine *delivery.Machine
 	// What it may reach besides the operator's floor (RunEgress).
 	Egress []string
+	// Any host, whatever Egress and the operator's floor say: a brainstorm
+	// of an organisation that lets them read the web (brainstorm_anywhere).
+	Anywhere bool
 }
 
 // MachineSpec puts a machine size on a lux spec: its resources, memory and
@@ -381,10 +384,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
-		if len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
+		if in.Anywhere || len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
 			// Its tools must be reachable, and what it stands in for may
 			// reach; it needs no model.
-			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in.Egress)
+			spec.Network = runNetwork(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in)
 		}
 		return spec
 	}
@@ -398,20 +401,37 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	default:
 		openCodeWorkload(c, in, &spec)
 	}
-	spec.Network = egress(c, in.Egress)
+	spec.Network = runNetwork(c, in)
 	return spec
+}
+
+// runNetwork is a Run's network: unrestricted when it may reach any host,
+// else its lists (egress).
+func runNetwork(c AgentConfig, in specInput) *lux.Network {
+	if in.Anywhere {
+		return &lux.Network{Unrestricted: true}
+	}
+	return egress(c, in.Egress)
 }
 
 // openCodeWorkload: the image's OpenCode config defines the two providers,
 // reading the URL and key from DUDE_LLM_URL and DUDE_LLM_KEY; the Run adds
 // its model, declared under the provider its name goes through with its
 // tier's options and headers, all of which OpenCode deep-merges over that
-// file (OPENCODE_CONFIG_CONTENT).
+// file (OPENCODE_CONFIG_CONTENT). With every model declared there, OpenCode's
+// fetch of models.opencode.ai at start is never needed, and egress refuses
+// it: OPENCODE_DISABLE_MODELS_FETCH turns it off.
 func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if c.LLMURL != "" {
 		spec.Env["DUDE_LLM_URL"] = c.LLMURL
 	}
 	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
+	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
+	// OpenCode's websearch tool exists only with Exa on, and reaches
+	// mcp.exa.ai: only a Run that may reach any host gets it.
+	if in.Anywhere {
+		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
+	}
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
@@ -425,10 +445,20 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // does not list): without it, thinking comes back with empty text, and no
 // setting or variable does the same. Effort none turns thinking off; an
 // unset effort leaves the model's own.
+//
+// Before each WebFetch, Claude Code asks api.anthropic.com
+// (/api/web/domain_info) whether the page's host is blocklisted: egress
+// refuses that host, so every fetch failed, and allowing it would tell
+// Anthropic every host an agent reads. skipWebFetchPreflight turns the
+// check off; --settings takes it as inline JSON. Claude Code keeps only the
+// last --settings it is given, so a tier's own is merged into dude's
+// (claudeCodeArgs) rather than following it.
 func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessClaudeCode
 	spec.Workload.Adapter = delivery.HarnessClaudeCode
-	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized"}
+	settings, args, _ := claudeCodeArgs(in.Options)
+	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized",
+		"--settings", settings}
 	switch in.Effort {
 	case "":
 	case "none":
@@ -436,7 +466,7 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	default:
 		cmd = append(cmd, "--effort", in.Effort)
 	}
-	spec.Workload.Command = append(cmd, harnessArgs(in.Options)...)
+	spec.Workload.Command = append(cmd, args...)
 	if c.LLMURL != "" {
 		spec.Env["ANTHROPIC_BASE_URL"] = anthropicBaseURL(c.LLMURL)
 	}
@@ -455,6 +485,40 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "ANTHROPIC_API_KEY", Value: c.LLMKey, As: "env"})
 	}
+}
+
+// claudeCodeArgs are a Claude Code Run's --settings value and the tier's
+// other args. Each of the tier's `--settings <json>` (or --settings=) that
+// is a JSON object is merged into dude's, later keys over earlier, with
+// skipWebFetchPreflight true whatever it says; one that is not (a file
+// path, which dude cannot read to merge) is dropped and named.
+func claudeCodeArgs(options map[string]any) (settings string, args, dropped []string) {
+	merged := map[string]any{}
+	for list, i := harnessArgs(options), 0; i < len(list); i++ {
+		arg, value := list[i], ""
+		switch {
+		case arg == "--settings" && i+1 >= len(list):
+			dropped = append(dropped, arg)
+			continue
+		case arg == "--settings":
+			i++
+			value = list[i]
+		case strings.HasPrefix(arg, "--settings="):
+			value = strings.TrimPrefix(arg, "--settings=")
+		default:
+			args = append(args, arg)
+			continue
+		}
+		var tier map[string]any
+		if err := json.Unmarshal([]byte(value), &tier); err != nil || tier == nil {
+			dropped = append(dropped, "--settings "+value)
+			continue
+		}
+		maps.Copy(merged, tier)
+	}
+	merged["skipWebFetchPreflight"] = true
+	b, _ := json.Marshal(merged)
+	return string(b), args, dropped
 }
 
 // anthropicBaseURL is the proxy's URL as Claude Code takes it: without the
@@ -649,8 +713,9 @@ func submittedHarness(ranOn, role string) string {
 }
 
 // logIgnoredOptions says which of the tier's options a Run on Claude Code
-// or Codex leaves out (only "args" means anything to them), and which of
-// its args Codex leaves out (all but its -c overrides).
+// or Codex leaves out (only "args" means anything to them), which of
+// its args Codex leaves out (all but its -c overrides), and which tier
+// --settings Claude Code leaves out (all but inline JSON).
 func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	if s.Log == nil {
 		return
@@ -662,6 +727,12 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	if in.Harness == delivery.HarnessCodex {
 		if _, dropped := codexSettings(s.Agent, in); len(dropped) > 0 {
 			s.Log.Warn("Codex takes only -c key=value args from a tier, written to its config.toml; dropped the rest",
+				"run", r.ID, "tier", in.ModelTier, "dropped", dropped)
+		}
+	}
+	if in.Harness == delivery.HarnessClaudeCode {
+		if _, _, dropped := claudeCodeArgs(in.Options); len(dropped) > 0 {
+			s.Log.Warn("Claude Code takes a tier's --settings only as inline JSON, merged into dude's; dropped the rest",
 				"run", r.ID, "tier", in.ModelTier, "dropped", dropped)
 		}
 	}
