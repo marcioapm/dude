@@ -186,6 +186,14 @@ test("removing is the blocked task's owner's for blocks, either owner's for rela
     .toEqual({ code: "not_owner", message: "only Bo can remove this relation — it holds up their task" });
   expect((await call(bo, "DELETE", `/v1/tasks/${b}/relations/blocked_by/${a}`)).status).toBe(204);
 
+  // A related edge holds nothing up: it is on their task.
+  const c = await task(bo);
+  const d = await task(bo);
+  expect((await call(bo, "POST", `/v1/tasks/${c}/relations`, { kind: "related", task: d })).status).toBe(201);
+  res = await call(ana, "DELETE", `/v1/tasks/${c}/relations/related/${d}`);
+  expect(res.status).toBe(403);
+  expect(((await res.json()) as { error: { message: string } }).error.message).toBe("only Bo can remove this relation — it's on their task");
+
   expect((await call(ana, "POST", `/v1/tasks/${b}/relations`, { kind: "related", task: a })).status).toBe(201);
   expect((await relations(ana, b)).related[0]!.canRemove).toBe(true);
   expect((await call(ana, "DELETE", `/v1/tasks/${b}/relations/related/${a}`)).status).toBe(204);
@@ -304,4 +312,45 @@ test("the navigation tree says what each task waits on, holds up and whether it 
   expect(w.blockedBy).toEqual([{ key: key(spike), title: expect.any(String), status: "done", project: "Control plane", unmerged: true }]);
   expect(byKey(key(spike)).merged).toBe(false);
   expect(byKey(key(spike)).blocks.length).toBe(1);
+});
+
+test("navigation's merged is done with a merged pull request: neither alone", async () => {
+  const both = await task(ana, "done");
+  await merged(both);
+  const prOnly = await task(ana, "review");
+  await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+      base_branch, head_sha, title, state)
+    VALUES (${`pr_${prOnly}`}, ${ORG}, ${PROJECT}, ${prOnly}, 'repo_rel', ${Number(prOnly.replace("wi_rel_", "")) + 100}, 'u', 'h', 'main', 's', 't', 'merged')`;
+  const doneOnly = await task(ana, "done");
+  const tree = (await (await call(bo, "GET", "/v1/navigation")).json()) as { projects: Array<{ tasks: NavTaskOut[] }> };
+  const all = tree.projects.flatMap((p) => p.tasks);
+  const m = (id: string) => all.find((t) => t.key === key(id))!.merged;
+  expect([m(both), m(prOnly), m(doneOnly)]).toEqual([true, false, false]);
+});
+
+test("removing the last blocker of a parked delivery signals it as the orchestrator's runtime does, and wakes it", async () => {
+  const blocker = await task(ana, "review");
+  const t = await task(ana, "queued");
+  await blocks(blocker, t);
+  const wf = `wfr_parked_${t}`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id, awaiting_signals, wake_at)
+    VALUES (${wf}, ${ORG}, 'delivery', ${`delivery:${t}`}, 'waiting', 'implementRun', '{}'::jsonb, ${t}, '["relations.unblocked"]'::jsonb, now() + interval '5 minutes')`;
+  // A delivery parked on something else is left alone.
+  const other = await task(ana, "queued");
+  await blocks(blocker, other);
+  const wfOther = `wfr_other_${other}`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id, awaiting_signals)
+    VALUES (${wfOther}, ${ORG}, 'delivery', ${`delivery:${other}`}, 'waiting', 'implementRun', '{}'::jsonb, ${other}, '["phase.finished"]'::jsonb)`;
+  expect((await call(ana, "DELETE", `/v1/tasks/${t}/relations/blocked_by/${blocker}`)).status).toBe(204);
+  expect((await call(ana, "DELETE", `/v1/tasks/${other}/relations/blocked_by/${blocker}`)).status).toBe(204);
+  // The row workflow.SignalTx writes: a sig_ id, the run, the name, the payload, no idempotency key.
+  const signals = await owner`SELECT id, organization_id AS org, workflow_run_id AS run, name, payload, idempotency_key AS idem
+    FROM workflow_signals WHERE workflow_run_id IN (${wf}, ${wfOther})`;
+  expect(signals.length).toBe(1);
+  expect(signals[0]).toMatchObject({ org: ORG, run: wf, name: "relations.unblocked", payload: { removed: true }, idem: null });
+  expect(String(signals[0].id)).toMatch(/^sig_[0-9a-z]{9}[0-9a-f]{16}$/);
+  const runs = await owner`SELECT id, status, wake_at FROM workflow_runs WHERE id IN (${wf}, ${wfOther}) ORDER BY id`;
+  const byId = new Map(runs.map((r: { id: string; status: string; wake_at: Date | null }) => [r.id, r]));
+  expect(byId.get(wf)).toMatchObject({ status: "running", wake_at: null });
+  expect(byId.get(wfOther)).toMatchObject({ status: "waiting" });
 });

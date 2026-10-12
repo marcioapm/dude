@@ -19,8 +19,8 @@
 
 import { z } from "zod";
 import {
-  EventTypes, NOT_STARTED_STATUSES, keyList, newId,
-  type AutoStartHow, type BlockerRef, type TaskRelationView, type TaskRelations, type TaskStatus,
+  EventTypes, NOT_STARTED_STATUSES, firstName, keyList, neverMergesRefusal, newId,
+  type AutoStartEnd, type AutoStartHow, type BlockerRef, type TaskRelationView, type TaskRelations, type TaskStatus,
 } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { HttpError, badRequest, json, noContent, notFound, parseBody } from "../http.ts";
@@ -54,14 +54,14 @@ async function findTask(scope: OrgScope, idOrKey: string): Promise<TaskRow | nul
   return rows[0] ?? null;
 }
 
-const firstName = (name: string | null | undefined) => (name ?? "").split(" ")[0] || "its owner";
+const ownerName = (name: string | null | undefined) => firstName(name, "its owner");
 
 /** Whether `person` may remove the edge `from → to` of `kind`, and if not, whose it is. */
 function removal(kind: "blocks" | "related", from: TaskRow, to: TaskRow, here: TaskRow, person: string): { can: boolean; by: string | null } {
   const owners = kind === "blocks" ? [to] : [from, to];
   if (owners.some((t) => t.ownerId === null || t.ownerId === person)) return { can: true, by: null };
   const holder = owners.find((t) => t.id === here.id) ?? owners[0]!;
-  const name = firstName(holder.ownerName);
+  const name = ownerName(holder.ownerName);
   return { can: false, by: holder.id === here.id ? `Only ${name}, the owner, can remove this` : `Only ${name}, ${holder.key}'s owner, can remove this` };
 }
 
@@ -105,9 +105,9 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
     ORDER BY r.created_at`) as EdgeRow[];
   const others = [...new Set(edges.map((e) => (e.fromId === here.id ? e.toId : e.fromId)))];
   const tasks = (await scope.sql`
-    SELECT ${scope.sql.unsafe(TASK_ROW)}, t.title, pp.name AS "projectName",
+    SELECT ${scope.sql.unsafe(TASK_ROW)}, t.title, p.name AS "projectName",
       t.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged') AS merged
-    FROM tasks t JOIN projects p ON p.id = t.project_id JOIN projects pp ON pp.id = t.project_id ${scope.sql.unsafe(OWNER_JOIN)}
+    FROM tasks t JOIN projects p ON p.id = t.project_id ${scope.sql.unsafe(OWNER_JOIN)}
     WHERE t.id = ANY(${scope.sql.array(others, "text")}::text[])`) as Array<TaskRow & { title: string; projectName: string; merged: boolean }>;
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const out: TaskRelations = { blockedBy: [], blocks: [], related: [], autoStart: null,
@@ -123,7 +123,7 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
         project: other.projectId !== here.projectId ? other.projectName : null,
         unmerged: other.status === "done" && !other.merged, merged: other.merged,
         owner: other.ownerId ? { id: other.ownerId, name: other.ownerName ?? "" } : null },
-      createdBy: e.person ? { kind: "person", name: e.person } : { kind: "agent", name: `${firstName(e.runOwner)}'s ${e.role ?? "agent"}`, role: e.role },
+      createdBy: e.person ? { kind: "person", name: e.person } : { kind: "agent", name: `${ownerName(e.runOwner)}'s ${e.role ?? "agent"}`, role: e.role },
       createdAt: e.createdAt, why: e.why, canRemove: may.can, removableBy: may.by,
     };
     if (e.kind === "related") out.related.push(view);
@@ -195,7 +195,8 @@ async function removeRelation(ctx: RequestContext): Promise<Response> {
     const may = removal(kind, from, to, here, ctx.principal.personId);
     if (!may.can) {
       const holder = kind === "blocks" ? to : here;
-      throw new HttpError(403, `only ${firstName(holder.ownerName)} can remove this relation — it holds up their task`, "not_owner");
+      const why = kind === "blocks" ? "it holds up their task" : "it's on their task";
+      throw new HttpError(403, `only ${ownerName(holder.ownerName)} can remove this relation — ${why}`, "not_owner");
     }
     await scope.sql`SELECT pg_advisory_xact_lock(hashtext('task_relations:' || ${scope.organizationId}))`;
     const gone = await scope.sql`
@@ -224,23 +225,32 @@ async function releasedByRemoval(scope: OrgScope, ctx: RequestContext, task: Tas
   const open = (await scope.sql`SELECT 1 FROM task_blocked_by(${task.id})`) as unknown[];
   if (open.length > 0) return false;
   await endAutoStart(scope, ctx, task.id, task.projectId, "unblocked_by_removal");
-  // The orchestrator's signal, written as workflow.SignalTx writes one: the
-  // backend cannot call into its workflow runtime, and the signal must
-  // commit with the removal.
+  // The orchestrator's signal, written as workflow.SignalTx writes one
+  // (orchestrator/internal/workflow/runtime.go signalTx): the backend cannot
+  // call into its workflow runtime, and the signal must commit with the
+  // removal. Row: a `sig` id, the run, the name, an object payload, no
+  // idempotency key; then the run woken only if it waits on that name and
+  // holds no timer. The control plane's relations test pins this row; the
+  // orchestrator's TestAParkedDeliveryResumesOnTheBackendsSignal runs a
+  // parked delivery on it.
   const parked = (await scope.sql`
-    SELECT id FROM workflow_runs WHERE task_id = ${task.id} AND status = 'waiting' AND awaiting_signals ? 'relations.unblocked'`) as Array<{ id: string }>;
+    SELECT id FROM workflow_runs WHERE task_id = ${task.id} AND status = 'waiting' AND awaiting_signals ? ${RELATIONS_UNBLOCK_SIGNAL}`) as Array<{ id: string }>;
   for (const { id } of parked) {
-    await scope.sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload)
-      VALUES (${newId("workflowSignal")}, ${scope.organizationId}, ${id}, 'relations.unblocked', '{"removed": true}'::jsonb)`;
+    await scope.sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+      VALUES (${newId("workflowSignal")}, ${scope.organizationId}, ${id}, ${RELATIONS_UNBLOCK_SIGNAL}, ${{ removed: true }}::jsonb, NULL)`;
     await scope.sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL
-      WHERE id = ${id} AND status = 'waiting' AND (wait_until IS NULL OR wait_until <= now())`;
+      WHERE id = ${id} AND status = 'waiting' AND awaiting_signals ? ${RELATIONS_UNBLOCK_SIGNAL}
+        AND (wait_until IS NULL OR wait_until <= now())`;
   }
   return true;
 }
 
+/** The signal a delivery parked on its blockers waits on (delivery.SignalRelationsUnblock). */
+const RELATIONS_UNBLOCK_SIGNAL = "relations.unblocked";
+
 /** End a task's start when unblocked without firing it, saying why; nothing when none is set. */
 export async function endAutoStart(scope: OrgScope, ctx: RequestContext, taskId: string, projectId: string,
-  why: "owner" | "started" | "owner_changed" | "unblocked_by_removal"): Promise<boolean> {
+  why: Exclude<AutoStartEnd, "failed">): Promise<boolean> {
   const gone = (await scope.sql`DELETE FROM task_auto_starts WHERE task_id = ${taskId} RETURNING how`) as Array<{ how: string }>;
   if (!gone[0]) return false;
   await recordAs(scope, ctx, EventTypes.TaskAutoStartCancelled, { how: gone[0].how, why }, { projectId, taskId });
@@ -252,7 +262,7 @@ const autoStartInput = z.object({ how: z.enum(["deliver", "talk"]) }).strict();
 
 function ownerOnly(task: TaskRow, person: string, verb: string): void {
   if (task.ownerId !== null && task.ownerId !== person) {
-    throw new HttpError(403, `only ${firstName(task.ownerName)}, its owner, can ${verb} this`, "not_owner");
+    throw new HttpError(403, `only ${ownerName(task.ownerName)}, its owner, can ${verb} this`, "not_owner");
   }
 }
 
@@ -271,8 +281,7 @@ async function setAutoStart(ctx: RequestContext): Promise<Response> {
     if (blockers.length === 0) throw new HttpError(409, "it can start now: Deliver or Talk it through", "not_blocked");
     const never = blockers.filter((b) => b.status === "done");
     if (never.length > 0) {
-      throw new HttpError(409, `${keyList(never.map((b) => b.key))} ${never.length === 1 ? "was" : "were"} marked done with nothing merged and will never merge, so this would never start it.`,
-        "never_merges", { blockers: never });
+      throw new HttpError(409, neverMergesRefusal(never.map((b) => b.key)), "never_merges", { blockers: never });
     }
     await scope.sql`
       INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person)
@@ -281,7 +290,7 @@ async function setAutoStart(ctx: RequestContext): Promise<Response> {
     await recordAs(scope, ctx, EventTypes.TaskAutoStartSet, { how: input.how }, { projectId: task.projectId, taskId: task.id });
     const how = input.how === "deliver" ? "Deliver" : "Talk it through";
     await recordAs(scope, ctx, EventTypes.ChatNotice, { about: "auto_start_set",
-      text: `${firstName(ctx.principal.name)} set this to start when it's unblocked, with ${how}. Nothing starts before ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}.` },
+      text: `${ownerName(ctx.principal.name)} set this to start when it's unblocked, with ${how}. Nothing starts before ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}.` },
       { projectId: task.projectId, taskId: task.id });
     await relationsChanged(scope, [task.id]);
     return readRelations(scope, task, ctx.principal.personId);

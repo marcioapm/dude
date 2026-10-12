@@ -52,6 +52,7 @@ interface TaskRow {
   people: PersonRef[];
   statusSince: string;
   escalation: Escalation | null;
+  merged: boolean;
 }
 
 interface RunRow {
@@ -197,7 +198,10 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
                w.created_at
-             ) AS "statusSince"
+             ) AS "statusSince",
+             -- Merged: done, with a merged pull request (task_blocked_by's
+             -- rule). Per row, through pull_requests_task_idx.
+             w.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = w.id AND pr.state = 'merged') AS merged
       FROM tasks w JOIN projects p ON p.id = w.project_id
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
 
@@ -246,26 +250,23 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const edges = (await sql`
       SELECT r.from_task_id AS "fromId", r.to_task_id AS "toId", r.kind,
         fp.key_prefix || '-' || f.number AS "fromKey", f.title AS "fromTitle", f.status AS "fromStatus", f.project_id AS "fromProject",
-        fpp.name AS "fromProjectName",
+        fp.name AS "fromProjectName",
         f.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = f.id AND pr.state = 'merged') AS "fromMerged",
         tp.key_prefix || '-' || t.number AS "toKey", t.title AS "toTitle", t.status AS "toStatus", t.project_id AS "toProject",
-        tpp.name AS "toProjectName"
+        tp.name AS "toProjectName"
       FROM task_relations r
-      JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id JOIN projects fpp ON fpp.id = f.project_id
-      JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id JOIN projects tpp ON tpp.id = t.project_id
+      JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id
+      JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id
       ORDER BY r.created_at`) as EdgeRow[];
     const autoStarts = (await sql`
       SELECT a.task_id AS "taskId", a.how, a.set_at AS at, person_ref(p) AS by
       FROM task_auto_starts a JOIN people p ON p.id = a.set_by_person`) as Array<{ taskId: string; how: "deliver" | "talk"; at: string; by: PersonRef }>;
-    const merged = (await sql`
-      SELECT DISTINCT task_id AS "taskId" FROM pull_requests WHERE state = 'merged'`) as Array<{ taskId: string }>;
 
     // -- assemble ----------------------------------------------------------
 
     const costByTask = new Map(costs.map((c) => [c.taskId, c.costUsd]));
     const relations = relationsByTask(edges);
     const autoByTask = new Map(autoStarts.map((a) => [a.taskId, a]));
-    const mergedTasks = new Set(merged.map((m) => m.taskId));
     const runsByTask = groupBy(runs, (r) => r.taskId);
     const tasksByEpic = groupBy(tasks, (w) => w.epicId);
     const tasksByProject = groupBy(
@@ -294,10 +295,10 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
         people: w.people,
         // Why delivery stopped for a person, so "Needs you" can say it.
         escalation: w.escalation,
-        merged: w.status === "done" && mergedTasks.has(w.id),
+        merged: w.merged,
         blockedBy,
         // What it holds up: not-started dependants, while it has not merged.
-        blocks: w.status === "done" && mergedTasks.has(w.id) ? [] : blocks,
+        blocks: w.merged ? [] : blocks,
         edges: { blockedBy: (rel?.blockedBy ?? []).map((b) => b.task.key), blocks: (rel?.blocks ?? []).map((b) => b.task.key),
           related: rel?.related ?? [] },
         startable: notStarted && blockedBy.length === 0,
