@@ -193,6 +193,14 @@ body {
   display: flex;
   margin-top: var(--ds-space-8);
 }
+/* One line of a rail block with its glyph: the epic's notes. */
+.railLine {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
 /* The header's terminal is the fallback for where the rail is not: on the
    conversation, with room for the rail, the rail has it. */
 .runScreen[data-view="chat"] .runTerminalFallback {
@@ -372,6 +380,7 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--ds-space-32);
 }
+
 
 /* A settings page that is one form: its sections spaced as the page's are. */
 .settingsForm {
