@@ -406,6 +406,8 @@ func (s *Server) processEnv(run *Run, sv *server) map[string]string {
 
 // runnerOnlySecrets are a spec's git and registry credentials: lux marks
 // them runnerOnly, whatever their as, and never puts them in the container.
+// A credential a resume's added repository brought stays one after its
+// clone failed (keepCredential).
 func runnerOnlySecrets(rawSpec json.RawMessage) map[string]bool {
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)
@@ -420,7 +422,35 @@ func runnerOnlySecrets(rawSpec json.RawMessage) map[string]bool {
 	for _, a := range spec.Image.RegistryAuth {
 		out[a.Secret] = true
 	}
+	var kept struct {
+		Secrets []struct {
+			Name       string `json:"name"`
+			RunnerOnly bool   `json:"runnerOnly"`
+		} `json:"secrets"`
+	}
+	_ = json.Unmarshal(rawSpec, &kept)
+	for _, sec := range kept.Secrets {
+		if sec.RunnerOnly {
+			out[sec.Name] = true
+		}
+	}
 	return out
+}
+
+// keepCredential is a stored spec's secrets with credential declared, as
+// lux's addRepositories declares an added repository's: valueless and
+// runner-only, so every later resume must supply it.
+func keepCredential(secrets any, credential string) any {
+	list, _ := secrets.([]any)
+	if credential == "" {
+		return secrets
+	}
+	for _, sec := range list {
+		if m, _ := sec.(map[string]any); m["name"] == credential {
+			return secrets
+		}
+	}
+	return append(list, map[string]any{"name": credential, "as": "none", "runnerOnly": true})
 }
 
 // runCommand runs a server's command through sh -c, once, in the Run's

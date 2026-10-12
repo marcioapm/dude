@@ -2021,7 +2021,11 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
-	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
+	secrets, err := s.storedSecrets(ctx, r, lr.Spec, spec.Secrets)
+	if err != nil {
+		return lux.Run{}, 0, err
+	}
+	in := lux.ResumeInput{Secrets: secrets, Input: input}
 	if r.brainstorm() {
 		if err := s.sessionResume(ctx, r, spec, &in); err != nil {
 			return lux.Run{}, 0, err
@@ -2063,6 +2067,38 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	}
 	return resumed, foreseen, err
+}
+
+// storedSecrets are fresh's secrets and every other one lux's stored spec
+// declares, which lux requires a value for at every resume. lux keeps a
+// repository's credential declared once a resume added the repository,
+// even when its clone failed and the repository was dropped: then the
+// Run's spec today names no repository and so no GIT_TOKEN, and it is
+// supplied here with the forge's token. A declared secret dude has no
+// value for fails the resume naming it.
+func (s *Syncer) storedSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
+	out := fresh
+	for _, sec := range stored.Secrets {
+		if slices.ContainsFunc(out, func(f lux.Secret) bool { return f.Name == sec.Name }) {
+			continue
+		}
+		if sec.Name != gitTokenSecret {
+			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s, which dude cannot supply on a resume", sec.Name)}
+		}
+		gh, err := s.Forges.For(ctx, r.Org)
+		if err != nil {
+			return nil, errForge{err}
+		}
+		if gh == nil {
+			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s and the organisation has no forge credentials to supply it", sec.Name)}
+		}
+		token, err := gh.Token()
+		if err != nil {
+			return nil, errForge{err}
+		}
+		out = append(slices.Clone(out), lux.Secret{Name: gitTokenSecret, Value: token})
+	}
+	return out, nil
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own

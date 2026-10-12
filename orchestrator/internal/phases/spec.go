@@ -19,6 +19,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+// gitTokenSecret is the secret holding the forge token lux clones and
+// pushes a Run's repositories with.
+const gitTokenSecret = "GIT_TOKEN"
+
 // AgentConfig is how the orchestrator gives agents their model access.
 //
 // Every OpenCode Run gets the same two things: the LLM API's base URL, as plain
@@ -327,7 +331,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 				// Declared as a secret only with a repository that uses it:
 				// one declared with none would be the workload's, and lux
 				// would refuse it as the credential of one added later.
-				repo.Credential = "GIT_TOKEN"
+				repo.Credential = gitTokenSecret
 			}
 			if r.ReadOnly {
 				repo.Push = new(bool)
@@ -337,8 +341,8 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == "GIT_TOKEN" }) {
-			spec.Secrets = append(spec.Secrets, lux.Secret{Name: "GIT_TOKEN", Value: in.ForgeToken})
+		if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == gitTokenSecret }) {
+			spec.Secrets = append(spec.Secrets, lux.Secret{Name: gitTokenSecret, Value: in.ForgeToken})
 		}
 	}
 

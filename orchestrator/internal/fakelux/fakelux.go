@@ -550,6 +550,11 @@ type Server struct {
 	// RepoFor, when set, finds the repository from a Run's spec instead: one
 	// fake lux serving tests that each have their own repository.
 	RepoFor func(url string) string
+	// CloneError, when set, is the error a resume's clone of url fails
+	// with, as lux reports git's: the clone fails even when the ref
+	// exists. Unset, or "", fails only a ref not found, with "ref not
+	// found".
+	CloneError func(url string) string
 	// Key is the API key the fake accepts.
 	Key string
 	// Workspaces is where each Run's checkout is made; "" is the system's
@@ -2201,11 +2206,9 @@ type specRepo struct {
 func workloadCredential(rawSpec json.RawMessage, added []lux.Repository) string {
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)
-	credentials := map[string]bool{}
-	if spec.Git != nil {
-		for _, r := range spec.Git.Repositories {
-			credentials[r.Credential] = true
-		}
+	credentials := runnerOnlySecrets(rawSpec)
+	for _, a := range spec.Image.RegistryAuth {
+		delete(credentials, a.Secret)
 	}
 	declared := map[string]bool{}
 	for _, sec := range spec.Secrets {
@@ -2511,19 +2514,31 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			spec["git"] = git
 		}
 		repos, _ := git["repositories"].([]any)
-		for _, repo := range in.Git.Repositories {
-			repos = append(repos, repo)
+		for i, repo := range in.Git.Repositories {
 			name, _ := repo["name"].(string)
 			ref, _ := repo["ref"].(string)
 			url, _ := repo["url"].(string)
 			base := head(s.repoPath(url), ref)
+			cloneErr := "ref not found"
+			if s.CloneError != nil {
+				if e := s.CloneError(url); e != "" {
+					base, cloneErr = "", e
+				}
+			}
 			event := map[string]any{"requestId": in.RequestID, "repo": name, "status": "cloned", "commit": base}
 			if base == "" {
-				event = map[string]any{"requestId": in.RequestID, "repo": name, "status": "failed", "error": "ref not found"}
+				// Dropped from the Run, as lux drops a repository whose
+				// clone failed; its credential stays declared (below).
+				event = map[string]any{"requestId": in.RequestID, "repo": name, "status": "failed", "error": cloneErr}
 			} else {
+				repos = append(repos, repo)
 				s.luxEvent(run, "git.checkout", map[string]any{"repo": name, "ref": ref, "base": base})
 			}
 			s.luxEvent(run, "git.clone", event)
+			// As lux's addRepositories: an added repository's credential
+			// becomes a secret of the Run, kept for every later resume to
+			// supply whether or not the clone succeeded.
+			spec["secrets"] = keepCredential(spec["secrets"], added[i].Credential)
 		}
 		git["repositories"] = repos
 		run.Spec, _ = json.Marshal(spec)
