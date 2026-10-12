@@ -266,7 +266,7 @@ func announceNoteTx(ctx context.Context, tx pgx.Tx, org, epicID, noteID, except,
 	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, r.task_id FROM runs r JOIN tasks t ON t.id = r.task_id
 		WHERE t.epic_id = $1 AND r.phase IS NOT NULL AND r.kind = 'agent' AND `+liveRun+`
 		  AND r.control <> 'abort' AND r.push_request_id IS NULL AND r.id <> $2
-		ORDER BY r.created_at FOR NO KEY UPDATE OF r`, epicID, except)
+		ORDER BY r.created_at`, epicID, except)
 	if err != nil {
 		return 0, err
 	}

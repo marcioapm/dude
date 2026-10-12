@@ -210,19 +210,22 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 
 // messageTarget is the Run a message to task is queued on: the Run that
 // asked, for a reply, while it is live; else the task's voice; "" to hold
-// it. A conductor that asked hears the reply only while it runs or waits on
-// it: a directive resumes a parked conductor, and peer traffic it did not
-// wait on never wakes one. A reply it cannot hear is held, and its digest
-// says it.
+// it. A conductor that asked hears the reply only mid-turn or while it
+// waits on that reply: a directive between its turns starts another, and
+// peer traffic it did not wait on never wakes one. A reply it cannot hear
+// is held, and its digest says it. No Run is locked here: two agents
+// messaging each other at once would each hold its own and wait on the
+// other's; a Run that ends before reading the directive leaves the message
+// unread, held for the task's next Run (heldForTx).
 func messageTarget(ctx context.Context, tx pgx.Tx, task, replyTo, asker string) (string, error) {
 	var target string
 	if replyTo != "" && asker != "" {
 		var conductor bool
 		err := tx.QueryRow(ctx, `SELECT r.id, r.role IS NOT DISTINCT FROM 'conductor' FROM runs r
 			WHERE r.id = $1 AND r.task_id = $2 AND `+liveRun+` AND r.control <> 'abort'
-			  AND (r.role IS DISTINCT FROM 'conductor' OR r.status = 'running'
-			       OR EXISTS (SELECT 1 FROM peer_waits w WHERE w.run_id = r.id AND w.message_id = $3 AND w.closed_at IS NULL))
-			FOR NO KEY UPDATE`, asker, task, replyTo).Scan(&target, &conductor)
+			  AND (r.role IS DISTINCT FROM 'conductor' OR (r.status = 'running' AND r.turn_done_at IS NULL)
+			       OR EXISTS (SELECT 1 FROM peer_waits w WHERE w.run_id = r.id AND w.message_id = $3 AND w.closed_at IS NULL))`,
+			asker, task, replyTo).Scan(&target, &conductor)
 		if err != nil && !db.IsNotFound(err) {
 			return "", err
 		}
@@ -236,7 +239,7 @@ func messageTarget(ctx context.Context, tx pgx.Tx, task, replyTo, asker string) 
 			return "", nil
 		}
 	}
-	err := tx.QueryRow(ctx, voiceSQL+` FOR NO KEY UPDATE`, task).Scan(&target)
+	err := tx.QueryRow(ctx, voiceSQL, task).Scan(&target)
 	if db.IsNotFound(err) {
 		return "", nil
 	}
@@ -356,13 +359,6 @@ func WaitOnUnansweredTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error
 	}
 	_, err = OpenWaitTx(ctx, tx, ref, message, "turn_ended")
 	return err == nil, err
-}
-
-// HasOpenWait says whether the Run waits on a peer's reply.
-func HasOpenWait(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
-	var open bool
-	err := tx.QueryRow(ctx, `SELECT `+openPeerWait+` FROM runs r WHERE r.id = $1`, runID).Scan(&open)
-	return open, err
 }
 
 // CoordinationReadTx settles what a directive carried once the agent has
