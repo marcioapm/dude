@@ -314,12 +314,13 @@ func TestClaudeCodeSkipsTheWebFetchPreflightOnEveryRole(t *testing.T) {
 
 // A tier's own --settings would replace dude's (Claude Code keeps the last
 // one): its JSON is merged into dude's, with the preflight still off even
-// where the tier turns it on, and one that is not JSON is dropped and named.
+// where the tier turns it on, and one that is not a JSON object (a path,
+// null, an array) is dropped and named.
 func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	c, in := goldenInput("claude-sonnet-5")
 	in.Harness = delivery.HarnessClaudeCode
 	in.Options = map[string]any{"args": []any{"--verbose", "--settings", `{"model":"x","skipWebFetchPreflight":false}`,
-		`--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json", "--extra"}}
+		`--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json", "--settings", "null", "--settings", "[1]", "--extra"}}
 	cmd := buildSpec(c, in).Workload.Command
 	if n := slices.Index(cmd, "--settings"); n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
 		slices.ContainsFunc(cmd, func(a string) bool { return strings.HasPrefix(a, "--settings=") || a == "/etc/claude.json" }) {
@@ -336,7 +337,7 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	if !slices.Contains(cmd, "--verbose") || !slices.Contains(cmd, "--extra") {
 		t.Errorf("command = %q, want the tier's other args kept", cmd)
 	}
-	if _, _, dropped := claudeCodeArgs(in.Options); !slices.Equal(dropped, []string{"--settings /etc/claude.json"}) {
+	if _, _, dropped := claudeCodeArgs(in.Options); !slices.Equal(dropped, []string{"--settings /etc/claude.json", "--settings null", "--settings [1]"}) {
 		t.Errorf("dropped = %q", dropped)
 	}
 	if _, _, dropped := claudeCodeArgs(map[string]any{"args": []any{"--settings"}}); !slices.Equal(dropped, []string{"--settings"}) {
