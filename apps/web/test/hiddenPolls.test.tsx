@@ -26,7 +26,8 @@ Object.defineProperty(document, "visibilityState", { configurable: true, get: ()
 
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
-let intervals = new Map<number, { fn: () => void; ms: number; due: number }>();
+type Interval = { fn: () => void; ms: number; due: number };
+let intervals = new Map<number, Interval>();
 let clock = 0;
 let nextId = 1;
 
@@ -53,7 +54,7 @@ afterEach(async () => {
 async function advance(ms: number) {
   const end = clock + ms;
   for (;;) {
-    let next: { fn: () => void; ms: number; due: number } | undefined;
+    let next: Interval | undefined;
     for (const entry of intervals.values()) if (entry.due <= end && (!next || entry.due < next.due)) next = entry;
     if (!next) break;
     clock = next.due;
@@ -72,6 +73,13 @@ async function setHidden(h: boolean) {
   });
 }
 
+/** Mounted until the test ends. */
+async function render(ui: Parameters<typeof mount>[0]) {
+  const view = await mount(ui);
+  mounted.push(view.unmount);
+  return view;
+}
+
 class Counting extends FixtureClient {
   people = 0;
   runs = 0;
@@ -86,11 +94,14 @@ class Counting extends FixtureClient {
 }
 
 describe("the people", () => {
+  async function renderPeople(client: Counting) {
+    await render(<PeopleProvider client={client as unknown as ApiClient}><span /></PeopleProvider>);
+  }
+
   test("are not read while the page is hidden, and are read once it is shown", async () => {
     hidden = true;
     const client = new Counting("a");
-    const { unmount } = await mount(<PeopleProvider client={client as unknown as ApiClient}><span /></PeopleProvider>);
-    mounted.push(unmount);
+    await renderPeople(client);
     await settle(100);
     expect(client.people).toBe(0);
     await setHidden(false);
@@ -100,8 +111,7 @@ describe("the people", () => {
 
   test("are read again each minute while shown, and not while hidden", async () => {
     const client = new Counting("a");
-    const { unmount } = await mount(<PeopleProvider client={client as unknown as ApiClient}><span /></PeopleProvider>);
-    mounted.push(unmount);
+    await renderPeople(client);
     await settle(50);
     expect(client.people).toBe(1);
     await advance(60_000);
@@ -115,8 +125,7 @@ describe("the people", () => {
 describe("a Run preparing its image", () => {
   test("is read again every few seconds while shown, and not while hidden", async () => {
     const client = new Counting("a");
-    const { container, unmount } = await mount(<RunScreen client={client} runId={RUN_ID} onBack={() => {}} />);
-    mounted.push(unmount);
+    const { container } = await render(<RunScreen client={client} runId={RUN_ID} onBack={() => {}} />);
     await until(() => container.querySelector("[data-testid=preparing-image]"), "the preparing callout");
     await settle(50);
     const shown = client.runs;
@@ -177,10 +186,9 @@ describe("the image library while a build runs", () => {
   ] as const) {
     test(`${what} is read again while shown, and not while hidden`, async () => {
       const { client, reads } = liveBuild();
-      const { unmount } = await mount(
+      await render(
         <TooltipProvider><ToastProvider><Images client={client} sub={sub} /></ToastProvider></TooltipProvider>,
       );
-      mounted.push(unmount);
       await settle(50);
       const shown = reads[read];
       await advance(8_000);
