@@ -68,7 +68,7 @@ export const repositoryFields = {
  * nothing else changed. GitHub redirects the one to the other, and git
  * does not send lux's Authorization header (`http.extraHeader`) to the
  * redirected host: a private repository then clones as anonymous, and
- * fails. Migration 109 rewrote the URLs stored before.
+ * fails. Migration 110 rewrote the URLs stored before.
  */
 export function canonicalRepositoryUrl(url: string): string {
   return url.replace(/^https:\/\/www\.github\.com\//i, "https://github.com/");
