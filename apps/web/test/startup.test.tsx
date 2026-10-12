@@ -58,6 +58,11 @@ describe("the projection", () => {
     expect(c.start).toBeNull();
   });
 
+  test("run.started ends the start in the projection itself, before any record of the agent and with no status given", () => {
+    const c = project([created(), stage("waiting", 0), stage("container", 3_000), ev("run.started", {}, 8_000)]);
+    expect(c.start).toBeNull();
+  });
+
   test("a resume: kind resume after run.unparked, its stages, no summary line of its own", () => {
     const events = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
       ev("run.parked", { reason: "session" }, 20_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000),
