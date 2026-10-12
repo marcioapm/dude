@@ -273,6 +273,25 @@ describe("a conductor's Chat", () => {
     expect(retried).toBe(0);
   });
 
+  test("a conductor dude woke that ran, parked, then failed resuming for a person's message: Try again, no wakes-next line", async () => {
+    let retried = 0;
+    const resumed = [created(), ev("conductor.briefed", { text: "Conductor, dude woke you; one thing: …" }, 1),
+      ev("conductor.woken", { text: "dude woke you; one thing: …", reasons: ["decision"], started: true }, 2),
+      stage("waiting", 3), ev("agent.message", { text: "Handled the decision." }, 1_000),
+      ev("run.parked", { reason: "conductor" }, 2_000),
+      ev("chat.message", { text: "and now?", directiveId: "dir_9" }, 3_000, { type: "person", id: "per_marcio" } as PersistedEvent["actor"]),
+      ev("run.unparked", { reason: "conductor", epoch: 2 }, 3_100), stage("waiting", 3_100, 2),
+      ev("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }, 9_000)];
+    const ended = project(resumed, "failed").turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && [ended.start?.kind, ended.woken]).toEqual(["resume", undefined]);
+    const page = await runPage("failed", resumed, true, undefined, () => { retried += 1; return Promise.resolve(); });
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not resume");
+    expect(page.querySelector("[data-testid=start-wakes-next]")).toBeNull();
+    await act(async () => page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!.click());
+    expect(retried).toBe(1);
+  });
+
   test("Try again after a new conductor already took the messages: says so, and is not offered again", async () => {
     const page = await runPage("failed", failedStart(), true, undefined,
       () => Promise.reject(new ApiError(409, "retry_taken", "a new agent already took the later messages")));

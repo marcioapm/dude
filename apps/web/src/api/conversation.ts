@@ -1153,7 +1153,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           }
           starting.failed = { reason: typeof payload.reason === "string" && payload.reason ? payload.reason : null };
           ended.start = starting;
-          if (state.startWoken) ended.woken = true;
+          // Only the wake's own first start: a woken conductor that ran and then failed resuming for a person's message keeps Try again.
+          if (state.startWoken && starting.kind === "start" && !state.ran) ended.woken = true;
           for (const m of state.startMessages) if (m.deliveredAt === null) m.failed = NOT_STARTED;
           state.failedStart = { turn: ended, messages: state.startMessages.filter((m) => m.deliveredAt === null) };
           state.startMessages = [];
