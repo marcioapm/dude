@@ -101,6 +101,13 @@ func TestTryAgainOnASessionWhoseResumeFailedHandsTheMessageToAFreshAgentOnce(t *
 	if n := s.liveTalkers("session_id", id); n != 1 {
 		t.Errorf("%d live agents after Try again, want 1", n)
 	}
+	// The fresh agent's copy and briefing name the directive they replace, so Chat rebinds that turn by identity.
+	old := s.str(`SELECT id FROM directives WHERE run_id = $1 AND text LIKE '%and the tests?'`, run)
+	for _, kind := range []string{"chat.message", "session.briefed"} {
+		if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'supersedes' = $3`, next, kind, old); n != 1 {
+			t.Errorf("the fresh agent's %s names the directive it replaces %d times, want 1", kind, n)
+		}
+	}
 	// Try again itself hands the message on, before any sweep: the failed
 	// Run's copy is settled naming the fresh agent, none left to hand on.
 	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE '%and the tests?'
@@ -203,6 +210,12 @@ func TestTryAgainOnAConductorThatDidNotStartStartsAFreshOneWithItsMessagesOnce(t
 		AND failed_at IS NOT NULL AND error LIKE '%' || $2 || '%'`, run, next); n != 1 {
 		t.Errorf("the failed conductor's queued message settled naming %s %d times, want once", next, n)
 	}
+	// Queued for the fresh conductor, its Chat copy names the directive it replaces.
+	old := w.str(`SELECT id FROM directives WHERE run_id = $1 AND text LIKE '%and now?'`, run)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'
+		AND payload ? 'directiveId' AND payload->>'supersedes' = $2`, next, old); n != 1 {
+		t.Errorf("the fresh conductor's queued chat.message names the directive it replaces %d times, want 1", n)
+	}
 	w.until("the fresh conductor to answer both messages", func() bool {
 		said := w.said(next)
 		return len(said) == 2
@@ -299,6 +312,11 @@ func TestTryAgainOnAConductorWhoseResumeFailedHandsTheMessageToAFreshOneOnce(t *
 	}
 	if n := w.liveTalkers("task_id", task); n != 1 {
 		t.Errorf("%d live conductors after Try again, want 1", n)
+	}
+	// Its Chat copy names the directive it replaces, so Chat rebinds that turn by identity.
+	old := w.str(`SELECT id FROM directives WHERE run_id = $1 AND text LIKE '%and now?'`, run)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message' AND payload->>'supersedes' = $2`, next, old); n != 1 {
+		t.Errorf("the fresh conductor's chat.message names the directive it replaces %d times, want 1", n)
 	}
 	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE '%and now?'
 		AND failed_at IS NOT NULL AND error LIKE '%' || $2 || '%'`, run, next); n != 1 {

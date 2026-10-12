@@ -45,13 +45,15 @@ type Writer struct {
 // conductor, from the task's head in each repository (the default branch
 // where nothing was published), briefed by dude with the message.
 func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string) (string, error) {
-	return startConductor(ctx, tx, org, projectID, taskID, w, message, false, "")
+	return startConductor(ctx, tx, org, projectID, taskID, w, message, false, "", "")
 }
 
 // With woken, the message is dude's wake note, not a person's. With
 // retries, the new Run is Try again on that failed one: its run.created
-// names it, so Chat reads its message as the same turn.
-func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool, retries string) (string, error) {
+// names it. With supersedes, the message is that directive of an ended
+// conductor handed on: its chat.message names it, so Chat shows it as that
+// directive's turn.
+func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool, retries, supersedes string) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
 	if w.Person != "" {
@@ -94,7 +96,11 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	// wake's note is recorded by the wake (WakeConductorTx).
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
 	if !woken {
-		if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
+		msg := map[string]any{"text": message}
+		if supersedes != "" {
+			msg["supersedes"] = supersedes
+		}
+		if err := ChatEvent(ctx, tx, ref, w, msg); err != nil {
 			return "", err
 		}
 	}
@@ -417,7 +423,7 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 			(SELECT person_id FROM api_keys WHERE id = $1), '')`, w.ActorID).Scan(&w.Person); err != nil {
 			return "", err
 		}
-		return startConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text, false, retries)
+		return startConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text, false, retries, from)
 	}
 	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: to}
 	// Superseding from with the same words, the copy resolves from's images
@@ -433,7 +439,7 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 	if err := RequestResumeForMessage(ctx, tx, to, "a message handed on from the conductor before"); err != nil {
 		return "", err
 	}
-	payload := map[string]any{"text": text, "directiveId": id}
+	payload := map[string]any{"text": text, "directiveId": id, "supersedes": from}
 	if len(images) > 0 {
 		payload["attachments"] = images
 	}

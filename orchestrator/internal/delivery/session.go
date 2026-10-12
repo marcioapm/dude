@@ -219,12 +219,14 @@ const LiveBrainstorm = `r.role = 'brainstorm' AND r.kind = 'agent' AND r.status 
 // StartBrainstorm creates the session's agent, briefed by dude with the
 // member's message (already attributed).
 func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown string) (string, error) {
-	return startBrainstorm(ctx, tx, org, sessionID, w, message, shown, "")
+	return startBrainstorm(ctx, tx, org, sessionID, w, message, shown, "", "")
 }
 
 // With retries, the new Run is Try again on that failed one: its
-// run.created names it, so Chat reads its message as the same turn.
-func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown, retries string) (string, error) {
+// run.created names it. With supersedes, the message is that directive of
+// an ended agent handed on: its chat.message and session.briefed name it,
+// so Chat shows it as that directive's turn.
+func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown, retries, supersedes string) (string, error) {
 	id := ids.New(ids.Run)
 	briefing, err := sessionBriefing(ctx, tx, sessionID, message)
 	if err != nil {
@@ -244,11 +246,19 @@ func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 		return "", err
 	}
 	if shown != "" {
-		if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": shown}); err != nil {
+		msg := map[string]any{"text": shown}
+		if supersedes != "" {
+			msg["supersedes"] = supersedes
+		}
+		if err := ChatEvent(ctx, tx, ref, w, msg); err != nil {
 			return "", err
 		}
 	}
-	return id, SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", map[string]any{"text": briefing})
+	briefed := map[string]any{"text": briefing}
+	if supersedes != "" {
+		briefed["supersedes"] = supersedes
+	}
+	return id, SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", briefed)
 }
 
 // sessionBriefing is the brainstorm's first prompt before its
@@ -460,7 +470,7 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string)
 				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
 				continue
 			}
-			if next, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown, retries); err != nil {
+			if next, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown, retries, d.ID); err != nil {
 				return "", err
 			}
 			continue
@@ -473,7 +483,7 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string)
 		if err := RequestResumeForMessage(ctx, tx, next, "a message handed on from the session's agent before"); err != nil {
 			return "", err
 		}
-		if err := ChatEvent(ctx, tx, to, w, map[string]any{"text": d.Shown, "directiveId": id}); err != nil {
+		if err := ChatEvent(ctx, tx, to, w, map[string]any{"text": d.Shown, "directiveId": id, "supersedes": d.ID}); err != nil {
 			return "", err
 		}
 	}

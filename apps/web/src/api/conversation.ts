@@ -548,8 +548,11 @@ export interface Projection {
   startMessages: HumanTurn[];
   /** The last start that failed, and the messages it never delivered: Try again hands them to a fresh agent. */
   failedStart: { turn: EndedTurn; messages: HumanTurn[] } | null;
-  /** After Try again (run.created with retries): the failed Run's unread messages, which the new Run sends again as the same turns. */
-  retrying: HumanTurn[];
+  /**
+   * After Try again (run.created with retries): the failed Run's unread messages. The new Run's copy of one
+   * names its directive (`supersedes`) and becomes that same turn; one the backend skips or refuses stays as it is.
+   */
+  retrying: Set<HumanTurn>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -583,7 +586,7 @@ export function emptyProjection(): Projection {
     startWoken: false,
     startMessages: [],
     failedStart: null,
-    retrying: [],
+    retrying: new Set(),
     cursor: 0,
   };
 }
@@ -636,7 +639,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startWoken = false;
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
-        state.retrying = [];
+        state.retrying = new Set();
         // Try again on a start that failed: the fresh agent has its messages, queued again.
         if (typeof payload.retries === "string" && state.failedStart) {
           state.failedStart.turn.retried = true;
@@ -651,9 +654,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         }
         // What the failed Run was sent and never read: Try again sends it to the fresh agent, the same turn again.
         if (typeof payload.retries === "string") {
-          state.retrying = turns.filter((t): t is HumanTurn =>
-            t.kind === "human" && t.directiveId !== null && t.deliveredAt === null && t.failed === null);
+          state.retrying = new Set(turns.filter((t): t is HumanTurn =>
+            t.kind === "human" && t.directiveId !== null && t.deliveredAt === null && t.failed === null));
         }
+        break;
+
+      case EventTypes.BrainstormBriefed:
+        // A briefing that is itself the handed-on directive (an answer, which has no Chat copy): its turn is the start's.
+        handedOn(state, payload, null);
         break;
 
       case EventTypes.RunStage: {
@@ -840,15 +848,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
         const text = String(payload.text ?? "");
-        // Try again re-sending a message the failed Run never read: the same turn, now the fresh agent's to read.
-        const again = state.retrying.findIndex((t) => t.text === text);
-        if (again >= 0) {
-          const earlier = state.retrying.splice(again, 1)[0]!;
-          earlier.directiveId = directiveId;
-          if (directiveId) state.steersByDirective.set(directiveId, earlier);
-          else if (state.start && !state.ran) state.startMessages.push(earlier);
-          break;
-        }
+        // Try again handing on a message the failed Run never read: the same turn, now the fresh agent's to read.
+        if (handedOn(state, payload, directiveId)) break;
         const github = githubOf(payload.github);
         const turn: HumanTurn = {
           ...humanTurn(event, "message", text, directiveId ? null : event.occurredAt),
@@ -898,8 +899,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.DirectiveFailed: {
         const id = String(payload.directiveId ?? "");
         const steer = state.steersByDirective.get(id);
-        // The hand-over's failures on the old Run close it: a later message with the same words is a new one.
-        state.retrying = [];
+        // The hand-over settling a message on the old Run: it is no longer one a copy can take.
+        if (steer) state.retrying.delete(steer);
         // Only its latest attempt's failure fails the turn: an Interrupt now
         // that carries the words still may deliver them.
         if (steer && steer.deliveredAt === null && steer.directiveId === id) {
@@ -1485,6 +1486,20 @@ export function actorName(by: ActorRef | null, people: ReadonlyMap<string, strin
 
 function numberOf(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * A copy of a message the failed Run never read, handed on by Try again: the event names the directive it
+ * replaces (`supersedes`), and that directive's turn becomes the new copy's (`directiveId`, or with none the
+ * fresh agent's start message). False when it names no such unread turn: it is a turn of its own.
+ */
+function handedOn(state: Projection, payload: Record<string, unknown>, directiveId: string | null): boolean {
+  const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
+  if (!earlier || !state.retrying.delete(earlier)) return false;
+  earlier.directiveId = directiveId;
+  if (directiveId) state.steersByDirective.set(directiveId, earlier);
+  else if (state.start && !state.ran) state.startMessages.push(earlier);
+  return true;
 }
 
 /** Events that say the agent is up: what it wrote or took, or the harness taking its input. */

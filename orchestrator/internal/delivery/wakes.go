@@ -119,7 +119,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	var directiveID string
 	if runID == "" {
 		if runID, err = startConductor(ctx, tx, org, projectID, taskID, Writer{ActorType: ledger.ActorSystem, ActorID: "dude"},
-			note, true, ""); err != nil {
+			note, true, "", ""); err != nil {
 			return "", err
 		}
 		payload["started"] = true

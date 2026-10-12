@@ -1666,8 +1666,8 @@ describe("a session's agent starting", () => {
     const ledger = [
       ...failedResume(),
       on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
-      on(ev("chat.message", { text: "and the tests?" }, { type: "person", id: YOU } as PersistedEvent["actor"])),
-      on(ev("session.briefed", { text: "Brainstorm, …\n\n## The first message\n\nMárcio: and the tests?" })),
+      on(ev("chat.message", { text: "and the tests?", supersedes: directive }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …\n\n## The first message\n\nMárcio: and the tests?", supersedes: directive })),
       { ...ev("run.directive.failed", { directiveId: directive, error: `the session's agent stopped before reading it; the next one, ${next}, has it`,
         nextRunId: next }), occurredAt: ago(1_000) },
     ];
@@ -1688,8 +1688,8 @@ describe("a session's agent starting", () => {
     const ledger = [
       ...failedResume(),
       on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
-      on(ev("chat.message", { text: "and the tests?" }, { type: "person", id: YOU } as PersistedEvent["actor"])),
-      on(ev("session.briefed", { text: "Brainstorm, …" })),
+      on(ev("chat.message", { text: "and the tests?", supersedes: directive }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: directive })),
       { ...ev("run.directive.failed", { directiveId: directive, error: "x", nextRunId: next }), occurredAt: ago(1_000) },
     ];
     const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
@@ -1720,5 +1720,97 @@ describe("a session's agent starting", () => {
     await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
     expect(page.querySelector("[data-testid=start-retry-taken]")!.textContent).toBe("A new agent already took the later messages.");
+  });
+});
+
+describe("Try again hands each unread message on as the directive it replaces, never by its words", () => {
+  const NEXT = "run_brainstorm2";
+  const by = (id: string) => ({ type: "person", id }) as PersistedEvent["actor"];
+  const on = (e: PersistedEvent) => ({ ...e, runId: NEXT });
+  // A parked agent whose resume lux ended, with `unread` sent to it; `before` is what it did before it parked.
+  // Thunks, so each event's cursor follows the ones before it.
+  const failedWith = (before: () => PersistedEvent[], unread: () => PersistedEvent[]) => [
+    ev("run.created", { role: "brainstorm" }),
+    ev("agent.message", { text: "Metering lives in billing." }),
+    ...before(),
+    ev("run.parked", { reason: "session", stopped: "stopped" }),
+    ...unread(),
+    ev("run.unparked", { reason: "session", epoch: 2 }),
+    ev("run.stage", { stage: "waiting", since: at(0), epoch: 1 }),
+    ev("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }),
+  ];
+  const retried = () => on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN }));
+  const HAS_IT = `the session's agent stopped before reading it; the next one, ${NEXT}, has it`;
+  const settled = (directiveId: string, error = HAS_IT) => ev("run.directive.failed", { directiveId, error, nextRunId: NEXT });
+  const humans = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) =>
+    t.kind === "human" ? [[t.by?.id, t.text, t.directiveId, t.deliveredAt !== null, t.failed]] : []);
+
+  test("an answer's note is the fresh agent's briefing; an identical later Chat message stays its writer's own turn", () => {
+    const ledger = [
+      ...failedWith(() => [ev("question.asked", { kind: "agent", questionId: "q_1", prompt: "Which table?" })], () => [
+        ev("question.answered", { questionId: "q_1", answer: "jobs", note: "same", directiveId: "dir_ans" }, by(ANA.id)),
+        ev("chat.message", { text: "same", directiveId: "dir_msg" }, by(YOU)),
+      ]),
+      // sessionHandOver: the answer has no Chat copy, only the briefing naming it; the message is queued for the fresh agent.
+      retried(),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_ans" })),
+      on(ev("chat.message", { text: "same", directiveId: "dir_n2", supersedes: "dir_msg" }, by(YOU))),
+      settled("dir_ans"), settled("dir_msg"),
+      on(ev("agent.session.started", { role: "brainstorm" })),
+      on(ev("run.directive.delivered", { directiveId: "dir_n2", read: true })),
+    ];
+    expect(humans(ledger)).toEqual([
+      [ANA.id, "same", null, true, null],
+      [YOU, "same", "dir_n2", true, null],
+    ]);
+  });
+
+  test("of two identical unread messages, the one refused for its images stays failed; the one handed on is read", () => {
+    const image = { id: "att_1", name: "plan.png", width: 10, height: 10, original: { bytes: 1 } };
+    const IMAGES = "the session's agent stopped before reading it; its images were not passed on; send it again";
+    const ledger = [
+      ...failedWith(() => [], () => [
+        ev("chat.message", { text: "again", directiveId: "dir_img", attachments: [image] }, by(YOU)),
+        ev("chat.message", { text: "again", directiveId: "dir_plain" }, by(YOU)),
+      ]),
+      retried(),
+      on(ev("chat.message", { text: "again", supersedes: "dir_plain" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_plain" })),
+      settled("dir_img", IMAGES), settled("dir_plain"),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "again", "dir_img", false, IMAGES],
+      [YOU, "again", null, false, null],
+    ]);
+    expect(humans([...ledger, on(ev("agent.session.started", { role: "brainstorm" }))])).toEqual([
+      [YOU, "again", "dir_img", false, IMAGES],
+      [YOU, "again", null, true, null],
+    ]);
+  });
+
+  test("two identical messages queued for the fresh agent: each delivery and failure lands on the turn its directive replaced", () => {
+    const ledger = [
+      // dir_b and dir_a were queued in one transaction (an earlier hand-over): the same created_at, so the hand-over
+      // takes them in id order, which need not be the order their Chat events were written.
+      ...failedWith(() => [], () => [
+        ev("chat.message", { text: "start", directiveId: "dir_0" }, by(YOU)),
+        ev("chat.message", { text: "ok", directiveId: "dir_b" }, by(ANA.id)),
+        ev("chat.message", { text: "ok", directiveId: "dir_a" }, by(YOU)),
+      ]),
+      retried(),
+      on(ev("chat.message", { text: "start", supersedes: "dir_0" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_0" })),
+      on(ev("chat.message", { text: "ok", directiveId: "dir_na", supersedes: "dir_a" }, by(YOU))),
+      on(ev("chat.message", { text: "ok", directiveId: "dir_nb", supersedes: "dir_b" }, by(ANA.id))),
+      settled("dir_0"), settled("dir_a"), settled("dir_b"),
+      on(ev("agent.session.started", { role: "brainstorm" })),
+      on(ev("run.directive.delivered", { directiveId: "dir_na", read: true })),
+      on(ev("run.directive.failed", { directiveId: "dir_nb", error: "lux could not deliver it" })),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "start", null, true, null],
+      [ANA.id, "ok", "dir_nb", false, "lux could not deliver it"],
+      [YOU, "ok", "dir_na", true, null],
+    ]);
   });
 });
