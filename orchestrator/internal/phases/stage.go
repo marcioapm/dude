@@ -90,17 +90,20 @@ func beforeRunning(was string) bool {
 }
 
 // failedStage is the stage a start that failed was in: the last run.stage
-// of epoch. was is lux_state before this event. "" when was is not a
-// start's (beforeRunning), so an end after running costs no query; when
-// the last stage is park, a move's stop rather than a start (a Run whose
-// resumePolicy fails it on a move); and from a lux with no stages.
+// of epoch, or of a resume's waiting, which lux announces under the epoch
+// it left (it moves the epoch at assignment). was is lux_state before this
+// event. "" when was is not a start's (beforeRunning), so an end after
+// running costs no query; when the last stage is park, a move's stop
+// rather than a start (a Run whose resumePolicy fails it on a move); and
+// from a lux with no stages.
 func (t *translator) failedStage(ctx context.Context, tx pgx.Tx, epoch int, was string) (string, error) {
 	if !beforeRunning(was) {
 		return "", nil
 	}
 	var stage string
 	err := tx.QueryRow(ctx, `SELECT payload->>'stage' FROM events WHERE run_id = $1 AND event_type = $2
-		AND ($3 = 0 OR (payload->>'epoch')::int = $3) ORDER BY cursor DESC LIMIT 1`, t.run.ID, EvRunStage, epoch).Scan(&stage)
+		AND ($3 = 0 OR (payload->>'epoch')::int = $3 OR (payload->>'stage' = 'waiting' AND (payload->>'epoch')::int = $3 - 1))
+		ORDER BY cursor DESC LIMIT 1`, t.run.ID, EvRunStage, epoch).Scan(&stage)
 	if err == pgx.ErrNoRows || stage == stageParked {
 		return "", nil
 	}

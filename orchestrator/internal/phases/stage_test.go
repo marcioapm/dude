@@ -65,3 +65,19 @@ func TestADrainedManualRunNamesNoStage(t *testing.T) {
 		t.Errorf("run.failed = %v, want no stage", p)
 	}
 }
+
+// A resume's waiting carries the epoch it left (lux moves the epoch at
+// assignment): a resume that fails while waiting, reported under the new
+// epoch, still names waiting.
+func TestAResumeThatFailsWhileWaitingNamesWaiting(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.stages(1, "waiting", "image", "volumes", "repositories", "container")
+	if _, err := w.owner.Exec(context.Background(), `UPDATE runs SET lux_state = 'resuming' WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.stages(1, "waiting")
+	w.luxFrame(2, "state", map[string]any{"state": "lost", "reason": "host lost"})
+	if p := w.failedWith(); p["stage"] != "waiting" || p["reason"] != "host lost" {
+		t.Errorf("run.failed = %v, want stage waiting and lux's reason", p)
+	}
+}
