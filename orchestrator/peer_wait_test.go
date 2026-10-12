@@ -108,8 +108,74 @@ func TestWaitForReplyParksAfterTheGraceAndTheReplyResumesTheRun(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM peer_messages WHERE reply_to = $1 AND read_at IS NOT NULL`, message); n != 1 {
 		t.Errorf("the reply's read is not recorded")
 	}
+	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN peer_waits pw ON pw.run_id = rr.run_id
+		WHERE rr.run_id = $1 AND rr.woken_at >= pw.closed_at`, runID); n != 1 {
+		t.Errorf("%d resumes timed from the reply", n)
+	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
 		t.Errorf("%d received events on the waiting Run", n)
+	}
+}
+
+func TestMutualPeerWaitsResumeToReadQueuedQuestions(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	a, b := w.task(), w.task()
+	w.onAnEpic(a, b)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Hang: true, Reply: "Still waiting."}
+	}
+	w.deliver(a)
+	w.deliver(b)
+	var ar, br string
+	w.until("both implementers to run", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, a).Scan(&ar)
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, b).Scan(&br)
+		return ar != "" && br != "" && len(w.lux.Runs()) >= 2
+	})
+	w.pausePhase(ar)
+	w.pausePhase(br)
+	w.until("both personally paused", func() bool { return w.personallyPaused(ar) && w.personallyPaused(br) })
+	ctx := context.Background()
+	for _, pair := range [][2]string{{ar, b}, {br, a}} {
+		fromTask := a
+		if pair[0] == br {
+			fromTask = b
+		}
+		ref := delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: fromTask, RunID: pair[0]}
+		if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			peer, _, err := delivery.PeerByKey(ctx, tx, fromTask, w.key(pair[1]))
+			if err != nil {
+				return err
+			}
+			q, err := delivery.SendMessageTx(ctx, tx, ref, delivery.MessageInput{To: peer, Text: "Question from " + fromTask})
+			if err != nil {
+				return err
+			}
+			_, err = delivery.OpenWaitTx(ctx, tx, ref, q.ID, "wait")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(t, w.owner, `UPDATE runs SET dude_pause = 'person', waiting_since = now(), turn_done_at = NULL
+		WHERE id = ANY($1)`, []string{ar, br})
+	w.until("both questions to be read", func() bool {
+		return w.count(`SELECT count(*) FROM peer_messages WHERE read_at IS NOT NULL`) == 2
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = ANY($1) AND sent_at IS NULL`, []string{ar, br}); n != 0 {
+		t.Errorf("%d unsent questions", n)
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 2 {
+		t.Errorf("%d open waits, want two", n)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = ANY($1) AND woken_at IS NOT NULL`, []string{ar, br}); n != 2 {
+		t.Errorf("%d timed resumes", n)
 	}
 }
 

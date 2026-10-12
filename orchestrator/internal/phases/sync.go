@@ -347,7 +347,7 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // conductor parked after its warm period (once someone wrote to it). An idle
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
-	OR (r.dude_pause = 'person' AND NOT ask.open)
+	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
 	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
