@@ -126,7 +126,7 @@ var warnedNoCredentials atomic.Bool
 
 // withCredentials does op with credentials, and again without them when
 // lux is a runner from before credentials on push and sync (409
-// push_credentials_unsupported): that one goes on with the token its Run
+// git_credentials_unsupported): that one goes on with the token its Run
 // was started or resumed with, which a PAT's is and an App's may no
 // longer be.
 func withCredentials(log *slog.Logger, credentials map[string]string, op func(map[string]string) error) error {
@@ -135,7 +135,7 @@ func withCredentials(log *slog.Logger, credentials map[string]string, op func(ma
 		return err
 	}
 	if log != nil && warnedNoCredentials.CompareAndSwap(false, true) {
-		log.Warn("lux takes no fresh credentials on a push or sync (409 push_credentials_unsupported): pushing with the token each Run was started or resumed with; a GitHub App's expires within the hour, so upgrade lux")
+		log.Warn("lux takes no fresh credentials on a push or sync (409 git_credentials_unsupported): pushing with the token each Run was started or resumed with; a GitHub App's expires within the hour, so upgrade lux")
 	}
 	return op(nil)
 }

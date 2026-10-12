@@ -621,8 +621,12 @@ type Server struct {
 	HoldSyncs bool
 	// NoOperationCredentials is a runner from before credentials on push
 	// and sync: one carrying them is refused, 409
-	// push_credentials_unsupported.
+	// git_credentials_unsupported.
 	NoOperationCredentials bool
+	// HostUnreachable is how many credentialed pushes or syncs to refuse
+	// next, 503 host_unreachable, as a luxd with no connection to the Run's
+	// host answers when several luxds share no sticky routing.
+	HostUnreachable int
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -2216,17 +2220,24 @@ type specRepo struct {
 
 // credentialsProblem refuses a push's or sync's credentials as lux does: a
 // runner from before them (NoOperationCredentials) refuses any, 409; a
-// name that is not one of the Run's repositories, or an empty token, is
-// invalid, 422.
+// luxd without the Run's host (HostUnreachable), 503; a name that is not
+// one of the Run's repositories, or an empty token, is invalid, 422.
 func (s *Server) credentialsProblem(spec map[string]any, creds map[string]string) (string, int, string) {
 	if len(creds) == 0 {
 		return "", 0, ""
 	}
 	s.mu.Lock()
 	old := s.NoOperationCredentials
+	elsewhere := s.HostUnreachable > 0
+	if elsewhere {
+		s.HostUnreachable--
+	}
 	s.mu.Unlock()
 	if old {
 		return "this runner cannot take credentials on a push or sync", 409, lux.CodeCredentialsUnsupported
+	}
+	if elsewhere {
+		return "this luxd has no connection to the run's host", 503, lux.CodeHostUnreachable
 	}
 	for name, token := range creds {
 		if !slices.ContainsFunc(specRepos(spec), func(r specRepo) bool { return r.Name == name }) {

@@ -123,7 +123,7 @@ func TestEveryPushCarriesThePAT(t *testing.T) {
 }
 
 // A runner that refuses credentials on a push (409
-// push_credentials_unsupported) is asked again without them, and the
+// git_credentials_unsupported) is asked again without them, and the
 // delivery goes on.
 func TestALuxWithoutPushCredentialsIsPushedWithout(t *testing.T) {
 	w := newWorld(t)
@@ -142,6 +142,33 @@ func TestALuxWithoutPushCredentialsIsPushedWithout(t *testing.T) {
 	}
 	if pushes != 3 {
 		t.Errorf("%d pushes, want 3", pushes)
+	}
+}
+
+// A push that reaches a luxd without the Run's host (503 host_unreachable,
+// several luxds without sticky routing) is asked again, with credentials,
+// and the delivery goes on: nothing fails on it.
+func TestAPushALuxdWithoutTheHostRefusedIsRetried(t *testing.T) {
+	w := newWorld(t)
+	w.lux.HostUnreachable = 1
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 0 {
+		t.Errorf("%d Runs failed", n)
+	}
+	pushes := 0
+	for _, r := range w.lux.Runs() {
+		for _, creds := range r.PushCredentials {
+			pushes++
+			if creds["target"] != "ghp_test" {
+				t.Errorf("push credentials %v, want target's PAT", creds)
+			}
+		}
+	}
+	// The refused one is not recorded: implement's retry, fix and simplify.
+	if pushes != 3 || w.lux.HostUnreachable != 0 {
+		t.Errorf("%d pushes accepted (%d refusals left), want 3 after the one refused", pushes, w.lux.HostUnreachable)
 	}
 }
 

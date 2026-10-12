@@ -796,7 +796,13 @@ func (c *HTTPClient) Push(ctx context.Context, runID, requestID string, credenti
 // CodeCredentialsUnsupported is an older runner's refusal (409) of a push
 // or sync carrying credentials. Asked again without them, it pushes with
 // the token its Run was started or last resumed with.
-const CodeCredentialsUnsupported = "push_credentials_unsupported"
+const CodeCredentialsUnsupported = "git_credentials_unsupported"
+
+// CodeHostUnreachable is lux's 503 for a credentialed push or sync that
+// reached a luxd with no connection to the Run's host (several luxds
+// without sticky routing). Retryable, as every 5xx: asked again, it may
+// reach the luxd that has the host.
+const CodeHostUnreachable = "host_unreachable"
 
 // CredentialsUnsupported says lux refused an operation's credentials.
 func CredentialsUnsupported(err error) bool {

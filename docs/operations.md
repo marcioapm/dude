@@ -36,6 +36,7 @@ without the file, or without the word, does not support the feature.
 | --- | --- |
 | `validate` | `dude-orchestrator validate` and `dude-backend validate` exist ([Validating a configuration](#validating-a-configuration)). Check it first: an older `dude-orchestrator` ignores the argument and **starts the service**. |
 | `image-builder` | `bin/dude-image-builder` exists, migration 068 creates the `dude_builder` role it connects as, and the `[images]` and `[builder]` settings are known ([design](design/images.md)). Run the builder only for a release that declares it. It exits non-zero at start unless `podman info` reports the `cpu` and `memory` cgroup controllers for its user, and writes a heartbeat every 30 s that the Images page reads. |
+| `git-credentials` | Every push and sync dude asks of lux carries freshly minted git credentials (`credentials` on `POST /v1/runs/{id}/push` and `/sync`). A luxd from before that field refuses it (422), so upgrade lux before this release ([lux version for fresh git credentials](#lux-version-for-fresh-git-credentials)). |
 
 A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
 any registry lux's runners can pull from, pinned by digest
@@ -153,6 +154,34 @@ check the running version of `luxd` and of each runner host.
 
 Upgrade or drain every runner host before setting `DUDE_REGISTRY_AUTH` to
 `ecr` or `static`, or pointing `DUDE_AGENT_IMAGE` at a private registry.
+
+### lux version for fresh git credentials
+
+A release whose `FEATURES` lists `git-credentials` sends a `credentials`
+map, a freshly minted token for each of the Run's repositories, on every
+push and sync it asks of lux (`POST /v1/runs/{id}/push`,
+`POST /v1/runs/{id}/sync`). A GitHub App's tokens last an hour, so a Run
+that outlives the token it started with needs this to keep pushing.
+
+Upgrade lux **before** deploying such a release: **luxd first, then the
+runners**.
+
+- A luxd older than the field refuses it, 422: phases' pushes are retried
+  without end, a conductor's publish is refused, and syncs are skipped.
+  dude does not probe for it.
+- A runner older than it, behind an upgraded luxd, answers 409
+  `git_credentials_unsupported`. dude then asks again without credentials
+  and logs one warning per process: the runner pushes with the token the
+  Run was started or last resumed with. A PAT's still works. A GitHub App's
+  expires within the hour, so finish upgrading the runners.
+
+**Several luxds.** lux carries a credentialed push or sync to the Run's
+host over the connection that host's runner keeps to one luxd. A luxd
+without that connection answers 503 `host_unreachable`. dude treats that
+as transient and asks again later, so with several luxds and no affinity
+a push may wait several attempts, or keep missing. Point dude's lux URL
+at a single luxd, or at a load balancer that routes each Run's requests
+sticky to the luxd its runner is connected to.
 
 ## Processes
 

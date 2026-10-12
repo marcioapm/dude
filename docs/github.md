@@ -49,14 +49,19 @@ On GitHub: Settings → Developer settings → GitHub Apps → New GitHub App (u
 Repository permissions:
 
 - **Contents: Read and write** — clone, push, task branches, fast-forwards.
-- **Pull requests: Read and write** — open and read pull requests, reviews and comments, request reviewers.
+- **Pull requests: Read and write** — open and read pull requests, reviews, review threads and comments, request reviewers.
 - **Workflows: Read and write** — push changes under `.github/workflows/`.
 - **Checks: Read** — read check runs (GitHub Actions and most CI). Unlike a fine-grained token, an App can.
 - **Actions: Read** — read workflow runs and jobs.
 - **Commit statuses: Read** — read CI that reports statuses.
 - **Metadata: Read** — granted automatically.
 
-Subscribe to the events **pull_request**, **pull_request_review**, **pull_request_review_comment**, **issue_comment**, **check_run** and **check_suite**. The App's webhook URL and secret are the ones the Webhooks card shows once the App is connected (**Show secret**); content type `application/json`. An App has one webhook for every repository it is installed on, so dude registers no repository hooks for it.
+Enable only for the operations you want, as for a token:
+
+- **Actions: Read and write** (in place of Read) — required if dude's CI recovery policy reruns failed GitHub Actions jobs. Read access alone does not permit reruns.
+- Organization **Members: Read** — required to check private organization membership when the feedback policy lets organization members wake dude, rather than only repository writers.
+
+Subscribe to the events **pull_request**, **pull_request_review**, **pull_request_review_comment**, **pull_request_review_thread**, **issue_comment**, **check_run**, **check_suite** and **status**. A resolved review thread changes whether a pull request is ready to merge, and `status` is how CI that reports commit statuses arrives; without them dude learns of either only when its reconciler next reads the pull request (about every 15 minutes). The App's webhook URL and secret are the ones the Webhooks card shows once the App is connected (**Show secret**); content type `application/json`. An App has one webhook for every repository it is installed on, so dude registers no repository hooks for it.
 
 An App that is **public** ("Any account" can install it) can be installed by link on more than one account; a private one only on the account that owns it. To have dude work on a personal account's repositories and an organization's, make it public and install it on each, giving it access to the repositories dude works on. One credential serves every installation: dude finds the installation of each repository's owner (`GET /repos/{owner}/{repo}/installation`) and keeps it.
 
@@ -68,7 +73,9 @@ An App that is **public** ("Any account" can install it) can be installed by lin
 4. Set the App's webhook URL and secret from the Webhooks card.
 5. **Verify** mints an installation token for one linked repository and reads the App's bot, and says GitHub's reason when it cannot (the App not installed on that owner, a key that is not the App's).
 
-dude signs a short-lived JWT with the key, exchanges it for an installation token (one hour), and mints a fresh one before every clone, push and sync it asks lux for, so a Run that outlives a token keeps pushing. A lux too old to take fresh credentials on a push is pushed with the token the Run was started or resumed with, and dude logs a warning: upgrade lux.
+dude signs a short-lived JWT with the key, exchanges it for an installation token (one hour), and mints a fresh one before every clone, push and sync it asks lux for, so a Run that outlives a token keeps pushing.
+
+**Upgrade lux first.** Fresh credentials on a push or sync are new in lux, and a dude release that sends them lists `git-credentials` in its `FEATURES`. Upgrade lux before deploying it, luxd first, then the runners: a luxd from before the field refuses every credentialed push and sync (422). A runner from before it answers 409 `git_credentials_unsupported`, and is pushed with the token the Run was started or resumed with, with a warning in dude's log: enough for a token, not for an App past its hour. With several luxds, dude's lux URL must route each Run sticky to its runner's luxd, or name a single one ([operations](operations.md#lux-version-for-fresh-git-credentials)).
 
 ### Co-authors
 
@@ -77,7 +84,9 @@ Every commit an agent makes carries a `Co-authored-by:` trailer for each person 
 - **GitHub username** — dude stores GitHub's numeric id for it and names them by their noreply address, `<id>+<login>@users.noreply.github.com`, which GitHub links to their account whatever addresses they keep private. A username GitHub does not know is refused.
 - **Commit email** — used instead, when set: an address on their GitHub account.
 
-The address used is the commit email, else the noreply address, else the email they sign in with; someone with none is left out, and nobody is named twice. The runtime image's commit hook adds the trailers (`dude git coauthors`), and runs the repository's own hooks after it. Agents are told not to add or remove them.
+The address used is the commit email, else the noreply address, else the email they sign in with; someone with none is left out, and nobody is named twice. The runtime image's commit hook adds the trailers (`dude git coauthors`), and runs the repository's own hooks after it. Agents are told not to add or remove them. A commit git replays (rebase, cherry-pick, revert) keeps the trailers it was written with.
+
+A repository that sets its own hooks directory (`core.hooksPath`, as husky and lefthook do) replaces the image's: git runs that directory's hooks instead, and its commits get no co-author trailers.
 
 ## Troubleshooting
 
