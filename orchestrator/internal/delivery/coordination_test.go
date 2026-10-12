@@ -12,6 +12,53 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
+func TestEndedPeersAcceptNeitherMessagesNorWaits(t *testing.T) {
+	for _, status := range []string{"done", "failed", "aborted"} {
+		t.Run(status, func(t *testing.T) {
+			w := newEpicWorld(t)
+			ctx := context.Background()
+			me := w.run(t, "run_me", "ABS-1", "implement", "implementer", "running")
+			q := w.send(t, me, "ABS-2", "Which path?", "")
+			w.in(t, func(tx pgx.Tx) error {
+				_, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, w.tasks["ABS-2"], "", status, "test")
+				return err
+			})
+			peer := w.peer(t, "ABS-1", "ABS-2")
+			err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+				_, err := delivery.SendMessageTx(ctx, tx, me, delivery.MessageInput{To: peer, Text: "Anyone there?"})
+				return err
+			})
+			var refused delivery.RefusedMessage
+			want := "ABS-2 is " + status + ": no Run will read this. Carry on with your assumption, or ask a person."
+			if !errors.As(err, &refused) || refused.Msg != want {
+				t.Fatalf("send to ended peer: %v", err)
+			}
+			for _, how := range []string{"wait", "turn_ended"} {
+				w.in(t, func(tx pgx.Tx) error {
+					got, err := delivery.OpenWaitTx(ctx, tx, me, q.ID, how)
+					if err == nil && (got.Message != "" || got.Notice != delivery.PeerEndedLine("ABS-2", status)) {
+						t.Errorf("wait on ended peer: %+v", got)
+					}
+					return err
+				})
+			}
+			w.in(t, func(tx pgx.Tx) error {
+				waits, err := delivery.WaitOnUnansweredTx(ctx, tx, me)
+				if waits {
+					t.Error("peer ended between send and idle, but idle waits")
+				}
+				return err
+			})
+			if n := w.count(t, `SELECT count(*) FROM peer_waits`); n != 0 {
+				t.Errorf("%d waits opened", n)
+			}
+			if n := w.count(t, `SELECT count(*) FROM peer_messages`); n != 1 {
+				t.Errorf("%d messages, want only the pre-end question", n)
+			}
+		})
+	}
+}
+
 func (w *epicWorld) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {

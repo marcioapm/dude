@@ -117,6 +117,13 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 		return Sent{}, RefusedMessage{Reason: "too_long", Msg: fmt.Sprintf("a message is at most %d KiB: say less, or pin a note",
 			SteerTextMax>>10)}
 	}
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, in.To.ID).Scan(&status); err != nil {
+		return Sent{}, err
+	}
+	if Ended(status) {
+		return Sent{}, RefusedMessage{Reason: "peer_ended", Msg: fmt.Sprintf("%s is %s: no Run will read this. Carry on with your assumption, or ask a person.", in.To.Key, status)}
+	}
 	// The Run's row serialises its sends, so two at once cannot both be
 	// the fifth.
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, ref.RunID); err != nil {
@@ -345,6 +352,7 @@ type Waiting struct {
 	On      string     `json:"on"`
 	How     string     `json:"how"`
 	ParksAt *time.Time `json:"parksAt,omitempty"`
+	Notice  string     `json:"notice,omitempty"`
 }
 
 // parkSecs (SQL, $3 a Run, $6 the factory's default in minutes): its
@@ -368,9 +376,14 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 	case !db.IsNotFound(err):
 		return w, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number FROM peer_messages m JOIN tasks t ON t.id = m.to_task_id
-		JOIN projects p ON p.id = t.project_id WHERE m.id = $1`, message).Scan(&w.On); err != nil {
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.status::text FROM peer_messages m JOIN tasks t ON t.id = m.to_task_id
+		JOIN projects p ON p.id = t.project_id WHERE m.id = $1`, message).Scan(&w.On, &status); err != nil {
 		return w, err
+	}
+	if Ended(status) {
+		w.Notice = PeerEndedLine(w.On, status)
+		return w, nil
 	}
 	w.Message, w.How = message, how
 	err = tx.QueryRow(ctx, `INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, parks_at)
@@ -392,7 +405,9 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 func WaitOnUnansweredTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error) {
 	var message string
 	err := tx.QueryRow(ctx, `SELECT m.id FROM peer_messages m JOIN runs r ON r.id = m.from_run_id
+		JOIN tasks t ON t.id = m.to_task_id
 		WHERE m.from_run_id = $1 AND m.reply_to IS NULL AND r.phase IS NOT NULL
+		  AND t.status NOT IN ('done', 'failed', 'aborted')
 		  AND NOT EXISTS (SELECT 1 FROM peer_messages a WHERE a.reply_to = m.id)
 		  AND NOT EXISTS (SELECT 1 FROM peer_waits w WHERE w.run_id = $1 AND w.closed_at IS NULL)
 		  AND NOT EXISTS (SELECT 1 FROM peer_waits w WHERE w.message_id = m.id)
@@ -403,8 +418,8 @@ func WaitOnUnansweredTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error
 	if err != nil {
 		return false, err
 	}
-	_, err = OpenWaitTx(ctx, tx, ref, message, "turn_ended")
-	return err == nil, err
+	w, err := OpenWaitTx(ctx, tx, ref, message, "turn_ended")
+	return err == nil && w.Message != "", err
 }
 
 // CoordinationReadTx settles what a directive carried once the agent has

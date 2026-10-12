@@ -129,6 +129,9 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	if err != nil {
 		return waitOut{}, err
 	}
+	if w.Notice != "" {
+		return waitOut{Next: w.Notice}, nil
+	}
 	return waitOut{Waiting: &w, Next: "End your turn now. " + toKey + "'s reply resumes you as your next message; if none " +
 		"comes within the project's grace, your Run is parked until it does."}, nil
 }
