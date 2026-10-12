@@ -125,7 +125,8 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
                 <div style={{ display: "flex", marginTop: 8 }}><TerminalLink href="https://lux.example.com/runs/run_k3jq7x2mfa9vbn4z/terminal" /></div>
               </SessionRailBlock>
               <SessionRailBlock label="Tools used">
-                <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 }, { name: "Write", count: 1 }]} />
+                <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 },
+                  { name: "dude update task", count: 2 }, { name: "Write", count: 1 }]} />
               </SessionRailBlock>
               <SessionRailBlock label="Files changed" live>
                 <ChangedFiles files={FILES.map((f) => ({ path: f.path, additions: f.additions, deletions: f.deletions }))} onOpen={() => {}} />

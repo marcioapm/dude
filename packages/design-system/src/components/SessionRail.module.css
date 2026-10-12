@@ -33,18 +33,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* One grid for every row, so the bars start together after the longest
+   name: a tool's name may be several words ("dude update task"). */
 .bars {
   display: grid;
-  gap: var(--ds-space-4);
+  grid-template-columns: fit-content(60%) minmax(0, 1fr) 28px;
+  align-items: center;
+  column-gap: var(--ds-space-8);
+  row-gap: var(--ds-space-4);
 }
 .bar {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 28px;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-height: 22px;
+  display: contents;
 }
 .barName {
+  min-width: 64px;
+  min-height: 22px;
+  line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

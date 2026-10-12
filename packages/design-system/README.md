@@ -1099,7 +1099,10 @@ here.
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
 - Beside the conversation, a `SessionRail` on the chrome shade: what the
-  header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
+  header does not say (agent, attempt), the tools it used (`ToolUsage`:
+  the harness's by name, dude's own as "dude update task"; the names share
+  one column, as wide as the longest up to 60% of the rail, so the bars
+  start together), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
   the diff's own list does. When the agent session is narrower than about
