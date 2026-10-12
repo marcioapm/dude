@@ -1183,7 +1183,8 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
       answers={turn.answers}
       answeredBy={by ? firstName(by) : undefined}
       dismissed={ended && turn.answeredAt === null}
-      settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
+      settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn"
+        : turn.closedBy === "replaced" ? "Left open: a fresh agent took over" : "Decided on the banner"}
       waitingOn={whom}
       onlyThey={turn.to !== null}
       {...(open ? {

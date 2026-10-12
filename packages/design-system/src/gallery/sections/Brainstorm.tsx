@@ -16,7 +16,7 @@ import { people } from "../navFixtures.ts";
 import styles from "../gallery.module.css";
 
 /** The app's line under the rail's picker. */
-const RAIL_MODEL_NOTE = "Applies the next time the agent starts.";
+const RAIL_MODEL_NOTE = "Applies from your next message: a fresh agent takes over with the conversation so far.";
 
 const P = people;
 
@@ -201,7 +201,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-rail" title="SessionPeople / LinkedProjects / ModelPicker / Capabilities"
-        note="The session's rail: its people (here: has it open now), what it reads, the model its agent runs on (the owner changes it here; it applies at the agent's next start), and what it can and cannot do.">
+        note="The session's rail: its people (here: has it open now), what it reads, the model its agent runs on (the owner changes it here; it applies from the next message, a fresh agent taking over with the conversation), and what it can and cannot do.">
         <Panes mode={mode}>
           <div style={{ width: 300 }}>
             <SessionRail>

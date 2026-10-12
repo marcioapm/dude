@@ -141,9 +141,9 @@ test("the rail's Model: the owner's chip, chosen and read only, each with when a
     const readOnly = pane.querySelector("[data-testid=rail-model-readonly]")!;
     expect(readOnly.querySelectorAll("button").length).toBe(0);
     expect(readOnly.textContent).toContain("Model: Coder on Claude Code");
-    for (const block of [chosen, readOnly]) expect(block.textContent).toContain("Applies the next time the agent starts.");
+    for (const block of [chosen, readOnly]) expect(block.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
   }
   for (const pane of el.querySelectorAll("#bs-rail [data-theme][data-density]")) {
-    expect(pane.querySelector("[data-testid=rail-model]")!.textContent).toContain("Applies the next time the agent starts.");
+    expect(pane.querySelector("[data-testid=rail-model]")!.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
   }
 });
