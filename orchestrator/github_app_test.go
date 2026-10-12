@@ -168,6 +168,42 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 	}
 }
 
+// An owner reinstalls the App while the implementer works, which gives it a
+// new installation: the push's first token exchange finds the old one gone
+// and is retried, the retry finds the new one, and the delivery goes on.
+func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing.T) {
+	w := newWorld(t)
+	app := w.asApp()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 81} })
+		}
+		return scripted(spec)
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 0 {
+		t.Errorf("%d Runs failed", n)
+	}
+	pushes := 0
+	for _, r := range w.lux.Runs() {
+		for _, creds := range r.PushCredentials {
+			pushes++
+			if app.Installation(creds["target"]) != 81 {
+				t.Errorf("push credentials %v, want the new installation 81's", creds)
+			}
+		}
+	}
+	if pushes != 3 {
+		t.Errorf("%d pushes, want 3", pushes)
+	}
+	if n := app.AttemptsFor(71); n == 0 || app.ExchangesFor(81) == 0 {
+		t.Errorf("exchanges asked of 71: %d, issued for 81: %d; want the removed one tried, then the new one", n, app.ExchangesFor(81))
+	}
+}
+
 // A preview's own secret named like an owner's token (stored before the
 // name was reserved) is the project's: a resume sends its value, once, and
 // mints nothing for an owner "deploy".
