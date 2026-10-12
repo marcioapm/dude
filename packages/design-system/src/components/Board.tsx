@@ -15,9 +15,15 @@ import {
   boardCardCount,
   boardColumns,
   boardCost,
+  boardFilter,
+  boardFilterCounts,
   boardSwimlanes,
+  isBlocked,
+  neighbourKeys,
+  scopeTasks,
   type BoardCard,
   type BoardColumn,
+  type BoardFilter,
   type BoardSwimlane,
 } from "../util/boardModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
@@ -27,6 +33,8 @@ import { Duration } from "./Numbers.tsx";
 import { PersonAvatarStack } from "./PersonAvatar.tsx";
 import { PrChip } from "./PrChip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { AutoStartMark, HOW_LABEL, RelationChip, relationWords, startsWhen } from "./Relations.tsx";
+import { Segmented } from "./ScreenHeader.tsx";
 import { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
 import styles from "./Board.module.css";
 
@@ -59,6 +67,33 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
   readonly onCollapsedChange?: ((next: ReadonlySet<string>) => void) | undefined;
   /** A swimlane header's "…" menu (a `RowMenu`); the DS knows no actions. */
   readonly laneMenu?: ((lane: BoardSwimlane) => ReactNode) | undefined;
+  /**
+   * Under the title: what the card waits on, holds up, and when it starts on
+   * its own. The board draws `RelationChip`s and `AutoStartMark` from the
+   * task's `NavTask` relations when absent.
+   */
+  readonly cardMarks?: ((card: BoardCard) => ReactNode) | undefined;
+  /**
+   * A Backlog card's start (`StartMenu`), drawn after the card in its list
+   * item: a sibling, never inside it. Null for a card the reader may not
+   * start. Tabbable only beside the card that holds the board's focus.
+   */
+  readonly cardStart?: ((card: BoardCard, focus: BoardCardStartFocus) => ReactNode) | undefined;
+  /** Keys kept lit, the rest dimmed; null for none. Hover and focus set it when uncontrolled. */
+  readonly highlight?: ReadonlySet<string> | null | undefined;
+  /** The card hovered or focused, by key (null on leaving), whether `highlight` is controlled or not. */
+  readonly onHighlightChange?: ((key: string | null) => void) | undefined;
+  /**
+   * All · Can start · Blocked, a `Segmented` in the header with counts in its
+   * labels, shown when `onFilterChange` is given. A view, not a triage bucket.
+   */
+  readonly filter?: BoardFilter | undefined;
+  readonly onFilterChange?: ((filter: BoardFilter) => void) | undefined;
+}
+
+/** The roving rule for a card's start: 0 only beside the card that holds the board's tab stop. */
+export interface BoardCardStartFocus {
+  readonly tabIndex: 0 | -1;
 }
 
 /** What the board is drawing: one anonymous group, or a swimlane per epic. */
@@ -83,16 +118,28 @@ interface Group {
  * the workflow's — the scheduler starts work, the agent opens the PR, the
  * checks make it ready, the merge closes it — and the two a person does
  * perform (confirm a plan, abort a run) are decisions with context, taken
- * in the transcript, not gestures. A card is a way in, not a handle.
+ * in the transcript, not gestures. A card is a way in, not a handle; the
+ * one exception is a Backlog card's start (`cardStart`), a sibling of the
+ * card offering the task header's own ways to start.
  *
  * Keyboard: one tab stop; ↑↓ move within a column (continuing into the
- * next swimlane), ←→ across, Home/End, Enter/Space open. Selection and
- * focus are separate.
+ * next swimlane), ←→ across, Home/End, Enter/Space open; Tab from a card
+ * reaches its start, Shift+Tab returns. Selection and focus are separate.
+ *
+ * Hover or focus on a card lights its relations: its own accent bar, theirs
+ * on the active wash, the rest at 35% opacity, and a polite live region
+ * saying it in words. Nothing is added to the layout.
  */
-export function Board({ project, you, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
+export function Board({ project, you, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu,
+  cardMarks, cardStart, highlight: controlledHighlight, onHighlightChange, filter = "all", onFilterChange, className, ...rest }: BoardProps) {
   const swimlanes = groupBy === "epic" && !epic;
-  const columns = useMemo(() => boardColumns(project, epic, you), [project, epic, you]);
-  const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project, you) : []), [swimlanes, project, you]);
+  const allColumns = useMemo(() => boardColumns(project, epic, you), [project, epic, you]);
+  const columns = useMemo(() => boardFilter(allColumns, filter), [allColumns, filter]);
+  const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project, you).map((l) => {
+    const cols = boardFilter(l.columns, filter);
+    return { ...l, columns: cols, count: boardCardCount(cols) };
+  }) : []), [swimlanes, project, you, filter]);
+  const filterCounts = useMemo(() => boardFilterCounts(scopeTasks(project, epic)), [project, epic]);
   const total = boardCardCount(columns);
   const cost = boardCost(columns);
   const counts = useMemo(() => sumTriage(columns.map((c) => c.counts)), [columns]);
@@ -119,6 +166,18 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
   const containerRef = useRef<HTMLElement>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const selectedKey = selected ? navKey(selected) : null;
+
+  // The card lit: hovered or focused, by task key. Its neighbours stay, the rest dim.
+  const [litKey, setLitKey] = useState<string | null>(null);
+  const tasksByKey = useMemo(() => new Map(scopeTasks(project, epic).filter((t) => t.key).map((t) => [t.key!, t])), [project, epic]);
+  const lit = litKey ? tasksByKey.get(litKey) ?? null : null;
+  const ownHighlight = useMemo(() => (lit ? new Set([lit.key!, ...neighbourKeys(lit)]) : null), [lit]);
+  const highlight = controlledHighlight !== undefined ? controlledHighlight : ownHighlight;
+  const light = (key: string | null) => {
+    if (key === litKey) return;
+    setLitKey(key);
+    onHighlightChange?.(key);
+  };
 
   const groups = useMemo<Group[]>(
     () => (swimlanes ? lanes.map((l) => ({ key: l.key, lane: l, columns: l.columns })) : [{ key: "all", lane: null, columns }]),
@@ -218,7 +277,8 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
   // The heading says where you are with a face: the project's.
 
   return (
-    <section ref={containerRef} className={cx(styles["root"], className)} aria-label={`${scopeLabel} board`} aria-busy={loading || undefined} {...rest}>
+    <section ref={containerRef} className={cx(styles["root"], className)} aria-label={`${scopeLabel} board`} aria-busy={loading || undefined}
+      onMouseLeave={() => light(null)} {...rest}>
       {!hideHeader ? (
         <header className={styles["header"]}>
           <span className={styles["scope"]}>
@@ -239,15 +299,30 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
               {cost > 0 ? <Cost tokensUsd={cost} size="sm" tone="muted" className={styles["summaryCost"]} /> : null}
             </span>
           ) : null}
-          {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
+          {headerActions || onFilterChange ? (
+            <span className={styles["headerActions"]}>
+              {onFilterChange ? (
+                <Segmented size="sm" label="Show" value={filter} onChange={onFilterChange} data-testid="board-filter"
+                  options={[
+                    { value: "all", label: `All ${filterCounts.all}` },
+                    { value: "startable", label: `Can start ${filterCounts.startable}` },
+                    { value: "blocked", label: `Blocked ${filterCounts.blocked}` },
+                  ]} />
+              ) : null}
+              {headerActions}
+            </span>
+          ) : null}
         </header>
       ) : null}
       {overview && !loading ? <div className={styles["overview"]}>{overview}</div> : null}
+      {/* Said, not shown: a line above the board would move the cards under the pointer. */}
+      <span className="ds-sr-only" role="status" aria-live="polite" data-testid="board-lit">{lit ? litWords(lit) : ""}</span>
 
       {loading ? (
         <BoardSkeleton />
       ) : total === 0 ? (
-        <EmptyState icon="layers" title={epic ? "Nothing in this epic yet" : "No tasks yet"} description="Give an agent a task and it appears here." className={styles["empty"]} />
+        <EmptyState icon="layers" title={filter !== "all" ? (filter === "blocked" ? "Nothing is blocked" : "Nothing can start now") : epic ? "Nothing in this epic yet" : "No tasks yet"}
+          description={filter !== "all" ? "Show All to see every task." : "Give an agent a task and it appears here."} className={styles["empty"]} />
       ) : (
         <div className={cx(styles["body"], swimlanes && styles["bodyLanes"])}>
           {swimlanes ? (
@@ -266,6 +341,8 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                 <BoardColumnView key={column.kind} column={column} folded={swimlanes && column.cards.length === 0} inLane={swimlanes}>
                   {cards.map((card, ri) => {
                     const key = cardKey(card);
+                    const k = card.task.key;
+                    const start = cardStart?.(card, { tabIndex: key === tabStop ? 0 : -1 }) ?? null;
                     return (
                       <BoardCardView
                         key={key}
@@ -274,9 +351,16 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                         showEpic={!epic && !swimlanes}
                         selected={cardContains(card, selectedKey)}
                         tabIndex={key === tabStop ? 0 : -1}
-                        onFocus={() => setFocusedKey(key)}
+                        onFocus={() => {
+                          setFocusedKey(key);
+                          light(k ?? null);
+                        }}
                         onKeyDown={(e) => onKeyDown(e, gi, ci, ri)}
                         onClick={() => select(card)}
+                        onHover={() => light(k ?? null)}
+                        lit={highlight ? (k === litKey ? "self" : k && highlight.has(k) ? "related" : "dim") : null}
+                        marks={cardMarks ? cardMarks(card) : <DefaultMarks card={card} />}
+                        start={card.column === "backlog" ? start : null}
                       />
                     );
                   })}
@@ -396,15 +480,65 @@ interface BoardCardViewProps {
   readonly onFocus: () => void;
   readonly onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
   readonly onClick: () => void;
+  readonly onHover: () => void;
+  /** Lit by a hovered card: itself, one of its relations, or dimmed; null when nothing is lit. */
+  readonly lit: "self" | "related" | "dim" | null;
+  /** Between the title and the foot: relation chips, a start when unblocked. */
+  readonly marks: ReactNode;
+  /** A Backlog card's start: after the card in its list item, never inside it. */
+  readonly start: ReactNode;
+}
+
+/** The card's name: its key and title, then why it can't start, and when it will. */
+function cardName(wi: NavTask): string {
+  const base = wi.key ? `${wi.key} ${wi.title}` : wi.title;
+  const blockers = isBlocked(wi) ? wi.blockedBy ?? [] : [];
+  if (blockers.length === 0) return base;
+  const why = `, ${relationWords("blocked-by", blockers).replace(/^B/, "b")}`;
+  const auto = wi.autoStart ? `; ${startsWhen(blockers).toLowerCase()}, ${HOW_LABEL[wi.autoStart.how]}` : "";
+  return `${base}${why}${auto}`;
+}
+
+/** What the live region says of a lit card's relations, in words. */
+function litWords(wi: NavTask): string {
+  const e = wi.edges;
+  const parts = [
+    e?.blockedBy.length ? `blocked by ${e.blockedBy.join(", ")}` : null,
+    e?.blocks.length ? `blocks ${e.blocks.join(", ")}` : null,
+    e?.related.length ? `related to ${e.related.join(", ")}` : null,
+  ].filter(Boolean);
+  return `${wi.key ?? wi.title}'s relations: ${parts.length ? parts.join("; ") : "none"}.`;
+}
+
+/** The marks a card draws from its task when the app passes none. */
+function DefaultMarks({ card }: { readonly card: BoardCard }) {
+  const wi = card.task;
+  const blockers = card.blocked ? wi.blockedBy ?? [] : [];
+  const holds = wi.blocks ?? [];
+  if (blockers.length === 0 && holds.length === 0) return null;
+  const auto = blockers.length && wi.autoStart ? wi.autoStart : null;
+  return (
+    <span className={styles["marks"]}>
+      {blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null}
+      {holds.length ? <RelationChip kind="blocks" tasks={holds} /> : null}
+      {auto ? (
+        <span className={styles["marksLine"]}>
+          <AutoStartMark compact blockers={blockers} auto={{ how: auto.how, by: firstName(auto.by.name), ago: formatDuration(Math.max(0, Date.now() - (toMs(auto.at) ?? Date.now())), { style: "age" }) }} />
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 /**
  * One task: its key (and the one loud pill when it needs you), its title,
- * the question when an agent asks, its pull requests' states, how far the
- * working agent's plan has got, and its people with what is happening —
- * the agent working for the owner sits on the owner's face.
+ * the question when an agent asks, what it waits on and holds up, its pull
+ * requests' states, how far the working agent's plan has got, and its
+ * people with what is happening — the agent working for the owner sits on
+ * the owner's face. A Backlog card's start is its sibling, over the foot's
+ * right end, which keeps the room for it.
  */
-function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKeyDown, onClick }: BoardCardViewProps) {
+function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKeyDown, onClick, onHover, lit, marks, start }: BoardCardViewProps) {
   const wi = card.task;
   const spec = statusSpec(wi.status);
   const needsYou = card.triage === "needs_you";
@@ -416,15 +550,18 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
   const plan = working?.plan;
   const prs = wi.pullRequests ?? [];
   return (
-    <li>
+    <li className={styles["cardItem"]} onMouseEnter={onHover}>
       <div
         role="button"
-        className={cx(styles["card"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}
+        className={cx(styles["card"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"],
+          lit === "self" && styles["lit"], lit === "related" && styles["litRelated"], lit === "dim" && styles["dimmed"], Boolean(start) && styles["hasStart"])}
         data-board-key={navKey({ kind: "task", id: wi.id })}
         data-triage={card.triage}
         data-status={wi.status}
+        data-blocked={card.blocked || undefined}
+        data-lit={lit ?? undefined}
         aria-current={selected ? "true" : undefined}
-        aria-label={wi.key ? `${wi.key} ${wi.title}` : wi.title}
+        aria-label={cardName(wi)}
         tabIndex={tabIndex}
         onFocus={onFocus}
         onKeyDown={(e) => {
@@ -456,6 +593,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
           {wi.title}
         </span>
         {needsYou ? <AskLine card={card} /> : null}
+        {marks}
         {prs.length > 0 ? (
           <span className={styles["prs"]}>
             {prs.map((pr) => (
@@ -479,6 +617,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
           {wi.costUsd !== undefined && wi.costUsd > 0 ? <Cost tokensUsd={wi.costUsd} size="sm" tone="muted" className={styles["cost"]} /> : null}
         </span>
       </div>
+      {start ? <span className={styles["cardStart"]}>{start}</span> : null}
     </li>
   );
 }
@@ -492,10 +631,21 @@ function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readon
   const w = working[0];
   if (w) return <><b>{w.title ?? ROLE_LABEL[w.role]}</b>{w.activity ?? "working"}</>;
   const where: Partial<Record<NavTask["status"], string>> = {
-    review: "waiting on GitHub", ready_to_merge: "ready to merge", done: "merged", failed: "failed", aborted: "stopped",
+    review: "waiting on GitHub", ready_to_merge: "ready to merge", done: doneWords(task), failed: "failed", aborted: "stopped",
     queued: "not started", received: "not started", intake: "being shaped", awaiting_confirmation: "plan to confirm",
   };
   return <><b>{names || statusSpec(task.status).label}</b>{where[task.status] ?? statusSpec(task.status).label.toLowerCase()}</>;
+}
+
+/**
+ * A done task's words: "merged" only when a pull request merged; otherwise
+ * "done, nothing merged" — a task marked done releases nothing it blocks.
+ * One that does not say (a view model from before it was kept) reads as its
+ * pull requests do.
+ */
+export function doneWords(task: NavTask): string {
+  const merged = task.merged ?? (task.pullRequests ?? []).some((pr) => pr.state === "merged");
+  return merged ? "merged" : "done, nothing merged";
 }
 
 function AskLine({ card }: { readonly card: BoardCard }) {
