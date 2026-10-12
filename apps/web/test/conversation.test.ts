@@ -580,11 +580,25 @@ describe("an ask's tool row and the question it asked", () => {
   const order = (events: PersistedEvent[]) =>
     project(events).turns.map((t) => (t.kind === "tool" ? `tool:${t.id}` : t.kind === "question" ? `q:${t.questionId}` : t.kind));
 
-  test("the harness's later report of the call goes before the question, by each harness's name", () => {
+  // OpenCode writes the agent's words before a call only when the call's
+  // first update arrives: after dude has recorded the question.
+  test("the harness's later report of the call goes before the question, after the agent's words, by each harness's name", () => {
     for (const tool of ["ask_person", "mcp__dude__ask_person", "dude_ask_person"]) {
-      expect(order([ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1", tool)]))
-        .toEqual(["message", "tool:c_1", "q:q_1"]);
+      const events = [asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentMessage, { text: "Let me ask." }), called("c_1", tool),
+        ev(EventTypes.ToolCompleted, { tool, callId: "c_1", status: "completed" })];
+      expect(order(events)).toEqual(["message", "tool:c_1", "q:q_1"]);
     }
+  });
+
+  test("the agent's thought and words written after the question stay before the row", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentThought, { text: "Ask them." }),
+      ev(EventTypes.AgentMessage, { text: "Asking." }), called("c_1")]))
+      .toEqual(["thought", "message", "tool:c_1", "q:q_1"]);
+  });
+
+  test("the message before the question stays before the row too", () => {
+    expect(order([ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1")]))
+      .toEqual(["message", "tool:c_1", "q:q_1"]);
   });
 
   test("a conductor's decide(ask_person) pairs with its question the same way", () => {
@@ -614,9 +628,11 @@ describe("an ask's tool row and the question it asked", () => {
       .toEqual(["q:q_1", "tool:c_2", "tool:c_1"]);
   });
 
-  test("nothing moves past a turn that came after the question", () => {
-    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.AgentMessage, { text: "Asked." }), called("c_1")]))
-      .toEqual(["q:q_1", "message", "tool:c_1"]);
+  test("a person's turn after the question keeps the question where it is", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.RunSteered, { text: "Also check X.", directiveId: "d_1" }), called("c_1")]))
+      .toEqual(["q:q_1", "human", "tool:c_1"]);
+    expect(order([asked("q_2"), dudeRecord("q_2"), ev(EventTypes.QuestionAnswered, { questionId: "q_2", answer: "Yes", note: "And hurry." }),
+      called("c_2")])).toEqual(["q:q_2", "human", "tool:c_2"]);
   });
 
   test("folded one event at a time, the order is the same, and the progress row stays found", () => {

@@ -1178,28 +1178,28 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
 
 /**
  * Add a tool call's row. dude writes an ask's question while handling the
- * call, before the harness reports the call, so the row of the call that
- * asked (`ask`: dude's record of it, by the tool's name) goes just before
- * its question — while nothing but questions has come after that.
+ * call, before the harness reports the call, so the question of the call
+ * that asked (`ask`: dude's record of it, by the tool's name) moves after
+ * its row. The agent's words before the call may land after the question
+ * too (OpenCode's text is written when the next tool update arrives), and
+ * stay before the row; a person's turn after the question keeps it where
+ * it is.
  */
 function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
   const { turns } = state;
-  if (ask && dudeToolName(turn.tool) === ask.tool) {
-    const at = turns.indexOf(ask.question);
-    // Only questions follow `at`, so the progress row (if any) is before it: its index holds.
-    if (at >= 0 && turns.slice(at).every((t) => t.kind === "question")) {
-      turns.splice(at, 0, turn);
-      return;
-    }
-  }
   turns.push(turn);
+  if (!ask || dudeToolName(turn.tool) !== ask.tool) return;
+  const at = turns.lastIndexOf(ask.question);
+  if (at < 0) return;
+  for (let i = at + 1; i < turns.length - 1; i++) {
+    const kind = turns[i]!.kind;
+    if (kind !== "message" && kind !== "thought" && kind !== "question") return;
+  }
+  moveToEnd(state, ask.question);
 }
 
-/**
- * A harness's name for a dude tool as dude names it: Claude Code's and
- * Codex's are recorded by the tool's own name already; OpenCode prefixes an
- * MCP server's tools with the server's name.
- */
+// Translators record dude's tools by their bare name; a `mcp__dude__` or
+// `dude_` prefix is tolerated for a harness that passes the server's name through.
 function dudeToolName(name: string): string {
   return name.replace(/^(?:mcp__dude__|dude_)/, "");
 }
@@ -1211,7 +1211,7 @@ function dudeToolName(name: string): string {
  */
 function moveToEnd(state: Projection, turn: Turn): void {
   const { turns } = state;
-  const from = turns.indexOf(turn);
+  const from = turns.lastIndexOf(turn);
   if (from < 0 || from === turns.length - 1) return;
   turns.splice(from, 1);
   turns.push(turn);
