@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"time"
@@ -26,7 +27,8 @@ var startStages = map[string]bool{"waiting": true, "image": true, "volumes": tru
 // StartStageJSON (SQL, over runs r): where the Run's start is, as the API
 // gives it ({stage, since, epoch} from its latest run.stage), while it is
 // live and lux has not reported it running; NULL otherwise. The ledger is
-// the source: no column holds it.
+// the source: no column holds it. Its twin over runs is the control
+// plane's startStage (apps/control-plane/src/api/routes/work.ts).
 const StartStageJSON = `(SELECT json_build_object('stage', e.payload->>'stage', 'since', e.payload->>'since',
 		'epoch', (e.payload->>'epoch')::int)
 	FROM events e WHERE e.run_id = r.id AND e.event_type = 'run.stage'
@@ -65,7 +67,7 @@ func (t *translator) stage(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 			return nil
 		}
 	}
-	payload := map[string]any{"stage": stage, "epoch": cmpEpoch(ev.Epoch, f.Epoch)}
+	payload := map[string]any{"stage": stage, "epoch": cmp.Or(ev.Epoch, f.Epoch)}
 	if ev.Since != nil {
 		payload["since"] = ev.Since.UTC()
 	}
@@ -73,13 +75,6 @@ func (t *translator) stage(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 		payload["reason"] = ev.Reason
 	}
 	return s.event(ctx, tx, t.run, EvRunStage, ledger.ActorSystem, payload)
-}
-
-func cmpEpoch(fromPayload, fromFrame int) int {
-	if fromPayload != 0 {
-		return fromPayload
-	}
-	return fromFrame
 }
 
 // beforeRunning says lux state was is one of a start's, before lux

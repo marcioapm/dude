@@ -643,7 +643,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           start = { kind: state.ran ? "resume" : "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
         }
         if (start.stage && start.stage !== stage && start.stageSince) {
-          start.done.push({ stage: start.stage, tookMs: Math.max(0, instantMs(since) - instantMs(start.stageSince)) });
+          start.done.push({ stage: start.stage, tookMs: Math.max(0, instant(since) - instant(start.stageSince)) });
         }
         if (start.stage !== stage) {
           start.stage = stage;
@@ -1101,7 +1101,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
         if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage && starting.stage && stage !== starting.stage && starting.stageSince) {
-            starting.done.push({ stage: starting.stage, tookMs: Math.max(0, instantMs(event.occurredAt) - instantMs(starting.stageSince)) });
+            starting.done.push({ stage: starting.stage, tookMs: Math.max(0, instant(event.occurredAt) - instant(starting.stageSince)) });
           }
           if (stage && stage !== starting.stage) {
             starting.stage = stage;
@@ -1443,10 +1443,6 @@ function numberOf(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function instantMs(at: string): number {
-  return instant(at);
-}
-
 /** Events that say the agent is up: what it wrote or took, or the harness taking its input. */
 const AGENT_UP: ReadonlySet<string> = new Set([
   EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted, EventTypes.PlanUpdated,
@@ -1470,10 +1466,10 @@ function endStart(state: Projection, event: PersistedEvent): void {
   if (start.kind !== "start" || !state.startStaged) return;
   const lines = [...start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`)];
   if (start.stage && start.stageSince) {
-    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(Math.max(0, instantMs(event.occurredAt) - instantMs(start.stageSince)))}`);
+    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(Math.max(0, instant(event.occurredAt) - instant(start.stageSince)))}`);
   }
   state.turns.push({
     kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
-    text: `Started in ${formatDuration(Math.max(0, instantMs(event.occurredAt) - instantMs(start.startedAt)))}.`,
+    text: `Started in ${formatDuration(Math.max(0, instant(event.occurredAt) - instant(start.startedAt)))}.`,
   });
 }

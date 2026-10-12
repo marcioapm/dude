@@ -33,7 +33,7 @@ const SLOW_WORDS: Record<StartStage, string> = {
 };
 
 /** The verb a start reads with: a move (a drain, a preemption) is "Moving to another machine". */
-export function startVerb(start: StartState): string {
+export function startVerbOf(start: StartState): string {
   return start.kind === "move" ? "Moving to another machine" : start.kind === "resume" ? "Resuming" : "Starting";
 }
 
@@ -71,7 +71,7 @@ export function StartRow({ start, role, onRetry }: { start: StartState; role: Ag
       // A failure is a new element: its stages start folded.
       key={start.failed ? "failed" : "live"}
       kind={start.kind}
-      verb={startVerb(start)}
+      verb={startVerbOf(start)}
       steps={stepsOf(start)}
       startedAt={start.startedAt}
       avatar={<AgentAvatar role={role} size="chat" />}
@@ -86,5 +86,5 @@ export function StartRow({ start, role, onRetry }: { start: StartState; role: Ag
 /** The header's line: a session's meta, or bare as a Run's statusNote. */
 export function StartHeaderChip({ start, bare }: { start: StartState; bare?: boolean }): ReactNode {
   const step = stepsOf(start).find((s) => s.state === "current" || s.state === "failed");
-  return <StartChip kind={start.kind} verb={startVerb(start)} step={step} startedAt={start.startedAt} bare={bare} data-testid="start-chip" />;
+  return <StartChip kind={start.kind} verb={startVerbOf(start)} step={step} startedAt={start.startedAt} bare={bare} data-testid="start-chip" />;
 }
