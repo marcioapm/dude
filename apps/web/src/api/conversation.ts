@@ -1182,13 +1182,10 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
 }
 
 /**
- * Add a tool call's row. dude writes an ask's question while handling the
- * call, before the harness reports the call, so the question of the call
- * that asked (`ask`: dude's record of it, by the tool's name) moves after
- * its row. The agent's words before the call may land after the question
- * too (OpenCode's text is written when the next tool update arrives), and
- * stay before the row; a person's turn after the question keeps it where
- * it is.
+ * Add a tool call's row; if it is the call that asked `ask.question`, that
+ * question moves after the row. Only the agent's words may lie between
+ * them (OpenCode writes them when the call's first update arrives); any
+ * other turn after the question keeps it where it is.
  */
 function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
   const { turns } = state;
