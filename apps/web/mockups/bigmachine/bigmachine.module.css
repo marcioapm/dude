@@ -2,7 +2,7 @@
  * The proposal's additions, tokens only. The raised chip reuses
  * MachineChip's stylesheet and the task's machines reuse ServersSummary's;
  * the request is a ToolCallCard, which needs only the pool's ink here.
- * MoveProgress is the startup design's row.
+ * StartProgress stands in for the design system's (agent-startup).
  */
 
 /* ---- MachineRequestCall -------------------------------------------------- */
@@ -59,7 +59,7 @@
   color: var(--ds-color-text-muted);
 }
 
-/* ---- MoveProgress (the startup design's row) ---------------------------- */
+/* ---- StartProgress (stand-in for the design system's) -------------------- */
 
 .moveRow {
   position: relative;

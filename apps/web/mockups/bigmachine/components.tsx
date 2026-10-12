@@ -10,7 +10,8 @@
  * - MachineRaises: the task's raised machines, in ServersSummary's grammar,
  *   each with Reset.
  * - ResetMachineConfirm: Reset's confirmation, a `Dialog size="sm"`.
- * - MoveProgress: the startup design's StartProgress, verb "Moving to Large".
+ * - StartProgress: a stand-in for the design system's, given the verb
+ *   "Moving to Large" and the move's stage list.
  */
 
 import { useEffect, useId, useState, type ReactNode } from "react";
@@ -169,24 +170,27 @@ export function ResetMachineConfirm({ open, onOpenChange, label, from, to, onCon
   );
 }
 
-// ---- MoveProgress (StartProgress from github/design/agent-startup) -------------------
+// ---- StartProgress ---------------------------------------------------------------
+// Stands in for the design system's StartProgress (github/design/agent-startup,
+// being built in packages/design-system); the mockup cannot import it yet.
+// Same props: a verb and a caller-supplied stage list.
 
-export interface MoveStep {
+export interface StartStep {
   readonly id: string;
   readonly label: string;
   readonly doneLabel: string;
-  readonly state: "done" | "current" | "pending";
+  readonly state: "done" | "current" | "pending" | "failed";
   readonly tookMs?: number | undefined;
   readonly since?: number | undefined;
 }
 
 /**
- * The startup design's row, where the agent's next turn will be, with the
- * verb "Moving to Large": the current stage and its clock, the total once
- * a stage has passed, and the stages as a stepper behind the line.
+ * The startup design's row, where the agent's next turn will be: the verb
+ * ("Starting", "Moving to Large"), the current stage and its clock, the
+ * total once a stage has passed, and the stages as a stepper behind the line.
  */
-export function MoveProgress({ verb, steps, startedAt, avatar, defaultOpen }: {
-  readonly verb: string; readonly steps: readonly MoveStep[]; readonly startedAt: number; readonly avatar: ReactNode; readonly defaultOpen?: boolean;
+export function StartProgress({ verb, steps, startedAt, avatar, defaultOpen }: {
+  readonly verb: string; readonly steps: readonly StartStep[]; readonly startedAt: number; readonly avatar: ReactNode; readonly defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen ?? false);
   const listId = useId();
@@ -209,11 +213,11 @@ export function MoveProgress({ verb, steps, startedAt, avatar, defaultOpen }: {
           {steps.map((st) => (
             <li key={st.id} className={s.step} data-state={st.state} aria-current={st.state === "current" ? "step" : undefined}>
               <span className={s.stepGlyph} aria-hidden>
-                <Icon name={st.state === "done" ? "check" : st.state === "current" ? "circle-half" : "circle-dotted"} size={12} strokeWidth={2} />
+                <Icon name={st.state === "done" ? "check" : st.state === "failed" ? "cross" : st.state === "current" ? "circle-half" : "circle-dotted"} size={12} strokeWidth={2} />
               </span>
               <span className={s.stepLabel}>
                 {st.state === "done" ? st.doneLabel : st.label}
-                <span className="ds-sr-only">{st.state === "pending" ? ", to come" : st.state === "current" ? ", now" : ""}</span>
+                <span className="ds-sr-only">{st.state === "pending" ? ", to come" : st.state === "current" ? ", now" : st.state === "failed" ? ", failed" : ""}</span>
               </span>
               <span className={s.stepTime}>
                 {st.state === "done" && st.tookMs !== undefined ? formatDuration(st.tookMs) : st.state === "current" && st.since !== undefined ? <Clock since={st.since} /> : null}
@@ -237,9 +241,9 @@ function Clock({ since, muted }: { since: number; muted?: boolean }) {
 }
 
 /** The stages at a moment: `done` finished, the next live for 4s. */
-export function stepsAt(stages: ReadonlyArray<{ id: string; now: string; done: string }>, done: number, at: number, took: readonly number[]): MoveStep[] {
+export function stepsAt(stages: ReadonlyArray<Pick<StartStep, "id" | "label" | "doneLabel">>, done: number, at: number, took: readonly number[]): StartStep[] {
   return stages.map((st, i) => ({
-    id: st.id, label: st.now, doneLabel: st.done,
+    ...st,
     state: i < done ? "done" : i === done ? "current" : "pending",
     tookMs: took[i], since: i === done ? at - 4_000 : undefined,
   }));

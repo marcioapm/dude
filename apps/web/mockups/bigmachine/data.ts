@@ -92,21 +92,21 @@ export const SESSION = {
  * resumes it with the new resources.
  */
 export const MOVE_STAGES = [
-  { id: "park", now: "Stopping it, keeping its work", done: "Stopped, work kept" },
-  { id: "waiting", now: "Waiting for a machine", done: "Machine found" },
-  { id: "volumes", now: "Restoring its workspace", done: "Workspace restored" },
-  { id: "container", now: "Starting the container", done: "Container started" },
-  { id: "running", now: "Starting the agent", done: "Agent started" },
+  { id: "park", label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept" },
+  { id: "waiting", label: "Waiting for a machine", doneLabel: "Machine found" },
+  { id: "volumes", label: "Restoring its workspace", doneLabel: "Workspace restored" },
+  { id: "container", label: "Starting the container", doneLabel: "Container started" },
+  { id: "running", label: "Starting the agent", doneLabel: "Agent started" },
 ] as const;
 
 /** A fresh Run's start, the startup design's stages unchanged. */
 export const START_STAGES = [
-  { id: "waiting", now: "Waiting for a machine", done: "Machine found" },
-  { id: "image", now: "Getting the image ready", done: "Image ready" },
-  { id: "volumes", now: "Restoring its workspace", done: "Workspace restored" },
-  { id: "repositories", now: "Checking out repositories", done: "Repositories checked out" },
-  { id: "container", now: "Starting the container", done: "Container started" },
-  { id: "running", now: "Starting the agent", done: "Agent started" },
+  { id: "waiting", label: "Waiting for a machine", doneLabel: "Machine found" },
+  { id: "image", label: "Getting the image ready", doneLabel: "Image ready" },
+  { id: "volumes", label: "Restoring its workspace", doneLabel: "Workspace restored" },
+  { id: "repositories", label: "Checking out repositories", doneLabel: "Repositories checked out" },
+  { id: "container", label: "Starting the container", doneLabel: "Container started" },
+  { id: "running", label: "Starting the agent", doneLabel: "Agent started" },
 ] as const;
 
 export type Scenario =
