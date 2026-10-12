@@ -51,3 +51,17 @@ func TestARunThatRanThenFailedNamesNoStage(t *testing.T) {
 		t.Errorf("run.failed = %v, want no stage or reason", p)
 	}
 }
+
+// A drained Run whose resumePolicy (manual) fails it on the move: its
+// stop was written as park, but park is not a start, so its run.failed
+// names no stage rather than "failed while stopping it".
+func TestADrainedManualRunNamesNoStage(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.luxFrame(1, "state", map[string]any{"state": "stopping", "reason": "drain"})
+	w.luxFrame(1, "stage", map[string]any{"stage": "stopping", "reason": "drain", "epoch": 1, "since": "2026-10-12T10:00:00Z"})
+	w.luxFrame(1, "state", map[string]any{"state": "stopped", "reason": "drain"})
+	w.luxFrame(1, "state", map[string]any{"state": "failed", "reason": "drain: not resumed (resumePolicy manual)"})
+	if p := w.failedWith(); p["stage"] != nil {
+		t.Errorf("run.failed = %v, want no stage", p)
+	}
+}

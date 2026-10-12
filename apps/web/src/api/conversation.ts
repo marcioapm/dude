@@ -1088,9 +1088,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           why: why || null,
         };
         // A start that failed before the agent ran: the row's stages, failed in the one it was in, with lux's own reason.
+        // A move whose Run failed at its stop (park: a resumePolicy that does not resume it) never began a start.
         const starting = state.start;
-        if (failed && starting && payload.kept !== true) {
-          const stage = isStartStage(payload.stage) ? payload.stage : starting.stage;
+        const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
+        if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage && starting.stage && stage !== starting.stage && starting.stageSince) {
             starting.done.push({ stage: starting.stage, tookMs: Math.max(0, instantMs(event.occurredAt) - instantMs(starting.stageSince)) });
           }

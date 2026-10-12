@@ -88,6 +88,18 @@ describe("the projection", () => {
     expect(sent).toMatchObject({ deliveredAt: null, failed: NOT_STARTED });
   });
 
+  test("a drained Run whose resumePolicy (manual) fails it at the stop did not fail a start: no stopping-it failure", () => {
+    const ran = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), stage("park", 20_000, 1, "drain")];
+    const why = "drain: not resumed (resumePolicy manual)";
+    for (const failure of [{ status: "failed", error: why, stage: "park", reason: why }, { status: "failed", error: why }]) {
+      const c = project([...ran, ev("run.failed", failure, 25_000)], "failed");
+      const ended = c.turns.find((t) => t.kind === "ended")!;
+      expect(ended.kind === "ended" && ended.start).toBeFalsy();
+      expect(ended).toMatchObject({ text: `Failed: ${why}` });
+      expect(c.start).toBeNull();
+    }
+  });
+
   test("the message its briefing carries is queued until the agent is up, then read", () => {
     const events = [created(), message("plan the epic", 1), stage("waiting", 0)];
     expect(project(events, "scheduled").turns.find((t) => t.kind === "human")).toMatchObject({ deliveredAt: null, failed: null });
