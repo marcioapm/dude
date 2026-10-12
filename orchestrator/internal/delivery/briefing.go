@@ -159,6 +159,19 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if err := briefFindingsSection(ctx, tx, &b, taskID); err != nil {
 		return "", err
 	}
+	// The epic it is on, and what its peers did since it last looked:
+	// told here, never a wake of its own.
+	var org string
+	if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, taskID).Scan(&org); err != nil {
+		return "", err
+	}
+	digest, err := ConductorDigestTx(ctx, tx, org, taskID)
+	if err != nil {
+		return "", err
+	}
+	if digest != "" {
+		b.WriteString("\n\n" + digest)
+	}
 	if err := briefPullRequestsSection(ctx, tx, &b, taskID); err != nil {
 		return "", err
 	}
@@ -183,6 +196,13 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	b.WriteString("\n\nYour checkout is at that head.")
 	if err := briefDeciderSection(ctx, tx, &b, taskID); err != nil {
 		return "", err
+	}
+	epic, err := EpicBriefing(ctx, tx, org, taskID, "", RoleConductor)
+	if err != nil {
+		return "", err
+	}
+	if epic != "" {
+		b.WriteString("\n\n" + epic)
 	}
 	// What the task's conductors were told and said before: none before
 	// its first. A message handed over is not in it (never read): it is

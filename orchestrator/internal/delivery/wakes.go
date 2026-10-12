@@ -125,6 +125,16 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		payload["started"] = true
 	} else {
 		ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
+		// A live conductor is not briefed again: what its epic's peers did
+		// since it last looked goes with the note.
+		digest, err := ConductorDigestTx(ctx, tx, org, taskID)
+		if err != nil {
+			return "", err
+		}
+		if digest != "" {
+			note += "\n\n" + digest
+			payload["text"], payload["digest"] = note, true
+		}
 		if directiveID, _, err = QueueDirective(ctx, tx, ref, Directive{Text: note, Scope: "run"}); err != nil {
 			return "", err
 		}
