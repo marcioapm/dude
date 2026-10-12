@@ -242,8 +242,23 @@ describe("a conductor's Chat", () => {
     const page = await runPage("failed", failedStart(), true, undefined, () => { retried += 1; return Promise.resolve(); });
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toContain("Did not start: failed while starting the container: start-failed.");
+    expect(page.querySelector("[data-testid=start-wakes-next]")).toBeNull();
     await act(async () => page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!.click());
     expect(retried).toBe(1);
+  });
+
+  test("a conductor dude woke whose start failed: no Try again; dude wakes a new one", async () => {
+    let retried = 0;
+    const woken = [created(), ev("conductor.briefed", { text: "Conductor, dude woke you; one thing: …" }, 1),
+      ev("conductor.woken", { text: "dude woke you; one thing: …", reasons: ["decision"], started: true }, 2),
+      stage("waiting", 3), stage("container", 3_000),
+      ev("run.failed", { status: "failed", error: "x", stage: "container", reason: "start-failed" }, 5_000)];
+    const page = await runPage("failed", woken, true, undefined, () => { retried += 1; return Promise.resolve(); });
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-wakes-next]")!.textContent).toBe("dude will wake a new conductor.");
+    expect(page.querySelector("[data-testid=start-retry-taken]")).toBeNull();
+    expect(retried).toBe(0);
   });
 
   test("Try again after a new conductor already took the messages: says so, and is not offered again", async () => {

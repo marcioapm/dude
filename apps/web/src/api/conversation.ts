@@ -269,6 +269,8 @@ export interface EndedTurn {
   retried?: boolean;
   /** A later agent took what it left without Try again (the hand-over, a next message): nothing is left to try again. */
   taken?: boolean;
+  /** A conductor dude started with its wake note, no person's message: dude wakes the next one for the same reasons. */
+  woken?: boolean;
 }
 
 /**
@@ -536,6 +538,8 @@ export interface Projection {
   startStaged: boolean;
   /** The current Run's agent has run: a later start is a resume. */
   ran: boolean;
+  /** The current Run is a conductor dude started with its wake note (conductor.woken started). */
+  startWoken: boolean;
   /** Messages its briefing carries, shown queued until the agent is up. */
   startMessages: HumanTurn[];
   /** The last start that failed, and the messages it never delivered: Try again hands them to a fresh agent. */
@@ -572,6 +576,7 @@ export function emptyProjection(): Projection {
     start: null,
     startStaged: false,
     ran: false,
+    startWoken: false,
     startMessages: [],
     failedStart: null,
     retrying: [],
@@ -624,6 +629,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.ran = false;
         state.start = { kind: "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
         state.startStaged = false;
+        state.startWoken = false;
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
         state.retrying = [];
@@ -691,6 +697,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
         state.start = null;
         state.startMessages = [];
+        break;
+
+      case EventTypes.ConductorWoken:
+        // dude's wake started this conductor: its briefing is dude's note, not a person's message.
+        if (payload.started === true && !state.ran) state.startWoken = true;
         break;
     }
 
@@ -1136,6 +1147,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           }
           starting.failed = { reason: typeof payload.reason === "string" && payload.reason ? payload.reason : null };
           ended.start = starting;
+          if (state.startWoken) ended.woken = true;
           for (const m of state.startMessages) if (m.deliveredAt === null) m.failed = NOT_STARTED;
           state.failedStart = { turn: ended, messages: state.startMessages.filter((m) => m.deliveredAt === null) };
           state.startMessages = [];

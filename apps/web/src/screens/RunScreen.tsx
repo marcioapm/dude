@@ -468,6 +468,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const restartedText = runRestartedText(run, events, people);
   // Try again on a phase that did not start: the task's own way back (its restart dialog), where the page offers one.
   // A conductor's: a fresh conductor takes what it never read; refused once a newer one took it, and not offered again.
+  // Not on one dude woke: its reasons wake the next conductor.
   const retryConductor = chat?.retry;
   const conductorRetry = (turnId: string) => retryConductor && !readOnly ? () => {
     setBusy(true);
@@ -483,7 +484,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
     : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
-        taken={turn.taken || retryTaken === turn.id}
+        taken={turn.taken || retryTaken === turn.id} woken={turn.woken}
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.

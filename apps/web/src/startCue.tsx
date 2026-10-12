@@ -73,9 +73,12 @@ function useSlowNote(start: StartState): string | null {
   return slowNote(start, now);
 }
 
-/** The row where the agent's first turn will be; failed, with Try again or why it is no longer offered. */
-export function StartRow({ start, role, onRetry, taken }: {
-  start: StartState; role: AgentRole; onRetry?: (() => void) | undefined; taken?: boolean | undefined;
+/** A woken conductor's failed start: its reasons go back to dude, which wakes the next conductor with them. */
+export const WAKES_NEXT = "dude will wake a new conductor.";
+
+/** The row where the agent's first turn will be; failed, with Try again or why it is not offered. */
+export function StartRow({ start, role, onRetry, taken, woken }: {
+  start: StartState; role: AgentRole; onRetry?: (() => void) | undefined; taken?: boolean | undefined; woken?: boolean | undefined;
 }) {
   const slow = useSlowNote(start);
   return (
@@ -90,10 +93,11 @@ export function StartRow({ start, role, onRetry, taken }: {
         avatar={<AgentAvatar role={role} size="chat" />}
         slowNote={slow ?? undefined}
         slowReason={slow ? start.luxReason : undefined}
-        failure={start.failed ? { reason: start.failed.reason, onRetry: taken ? undefined : onRetry } : undefined}
+        failure={start.failed ? { reason: start.failed.reason, onRetry: taken || woken ? undefined : onRetry } : undefined}
         data-testid="start-progress"
       />
-      {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p> : null}
+      {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p>
+        : start.failed && woken ? <p className="muted" data-testid="start-wakes-next">{WAKES_NEXT}</p> : null}
     </>
   );
 }
