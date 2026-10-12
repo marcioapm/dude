@@ -619,6 +619,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.ran = false;
         state.start = { kind: "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
         state.startStaged = false;
+        // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
+        state.startMessages = [];
         // Try again on a start that failed: the fresh agent has its messages, queued again.
         if (typeof payload.retries === "string" && state.failedStart) {
           state.failedStart.turn.retried = true;
@@ -668,6 +670,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunStarted:
         endStart(state, event);
+        break;
+
+      case EventTypes.RunCompleted:
+        // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
+        state.start = null;
+        state.startMessages = [];
         break;
     }
 

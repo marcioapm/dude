@@ -100,6 +100,20 @@ describe("the projection", () => {
     }
   });
 
+  test("a start that ended (run.completed) before its agent came up: the next agent's start does not mark its message read", () => {
+    const events = [created(), message("plan the epic", 1), stage("waiting", 2),
+      ev("run.completed", { status: "completed", reason: "its container stopped" }, 5_000),
+      created(6_000), stage("waiting", 6_001), ev("agent.message", { text: "Hello." }, 9_000)];
+    const c = project(events, "running");
+    expect(c.turns.find((t) => t.kind === "human")).toMatchObject({ text: "plan the epic", deliveredAt: null });
+    expect(c.start).toBeNull();
+    // And with no next Run, before the screen knows its status: the ended start is not shown as still starting.
+    expect(project(events.slice(0, 4)).start).toBeNull();
+    // A next Run with no run.completed before it (a swap while starting): the same.
+    const swapped = project([...events.slice(0, 3), ...events.slice(4)], "running");
+    expect(swapped.turns.find((t) => t.kind === "human")).toMatchObject({ text: "plan the epic", deliveredAt: null });
+  });
+
   test("the message its briefing carries is queued until the agent is up, then read", () => {
     const events = [created(), message("plan the epic", 1), stage("waiting", 0)];
     expect(project(events, "scheduled").turns.find((t) => t.kind === "human")).toMatchObject({ deliveredAt: null, failed: null });
