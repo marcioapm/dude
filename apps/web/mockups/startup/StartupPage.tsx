@@ -111,7 +111,8 @@ export function SessionScreen({ start, now, sentAt, resumed }: {
               {running ? (
                 <>
                   <ChatNotice kind="unparked" by="El Duderino" text="Taken back up in 14s." at={sentAt + 14_000} data-testid="resumed-line"
-                    title={"dude asked lux 0.2s\nlux placed it 9.4s\nimage ready 1.2s\nrestored 8.6s\nrepositories checked out 1.9s\nstarted 1.4s\nagent reloaded 0.9s\nfirst words 2.1s"} />
+                    title={[`dude asked lux 0.2s`, `${STAGE_WORDS.waiting.done} 9.4s`, `${STAGE_WORDS.image.done} 1.2s`, `${STAGE_WORDS.volumes.done} 8.6s`,
+                      `${STAGE_WORDS.repositories.done} 1.9s`, `${STAGE_WORDS.container.done} 1.4s`, "agent reloaded 0.9s", "first words 2.1s"].join("\n")} />
                   <ChatMessage role="brainstorm" content={SESSION.reply} startedAt={sentAt + 16_000} streaming activity="streaming" />
                 </>
               ) : <Progress start={start} role="brainstorm" now={now} open={resumed && !failed ? true : undefined} />}
