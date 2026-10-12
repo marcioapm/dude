@@ -109,10 +109,14 @@ func TestARelateItemIsFiledAsAnEdge(t *testing.T) {
 	a := s.taskIn(s.project, "Meter", s.marcio)
 	b := s.taskIn(s.project, "Billing page", s.marcio)
 	proposal := s.proposal(id, []delivery.ProposalItem{{Kind: "relation", From: s.keyOf(a), To: s.keyOf(b), RelationKind: "blocks", Why: "the page reads it"}})
+	// The card's brainstorm Run, which the edge names as its proposer.
+	mustExec(t, s.owner, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
+		VALUES ('run_bs_'||$1, $2, $1, 1, 'running', 'agent', 'brainstorm')`, id, s.org)
+	mustExec(t, s.owner, `UPDATE session_proposals SET run_id = 'run_bs_'||$2 WHERE id = $1`, proposal, id)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": []int{0}})
 	edges := s.edges()
-	if len(edges) != 1 || !strings.HasPrefix(edges[0], s.keyOf(a)+" blocks "+s.keyOf(b)) {
-		t.Fatalf("edges: %v", edges)
+	if want := s.keyOf(a) + " blocks " + s.keyOf(b) + " (" + s.marcio + "/run_bs_" + id + ")"; len(edges) != 1 || edges[0] != want {
+		t.Fatalf("edges: %v, want %q", edges, want)
 	}
 	status, body := s.call("/internal/tasks/"+b+"/deliver", map[string]any{})
 	if status != 409 {

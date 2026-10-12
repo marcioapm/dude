@@ -855,7 +855,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
 				continue
 			}
-			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, linked, facts, item, f)
+			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, proposalRunID, linked, facts, item, f)
 			if err != nil {
 				var refused delivery.RelationRefusal
 				if errors.As(err, &refused) {
@@ -902,8 +902,9 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 }
 
 // fileItem files one item as f; returns what it made: a task's key (or an
-// epic's title), and the task or epic.
-func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID string, linked []string, facts fileFacts,
+// epic's title), and the task or epic. runID is the brainstorm's Run that
+// proposed it, "" for none.
+func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID, runID string, linked []string, facts fileFacts,
 	item delivery.ProposalItem, f delivery.Filer) (key, taskID, epicID string, err error) {
 	projectOf := func(k string) (string, error) {
 		// At most one: keys are unique in the organisation (projects_key_idx).
@@ -959,8 +960,6 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID string, linked []s
 		if item.RelationKind == "related" {
 			side = delivery.SideRelated
 		}
-		var runID string
-		_ = tx.QueryRow(ctx, `SELECT COALESCE(run_id, '') FROM session_proposals WHERE id = $1`, proposalID).Scan(&runID)
 		err := delivery.AddRelationTx(ctx, tx, org, delivery.Edge{
 			Here:  delivery.RelatedTask{ID: from.ID, Key: fk, ProjectID: from.ProjectID},
 			Other: delivery.RelatedTask{ID: to.ID, Key: tk, ProjectID: to.ProjectID},
