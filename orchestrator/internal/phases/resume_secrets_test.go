@@ -42,6 +42,12 @@ func TestAResumeSuppliesEverySecretLuxDeclares(t *testing.T) {
 		t.Errorf("GIT_TOKEN fresh: %v, %v", got, err)
 	}
 
+	// Not declared by lux, none fresh: not supplied, or lux would declare it
+	// on the resume and hand the forge's token to the agent's environment.
+	if got, err := s.storedSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH"), fresh); err != nil || !slices.Equal(got, fresh) {
+		t.Errorf("GIT_TOKEN undeclared: %v, %v, want exactly %v", got, err, fresh)
+	}
+
 	var cannot errCannotResume
 	_, err = s.storedSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", "NPM_TOKEN"), fresh)
 	if !errors.As(err, &cannot) || err.Error() != "lux's Run declares the secret NPM_TOKEN, which dude cannot supply on a resume" {

@@ -102,6 +102,20 @@ func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	}
 }
 
+// A resume of a Run lux declares no GIT_TOKEN for, with no repository,
+// sends none: the forge's token is not handed to lux for nothing.
+func TestAResumeWithNoRepositorySendsNoGitToken(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.parkSession(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+	s.until("the agent resumed", func() bool {
+		return len(s.resumeSecrets(run)) == 1 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run) == 1
+	})
+	if got := s.resumeSecrets(run)[0]; slices.Contains(got, "GIT_TOKEN") {
+		t.Errorf("the resume carried %v, want no GIT_TOKEN", got)
+	}
+}
+
 // A linked repository whose clone fails is said: its agent gets dude's
 // line naming it and git's reason (a directive, delivered as any), the
 // members a line in Chat in plain words, and the session no longer links
