@@ -976,6 +976,18 @@ func (g *GitHub) Permission(ctx context.Context, slug, login string) (string, er
 	return out.Permission, nil
 }
 
+// UserID is a GitHub account's numeric id, by login: what its noreply
+// address is made of. An unknown login is a 404 *Error.
+func (g *GitHub) UserID(ctx context.Context, login string) (int64, error) {
+	var u struct {
+		ID int64 `json:"id"`
+	}
+	if err := g.do(ctx, "GET", "/users/"+url.PathEscape(login), nil, &u); err != nil {
+		return 0, err
+	}
+	return u.ID, nil
+}
+
 // CanWrite says whether a permission lets its holder push: what "a
 // collaborator with write access" means.
 func CanWrite(permission string) bool {

@@ -243,8 +243,10 @@ func severityNote(blocking []string) string {
 
 // Every phase that changes code commits it; lux pushes what was committed.
 // Uncommitted work is not part of the result, and saying so is cheaper than
-// discovering an empty push.
-const commitNote = "Commit your work when you are done. Only committed changes are kept."
+// discovering an empty push. The image's commit hook adds the task's people
+// as Co-authored-by trailers; an agent editing them would undo it.
+const commitNote = "Commit your work when you are done. Only committed changes are kept. " +
+	"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them."
 
 // testerTools is how the tester drives a browser and records it. Playwright
 // and Chromium are in the runtime image (images/runtime); the evidence is
@@ -377,7 +379,9 @@ var builtinInstructions = map[string][]string{
 			"rebase or merge before you publish: lux will not push a checkout in the middle of one. Your machine is small " +
 			"and does not run the code: never build, install or run tests. Your commits are reviewed like any other: " +
 			"run a review after you publish; the pull request gate refuses an unreviewed commit of yours. Whether " +
-			"tests passed is what the Runs that ran them reported; do not claim what you did not see a Run do."},
+			"tests passed is what the Runs that ran them reported; do not claim what you did not see a Run do. " +
+			"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change " +
+			"or remove them."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"brainstorm": {"You think out loud with the members of this session about their projects: where something " +

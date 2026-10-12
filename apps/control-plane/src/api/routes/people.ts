@@ -19,6 +19,7 @@ import { ACCESS_LOGOUT_PATH } from "../cloudflareAccess.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
+import { orchestrator } from "../../orchestrator/client.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
@@ -97,6 +98,18 @@ async function personDetail(scope: OrgScope, id: string) {
 }
 
 /**
+ * You, as your own profile shows you: with who you are on GitHub, which
+ * only you see — the co-authors of your tasks' commits are made of it.
+ */
+async function myDetail(scope: OrgScope, id: string) {
+  const rows = (await scope.sql`
+    SELECT ${scope.sql.unsafe(PERSON_DETAIL)}, p.github_login AS "githubLogin", p.commit_email AS "commitEmail"
+    FROM people p WHERE p.id = ${id}`) as Array<{ person: PersonRef; githubLogin: string | null; commitEmail: string | null }>;
+  const row = rows[0];
+  return row ? { ...row.person, githubLogin: row.githubLogin, commitEmail: row.commitEmail } : null;
+}
+
+/**
  * Refuse anyone but an organization admin. Changes to an organization's
  * members take turns (a transaction-scoped lock), so two admins demoting
  * each other at once cannot both pass the last-admin check.
@@ -143,7 +156,7 @@ export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string
 
 async function getMe(ctx: RequestContext): Promise<Response> {
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const person = await personDetail(scope, ctx.principal.personId);
+    const person = await myDetail(scope, ctx.principal.personId);
     // organizations is not a tenant table; the row is the caller's own.
     const org = (await scope.sql`
       SELECT id, name FROM organizations WHERE id = ${ctx.principal.organizationId}`) as Array<{ id: string; name: string }>;
@@ -164,18 +177,57 @@ const photoInput = z
   .regex(/^https:\/\/[^\s"'<>]+$/, "a photo is an https URL; upload an image to /v1/me/photo")
   .nullable();
 
+/** A GitHub login as GitHub allows one: letters, digits and single inner hyphens, at most 39. */
+const githubLoginInput = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/, "a GitHub username is letters, digits and single hyphens, at most 39")
+  .nullable();
+
 const updateMeInput = z
   .object({
     name: z.string().trim().min(1).max(100),
     photoUrl: photoInput,
+    // "" clears either, as null does.
+    githubLogin: z.literal("").or(githubLoginInput),
+    commitEmail: z.literal("").or(z.string().trim().email().max(320).nullable()),
   })
   .partial()
   .strict();
 
+/**
+ * The numeric id of a GitHub login, asked of GitHub with the
+ * organisation's credential (through the orchestrator): what the noreply
+ * address on a commit's co-author trailer is made of. An unknown login is
+ * the person's to fix (422); GitHub not connected or not answering leaves
+ * the id unknown, and the login is kept without it.
+ */
+async function githubUserId(ctx: RequestContext, login: string): Promise<number | null> {
+  let res: Response;
+  try {
+    res = await orchestrator(ctx.principal.organizationId, "GET", `/internal/github/users/${encodeURIComponent(login)}`,
+      undefined, ctx.principal);
+  } catch {
+    return null;
+  }
+  const body = (await res.json().catch(() => ({}))) as { id?: number; error?: { code?: string } };
+  if (res.status === 404 && body.error?.code === "github_user_unknown") {
+    throw new HttpError(422, `GitHub has no user named ${login}: check the spelling of your GitHub username`, "github_user_unknown");
+  }
+  return res.ok && typeof body.id === "number" ? body.id : null;
+}
+
 async function updateMe(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updateMeInput);
-  if (input.name === undefined && input.photoUrl === undefined) throw badRequest("nothing to change");
+  if (input.name === undefined && input.photoUrl === undefined && input.githubLogin === undefined && input.commitEmail === undefined) {
+    throw badRequest("nothing to change");
+  }
   const setPhoto = input.photoUrl !== undefined;
+  const setLogin = input.githubLogin !== undefined;
+  const login = input.githubLogin || null;
+  const setCommitEmail = input.commitEmail !== undefined;
+  // Asked before the transaction: a GitHub call holds no row lock.
+  const githubId = login ? await githubUserId(ctx, login) : null;
   const { person, old } = await withOrg(ctx.principal.organizationId, async (scope) => {
     const [before] = (await scope.sql`
       SELECT photo_key AS key FROM people WHERE id = ${ctx.principal.personId} FOR UPDATE`) as Array<{ key: string | null }>;
@@ -185,9 +237,12 @@ async function updateMe(ctx: RequestContext): Promise<Response> {
         name = COALESCE(${input.name ?? null}, name),
         photo_url = CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
         photo_key = CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
-        photo_token = CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END
+        photo_token = CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END,
+        github_login = CASE WHEN ${setLogin} THEN ${login}::text ELSE github_login END,
+        github_user_id = CASE WHEN ${setLogin} THEN ${githubId}::bigint ELSE github_user_id END,
+        commit_email = CASE WHEN ${setCommitEmail} THEN ${input.commitEmail || null}::citext ELSE commit_email END
       WHERE id = ${ctx.principal.personId}`;
-    return { person: await personDetail(scope, ctx.principal.personId), old: setPhoto ? before?.key : null };
+    return { person: await myDetail(scope, ctx.principal.personId), old: setPhoto ? before?.key : null };
   });
   if (old) await deleteObject(old);
   return json({ person });

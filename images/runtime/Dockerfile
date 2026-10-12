@@ -113,9 +113,25 @@ ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json
 COPY bin/linux-${TARGETARCH}/dude /usr/local/bin/dude
 
 # Git identity for commits the agent makes, system-wide for the same reason.
+# A GitHub App's Runs override it with the App's bot (GIT_AUTHOR_* and
+# GIT_COMMITTER_* in the Run's env).
 RUN git config --system user.name "dude" \
     && git config --system user.email "dude@localhost" \
     && git config --system init.defaultBranch main
+
+# The commit hook that adds the task's people as Co-authored-by trailers,
+# under each client hook's name so a repository's own hooks still run
+# through it (see the script). A system core.hooksPath: a repository's or
+# the agent's own core.hooksPath still wins. Not linked, so a repository's
+# own of these does not run: reference-transaction and post-index-change,
+# which git calls on every ref and index write.
+COPY --chmod=0755 git-hooks/dude-hook /usr/local/share/dude/git-hooks/dude-hook
+RUN cd /usr/local/share/dude/git-hooks \
+    && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \
+         commit-msg post-commit pre-rebase post-checkout post-merge pre-push post-rewrite pre-auto-gc \
+         sendemail-validate; do \
+         ln -s dude-hook "$h"; done \
+    && git config --system core.hooksPath /usr/local/share/dude/git-hooks
 
 USER agent
 WORKDIR /home/agent

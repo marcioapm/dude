@@ -1,0 +1,54 @@
+#!/bin/sh
+# dude's git hook, installed in the agent image under every client hook's
+# name and made git's hook directory system-wide (git config --system
+# core.hooksPath /usr/local/share/dude/git-hooks).
+#
+# As prepare-commit-msg it adds a Co-authored-by trailer for each person on
+# the task, as dude has them now (`dude git coauthors`). prepare-commit-msg
+# runs for every commit, `git commit -m`, --amend and --no-verify included
+# (--no-verify skips only pre-commit and commit-msg). A trailer the message
+# has already is not added again (--if-exists addIfDifferent), so an amend
+# keeps one of each. Without dude's tools the commit goes ahead without
+# trailers, said in one line on stderr: never a refusal.
+#
+# Under every name it then runs the repository's own hook of that name, with
+# the same arguments and stdin, and exits as it does. A system core.hooksPath
+# replaces each repository's .git/hooks rather than adding to it, so without
+# this a repository's hooks would never run. A core.hooksPath in a
+# repository's own config (husky, lefthook) or the agent's global config
+# takes precedence over the system one: git then runs that directory's hooks
+# and never this script, and those commits carry no co-authors.
+
+name=$(basename "$0")
+
+# add_trailers MESSAGE_FILE TRAILERS: one --trailer per line of TRAILERS.
+add_trailers() {
+  msg=$1
+  lines=$2
+  set --
+  while IFS= read -r line; do
+    [ -n "$line" ] && set -- "$@" --trailer "$line"
+  done <<EOF
+$lines
+EOF
+  [ $# -gt 0 ] || return 0
+  git interpret-trailers --in-place --if-exists addIfDifferent "$@" "$msg"
+}
+
+if [ "$name" = prepare-commit-msg ] && [ -n "$1" ]; then
+  if ! command -v dude >/dev/null 2>&1; then
+    echo "dude: committing without co-authors: no dude CLI on PATH" >&2
+  elif trailers=$(dude git coauthors 2>&1); then
+    if ! add_trailers "$1" "$trailers" 2>/dev/null; then
+      echo "dude: could not add the co-authors to this commit; committing without them" >&2
+    fi
+  else
+    echo "dude: committing without co-authors: dude's tools did not answer ($(printf '%s\n' "$trailers" | head -n 1))" >&2
+  fi
+fi
+
+hooks=$(git rev-parse --git-common-dir 2>/dev/null) && hooks=$hooks/hooks
+if [ -n "$hooks" ] && [ -f "$hooks/$name" ] && [ -x "$hooks/$name" ]; then
+  exec "$hooks/$name" "$@"
+fi
+exit 0

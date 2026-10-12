@@ -333,11 +333,14 @@ function qs(params: Record<string, unknown>): string {
 // ---------------------------------------------------------------------------
 
 export interface MeResponse {
-  person: Member;
+  person: Me;
   organization: { id: string; name: string };
   authMethod?: "api_key" | "cloudflare_access";
   logoutUrl?: "/cdn-cgi/access/logout";
 }
+
+/** You, as your own profile shows you: who you are on GitHub too. */
+export type Me = Member & { githubLogin?: string | null; commitEmail?: string | null };
 
 export interface ApiClientOptions {
   /** Base URL; empty means same-origin, which is the browser and Tauri case. */
@@ -600,7 +603,9 @@ export class ApiClient {
     return this.#request("GET", "/v1/me");
   }
 
-  updateMe(changes: { name?: string; photoUrl?: string | null }): Promise<{ person: Member }> {
+  /** Your profile; "" or null clears githubLogin or commitEmail. */
+  updateMe(changes: { name?: string; photoUrl?: string | null; githubLogin?: string | null; commitEmail?: string | null }):
+    Promise<{ person: Me }> {
     return this.#request("PATCH", "/v1/me", changes);
   }
 
