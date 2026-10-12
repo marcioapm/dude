@@ -296,6 +296,26 @@ describe("the Chat tab", () => {
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")?.disabled).toBe(false);
   });
 
+  test("the conductor's Tools used names its dude actions as called and completed, with the overlap note only when there are some", async () => {
+    const NOTE = "Harness calls include failures and may repeat the completed dude actions listed here.";
+    const agent = { type: "agent", id: CONDUCTOR } as const;
+    const usage = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=chat-screen] [data-testid=tool-usage]");
+    const plain = await chatPage(new ChatClient({ status: "running" }, conductorEvents()));
+    const bare = await until(() => usage(plain), "the conductor's tools");
+    expect(bare.textContent).toContain("Bash");
+    expect(bare.parentElement!.textContent).not.toContain("Harness calls");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const events = [...conductorEvents(),
+      ev("agent.tool.called", { tool: "mcp__dude__update_task", callId: "c_dude", input: {} }, agent),
+      ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }, agent)];
+    const page = await chatPage(new ChatClient({ status: "running" }, events));
+    const rows = await until(() => (usage(page)?.textContent?.includes("(completed)") ? usage(page) : null), "the conductor's dude actions");
+    const names = [...rows.children].map((row) => row.querySelector("span")?.textContent);
+    expect(names).toEqual(expect.arrayContaining(["dude update task (called)", "dude update task (completed)"]));
+    expect(rows.parentElement!.textContent).toContain(NOTE);
+  });
+
   test("a live conductor whose turn ended shows nothing thinking: the turn's totals and its end clear it", async () => {
     const agent = { type: "agent", id: CONDUCTOR } as const;
     const turn = (closed: boolean) => {
