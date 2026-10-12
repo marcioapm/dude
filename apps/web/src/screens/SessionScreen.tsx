@@ -22,7 +22,7 @@ import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harnes
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
@@ -420,6 +420,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  <span className="muted">{TOOL_USAGE_NOTE}</span>
                 </SessionRailBlock>
               ) : null}
               <SessionRailBlock label="It can">

@@ -542,24 +542,14 @@ export function toolLabel(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/**
- * The tools a Run used, for the session rail: the harness's, by its label,
- * and dude's own, as "dude update task". A dude tool called over MCP is
- * also the harness's call (`ask_person`, `dude_ask_person`): it counts once,
- * as the larger of the two records, since dude records only the calls it
- * carried out and the harness also those that failed. Called through the
- * dude CLI it is a `bash` call as well, and both are shown.
- */
+// These sources overlap but have no shared call id: they are not an additive total.
+export const TOOL_USAGE_NOTE = "Harness calls include failures; completed dude actions may also appear above.";
+
 export function toolUsage(conversation: Pick<Conversation, "toolCounts" | "dudeToolCounts">): { name: string; count: number }[] {
-  const dude = new Map(conversation.dudeToolCounts);
-  const out: { name: string; count: number }[] = [];
-  for (const [name, count] of conversation.toolCounts) {
-    const own = dudeToolName(name);
-    if (name !== own || dude.has(own)) dude.set(own, Math.max(count, dude.get(own) ?? 0));
-    else out.push({ name: toolLabel(name), count });
-  }
-  for (const [name, count] of dude) out.push({ name: `dude ${name.replaceAll("_", " ")}`, count });
-  return out;
+  return [
+    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: toolLabel(name), count })),
+    ...Array.from(conversation.dudeToolCounts, ([name, count]) => ({ name: `dude ${name.replaceAll("_", " ")} (completed)`, count })),
+  ];
 }
 
 /**

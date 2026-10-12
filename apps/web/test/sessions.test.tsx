@@ -152,7 +152,7 @@ async function menuItem(label: string): Promise<HTMLElement> {
 }
 
 describe("a brainstorm session's page", () => {
-  test("its Tools used rail renders readable dude names and merged counts", async () => {
+  test("its Tools used rail renders the harness calls and dude's completed actions as separate sources", async () => {
     const page = await sessionPage(new SessionClient(detail("owner"), [
       ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
       ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
@@ -161,7 +161,7 @@ describe("a brainstorm session's page", () => {
     ]));
     const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
     expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
-      .toEqual([["dude name session", "2"], ["dude update task", "1"]]);
+      .toEqual([["dude name session (completed)", "2"], ["dude update task (completed)", "1"], ["Mcp__dude__name_session", "1"]]);
   });
 
   test("a stopped turn is visible to readers with its tool and error kind", async () => {
@@ -1225,6 +1225,19 @@ describe("a session's model", () => {
       .toBe("Started a fresh agent on Opus · OpenCode; it has the conversation so far.");
     expect(sessionNotice(ev("session.model.applied", { from: "run_a", to: "run_b", tier: null, model: "gpt-6-sol", harness: "codex" }), people))
       .toBe("Started a fresh agent on gpt-6-sol · Codex; it has the conversation so far.");
+  });
+});
+
+describe("a session's tools", () => {
+  test("the rail keeps harness calls and completed dude actions as labelled sources", async () => {
+    const page = await sessionPage(new SessionClient(detail("read"), [
+      ev("agent.tool.called", { tool: "dude_name_session", callId: "c_1", input: {} }),
+      ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
+    ]));
+    const block = await until(() => page.querySelector("[data-testid=tool-usage]")?.parentElement ?? null, "the tools");
+    expect([...block.querySelectorAll("[data-testid=tool-usage] > div")].map((row) => row.textContent))
+      .toEqual(["dude name session (completed)1", "Dude_name_session1"]);
+    expect(block.textContent).toContain("Harness calls include failures; completed dude actions may also appear above.");
   });
 });
 

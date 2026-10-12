@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, TOOL_USAGE_NOTE, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
@@ -705,6 +705,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  <span className="muted">{TOOL_USAGE_NOTE}</span>
                 </SessionRailBlock>
               ) : null}
             </SessionRail>}
@@ -894,6 +895,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  <span className="muted">{TOOL_USAGE_NOTE}</span>
                 </SessionRailBlock>
               ) : null}
               {changed.length > 0 ? (

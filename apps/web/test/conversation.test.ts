@@ -595,30 +595,36 @@ describe("the tools a Run used, for the session rail", () => {
   const dude = (tool: string) => ev("agent.tool.dude", { tool, arguments: {}, result: {} });
   const called = (tool: string, callId: string) => ev(EventTypes.ToolCalled, { tool, callId, input: {} });
 
-  test("dude's tools are counted beside the harness's, under a readable name", () => {
-    // The scripted conductor's update_task through lux's service: dude's record, no harness call.
-    const usage = toolUsage(project([called("read", "c_1"), dude("update_task"), dude("start_phase"), dude("start_phase")]));
-    expect(usage).toEqual([{ name: "Read", count: 1 }, { name: "dude update task", count: 1 }, { name: "dude start phase", count: 2 }]);
+  test("successful recorded actions have readable completed labels beside harness calls", () => {
+    expect(toolUsage(project([called("read", "c_1"), dude("update_task"), dude("start_phase"), dude("start_phase")])))
+      .toEqual([{ name: "Read", count: 1 }, { name: "dude update task (completed)", count: 1 }, { name: "dude start phase (completed)", count: 2 }]);
   });
 
-  test("a dude tool the harness also reported, by any harness's name, counts once", () => {
-    for (const tool of ["update_task", "dude_update_task", "mcp__dude__update_task"]) {
-      const usage = toolUsage(project([dude("update_task"), called(tool, "c_1")]));
-      expect(usage).toEqual([{ name: "dude update task", count: 1 }]);
+  test("successful MCP overlap stays separately labelled for every harness alias", () => {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"]) {
+      expect(toolUsage(project([dude("decide"), called(tool, "c_1"), ev(EventTypes.ToolCompleted, { callId: "c_1", status: "completed" })])))
+        .toEqual([{ name: tool.charAt(0).toUpperCase() + tool.slice(1), count: 1 }, { name: "dude decide (completed)", count: 1 }]);
     }
   });
 
-  for (const alias of ["decide", "dude_decide", "mcp__dude__decide"]) {
-    for (const [harnessCount, dudeCount] of [[2, 1], [1, 2]] as const) {
-      test(`${alias}: harness=${harnessCount}, dude=${dudeCount} preserves the larger count`, () => {
-        const events = [
-          ...Array.from({ length: harnessCount }, (_, i) => called(alias, `c_${i}`)),
-          ...Array.from({ length: dudeCount }, () => dude("decide")),
-        ];
-        expect(toolUsage(project(events))).toEqual([{ name: "dude decide", count: 2 }]);
-      });
+  test("two successful CLI decisions and one refused MCP decision preserve both sources", () => {
+    expect(toolUsage(project([called("bash", "cli_1"), dude("decide"), called("bash", "cli_2"), dude("decide"),
+      called("dude_decide", "mcp_1"), ev(EventTypes.ToolCompleted, { callId: "mcp_1", status: "error" })])))
+      .toEqual([{ name: "Bash", count: 2 }, { name: "Dude_decide", count: 1 }, { name: "dude decide (completed)", count: 2 }]);
+    expect(toolUsage(project([called("dude_decide", "refused"), ev(EventTypes.ToolCompleted, { callId: "refused", status: "error" })])))
+      .toEqual([{ name: "Dude_decide", count: 1 }]);
+  });
+
+  test("server records before harness arrival remain complete in incremental projection", () => {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"]) {
+      const state = apply(emptyProjection(), [dude("decide"), dude("decide")]);
+      expect(toolUsage(snapshot(state))).toEqual([{ name: "dude decide (completed)", count: 2 }]);
+      apply(state, [called(tool, "c_1")]);
+      expect(toolUsage(snapshot(state))).toEqual([
+        { name: tool.charAt(0).toUpperCase() + tool.slice(1), count: 1 }, { name: "dude decide (completed)", count: 2 },
+      ]);
     }
-  }
+  });
 });
 
 describe("an ask's tool row and the question it asked", () => {
