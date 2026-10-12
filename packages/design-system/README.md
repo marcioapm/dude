@@ -337,7 +337,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   running), `RESUME_STAGES` (the same six, as lux announces each on every
   resume) or `MOVE_STAGES`
   (led by `park`, "Stopping it, keeping its work" / "Stopped, work kept");
-  a stage lux reports that the list leaves out is drawn in its place. Its line opens the stages as a
+  a stage lux reports that the list leaves out is drawn in its place. An
+  optional `pool` names where it waits: `waiting` reads "Waiting for a
+  machine in highmem" while it is current, and "Machine found" once done. Its line opens the stages as a
   stepper (done with their times, the current one live, the rest hollow,
   `aria-current="step"`). With no stage (an older lux) it is the verb and
   the total clock, nothing to open. Past the app's threshold, one calm

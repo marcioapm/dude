@@ -60,6 +60,15 @@ describe("startSteps", () => {
     expect(START_STAGE_WORDS.park).toEqual({ now: "Stopping it, keeping its work", done: "Stopped, work kept" });
   });
 
+  test("a pool names where it waits while waiting is current; once found it reads Machine found", () => {
+    const waiting = startSteps({ stage: "waiting", stages: MOVE_STAGES, pool: "highmem" });
+    expect(waiting.find((s) => s.id === "waiting")).toMatchObject({ label: "Waiting for a machine in highmem", state: "current" });
+    const found = startSteps({ stage: "volumes", stages: MOVE_STAGES, pool: "highmem" }).find((s) => s.id === "waiting")!;
+    expect(found.state).toBe("done");
+    expect(found.doneLabel).toBe("Machine found");
+    expect(startSteps({ stage: "waiting" })[0]!.label).toBe("Waiting for a machine");
+  });
+
   test("failed marks the stage it failed in; no stage leaves every step pending", () => {
     expect(startSteps({ stage: "image", failed: true }).map((s) => s.state)).toEqual(["done", "failed", "pending", "pending", "pending", "pending"]);
     expect(startSteps({ stage: null }).every((s) => s.state === "pending")).toBe(true);
@@ -219,7 +228,7 @@ test("the gallery's Starting blocks render in dark and light, comfortable and co
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);
   }
   for (const move of el.querySelectorAll("[data-testid=start-move]")) {
-    expect(move.querySelector("[role=status]")!.textContent).toBe("Moving to Large: Waiting for a machine.");
+    expect(move.querySelector("[role=status]")!.textContent).toBe("Moving to Large: Waiting for a machine in highmem.");
     expect([...move.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending", "pending", "pending", "pending", "pending"]);
     expect(move.querySelector("li")!.textContent).toContain("Stopped, work kept");
   }

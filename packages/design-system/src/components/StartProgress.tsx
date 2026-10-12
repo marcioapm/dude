@@ -37,6 +37,8 @@ export interface StartStepsInput {
   readonly failed?: boolean | undefined;
   /** The stages this kind of start has, in order; the fresh-start list by default. */
   readonly stages?: readonly StartStage[] | undefined;
+  /** The pool it waits in: `waiting` reads "Waiting for a machine in <pool>" while current or pending. */
+  readonly pool?: string | null | undefined;
 }
 
 /**
@@ -45,7 +47,7 @@ export interface StartStepsInput {
  * after all) is drawn in its place in lux's order; stages that never
  * occur are not drawn.
  */
-export function startSteps({ stage, since, done = [], failed, stages = FRESH_START_STAGES }: StartStepsInput): StartStep[] {
+export function startSteps({ stage, since, done = [], failed, stages = FRESH_START_STAGES, pool }: StartStepsInput): StartStep[] {
   const present = new Set<StartStage>(stages);
   if (stage) present.add(stage);
   for (const d of done) present.add(d.stage);
@@ -53,10 +55,11 @@ export function startSteps({ stage, since, done = [], failed, stages = FRESH_STA
   const at = stage ? order.indexOf(stage) : -1;
   return order.map((id, i) => {
     const words = START_STAGE_WORDS[id];
+    const label = id === "waiting" && pool ? `${words.now} in ${pool}` : words.now;
     const state: StartStepState = at < 0 ? "pending" : i < at ? "done" : i === at ? (failed ? "failed" : "current") : "pending";
     const tookMs = state === "done" ? done.find((d) => d.stage === id)?.tookMs : undefined;
     return {
-      id, label: words.now, doneLabel: words.done, state,
+      id, label, doneLabel: words.done, state,
       ...(tookMs !== undefined ? { tookMs } : {}),
       ...(i === at && since !== null && since !== undefined ? { since } : {}),
     };

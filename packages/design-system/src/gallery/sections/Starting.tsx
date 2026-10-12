@@ -37,13 +37,13 @@ function Playing() {
   );
 }
 
-function Example({ kind, verb, stage, since, startedAt, done, stages, slow, failed, open, role = "brainstorm", id }: {
+function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow, failed, open, role = "brainstorm", id }: {
   kind?: StartKind; verb?: string; stage: StartStage | null; since: number; startedAt: number;
-  done?: ReadonlyArray<{ stage: StartStage; tookMs: number }>; stages?: readonly StartStage[];
+  done?: ReadonlyArray<{ stage: StartStage; tookMs: number }>; stages?: readonly StartStage[]; pool?: string;
   slow?: { note: string; reason?: string }; failed?: string | null; open?: boolean;
   role?: "brainstorm" | "implementer" | "conductor"; id: string;
 }) {
-  const steps = startSteps({ stage, since, done, failed: failed !== undefined, stages });
+  const steps = startSteps({ stage, since, done, failed: failed !== undefined, stages, pool });
   return (
     <StartProgress kind={kind} verb={verb} steps={steps} startedAt={startedAt} avatar={<AgentAvatar role={role} size="chat" />}
       slowNote={slow?.note} slowReason={slow?.reason} defaultOpen={open} data-testid={id}
@@ -83,10 +83,10 @@ export function StartingSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="st-move" title="StartProgress: a move"
-        note={`A Run moved to a larger machine: verb "Moving to Large", its stages led by park (stopped, its work kept), then a resume's. A drain or preempt reads "Moving to another machine" with the same stages.`}>
+        note={`A Run moved to a larger machine: verb "Moving to Large", its stages led by park (stopped, its work kept), then a resume's; given its pool, waiting names it ("Waiting for a machine in highmem"). A drain or preempt reads "Moving to another machine" with the same stages.`}>
         <Panes mode={mode}>
           <Example id="start-move" kind="move" verb="Moving to Large" stage="waiting" since={ago(6)} startedAt={ago(15)}
-            done={[{ stage: "park", tookMs: 9_000 }]} stages={MOVE_STAGES} role="implementer" open />
+            done={[{ stage: "park", tookMs: 9_000 }]} stages={MOVE_STAGES} pool="highmem" role="implementer" open />
         </Panes>
       </Block>
       <Block id="st-chip" title="StartChip"
