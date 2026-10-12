@@ -398,25 +398,30 @@ README, *Management*, the settings paragraph gains: "Under 720px a
 
 Gallery: the settings page's existing phone frame.
 
+## Decided (Márcio, 2026-10-12)
+
+1. **Web search is on by default for every harness and role.** Until
+   capabilities ship, Codex, Claude Code and OpenCode all search on every
+   Run (OpenCode through Exa, whose host every OpenCode Run may reach).
+   Capabilities migrate that as "Web search: on" everywhere; narrowing is a
+   later, deliberate change.
+2. **A project's Brainstorm capabilities apply to sessions.** Brainstorm
+   only runs in sessions, so a project override that never applied would be
+   useless. A session that links one project follows that project's
+   Brainstorm settings; which project wins for a session spanning several
+   is still open (below).
+3. **Any project editor may widen on a project**, as with every other
+   project setting today (no admin gate). The widened state is shown
+   (Beyond Acme), and an audit event is still worth having.
+4. **"dude only" keeps the operator's floor:** a role on dude only still
+   reaches what the operator lists; the level's description says so where
+   the operator lists hosts.
+
 ## Open questions
 
-1. **Claude Code's WebSearch today is on for every role.** Keep it on by
-   migration (no change on deploy, people narrow later), or default Web
-   search off and narrow on deploy? The mockup shows the second.
-2. **Is the brainstorm's Internet still organisation-only in effect?** A
-   session spans projects and runs under the organisation's settings, so a
-   project's Brainstorm override applies only if the session links that
-   project alone — or never. Proposal: never; the project's Brainstorm page
-   shows Capabilities read-only, "Sessions follow Acme's". The mockup's
-   billing override on Brainstorm shows the matrix behaviour only.
-3. **Who may widen on a project?** Every other project setting is changed
-   by anyone who may edit the project. Widening now needs only that too; an
-   audit event (`settings.capability_widened`) and a notification to the
-   organisation's admins may be enough, or it may want an admin.
-4. **Should "dude only" also drop the operator's floor?** The proposal keeps
-   the floor (the operator decides what is ever allowed); a role on dude
-   only then still reaches what the operator lists. The level's description
-   would need to say so on a dude whose operator lists hosts.
-5. **Per-host lists per role** (the implementer gets `registry.npmjs.org`,
+1. **A session spanning several projects:** whose Brainstorm settings
+   apply (e.g. the first-linked project's, or the widest), and how the
+   session shows which.
+2. **Per-host lists per role** (the implementer gets `registry.npmjs.org`,
    the reviewer does not) are not in this proposal: the three levels cover
    the asks so far. If wanted, it would be a fourth level, "Its own list".
