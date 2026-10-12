@@ -427,10 +427,18 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       }
     }),
     {
-      label: "Waiting after the question",
+      label: "Activity after the question",
       at: 49,
       apply: (s) => {
-        for (let i = 0; i < 5; i++) s.turns.push({ id: `waiting-${i}`, kind: "system", role: "system", text: "Waiting for your answer above. The implementer has finished its checks; the pull request will wait for your decision.", shown: 999, startedAt: T(49 + i), tools: [] });
+        // What a run records while it waits: enough below the question that following the tail would scroll it away.
+        const later = [
+          "CI · bun test src/integrations/github passed on 3a91f2c · 38 tests, 14s",
+          "Reviewer · no findings on apps/control-plane/src/integrations/github/client.ts",
+          "Implementer · branch pushed: feat/github-retry-backoff",
+          "CI · lint and typecheck passed on 3a91f2c",
+          "Orchestrator · waiting on your answer before it opens the pull request",
+        ];
+        later.forEach((text, i) => s.turns.push({ id: `waiting-${i}`, kind: "system", role: "system", text, shown: 999, startedAt: T(49 + i), tools: [] }));
       },
     },
   ];
