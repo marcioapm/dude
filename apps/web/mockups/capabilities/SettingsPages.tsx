@@ -386,6 +386,12 @@ export function NetworkPage({ where, store, onRole }: { readonly where: Where; r
         {beyond.length ? <>Beyond these lists{project ? ` on ${project}` : ""}: {names(beyond)}, set to <b>Any host</b> in {beyond.length === 1 ? "its" : "their"} Capabilities.</> : <>No agent goes beyond these lists.</>}
         {narrower.length ? <> {names(narrower)} {narrower.length === 1 ? "reaches" : "reach"} only dude.</> : null}
         {beyond.length || narrower.length ? " Every other agent keeps to them." : null}
+        {project ? null : (() => {
+          // Projects whose own value goes past Acme's: an admin reading Acme's lists should see them too.
+          const wide = (Object.keys(store.overrides) as ProjectName[]).flatMap((p) =>
+            ROLES.filter((r) => resolve(r, store.overrides[p]).internet.wider && resolve(r, store.overrides[p]).internet.value === "any").map((r) => `${p}’s ${ROLE_LABEL[r]}`));
+          return wide.length ? <> On projects, beyond {ORG}’s: {wide.join(", ")}.</> : null;
+        })()}
       </SettingsNote>
       <SettingsSection data-testid="network-page">
         <SettingRow className={styles["row"]} label="Agents may reach" help="A hostname, an address or a range. Presets add what a toolchain needs, by name.">
