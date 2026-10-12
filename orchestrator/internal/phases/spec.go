@@ -425,10 +425,17 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // does not list): without it, thinking comes back with empty text, and no
 // setting or variable does the same. Effort none turns thinking off; an
 // unset effort leaves the model's own.
+//
+// Before each WebFetch, Claude Code asks api.anthropic.com
+// (/api/web/domain_info) whether the page's host is blocklisted: egress
+// refuses that host, so every fetch failed, and allowing it would tell
+// Anthropic every host an agent reads. skipWebFetchPreflight turns the
+// check off; --settings takes it as inline JSON.
 func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessClaudeCode
 	spec.Workload.Adapter = delivery.HarnessClaudeCode
-	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized"}
+	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized",
+		"--settings", claudeCodeSettings}
 	switch in.Effort {
 	case "":
 	case "none":
@@ -456,6 +463,8 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "ANTHROPIC_API_KEY", Value: c.LLMKey, As: "env"})
 	}
 }
+
+const claudeCodeSettings = `{"skipWebFetchPreflight":true}`
 
 // anthropicBaseURL is the proxy's URL as Claude Code takes it: without the
 // /v1 it adds to every path itself.

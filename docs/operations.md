@@ -703,7 +703,7 @@ arbitrary `fake/<model>` values are not accepted.
 
 A role on **Claude Code** (lux adapter `claude-code`) runs
 
-    claude --model <model> --permission-mode bypassPermissions --thinking-display summarized [--effort <e> | --thinking disabled] [<args>…]
+    claude --model <model> --permission-mode bypassPermissions --thinking-display summarized --settings '{"skipWebFetchPreflight":true}' [--effort <e> | --thinking disabled] [<args>…]
 
 with `ANTHROPIC_BASE_URL` (`llm.url` without its `/v1`, which Claude Code
 adds), `ANTHROPIC_API_KEY` (a lux env secret, the `llm.key`),
@@ -713,6 +713,13 @@ adds), `ANTHROPIC_API_KEY` (a lux env secret, the `llm.key`),
 summarized` is a flag Claude Code does not list: without it thinking comes
 back with empty text, and no setting or variable does the same. Effort
 `none` turns thinking off; no effort sends no `--effort`.
+`skipWebFetchPreflight` (every role) stops Claude Code asking
+`api.anthropic.com/api/web/domain_info?domain=<host>` before each WebFetch:
+the Run's egress refuses that host, so every fetch failed with "Unable to
+verify if domain … is safe to fetch" (the message names claude.ai, which is
+never contacted), and allowing it would send Anthropic every host an agent
+reads. The fetch itself still needs the page's host in the Run's network
+(see [Agent network](#agent-network)).
 
 A role on **Codex** (lux adapter `codex`) runs Codex on a provider of its
 own, `dude`: the proxy's Responses API (`wire_api = "responses"`, the only

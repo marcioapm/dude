@@ -276,6 +276,36 @@ func TestACodexHeaderWithDELIsValidTOML(t *testing.T) {
 	}
 }
 
+// Claude Code never asks api.anthropic.com about a host before a WebFetch,
+// on any role or effort: its command carries --settings with the check
+// off, as JSON Claude Code parses.
+func TestClaudeCodeSkipsTheWebFetchPreflightOnEveryRole(t *testing.T) {
+	roles := map[string]func(*specInput){
+		"implementer": func(*specInput) {},
+		"reviewer":    func(in *specInput) { in.Phase, in.Role, in.PushBranch = "review", "reviewer", "" },
+		"conductor":   func(in *specInput) { in.Phase, in.Role = "", "conductor" },
+		"brainstorm":  func(in *specInput) { in.Phase, in.Role, in.TaskID, in.SessionID, in.PushBranch = "", "brainstorm", "", "ssn_1", "" },
+	}
+	for role, edit := range roles {
+		for _, effort := range []string{"", "none", "high"} {
+			c, in := goldenInput("claude-sonnet-5")
+			in.Harness, in.Effort = delivery.HarnessClaudeCode, effort
+			in.Options = map[string]any{"args": []any{"--settings-like", "x"}}
+			edit(&in)
+			cmd := buildSpec(c, in).Workload.Command
+			i := slices.Index(cmd, "--settings")
+			if i < 0 || i+1 >= len(cmd) {
+				t.Errorf("%s effort=%q: no --settings in %v", role, effort, cmd)
+				continue
+			}
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(cmd[i+1]), &settings); err != nil || settings["skipWebFetchPreflight"] != true {
+				t.Errorf("%s effort=%q: --settings %q (%v), want skipWebFetchPreflight true", role, effort, cmd[i+1], err)
+			}
+		}
+	}
+}
+
 // A resumed Run goes on with the harness it was submitted on.
 func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	if got := submittedHarness(delivery.HarnessCodex, delivery.HarnessClaudeCode); got != delivery.HarnessCodex {
