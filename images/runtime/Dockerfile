@@ -120,11 +120,14 @@ RUN git config --system user.name "dude" \
     && git config --system init.defaultBranch main
 
 # The commit hook that adds the task's people as Co-authored-by trailers,
-# under each client hook's name so a repository's own hooks still run
-# through it (see the script). A system core.hooksPath: a repository's or
-# the agent's own core.hooksPath still wins. Not linked, so a repository's
-# own of these does not run: reference-transaction and post-index-change,
-# which git calls on every ref and index write.
+# under each client hook's name. Every Run points core.hooksPath here in
+# command scope (its environment), over any a repository, worktree or the
+# agent's global config sets; the hook then runs the hook that setting
+# names, so husky, lefthook and plain .git/hooks keep working (see the
+# script). The system setting is the fallback for a git started without
+# the Run's environment. Not linked, so a repository's own of these do not
+# run: reference-transaction and post-index-change, which git calls on
+# every ref and index write.
 COPY --chmod=0755 git-hooks/dude-hook /usr/local/share/dude/git-hooks/dude-hook
 RUN cd /usr/local/share/dude/git-hooks \
     && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \

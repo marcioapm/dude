@@ -181,12 +181,15 @@ func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
 }
 
 // hookRepo is a repository whose hooks are dude's image's (core.hooksPath
-// at a copy of its hook directory), committing with the dude CLI on PATH
-// reaching the tools as lux's socket would, or reaching nothing.
+// at a copy of its hook directory, in command scope as a Run sets it),
+// committing with the dude CLI on PATH reaching the tools as lux's socket
+// would, or reaching nothing. HOME and the global config are its own.
 type hookRepo struct {
-	t   *testing.T
-	dir string
-	env []string
+	t     *testing.T
+	dir   string
+	env   []string
+	hooks string // dude's hook directory
+	home  string
 }
 
 func newHookRepo(t *testing.T, service string, bin string) *hookRepo {
@@ -201,10 +204,14 @@ func newHookRepo(t *testing.T, service string, bin string) *hookRepo {
 			t.Fatal(err)
 		}
 	}
-	r := &hookRepo{t: t, dir: t.TempDir()}
+	r := &hookRepo{t: t, dir: t.TempDir(), hooks: hooks, home: t.TempDir()}
+	global := filepath.Join(r.home, ".gitconfig")
+	if err := os.WriteFile(global, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Dir(bin) + string(os.PathListSeparator) + os.Getenv("PATH")
 	r.env = append(os.Environ(), "PATH="+path, "LUX_SERVICE_DUDE="+service, "DUDE_TOOLS_URL=", "DUDE_TOOLS_TOKEN=",
-		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_EDITOR=true",
+		"HOME="+r.home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global, "GIT_EDITOR=true",
 		"GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+hooks,
 		"GIT_CONFIG_KEY_1=user.name", "GIT_CONFIG_VALUE_1=dude", "GIT_CONFIG_KEY_2=user.email", "GIT_CONFIG_VALUE_2=dude@localhost")
 	r.git("init", "-q", "-b", "main")
@@ -234,8 +241,164 @@ func (r *hookRepo) message() string { return r.git("log", "-1", "--format=%B") }
 // repoHook writes the repository's own hook of that name.
 func (r *hookRepo) repoHook(name, body string) {
 	r.t.Helper()
-	if err := os.WriteFile(filepath.Join(r.dir, ".git", "hooks", name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
-		r.t.Fatal(err)
+	writeHook(r.t, filepath.Join(r.dir, ".git", "hooks"), name, body)
+}
+
+// writeHook writes an executable shell hook name in dir, made if missing.
+func writeHook(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ran is a hook body that appends its name to log, for a test to read.
+func ran(log, name string) string { return "echo " + name + " >> '" + log + "'\n" }
+
+func readLog(t *testing.T, log string) []string {
+	t.Helper()
+	b, _ := os.ReadFile(log)
+	return strings.Fields(string(b))
+}
+
+// A repository managing its hooks with husky (core.hooksPath=.husky/_ in
+// its config, a relative path): dude's hook still adds the co-authors and
+// then runs husky's hooks, from a subdirectory too; husky's commit-msg sees
+// the trailers, and its pre-commit's refusal stops the commit with its own
+// status.
+func TestARepositorysHookManagerRunsAfterDudesHook(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_husky", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	log := filepath.Join(t.TempDir(), "log")
+	husky := filepath.Join(r.dir, ".husky", "_")
+	writeHook(t, husky, "pre-commit", ran(log, "pre-commit")+"[ -f \"$(git rev-parse --show-toplevel)/REFUSE\" ] && { echo 'husky: lint failed' >&2; exit 7; }\nexit 0\n")
+	writeHook(t, husky, "commit-msg", "grep -q '^Co-authored-by: Ana Lima' \"$1\" || exit 9\n"+ran(log, "commit-msg"))
+	r.git("config", "core.hooksPath", ".husky/_")
+	if err := os.MkdirAll(filepath.Join(r.dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r.git("-C", "src", "commit", "-q", "--allow-empty", "-m", "Through husky")
+	if got := r.message(); !strings.Contains(got, "Co-authored-by: Ana Lima") || !strings.Contains(got, "Co-authored-by: Bo Chen") {
+		t.Errorf("message:\n%s", got)
+	}
+	if got := readLog(t, log); !slices.Equal(got, []string{"pre-commit", "commit-msg"}) {
+		t.Errorf("husky's hooks ran %v, want pre-commit then commit-msg", got)
+	}
+
+	head := r.git("rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(r.dir, "REFUSE"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := r.run("commit", "-q", "--allow-empty", "-m", "Refused"); err == nil || !strings.Contains(errOut, "husky: lint failed") {
+		t.Errorf("husky's pre-commit refusing: %v %q", err, errOut)
+	}
+	if r.git("rev-parse", "HEAD") != head {
+		t.Error("a commit husky refused was made")
+	}
+	// The status git sees is husky's own: dude's hook exits as it does.
+	cmd := exec.Command(filepath.Join(r.hooks, "pre-commit"))
+	cmd.Dir, cmd.Env = r.dir, r.env
+	if err := cmd.Run(); cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 7 {
+		t.Errorf("dude's pre-commit exited %v, want husky's 7", err)
+	}
+}
+
+// Where git would look for hooks without dude's setting, dude's hook looks
+// too: an absolute path (lefthook), the global config's ~/ path, a
+// worktree's own setting over the repository's, and .git/hooks when none
+// is set. A setting naming dude's own directory, directly or through a
+// symlink, runs nothing more and does not loop.
+func TestDudesHookRunsTheHooksGitWouldHaveRun(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_where", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	log := filepath.Join(t.TempDir(), "log")
+	commit := func(what string) []string {
+		t.Helper()
+		_ = os.Remove(log)
+		r.git("commit", "-q", "--allow-empty", "-m", what)
+		if !strings.Contains(r.message(), "Co-authored-by: Ana Lima") {
+			t.Errorf("%s: no co-authors:\n%s", what, r.message())
+		}
+		return readLog(t, log)
+	}
+
+	r.repoHook("commit-msg", ran(log, "dot-git"))
+	if got := commit("none set"); !slices.Equal(got, []string{"dot-git"}) {
+		t.Errorf("no core.hooksPath: ran %v, want .git/hooks", got)
+	}
+
+	lefthook := t.TempDir()
+	writeHook(t, lefthook, "commit-msg", ran(log, "absolute"))
+	r.git("config", "core.hooksPath", lefthook)
+	if got := commit("absolute"); !slices.Equal(got, []string{"absolute"}) {
+		t.Errorf("an absolute path: ran %v", got)
+	}
+
+	r.git("config", "--unset", "core.hooksPath")
+	writeHook(t, filepath.Join(r.home, "my-hooks"), "commit-msg", ran(log, "global"))
+	r.git("config", "--global", "core.hooksPath", "~/my-hooks")
+	if got := commit("global"); !slices.Equal(got, []string{"global"}) {
+		t.Errorf("a global ~/ path: ran %v", got)
+	}
+
+	// A worktree's setting comes after the repository's, as git reads them.
+	r.git("config", "core.hooksPath", lefthook)
+	r.git("config", "extensions.worktreeConfig", "true")
+	worktree := t.TempDir()
+	writeHook(t, worktree, "commit-msg", ran(log, "worktree"))
+	r.git("config", "--worktree", "core.hooksPath", worktree)
+	if got := commit("worktree"); !slices.Equal(got, []string{"worktree"}) {
+		t.Errorf("a worktree's setting: ran %v", got)
+	}
+	r.git("config", "--worktree", "--unset", "core.hooksPath")
+
+	// An empty value unsets what comes before it: .git/hooks again.
+	r.git("config", "core.hooksPath", "")
+	if got := commit("empty"); !slices.Equal(got, []string{"dot-git"}) {
+		t.Errorf("an empty setting: ran %v, want .git/hooks", got)
+	}
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(r.hooks, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, own := range []string{r.hooks, link} {
+		r.git("config", "core.hooksPath", own)
+		done := make(chan []string, 1)
+		go func() { done <- commit("own " + own) }()
+		select {
+		case got := <-done:
+			if len(got) != 0 || strings.Count(r.message(), "Ana Lima") != 1 {
+				t.Errorf("dude's own directory %s: ran %v, message\n%s", own, got, r.message())
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("dude's own directory %s: the commit loops", own)
+		}
+	}
+}
+
+// An agent's explicit `git -c core.hooksPath=…` is read after the Run's
+// command-scope setting, and git takes the last: that one command runs its
+// own hooks and gets no co-authors, a bypass it asked for by name.
+func TestAnExplicitCommandLineHooksPathBypassesDude(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_cli", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	log := filepath.Join(t.TempDir(), "log")
+	mine := t.TempDir()
+	writeHook(t, mine, "commit-msg", ran(log, "mine"))
+	r.git("-c", "core.hooksPath="+mine, "commit", "-q", "--allow-empty", "-m", "Mine")
+	if got := readLog(t, log); !slices.Equal(got, []string{"mine"}) || strings.Contains(r.message(), "Co-authored-by") {
+		t.Errorf("git -c core.hooksPath: ran %v, message\n%s", got, r.message())
 	}
 }
 
@@ -279,9 +442,14 @@ func TestARebasedCommitKeepsItsCoauthors(t *testing.T) {
 	token := f.run(t, "run_hook_rebase", "implementer", "running")
 	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
 	old := "Co-authored-by: Ana Lima <ana@corp.example>"
+	// The repository's own hook keeps running while git replays commits.
+	log := filepath.Join(t.TempDir(), "log")
+	writeHook(t, filepath.Join(r.dir, ".husky"), "prepare-commit-msg", ran(log, "replayed"))
+	r.git("config", "core.hooksPath", ".husky")
 	r.git("commit", "-q", "--allow-empty", "-m", "Base")
 	r.git("commit", "-q", "--allow-empty", "-m", "Under Ana")
 	before := r.git("rev-parse", "HEAD")
+	_ = os.Remove(log)
 
 	// The task passes from Ana to Bo.
 	mustExec(t, f.owner, `DELETE FROM task_people WHERE person_id = $1`, "per_a_"+f.org)
@@ -303,6 +471,9 @@ func TestARebasedCommitKeepsItsCoauthors(t *testing.T) {
 	r.git("cherry-pick", "--allow-empty", "--keep-redundant-commits", "main")
 	if got := r.message(); got != "Under Ana\n\n"+old {
 		t.Errorf("the cherry-picked commit:\n%s\nwant Ana alone", got)
+	}
+	if got := readLog(t, log); !slices.Equal(got, []string{"replayed", "replayed"}) {
+		t.Errorf("the repository's prepare-commit-msg during the rebase and cherry-pick ran %v, want twice", got)
 	}
 	r.git("commit", "-q", "--allow-empty", "-m", "Under Bo")
 	if got := r.message(); got != "Under Bo\n\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>" {

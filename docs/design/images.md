@@ -145,7 +145,11 @@ scratch` image whose `/rootfs/` holds:
 
 - the dude CLI, OpenCode and ripgrep;
 - OpenCode's config;
-- `setup.sh`, which adds the `agent` user and the git identity.
+- `setup.sh`, which adds the `agent` user and the git identity;
+- dude's commit hook in `/usr/local/share/dude/git-hooks`
+  (`images/runtime/git-hooks/dude-hook` under every client hook's name).
+  Every Run sets `core.hooksPath` there in command scope, so an image
+  without it runs no git hooks at all, not even a repository's own.
 
 `HOME` is set because `agent` may be a second name for uid 1000 (`node` on
 the node images), and podman takes `HOME` from the first passwd entry with

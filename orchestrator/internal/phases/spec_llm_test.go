@@ -275,7 +275,7 @@ func TestARunsListIsItsOrganisationsAndProjectsOrTheProjectsOnly(t *testing.T) {
 // The scripted agent neither needs nor gets the LLM's URL or key.
 func TestTheScriptedAgentGetsNoLLM(t *testing.T) {
 	spec := llmSpec("fake/scripted", "high")
-	if len(spec.Env) != 0 || slices.ContainsFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "DUDE_LLM_KEY" }) {
+	if spec.Env["DUDE_LLM_URL"] != "" || spec.Env["OPENCODE_CONFIG_CONTENT"] != "" || slices.ContainsFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "DUDE_LLM_KEY" }) {
 		t.Errorf("env %v secrets %+v", spec.Env, spec.Secrets)
 	}
 }
