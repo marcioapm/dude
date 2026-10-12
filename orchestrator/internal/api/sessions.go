@@ -501,18 +501,29 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	for i := range cards {
 		c := &cards[i]
 		c.Status = make([]map[string]any, len(c.Items))
-		for n, it := range c.Items {
+		isFiled := func(n int) bool { _, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; return ok }
+		for n := range c.Items {
 			st := map[string]any{}
 			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
 				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
 			} else {
-				no := facts.cannotFile(it, person, role)
+				no := facts.cannotFileIn(c.Items, n, isFiled, person, role)
 				st["canFile"] = no.why == ""
 				if no.why != "" {
 					st["why"], st["blockedBy"] = no.why, no.by
 					if no.owner != nil {
 						st["owner"] = no.owner
 					}
+				}
+				// The unfiled items it waits on, filed with it.
+				if with := withBlockers(c.Items, []int{n}, isFiled); len(with) > 1 {
+					var others []int
+					for _, b := range with {
+						if b != n {
+							others = append(others, b)
+						}
+					}
+					st["filesWith"] = others
 				}
 			}
 			c.Status[n] = st
@@ -563,8 +574,15 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	var prefixes []string
 	var numbers []int32
 	for _, it := range items {
-		if it.Kind == "edit" || it.Kind == "comment" {
-			if prefix, n, ok := keyParts(it.Task); ok {
+		keys := []string{}
+		switch it.Kind {
+		case "edit", "comment":
+			keys = append(keys, it.Task)
+		case "relation":
+			keys = append(keys, it.From, it.To)
+		}
+		for _, k := range keys {
+			if prefix, n, ok := keyParts(k); ok {
 				prefixes, numbers = append(prefixes, prefix), append(numbers, n)
 			}
 		}
@@ -646,6 +664,13 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 		if item.Kind == "edit" && t.Started {
 			return fileBlock{why: fmt.Sprintf("%s has started (%s): its text can no longer change", item.Task, t.Status), by: "started"}
 		}
+	case "relation":
+		for _, k := range []string{item.From, item.To} {
+			key, _ := delivery.TaskKey(k)
+			if _, ok := f.tasks[key]; !ok {
+				return fileBlock{why: fmt.Sprintf("%s is not a task of a linked project", k), by: "not_a_task"}
+			}
+		}
 	default:
 		return fileBlock{why: "unknown item", by: "unknown"}
 	}
@@ -656,6 +681,92 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 		return fileBlock{why: fmt.Sprintf("only %s can file this: it's their task", t.OwnerName), by: "owner", owner: t.Owner}
 	}
 	return fileBlock{}
+}
+
+// cannotFileIn is cannotFile for item n of a card, after its own reasons:
+// an item that waits on another of the card's items (unfiled) that nobody
+// can file can't be filed either, saying which (blocker_unfiled). Filed
+// says which items are filed already.
+func (f fileFacts) cannotFileIn(items []delivery.ProposalItem, n int, filed func(int) bool, person, role string) fileBlock {
+	if no := f.cannotFile(items[n], person, role); no.why != "" {
+		return no
+	}
+	seen := map[int]bool{n: true}
+	var walk func(i int) (int, fileBlock)
+	walk = func(i int) (int, fileBlock) {
+		for _, b := range delivery.ItemBlockers(items, i) {
+			if b < 0 || b >= len(items) || seen[b] || filed(b) {
+				continue
+			}
+			seen[b] = true
+			if no := f.cannotFile(items[b], person, role); no.why != "" && no.by != "owner" && no.by != "reader" {
+				return b, no
+			}
+			if at, no := walk(b); no.why != "" {
+				return at, no
+			}
+		}
+		return -1, fileBlock{}
+	}
+	if at, no := walk(n); no.why != "" {
+		return fileBlock{by: "blocker_unfiled", why: fmt.Sprintf("Waits on item %d, which can't be filed (%s): fix that, "+
+			"or ask the brainstorm to propose it without item %d.", at+1, no.why, at+1)}
+	}
+	return fileBlock{}
+}
+
+// withBlockers is the items to file, each with the card's unfiled items it
+// waits on (filing an item files its blockers with it), in the order
+// filing takes them: new epics first, then each task after what it waits on.
+func withBlockers(items []delivery.ProposalItem, picked []int, filed func(int) bool) []int {
+	want := map[int]bool{}
+	var add func(i int)
+	add = func(i int) {
+		if i < 0 || i >= len(items) || want[i] || filed(i) {
+			return
+		}
+		want[i] = true
+		for _, b := range delivery.ItemBlockers(items, i) {
+			add(b)
+		}
+	}
+	var out []int
+	for _, n := range picked {
+		if n < 0 || n >= len(items) || filed(n) {
+			// Answered as it is (no such item, already filed), in its place.
+			out = append(out, n)
+			continue
+		}
+		add(n)
+	}
+	// Depth-first over blockers, epics first: a stable order, blockers before
+	// what waits on them.
+	done := map[int]bool{}
+	var ordered []int
+	var place func(i int)
+	place = func(i int) {
+		if done[i] {
+			return
+		}
+		done[i] = true
+		for _, b := range delivery.ItemBlockers(items, i) {
+			if want[b] {
+				place(b)
+			}
+		}
+		ordered = append(ordered, i)
+	}
+	for i := range items {
+		if want[i] && items[i].Kind == "epic" {
+			place(i)
+		}
+	}
+	for i := range items {
+		if want[i] {
+			place(i)
+		}
+	}
+	return append(out, ordered...)
 }
 
 // fileProposal files the items a member kept, as that member. Items they
@@ -688,8 +799,9 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			return err
 		}
 		var raw json.RawMessage
-		if err := tx.QueryRow(r.Context(), `SELECT items FROM session_proposals WHERE id = $1 AND session_id = $2`,
-			body.ProposalID, id).Scan(&raw); err != nil {
+		var proposalRunID string
+		if err := tx.QueryRow(r.Context(), `SELECT items, COALESCE(run_id, '') FROM session_proposals WHERE id = $1 AND session_id = $2`,
+			body.ProposalID, id).Scan(&raw, &proposalRunID); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "proposal %s not found", body.ProposalID)
 			}
@@ -701,19 +813,21 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 		if err != nil {
 			return err
 		}
-		// New epics first, so the tasks under them find them.
-		order := slices.Clone(body.Items)
-		slices.SortStableFunc(order, func(a, b int) int {
-			ea := a >= 0 && a < len(items) && items[a].Kind == "epic"
-			eb := b >= 0 && b < len(items) && items[b].Kind == "epic"
-			switch {
-			case ea && !eb:
-				return -1
-			case eb && !ea:
-				return 1
-			}
-			return 0
-		})
+		rows, err := tx.Query(r.Context(), `SELECT item, COALESCE(task_id, '') FROM session_filings WHERE proposal_id = $1`, body.ProposalID)
+		if err != nil {
+			return err
+		}
+		done := map[int]bool{}
+		// The tasks this card's items became, by item.
+		made := map[int]string{}
+		var n int
+		var made1 string
+		if _, err := pgx.ForEachRow(rows, []any{&n, &made1}, func() error { done[n], made[n] = true, made1; return nil }); err != nil {
+			return err
+		}
+		// What was asked, with the items each waits on (filed with it), new
+		// epics first and every task after what it waits on.
+		order := withBlockers(items, body.Items, func(i int) bool { return done[i] })
 		var filed []map[string]any
 		var picked []delivery.ProposalItem
 		for _, n := range order {
@@ -726,15 +840,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(r.Context(), `SELECT item FROM session_filings WHERE proposal_id = $1`, body.ProposalID)
-		if err != nil {
-			return err
-		}
-		done := map[int]bool{}
-		var n int
-		if _, err := pgx.ForEachRow(rows, []any{&n}, func() error { done[n] = true; return nil }); err != nil {
-			return err
-		}
+		relations := 0
 		for _, n := range order {
 			if n < 0 || n >= len(items) {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "no such item"})
@@ -745,12 +851,16 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			if no := facts.cannotFile(item, p.Person, role); no.why != "" {
+			if no := facts.cannotFileIn(items, n, func(i int) bool { return done[i] }, p.Person, role); no.why != "" {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
 				continue
 			}
 			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, linked, facts, item, f)
 			if err != nil {
+				var refused delivery.RelationRefusal
+				if errors.As(err, &refused) {
+					return fail(http.StatusConflict, refused.Code, "item %d: %s", n+1, refused.Msg)
+				}
 				return err
 			}
 			if _, err := tx.Exec(r.Context(), `INSERT INTO session_filings (proposal_id, item, organization_id, session_id, filed_by, key, task_id, epic_id)
@@ -758,7 +868,18 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				body.ProposalID, n, org, id, p.Person, key, taskID, epicID); err != nil {
 				return err
 			}
-			done[n] = true
+			done[n], made[n] = true, taskID
+			if item.Kind == "task" {
+				k, err := fileItemRelations(r.Context(), tx, org, proposalRunID, linked, items, n, made, p.Person)
+				if err != nil {
+					var refused delivery.RelationRefusal
+					if errors.As(err, &refused) {
+						return fail(http.StatusConflict, refused.Code, "item %d: %s", n+1, refused.Msg)
+					}
+					return err
+				}
+				relations += k
+			}
 			entry := map[string]any{"item": n, "status": "filed", "key": key, "kind": item.Kind}
 			results = append(results, entry)
 			filed = append(filed, entry)
@@ -771,7 +892,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			return err
 		}
 		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionFiled, p.ActorType, p.Actor,
-			map[string]any{"proposalId": body.ProposalID, "by": name, "filed": filed})
+			map[string]any{"proposalId": body.ProposalID, "by": name, "filed": filed, "relations": relations})
 	})
 	if err != nil {
 		return err
@@ -830,8 +951,113 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID string, linked []s
 		k, _ := delivery.TaskKey(item.Task)
 		t := facts.tasks[k]
 		return strings.ToUpper(item.Task), t.ID, "", delivery.CommentTx(ctx, tx, org, t.ProjectID, t.ID, f, item.Text)
+	case "relation":
+		fk, _ := delivery.TaskKey(item.From)
+		tk, _ := delivery.TaskKey(item.To)
+		from, to := facts.tasks[fk], facts.tasks[tk]
+		side := delivery.SideBlocks
+		if item.RelationKind == "related" {
+			side = delivery.SideRelated
+		}
+		var runID string
+		_ = tx.QueryRow(ctx, `SELECT COALESCE(run_id, '') FROM session_proposals WHERE id = $1`, proposalID).Scan(&runID)
+		err := delivery.AddRelationTx(ctx, tx, org, delivery.Edge{
+			Here:  delivery.RelatedTask{ID: from.ID, Key: fk, ProjectID: from.ProjectID},
+			Other: delivery.RelatedTask{ID: to.ID, Key: tk, ProjectID: to.ProjectID},
+			Side:  side, Person: f.Person, ProposedByRun: runID, Why: item.Why})
+		return fk + " " + item.RelationKind + " " + tk, "", "", err
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
+}
+
+// fileItemRelations writes the relations of task item n, just filed as
+// made[n], as the person filing with the brainstorm's Run as proposer: to
+// existing tasks by key, and to items of the card already filed (an item
+// filed later writes the edge from its side). Returns how many it wrote.
+func fileItemRelations(ctx context.Context, tx pgx.Tx, org, runID string, linked []string, items []delivery.ProposalItem,
+	n int, made map[int]string, person string) (int, error) {
+	here, err := relatedOf(ctx, tx, made[n])
+	if err != nil {
+		return 0, err
+	}
+	written := 0
+	// An edge both ends name (blockedBy on one item, blocks on the other) is one edge.
+	seen := map[string]bool{}
+	write := func(side string, other delivery.RelatedTask) error {
+		if seen[other.ID] {
+			return nil
+		}
+		seen[other.ID] = true
+		written++
+		return delivery.AddRelationTx(ctx, tx, org, delivery.Edge{Here: here, Other: other, Side: side, Person: person, ProposedByRun: runID})
+	}
+	resolve := func(r delivery.ProposalRef) (delivery.RelatedTask, bool, error) {
+		if r.Item > 0 {
+			id, ok := made[r.Item-1]
+			if !ok || id == "" {
+				return delivery.RelatedTask{}, false, nil
+			}
+			t, err := relatedOf(ctx, tx, id)
+			return t, err == nil, err
+		}
+		id, _, err := delivery.TaskByKey(ctx, tx, linked, r.Key)
+		if err != nil || id == "" {
+			return delivery.RelatedTask{}, false, err
+		}
+		t, err := relatedOf(ctx, tx, id)
+		return t, err == nil, err
+	}
+	for _, side := range []struct {
+		name string
+		refs []delivery.ProposalRef
+	}{{delivery.SideBlockedBy, items[n].BlockedBy}, {delivery.SideBlocks, items[n].Blocks}, {delivery.SideRelated, items[n].Related}} {
+		for _, r := range side.refs {
+			other, ok, err := resolve(r)
+			if err != nil {
+				return written, err
+			}
+			if ok {
+				if err := write(side.name, other); err != nil {
+					return written, err
+				}
+			}
+		}
+	}
+	// Items filed before this one that name it: their edge to it is written
+	// now, from their side, as it could not be then.
+	for i, it := range items {
+		id, ok := made[i]
+		if i == n || !ok || id == "" {
+			continue
+		}
+		other, err := relatedOf(ctx, tx, id)
+		if err != nil {
+			return written, err
+		}
+		for _, side := range []struct {
+			name string
+			refs []delivery.ProposalRef
+		}{{delivery.SideBlocks, it.BlockedBy}, {delivery.SideBlockedBy, it.Blocks}, {delivery.SideRelated, it.Related}} {
+			for _, r := range side.refs {
+				if r.Item == n+1 {
+					if err := write(side.name, other); err != nil {
+						return written, err
+					}
+				}
+			}
+		}
+	}
+	return written, nil
+}
+
+func relatedOf(ctx context.Context, tx pgx.Tx, taskID string) (delivery.RelatedTask, error) {
+	key, err := delivery.TaskKeyOf(ctx, tx, taskID)
+	if err != nil {
+		return delivery.RelatedTask{}, err
+	}
+	t := delivery.RelatedTask{ID: taskID, Key: key}
+	err = tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&t.ProjectID)
+	return t, err
 }
 
 // sessionChat is a member writing to the session's agent. The agent is

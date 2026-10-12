@@ -566,6 +566,9 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
         before: textOf(item.before), after: textOf(item.after), ...common };
     case "comment":
       return { kind: "comment", title: `Comment on ${item.task ?? ""}`, taskKey: item.task, detail: item.text ? `“${item.text}”` : undefined, ...common };
+    case "relation":
+      return { kind: "comment", title: `${item.from ?? ""} ${item.relationKind === "related" ? "related to" : "blocks"} ${item.to ?? ""}`,
+        taskKey: item.to, detail: item.why ? `“${item.why}”` : undefined, ...common };
   }
 }
 

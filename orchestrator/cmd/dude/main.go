@@ -2,10 +2,12 @@
 // part of, and dude's tools, from a shell — for the agent, and for any
 // script it runs.
 //
-//	dude task list [--text T]             the project's tasks
+//	dude task list [--text T] [--startable]
+//	                                      the project's tasks, with their relations
 //	dude epic list                        the project's epics
 //	dude repo list | request NAME --reason R [--write]
 //	dude task create --title T --goal G [--epic E] [--criterion C]...
+//	        [--blocked-by KEY]... [--blocks KEY]... [--related KEY]...
 //	dude ask "question" [--choice C]... [--action A]...
 //	dude ask --questions-json '[{"header":H,"question":Q,"choices":[...]},...]'
 //	                                      ask a person; end your turn after
@@ -27,6 +29,8 @@
 //	dude pr reply PR TEXT [--in-reply-to ID]
 //	                                      a conductor's: answer on its task's pull request
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
+//	        [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]
+//	dude relate KEY --blocks KEY | --related KEY   a brainstorm's: proposed for a member to file
 //	dude publish FILE [--name NAME] [--description TEXT]
 //	                                      keep a file for people (lux-shim publish)
 //	dude publish [--message M]            a conductor's: publish its commits
@@ -107,10 +111,15 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, get("/tools"))
 	case "task list":
 		text := fs.String("text", "", "only work mentioning this")
+		startable := fs.Bool("startable", false, "only tasks that can start: not started, nothing unmerged in front of them")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		return show(out, *asJSON, call("list_tasks", map[string]any{"text": *text}))
+		body := map[string]any{"text": *text}
+		if *startable {
+			body["startable"] = true
+		}
+		return show(out, *asJSON, call("list_tasks", body))
 	case "epic list":
 		if err := fs.Parse(rest); err != nil {
 			return err
@@ -137,13 +146,21 @@ func run(args []string, out io.Writer) error {
 		title := fs.String("title", "", "what should change, in one line")
 		goal := fs.String("goal", "", "why it matters and what should change; required, at least 16 characters")
 		epic := fs.String("epic", "", "an existing epic's title")
-		var criteria many
+		var criteria, blockedBy, blocks, related many
 		fs.Var(&criteria, "criterion", "a thing that must be true when it is done (repeatable)")
+		fs.Var(&blockedBy, "blocked-by", "a task key it can't start before is merged (repeatable)")
+		fs.Var(&blocks, "blocks", "a task key that can't start before it is merged (repeatable)")
+		fs.Var(&related, "related", "a related task key, gating nothing (repeatable)")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		return show(out, *asJSON, call("create_task", map[string]any{"title": *title, "goal": *goal,
-			"epic": *epic, "acceptanceCriteria": []string(criteria)}))
+		body := map[string]any{"title": *title, "goal": *goal, "epic": *epic, "acceptanceCriteria": []string(criteria)}
+		for name, keys := range map[string]many{"blockedBy": blockedBy, "blocks": blocks, "related": related} {
+			if len(keys) > 0 {
+				body[name] = []string(keys)
+			}
+		}
+		return show(out, *asJSON, call("create_task", body))
 	case "memory search":
 		var types many
 		fs.Var(&types, "type", "only memory, task, epic or project (repeatable)")
@@ -381,8 +398,14 @@ func run(args []string, out io.Writer) error {
 	case "task update":
 		goal := fs.String("goal", "", "the task's goal, whole")
 		clear := fs.Bool("no-criteria", false, "clear the acceptance criteria")
-		var criteria many
+		why := fs.String("why", "", "why the relations change, shown in the task's history")
+		var criteria, blockOn, unblock, blocks, relate, unrelate many
 		fs.Var(&criteria, "criterion", "an acceptance criterion (repeatable): the whole list")
+		fs.Var(&blockOn, "block-on", "a task key this task can't start before is merged (repeatable)")
+		fs.Var(&unblock, "unblock", "a task key to take off what this task is blocked by (repeatable)")
+		fs.Var(&blocks, "blocks", "a task key that can't start before this one is merged (repeatable)")
+		fs.Var(&relate, "relate", "a related task key (repeatable)")
+		fs.Var(&unrelate, "unrelate", "a related task key to remove (repeatable)")
 		if _, err := parse(fs, rest); err != nil {
 			return err
 		}
@@ -395,10 +418,46 @@ func run(args []string, out io.Writer) error {
 		if len(criteria) > 0 || *clear {
 			body["acceptanceCriteria"] = list(criteria)
 		}
+		edges := func(kind string, keys many) []map[string]any {
+			var out []map[string]any
+			for _, k := range keys {
+				e := map[string]any{"kind": kind, "task": k}
+				if *why != "" {
+					e["why"] = *why
+				}
+				out = append(out, e)
+			}
+			return out
+		}
+		if add := append(append(edges("blocked_by", blockOn), edges("blocks", blocks)...), edges("related", relate)...); len(add) > 0 {
+			body["addRelations"] = add
+		}
+		if remove := append(edges("blocked_by", unblock), edges("related", unrelate)...); len(remove) > 0 {
+			for _, e := range remove {
+				delete(e, "why")
+			}
+			body["removeRelations"] = remove
+		}
 		if len(body) == 0 {
-			return errors.New(`usage: dude task update [--goal G] [--criterion C]... [--no-criteria]`)
+			return errors.New(`usage: dude task update [--goal G] [--criterion C]... [--no-criteria] [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]`)
 		}
 		return show(out, *asJSON, call("update_task", body))
+	case "relate":
+		blocks := fs.String("blocks", "", "the task KEY can't let start until it is merged")
+		related := fs.String("related", "", "the task KEY is related to")
+		why := fs.String("why", "", "why, for the member who files it")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || (*blocks == "") == (*related == "") {
+			return errors.New(`usage: dude relate KEY --blocks KEY | --related KEY [--why TEXT]`)
+		}
+		body := map[string]any{"from": args[0], "kind": "blocks", "to": *blocks, "why": *why}
+		if *related != "" {
+			body["kind"], body["to"] = "related", *related
+		}
+		return show(out, *asJSON, call("relate", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
 		description := fs.String("description", "", "one short line: what the file is for")
@@ -622,11 +681,13 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
-  dude task list [--text T]                  the project's tasks
+  dude task list [--text T] [--startable]    the project's tasks, each with its relations on its line
   dude epic list                             the project's epics, in priority order
   dude task create --title T --goal G [--epic E] [--criterion C]...
+                   [--blocked-by KEY]... [--blocks KEY]... [--related KEY]...
                                              record work found outside your task
-                                             (a person decides whether it is done)
+                                             (a person decides whether it is done);
+                                             a conductor's or investigator's may relate it
   dude repo list                             the project's repositories: which you have, which you could ask for
   dude repo request NAME --reason R [--write] [--wait]
                                              ask a person for another of them
@@ -680,6 +741,12 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude task update [--goal G] [--criterion C]... [--no-criteria]
                                              a conductor's: write what Chat settled into the task,
                                              before the implementer starts
+  dude task update [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]...
+                   [--unrelate KEY]... [--why TEXT]
+                                             a conductor's: the task's relations, at any status;
+                                             it removes only what this task's agents added
+  dude relate KEY --blocks KEY | --related KEY [--why TEXT]
+                                             a brainstorm's: propose a relation for a member to file
   dude publish FILE --name NAME --description "what it is for"
                                              keep a file for people, shown with the task while
                                              you work; the description is one short line saying
