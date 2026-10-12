@@ -25,7 +25,8 @@ const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
 // brainstormAnywhere is whether a brainstorm may reach any host, the one
-// answer its spec (Exa, Codex's pinned search) and its prompt both take:
+// answer its spec (its network, and Codex's search forced live over the
+// tier's) and its prompt both take:
 // once submitted, the network recorded on the Run, which its resumes keep;
 // before that, the network its submit will compute (runNetwork), so the
 // organisation's brainstorm_anywhere or "*" in either list both count.

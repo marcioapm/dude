@@ -244,10 +244,9 @@ a malicious page could talk it into sending out. Like the lists, a change
 reaches brainstorm Runs submitted after it, either way: a brainstorm already
 started, running or parked, keeps the network it had (any host or the
 list) through its resumes until its session
-starts a new agent. A resume writes Codex's `config.toml` again, from the
-network recorded on the Run (`runs.network`), not from the setting as it is
-now; briefed again after a lost conversation, the brainstorm is told what
-that network allows.
+starts a new agent. A resume keeps the Run's recorded network
+(`runs.network`); briefed again after a lost conversation, the brainstorm
+is told what that network allows.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
