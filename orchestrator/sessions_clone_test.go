@@ -136,9 +136,11 @@ func TestAResumeWithNoRepositorySendsNoGitToken(t *testing.T) {
 // line naming it and git's reason (a directive, delivered as any), the
 // members a line in Chat in plain words, and the session no longer links
 // the repository. Its project stays linked, showing nothing checked out,
-// and list_repositories gives the repository no path.
+// and list_repositories gives the repository no path. A github.com
+// repository's sign-in failure names GitHub.
 func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	s, id, run := cloneFailingSession(t)
+	mustExec(t, s.owner, `UPDATE repositories SET url = 'https://github.com/acme/web.git' WHERE id = $1`, s.webRepo)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{}},
 		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
@@ -158,7 +160,7 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'
 		AND payload->>'key' = 'WC' AND payload->>'name' = 'web' AND payload->>'reason' = $2`, run,
-		"dude couldn't sign in to the repository's host: check its URL and that dude's access covers it."); n != 1 {
+		"dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."); n != 1 {
 		t.Errorf("the members' line does not name WC/web with the reason in plain words")
 	}
 	s.until("the agent read it", func() bool {

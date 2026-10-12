@@ -844,6 +844,49 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	}
 }
 
+// A task's approved github.com repository whose clone git could not sign
+// in for is told to the members as a GitHub sign-in failure.
+func TestAResumedCloneSignInFailureNamesGitHub(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.CloneError = func(url string) string {
+		if strings.Contains(url, "/web.git") {
+			return authFailure
+		}
+		return ""
+	}
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("agent running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"read client"}`)
+	if status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	var req struct{ RequestID string }
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
+		t.Fatalf("approve: %d %v", status, body)
+	}
+	w.until("the clone failure in the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'
+		AND payload->>'repository' = 'web' AND payload->>'reason' = $2`, wi,
+		"dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."); n != 1 {
+		t.Errorf("the members' reason does not name GitHub")
+	}
+}
+
 func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	w := newWorld(t)
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
