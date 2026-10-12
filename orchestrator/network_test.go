@@ -43,6 +43,17 @@ func rules(n lux.Network) (out []string) {
 	return out
 }
 
+// recordedNetwork waits for the network recorded on a Run (runs.network)
+// and answers it raw.
+func (w *world) recordedNetwork(run string) (raw []byte) {
+	w.t.Helper()
+	w.until("the Run's network to be recorded", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, run).Scan(&raw)
+		return raw != nil
+	})
+	return raw
+}
+
 // A Run reaches its organisation's list and its project's additions, with
 // the operator's floor, its model and, on OpenCode, Exa's search, and
 // records what it was given.
@@ -129,11 +140,7 @@ func TestOnlyOpenCodeRunsReachExa(t *testing.T) {
 			if got := rules(*v.spec.Network); v.spec.Network.Unrestricted || !slices.Equal(got, want) {
 				t.Errorf("egress = %v, want %v", got, want)
 			}
-			var raw []byte
-			s.until("the network to be recorded", func() bool {
-				_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, run).Scan(&raw)
-				return raw != nil
-			})
+			raw := s.recordedNetwork(run)
 			var recorded lux.Network
 			if err := json.Unmarshal(raw, &recorded); err != nil || !slices.Equal(rules(recorded), want) {
 				t.Errorf("recorded = %s (%v), want %v", raw, err, want)
@@ -173,11 +180,7 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
 		t.Errorf("the brainstorm that may reach any host is not told it can read the web:\n%s", v.spec.Workload.Prompt)
 	}
-	var raw []byte
-	s.until("the brainstorm's network to be recorded", func() bool {
-		_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, id).Scan(&raw)
-		return raw != nil
-	})
+	raw := s.recordedNetwork(id)
 	var kept lux.Network
 	if err := json.Unmarshal(raw, &kept); err != nil || !kept.Unrestricted {
 		t.Errorf("recorded = %s (%v), want unrestricted", raw, err)
