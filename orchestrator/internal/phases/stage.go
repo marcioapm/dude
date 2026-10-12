@@ -82,11 +82,19 @@ func cmpEpoch(fromPayload, fromFrame int) int {
 	return fromFrame
 }
 
+// beforeRunning says lux state was is one of a start's, before lux
+// reported the Run running: none yet, waiting for a host, or placed and
+// starting. A Run that ran ends from running or stopping instead.
+func beforeRunning(was string) bool {
+	return was == "" || lux.Waiting(was) || was == "scheduled" || was == "starting"
+}
+
 // failedStage is the stage a start that failed was in: the last run.stage
-// of epoch, if lux has not reported the Run running since (was, its lux
-// state before this event); "" otherwise, or from a lux with no stages.
+// of epoch. was is lux_state before this event. "" when was is not a
+// start's (beforeRunning), so an end after running costs no query; and
+// from a lux with no stages.
 func (t *translator) failedStage(ctx context.Context, tx pgx.Tx, epoch int, was string) (string, error) {
-	if was == "running" {
+	if !beforeRunning(was) {
 		return "", nil
 	}
 	var stage string
