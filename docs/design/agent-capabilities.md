@@ -438,6 +438,16 @@ Gallery: the settings page's existing phone frame.
      model change (#112), they take effect when the session next starts an
      agent, and the session says so.
 
+6. **Asking for a larger machine joins Reach when capabilities ships.**
+   The `request_machine` tool (`docs/design/agent-machine-request.md`, on
+   `design/agent-machine-request`) ships first with no setting: every
+   agent, the conductor included, may always ask. When capabilities
+   ships it becomes **"Ask for a larger machine"**, an agent-wide on/off
+   under Reach, on by default for every role so nothing narrows on
+   migration; off means the tool is not offered and the prompt does not
+   mention it. It is also a column of the matrix. Until then it is not
+   configurable (Márcio, 2026-10-12).
+
 ## Open questions
 
 1. **Per-host lists per role** (the implementer gets `registry.npmjs.org`,
