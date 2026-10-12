@@ -419,7 +419,7 @@ Rebriefing includes it the same way.
 
 **Its task Chat shows what it was told.** A `SinceDigest` sits just before
 the briefing turn, folded to one muted line ("Since the conductor last
-looked, on this epic · 2 threads · 1 note replaced · ABS-1 in review · 13:44
+looked, on this epic · 2 threads · 2 note changes · ABS-1 in review · 13:44
 → 14:20 · in its briefing"), and opens to the same items with task chips
 (screen 4). It is not a wake and has no tone.
 

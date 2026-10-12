@@ -354,7 +354,7 @@ export function ConductorChat({ open }: { readonly open: boolean }) {
               <ChatNotice kind="parked" by="Duder" text="Parked while nobody is writing" at={at("13:44:00")} />
               <ChatNotice kind="decision" by="Duder" text="The implementer finished: what follows it is the conductor's decision" at={at("14:20:05")} />
               <SinceDigest key={String(open)} defaultOpen={open} since={at("13:44")} woke={at("14:20")}
-                counts="2 threads · 1 note replaced · ABS-1 in review"
+                counts="2 threads · 2 note changes · ABS-1 in review"
                 groups={[
                   { title: "Messages with ABS-2", items: [
                     { id: "d1", lead: <TaskChip task="ABS-4" />, text: <>asked for the preview body and response, and waited · <b>answered 13:49</b></>, at: at("13:43") },
