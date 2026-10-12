@@ -1,7 +1,7 @@
 /*
  * Screen 1 (and 7, at phone width): an epic's page with its proposed
  * second view, Coordination — the epic notes, then the threads between its
- * tasks' agents, and its tasks as `list_tasks --epic mine` sees them.
+ * tasks' agents, and its tasks as `list_tasks --peers` describes them.
  * Screen 6: the project's page, its epic card carrying the waiting mark.
  *
  * The epic page is today's epic board (Board with the epic) with a
