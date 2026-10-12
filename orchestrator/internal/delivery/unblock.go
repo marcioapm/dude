@@ -1,0 +1,323 @@
+package delivery
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
+)
+
+// Unblocking, and start when unblocked (docs/design/task-relations.md):
+// a merge releases what waits on it, and a task whose owner asked starts
+// then — never in the merge's transaction, by a worker, after every
+// blocker is read again.
+
+type actingPersonKey struct{}
+
+// ActingPerson carries who moves a task's status, for what the move
+// records about them (Mark done's "marked done by Tom").
+func ActingPerson(ctx context.Context, personID string) context.Context {
+	return context.WithValue(ctx, actingPersonKey{}, personID)
+}
+
+func actingPerson(ctx context.Context) string {
+	p, _ := ctx.Value(actingPersonKey{}).(string)
+	return p
+}
+
+// notStartedSQL is the statuses a task has before any start.
+const notStartedSQL = `('received', 'intake', 'awaiting_confirmation', 'queued')`
+
+// releaseDependantsTx runs as a task moves to done (RecordStatusTx). With a
+// merged pull request, each not-started task it blocked that has nothing
+// open in front of it any more is released: task.unblocked on it, dude's
+// notice in its Chat, its live conductor woken, a delivery parked on it
+// signalled, and its start when unblocked marked due. Done with nothing
+// merged releases nobody, and says so on each task it still blocks.
+func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) error {
+	var key string
+	var prNumber *int
+	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number,
+			(SELECT pr.number FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged' ORDER BY pr.updated_at DESC LIMIT 1)
+		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&key, &prNumber); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT t.id, t.project_id, p.key_prefix || '-' || t.number,
+			NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
+			EXISTS (SELECT 1 FROM task_auto_starts a WHERE a.task_id = t.id)
+		FROM task_relations r JOIN tasks t ON t.id = r.to_task_id JOIN projects p ON p.id = t.project_id
+		WHERE r.from_task_id = $1 AND r.kind = 'blocks' AND t.status IN `+notStartedSQL+`
+		ORDER BY t.project_id, t.number`, taskID)
+	if err != nil {
+		return err
+	}
+	type dependant struct {
+		ID, ProjectID, Key string
+		Free, Auto         bool
+	}
+	deps, err := pgx.CollectRows(rows, pgx.RowToStructByPos[dependant])
+	if err != nil {
+		return err
+	}
+	for _, d := range deps {
+		event := func(typ string, payload map[string]any) error {
+			_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: org, ProjectID: d.ProjectID, TaskID: d.ID,
+				ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: d.ID, Payload: payload})
+			return err
+		}
+		if prNumber == nil {
+			payload := map[string]any{"by": key}
+			if p := actingPerson(ctx); p != "" {
+				payload["person"] = p
+			}
+			if err := event(EvBlockerUnmerged, payload); err != nil {
+				return err
+			}
+			continue
+		}
+		if !d.Free {
+			continue
+		}
+		if err := event(EvTaskUnblocked, map[string]any{"by": key, "pr": *prNumber, "blockers": []any{}}); err != nil {
+			return err
+		}
+		if d.Auto {
+			// The worker starts it, after this commits: a start that fails
+			// must never roll a merge back.
+			if _, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = now() WHERE task_id = $1`, d.ID); err != nil {
+				return err
+			}
+		} else if err := event(EvChatNotice, map[string]any{"about": "unblocked", "by": key,
+			"text": fmt.Sprintf("%s merged — %s can start. Nothing started it: Deliver or Talk it through when you're ready.", key, d.Key)}); err != nil {
+			return err
+		}
+		if err := wakeUnblockedTx(ctx, tx, org, d.ID, d.Key, key, d.Auto); err != nil {
+			return err
+		}
+		// A delivery a person started, parked at its implement step on this
+		// blocker (path 5), goes on: its step reads every blocker again.
+		var wf string
+		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND workflow_type = $2 AND status = 'waiting'
+			AND awaiting_signals ? $3 ORDER BY created_at DESC LIMIT 1`, d.ID, WorkflowType, SignalRelationsUnblock).Scan(&wf)
+		if err == nil {
+			err = workflow.SignalTx(ctx, tx, org, wf, SignalRelationsUnblock, map[string]any{"by": key}, "unblocked:"+taskID)
+		}
+		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// wakeUnblockedTx tells a released task's live conductor it can start. A
+// task with none gets none: a wake would start one, and that is a start.
+func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by string, auto bool) error {
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
+		return err
+	}
+	line := fmt.Sprintf("%s merged: %s can start now, nothing open in front of it. Tell the person; start nothing until they agree.", by, taskKey)
+	if auto {
+		line = fmt.Sprintf("%s merged: %s can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.", by, taskKey)
+	}
+	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, line)
+	return err
+}
+
+// EndAutoStartTx ends the task's start when unblocked without firing it,
+// saying why (task.auto_start_cancelled): "owner", "started",
+// "owner_changed", "unblocked_by_removal". Nothing when none is set.
+func EndAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, why, actorType, actorID string) error {
+	var how, projectID string
+	err := tx.QueryRow(ctx, `DELETE FROM task_auto_starts a USING tasks t WHERE a.task_id = $1 AND t.id = a.task_id
+		RETURNING a.how, t.project_id`, taskID).Scan(&how, &projectID)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if actorType == "" {
+		actorType, actorID = ledger.ActorSystem, "dude"
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvAutoStartCancelled, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
+		ActorType: actorType, ActorID: actorID, Source: ledger.SourceOrchestrator, CorrelationID: taskID,
+		Payload: map[string]any{"how": how, "why": why}})
+	return err
+}
+
+// EndAutoStartIfFreeTx ends a start when unblocked whose task has nothing
+// open in front of it any more, after a relation was removed: the person
+// acting is present, so the task is simply startable.
+func EndAutoStartIfFreeTx(ctx context.Context, tx pgx.Tx, org, taskID, actorType, actorID string) error {
+	blockers, err := OpenBlockers(ctx, tx, taskID)
+	if err != nil || len(blockers) > 0 {
+		return err
+	}
+	return EndAutoStartTx(ctx, tx, org, taskID, "unblocked_by_removal", actorType, actorID)
+}
+
+// autoStartBatch bounds the requests one pass fires.
+const autoStartBatch = 20
+
+// AutoStarts is the worker that fires due start-when-unblocked requests.
+type AutoStarts struct {
+	DB      *db.DB
+	Starter Starter
+}
+
+// Sweep fires the due requests, one transaction per task, each taken FOR
+// UPDATE SKIP LOCKED so two workers never fire one twice. Returns how many
+// it took.
+func (a *AutoStarts) Sweep(ctx context.Context) (int, error) {
+	type due struct{ Org, TaskID string }
+	var todo []due
+	if err := a.DB.InSystem(ctx, "auto-starts", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT organization_id, task_id FROM task_auto_starts WHERE due_at IS NOT NULL
+			ORDER BY due_at LIMIT $1`, autoStartBatch)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[due])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	for _, d := range todo {
+		err := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.fire(ctx, tx, d.Org, d.TaskID) })
+		if err == nil {
+			continue
+		}
+		// A start that failed for any other reason than a blocker is not
+		// tried again by itself: the request waits for the next merge, and
+		// says why it did not start.
+		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.failed(ctx, tx, d.Org, d.TaskID, err) }); ferr != nil {
+			return 0, ferr
+		}
+	}
+	return len(todo), nil
+}
+
+// fire is one due request: re-read every blocker, then the same start a
+// person makes (StartTx), as dude for the person who set it.
+func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string) error {
+	var how, setBy, setByName, projectID, taskKey, status string
+	var setAt time.Time
+	err := tx.QueryRow(ctx, `SELECT a.how, a.set_by_person, COALESCE(p.name, ''), a.set_at FROM task_auto_starts a
+		LEFT JOIN people p ON p.id = a.set_by_person
+		WHERE a.task_id = $1 AND a.due_at IS NOT NULL FOR UPDATE OF a SKIP LOCKED`, taskID).Scan(&how, &setBy, &setByName, &setAt)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text FROM tasks t
+		JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status); err != nil {
+		return err
+	}
+	event := func(typ string, payload map[string]any) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
+			ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: taskID, Payload: payload})
+		return err
+	}
+	if !strings.Contains(notStartedSQL, "'"+status+"'") {
+		// Started some other way since: the request was consumed.
+		return EndAutoStartTx(ctx, tx, org, taskID, "started", "", "")
+	}
+	var by string
+	var pr *int
+	_ = tx.QueryRow(ctx, `SELECT payload->>'by', (payload->>'pr')::int FROM events WHERE task_id = $1 AND event_type = $2
+		ORDER BY cursor DESC LIMIT 1`, taskID, EvTaskUnblocked).Scan(&by, &pr)
+	first := firstName(setByName)
+	// The locks a start takes, in its order (Chat's, the delivery's, the
+	// task's), before the blockers are read under the task's.
+	if how == HowTalk {
+		if err := LockChat(ctx, tx, taskID); err != nil {
+			return err
+		}
+	}
+	if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
+		return err
+	}
+	err = RefuseBlockedTx(ctx, tx, taskID)
+	if blocked, ok := AsBlocked(err); ok {
+		if _, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = NULL WHERE task_id = $1`, taskID); err != nil {
+			return err
+		}
+		if err := RecordStartRefusedTx(ctx, tx, org, taskID, "auto_start", ledger.ActorSystem, "dude", blocked.Blockers); err != nil {
+			return err
+		}
+		if err := event(EvAutoStartRefused, map[string]any{"by": by, "blockers": BlockersPayload(blocked.Blockers)}); err != nil {
+			return err
+		}
+		words := make([]string, len(blocked.Blockers))
+		for i, b := range blocked.Blockers {
+			words[i] = b.Words()
+		}
+		that := "that merges"
+		if len(words) > 1 {
+			that = "they merge"
+		}
+		return event(EvChatNotice, map[string]any{"about": "auto_start_refused", "text": fmt.Sprintf(
+			"%s merged, but %s is still blocked by %s: it starts when %s, as %s asked.", by, taskKey, KeyList(words), that, first)})
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM task_auto_starts WHERE task_id = $1`, taskID); err != nil {
+		return err
+	}
+	payload := map[string]any{"how": how, "by": by, "setBy": setBy, "setByName": setByName, "setAt": setAt.UTC()}
+	if pr != nil {
+		payload["pr"] = *pr
+	}
+	if err := event(EvAutoStarted, payload); err != nil {
+		return err
+	}
+	in := StartInput{Org: org, TaskID: taskID, How: how, Writer: Writer{ActorType: ledger.ActorSystem, ActorID: "dude", Person: setBy}}
+	if how == HowTalk {
+		in.Message = fmt.Sprintf("%s set this task to be talked through once nothing was in front of it, and %s merged. "+
+			"Read the task and the merged code, then ask %s what you need to know, or propose a plan. Nothing is built until they agree.",
+			first, by, first)
+	}
+	if _, err := StartTx(ctx, tx, a.Starter, in); err != nil {
+		return err
+	}
+	return event(EvChatNotice, map[string]any{"about": "auto_started", "text": fmt.Sprintf(
+		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", by, taskKey, howLabel[how], first)})
+}
+
+var howLabel = map[string]string{HowDeliver: "Deliver", HowTalk: "Talk it through"}
+
+// failed records a request that could not fire for a reason other than a
+// blocker: no longer due, and why, for Activity.
+func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID string, cause error) error {
+	var projectID string
+	err := tx.QueryRow(ctx, `UPDATE task_auto_starts a SET due_at = NULL FROM tasks t
+		WHERE a.task_id = $1 AND t.id = a.task_id RETURNING t.project_id`, taskID).Scan(&projectID)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvAutoStartRefused, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
+		ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: taskID,
+		Payload: map[string]any{"error": clip(cause.Error(), 500), "blockers": []any{}}})
+	return err
+}
+
+// firstName is a person's first name, or "its owner" for none.
+func firstName(name string) string {
+	if f := strings.Fields(name); len(f) > 0 {
+		return f[0]
+	}
+	return "its owner"
+}

@@ -934,7 +934,10 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if status != "review" || open {
 			return fail(http.StatusConflict, "conflict", "task %s is %s; only finished work waiting to be read can be marked done", id, status)
 		}
-		_, err := delivery.SetTaskStatusTx(r.Context(), tx, org, projectID, id, "review", "done", "marked done by "+actor(r))
+		// Who marked it done goes with the move: a task it blocks is told
+		// it still blocks, and by whom it was marked done.
+		_, err := delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
+			"review", "done", "marked done by "+actor(r))
 		return err
 	})
 	if err != nil {

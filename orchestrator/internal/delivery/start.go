@@ -140,6 +140,10 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 		IdempotencyKey: "delivery:" + in.TaskID, TaskID: in.TaskID, Input: st}); err != nil {
 		return out, err
 	}
+	// Any start consumes a start when unblocked.
+	if err := EndAutoStartTx(ctx, tx, in.Org, in.TaskID, "started", in.Writer.ActorType, in.Writer.ActorID); err != nil {
+		return out, err
+	}
 	if in.How != HowTalk || out.Joined {
 		return out, nil
 	}
