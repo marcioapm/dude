@@ -20,7 +20,7 @@ function setup(loadedAt = 0) {
   const win = new EventTarget();
   let now = loadedAt;
   const activity = createActivity(doc, loadedAt);
-  activity.install(win, doc, () => now);
+  activity.install(win, () => now);
   return { doc, win, activity, at: (t: number) => (now = t) };
 }
 
@@ -30,9 +30,10 @@ describe("activity", () => {
   });
 
   test("hidden is not in use, whatever the input", () => {
-    const { doc, activity } = setup();
+    const { doc, win, activity, at } = setup();
     doc.visibilityState = "hidden";
-    activity.markActive(10);
+    at(10);
+    win.dispatchEvent(new Event("pointerdown"));
     expect(activity.isActive(10)).toBe(false);
   });
 
@@ -63,8 +64,8 @@ describe("activity", () => {
     pane.append(nested);
     document.body.append(pane);
     let now = 0;
-    const activity = createActivity({ visibilityState: "visible", hasFocus: () => true }, now);
-    activity.install(window, document, () => now);
+    const activity = createActivity(new FakeDocument(), now);
+    activity.install(window, () => now);
     try {
       for (const type of ["wheel", "pointerdown", "keydown", "touchstart"]) {
         now += ACTIVE_WINDOW_MS + 1;
@@ -105,13 +106,12 @@ describe("activity", () => {
   });
 
   test("installed twice, it listens once", () => {
-    const doc = new FakeDocument();
     const added: string[] = [];
     const win = { addEventListener: (type: string) => void added.push(type) };
-    const activity = createActivity(doc, 0);
-    activity.install(win, doc);
+    const activity = createActivity(new FakeDocument(), 0);
+    activity.install(win);
     const once = added.length;
-    activity.install(win, doc);
+    activity.install(win);
     expect(added.length).toBe(once);
   });
 });

@@ -1,51 +1,49 @@
 /**
- * Whether the person is using this tab now: it is shown, it has focus, and
- * they gave it input within ACTIVE_WINDOW_MS. Requests say so with
- * `x-dude-active` (api/client.ts), and only those count as the person being
- * here (control plane, api/presence.ts). Opening the page counts as input.
+ * Whether the person is using this tab now, which is what `x-dude-active`
+ * says on requests (api/client.ts). The rule: docs/CONTRIBUTING.md, "Online
+ * and last seen".
  */
 
 export const ACTIVE_WINDOW_MS = 5 * 60_000;
 
-export interface DocumentLike {
+// No `scroll`: a pane following its output scrolls with nobody there.
+const INPUT = ["pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
+
+type Listening = Pick<EventTarget, "addEventListener">;
+
+interface ShownDocument extends Listening {
   visibilityState: string;
   hasFocus(): boolean;
 }
 
-type Listening = Pick<EventTarget, "addEventListener">;
-
 export interface Activity {
-  markActive(now: number): void;
   isActive(now: number): boolean;
-  /** Listen for input on `win` and `doc`, once; later calls do nothing. */
-  install(win: Listening, doc: Listening & DocumentLike, clock?: () => number): void;
+  /** Listens once; later calls do nothing. */
+  install(win: Listening, clock?: () => number): void;
 }
 
-const INPUT = ["pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
-
-export function createActivity(doc: DocumentLike, loadedAt: number): Activity {
+// Opening the page counts as input: `loadedAt` is the first.
+export function createActivity(doc: ShownDocument, loadedAt: number): Activity {
   let last = loadedAt;
   let installed = false;
-  const markActive = (now: number) => {
-    if (now > last) last = now;
-  };
   return {
-    markActive,
     isActive: (now) => doc.visibilityState === "visible" && doc.hasFocus() && now - last < ACTIVE_WINDOW_MS,
-    install(win, d, clock = Date.now) {
+    install(win, clock = Date.now) {
       if (installed) return;
       installed = true;
       const opts = { passive: true } as const;
-      const mark = () => markActive(clock());
+      const mark = () => {
+        last = Math.max(last, clock());
+      };
       for (const type of INPUT) win.addEventListener(type, mark, opts);
-      d.addEventListener("visibilitychange", () => {
-        if (d.visibilityState === "visible") mark();
+      doc.addEventListener("visibilitychange", () => {
+        if (doc.visibilityState === "visible") mark();
       }, opts);
     },
   };
 }
 
-// This page's: created when the app's code first loads, which is the page load.
+// Created when the app's code first loads, which is the page load.
 const page = typeof document === "undefined" ? null : createActivity(document, Date.now());
 
 export function isActive(now: number): boolean {
@@ -53,5 +51,5 @@ export function isActive(now: number): boolean {
 }
 
 export function installActivity(): void {
-  page?.install(window, document);
+  page?.install(window);
 }
