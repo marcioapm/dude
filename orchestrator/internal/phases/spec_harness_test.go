@@ -423,6 +423,49 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 	}
 }
 
+// Codex sends its hosted web_search tool unless told not to: on every role,
+// a Run on Codex searches live only when it may reach any host, and says
+// "disabled" otherwise. A tier's -c web_search changes neither way and is
+// dropped.
+func TestCodexSearchesTheWebOnlyWhenItsRunMayReachAnyHost(t *testing.T) {
+	configOf := func(spec lux.Spec) string {
+		for _, s := range spec.Secrets {
+			if s.Name == "CODEX_CONFIG" {
+				return s.Value
+			}
+		}
+		t.Fatal("no CODEX_CONFIG secret")
+		return ""
+	}
+	for role, edit := range everyRole {
+		for _, anywhere := range []bool{false, true} {
+			for _, tier := range []string{"", `"live"`, "disabled"} {
+				c, in := goldenInput("gpt-6-sol")
+				edit(&in)
+				in.Harness, in.Anywhere = delivery.HarnessCodex, anywhere
+				if tier != "" {
+					in.Options = map[string]any{"args": []any{"-c", "web_search=" + tier}}
+				}
+				want := map[bool]string{false: "disabled", true: "live"}[anywhere]
+				spec := buildSpec(c, in)
+				name := fmt.Sprintf("%s, anywhere %v, tier web_search %q", role, anywhere, tier)
+				if got := parsedCodexTOML(t, configOf(spec))["web_search"]; got != want {
+					t.Errorf("%s: config.toml web_search = %v, want %s", name, got, want)
+				}
+				line := `web_search="` + want + `"`
+				if n := slices.Index(spec.Workload.Command, line); n < 1 || spec.Workload.Command[n-1] != "-c" ||
+					slices.ContainsFunc(spec.Workload.Command, func(a string) bool { return strings.HasPrefix(a, "web_search=") && a != line }) {
+					t.Errorf("%s: command = %q, want -c %s alone", name, spec.Workload.Command, line)
+				}
+				_, dropped := codexSettings(c, in)
+				if tier != "" && !slices.Equal(dropped, []string{"-c web_search=" + tier}) {
+					t.Errorf("%s: dropped = %q", name, dropped)
+				}
+			}
+		}
+	}
+}
+
 // A resumed Run goes on with the harness it was submitted on.
 func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	if got := submittedHarness(delivery.HarnessCodex, delivery.HarnessClaudeCode); got != delivery.HarnessCodex {
@@ -436,7 +479,8 @@ func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 // Prints the command, env and secret names buildSpec gives a phase Run on
 // a harness, as JSON, for running the real CLI with them
 // (scripts/real_harnesses.py). Only when DUDE_PRINT_HARNESS_SPEC is
-// "HARNESS MODEL [EFFORT]"; the LLM URL is DUDE_LLM_URL, and the key is a
+// "HARNESS MODEL [EFFORT [anywhere]]"; anywhere makes it a brainstorm that
+// may reach any host. The LLM URL is DUDE_LLM_URL, and the key is a
 // placeholder the script replaces.
 func TestPrintAHarnessSpec(t *testing.T) {
 	args := strings.Fields(os.Getenv("DUDE_PRINT_HARNESS_SPEC"))
@@ -446,6 +490,9 @@ func TestPrintAHarnessSpec(t *testing.T) {
 	in := specInput{Phase: delivery.PhaseImplement, Harness: args[0], Model: args[1], ModelTier: "Probe"}
 	if len(args) > 2 {
 		in.Effort = args[2]
+	}
+	if len(args) > 3 && args[3] == "anywhere" {
+		in.Phase, in.Role, in.Anywhere = "", delivery.RoleBrainstorm, true
 	}
 	spec := buildSpec(AgentConfig{LLMURL: os.Getenv("DUDE_LLM_URL"), LLMKey: "<key>"}, in)
 	secrets := map[string]any{}
