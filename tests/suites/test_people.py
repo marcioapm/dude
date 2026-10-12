@@ -520,7 +520,7 @@ def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, cl
     page.clock.run_for("06:00")
     page.wait_for_timeout(500)
     assert people_reads == []
-    assert all(h is None for h in sent), sent
+    assert sent == []
 
     # The last time they used it was more than five minutes ago: offline.
     execute(owner_dsn, "UPDATE people SET last_seen_at = now() - interval '6 minutes' WHERE id = %s", (me["id"],))
