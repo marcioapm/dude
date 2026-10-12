@@ -325,12 +325,13 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 		"--add-dir", "/x", `--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json",
 		"--settings", "null", "--settings", "[1]", "--settings-like", "x", "--extra"}}
 	cmd := buildSpec(c, in).Workload.Command
-	if n := slices.Index(cmd, "--settings"); n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
+	n := slices.Index(cmd, "--settings")
+	if n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
 		slices.ContainsFunc(cmd, func(a string) bool { return strings.HasPrefix(a, "--settings=") || a == "/etc/claude.json" }) {
 		t.Fatalf("command = %q, want dude's --settings alone", cmd)
 	}
 	var settings map[string]any
-	if err := json.Unmarshal([]byte(cmd[slices.Index(cmd, "--settings")+1]), &settings); err != nil {
+	if err := json.Unmarshal([]byte(cmd[n+1]), &settings); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]any{"model": "y", "env": map[string]any{"A": "1"}, "skipWebFetchPreflight": true}
@@ -339,7 +340,7 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	}
 	// The tier's other args follow dude's --settings in their order, pairs
 	// kept together; one merely starting with --settings is one of them.
-	tail, wantTail := cmd[slices.Index(cmd, "--settings")+2:], []string{"--verbose", "--add-dir", "/x", "--settings-like", "x", "--extra"}
+	tail, wantTail := cmd[n+2:], []string{"--verbose", "--add-dir", "/x", "--settings-like", "x", "--extra"}
 	if !slices.Equal(tail, wantTail) {
 		t.Errorf("command ends %q, want %q", tail, wantTail)
 	}
@@ -391,8 +392,9 @@ func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
 // every harness and on the scripted agent; on OpenCode it also gets Exa,
 // its websearch tool. A Run on the lists gets neither.
 func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T) {
+	harnesses := []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex}
 	for _, model := range []string{"claude-sonnet-5", "fake/scripted"} {
-		for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+		for _, harness := range harnesses {
 			for _, anywhere := range []bool{false, true} {
 				c, in := goldenInput(model)
 				everyRole["brainstorm"](&in)
@@ -411,7 +413,7 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 	}
 	// The scripted agent with no lists and no tools to reach still may
 	// reach any host when its Run may.
-	for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+	for _, harness := range harnesses {
 		c, in := goldenInput("fake/scripted")
 		everyRole["brainstorm"](&in)
 		c.ToolsURL, in.Egress, in.Harness, in.Anywhere = "", nil, harness, true
