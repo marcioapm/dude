@@ -287,94 +287,60 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	if err != nil {
 		return err
 	}
-	var projectID string
-	var policy delivery.Policy
+	p := principalOf(r)
+	var started delivery.Started
 	var parked string
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		var err error
-		if projectID, policy, err = policyFor(r.Context(), tx, taskID); err != nil {
-			return err
-		}
 		d, err := delivery.LoadDelivery(r.Context(), tx, taskID)
 		if err != nil {
 			return err
 		}
-		if d == nil || !d.Live() {
-			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
-				return err
-			}
-		} else if override != nil && !d.State.Overridden {
+		if d != nil && d.Live() && override != nil && !d.State.Overridden {
 			// Its delivery is parked on its blockers (the implement step's
 			// backstop): Start anyway lets it go on.
-			if parked, err = delivery.OverrideParkedTx(r.Context(), tx, org, taskID, d, *override); err != nil {
+			if parked, err = delivery.OverrideParkedTx(r.Context(), tx, org, taskID, d, *override); err != nil || parked != "" {
 				return err
 			}
 		}
-		// The prompt's images are the ones the task's text references,
-		// kept so by the backend on every save (delivery.PromptAttachments).
-		// Which repositories it works on is the task's to say: none is
-		// work that changes no code — unless its project has just one.
-		return delivery.NameOnlyRepository(r.Context(), tx, taskID)
+		started, err = delivery.StartTx(r.Context(), tx, s.Workflow, delivery.StartInput{Org: org, TaskID: taskID,
+			How: delivery.HowDeliver, Writer: delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person},
+			Policy: body.Policy, Override: override})
+		return err
 	})
 	if err != nil {
-		return s.refusedStart(r.Context(), org, taskID, "deliver", principalOf(r), err)
+		return s.refusedStart(r.Context(), org, taskID, "deliver", p, startFailure(err))
 	}
+	s.kick()
 	if parked != "" {
-		s.kick()
 		write(w, http.StatusOK, map[string]any{"workflowRunId": parked, "taskId": taskID, "alreadyRunning": true})
 		return nil
 	}
-
-	// The task's own policy, over the layers policyFor resolved.
-	if len(body.Policy) > 0 {
-		if err := json.Unmarshal(body.Policy, &policy); err != nil {
-			return fail(http.StatusBadRequest, "bad_request", "policy: %v", err)
-		}
-	}
-	var attempt int
-	_ = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, taskID).Scan(&attempt)
-	})
-	id, dup, err := s.Workflow.Start(r.Context(), workflow.StartOptions{
-		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: deliveryKey(taskID),
-		TaskID: taskID,
-		Input: delivery.State{TaskID: taskID, ProjectID: projectID,
-			Policy: policy, Branch: delivery.BranchFor(taskID, attempt), Overridden: override != nil},
-	})
-	if err != nil {
-		return err
-	}
-	s.kick()
 	status := http.StatusCreated
-	if dup {
+	if started.Joined {
 		status = http.StatusOK
 	}
-	write(w, status, map[string]any{"workflowRunId": id, "taskId": taskID, "alreadyRunning": dup})
+	write(w, status, map[string]any{"workflowRunId": started.WorkflowID, "taskId": taskID, "alreadyRunning": started.Joined})
 	return nil
 }
 
-// deliveryKey is the idempotency key of a task's delivery workflow.
-func deliveryKey(taskID string) string { return "delivery:" + taskID }
+// startFailure answers what delivery.StartTx refuses for the request's own
+// reasons: a task that is not there, a policy that does not decode.
+func startFailure(err error) error {
+	var missing delivery.TaskNotFound
+	var policy delivery.PolicyError
+	switch {
+	case errors.As(err, &missing):
+		return fail(http.StatusNotFound, "not_found", "%s", missing.Error())
+	case errors.As(err, &policy):
+		return fail(http.StatusBadRequest, "bad_request", "%s", policy.Error())
+	}
+	return err
+}
 
-// policyFor is the task's project and the delivery policy it gets: the
-// factory's defaults, then the organization's, then the project's, each
-// layer setting only what it names.
+// policyFor is delivery.PolicyFor, answering a missing task as a 404.
 func policyFor(ctx context.Context, tx pgx.Tx, taskID string) (string, delivery.Policy, error) {
-	var projectID string
-	var orgPolicy, projectPolicy []byte
-	if err := tx.QueryRow(ctx, `SELECT w.project_id, o.delivery_policy, p.delivery_policy FROM tasks w
-		JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
-		WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy); err != nil {
-		if db.IsNotFound(err) {
-			return "", delivery.Policy{}, fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
-		}
-		return "", delivery.Policy{}, err
-	}
-	policy, err := delivery.ResolvePolicy(orgPolicy, projectPolicy)
-	if err != nil {
-		return "", policy, fmt.Errorf("project %s: %w", projectID, err)
-	}
-	return projectID, policy, nil
+	projectID, policy, err := delivery.PolicyFor(ctx, tx, taskID)
+	return projectID, policy, startFailure(err)
 }
 
 // runInfo loads what every run-control action needs, confined to org.
