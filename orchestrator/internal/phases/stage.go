@@ -86,11 +86,13 @@ func beforeRunning(was string) bool {
 
 // failedStage is the stage a start that failed was in: the last run.stage
 // of epoch, or of a resume's waiting, which lux announces under the epoch
-// it left (it moves the epoch at assignment). was is lux_state before this
-// event. "" when was is not a start's (beforeRunning), so an end after
-// running costs no query; when the last stage is park, a move's stop
-// rather than a start (a Run whose resumePolicy fails it on a move); and
-// from a lux with no stages.
+// it left (it moves the epoch at assignment). That waiting leg also matches
+// the first start's waiting when a resume fails before lux announces its
+// own; the resume then names waiting, which it was (waiting for a host).
+// was is lux_state before this event. "" when was is not a start's
+// (beforeRunning), so an end after running costs no query; when the last
+// stage is park, a move's stop rather than a start (a Run whose
+// resumePolicy fails it on a move); and from a lux with no stages.
 func (t *translator) failedStage(ctx context.Context, tx pgx.Tx, epoch int, was string) (string, error) {
 	if !beforeRunning(was) {
 		return "", nil

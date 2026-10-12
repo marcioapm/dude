@@ -186,11 +186,11 @@ func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 // is not the failed one: ErrRetryTaken when failedExists (SQL, $1 the
 // session or task) finds an earlier failed one, else ErrNothingToRetry.
 func retryRefused(ctx context.Context, tx pgx.Tx, failedExists, id string) error {
-	var any bool
-	if err := tx.QueryRow(ctx, failedExists, id).Scan(&any); err != nil {
+	var failedBefore bool
+	if err := tx.QueryRow(ctx, failedExists, id).Scan(&failedBefore); err != nil {
 		return err
 	}
-	if any {
+	if failedBefore {
 		return ErrRetryTaken
 	}
 	return ErrNothingToRetry
