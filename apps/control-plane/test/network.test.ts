@@ -171,8 +171,14 @@ describe("brainstorm sessions reaching any host", () => {
   });
 
   test("a change to the list leaves it as it is", async () => {
-    await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com", "*.github.com"] } });
+    const res = await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com"] } });
+    expect(res.status).toBe(200);
+    expect((await body(res)).network).toMatchObject({ egress: { value: ["github.com"] }, brainstorm: { anywhere: true } });
+    const [{ agent_egress }] = await owner`SELECT agent_egress FROM organizations WHERE id = ${ORG}`;
+    expect(agent_egress).toEqual(["github.com"]);
     expect(await stored()).toBe(true);
+    // The list the tests after this one expect.
+    expect((await call(adminKey, "PATCH", "/v1/settings/organization", { network: { egress: ["github.com", "*.github.com"] } })).status).toBe(200);
   });
 
   test("a member's change, a project's, or not a boolean, is refused and changes nothing", async () => {
