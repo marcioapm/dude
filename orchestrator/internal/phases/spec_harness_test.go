@@ -320,7 +320,8 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	c, in := goldenInput("claude-sonnet-5")
 	in.Harness = delivery.HarnessClaudeCode
 	in.Options = map[string]any{"args": []any{"--verbose", "--settings", `{"model":"x","skipWebFetchPreflight":false}`,
-		`--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json", "--settings", "null", "--settings", "[1]", "--extra"}}
+		"--add-dir", "/x", `--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json",
+		"--settings", "null", "--settings", "[1]", "--extra"}}
 	cmd := buildSpec(c, in).Workload.Command
 	if n := slices.Index(cmd, "--settings"); n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
 		slices.ContainsFunc(cmd, func(a string) bool { return strings.HasPrefix(a, "--settings=") || a == "/etc/claude.json" }) {
@@ -334,8 +335,10 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("settings = %v, want %v", settings, want)
 	}
-	if !slices.Contains(cmd, "--verbose") || !slices.Contains(cmd, "--extra") {
-		t.Errorf("command = %q, want the tier's other args kept", cmd)
+	// The tier's other args follow dude's --settings in their order, pairs
+	// kept together.
+	if tail, want := cmd[slices.Index(cmd, "--settings")+2:], []string{"--verbose", "--add-dir", "/x", "--extra"}; !slices.Equal(tail, want) {
+		t.Errorf("command ends %q, want %q", tail, want)
 	}
 	if _, _, dropped := claudeCodeArgs(in.Options); !slices.Equal(dropped, []string{"--settings /etc/claude.json", "--settings null", "--settings [1]"}) {
 		t.Errorf("dropped = %q", dropped)
