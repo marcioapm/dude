@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
-import { DECISION_POINT_LABEL, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
+import { DECISION_POINT_LABEL, EventTypes, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
@@ -131,10 +131,12 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     ...(pullRequests.length > 0 ? [{ label: "PR comments", value: feedback }, { label: "Checks", value: checks }] : []),
   ], [sessions, findings.length, open, pullRequests.length, feedback, checks]);
   // One object while nothing in it changed: the conductor's transcript is not redrawn for each reload here.
-  const earlierKey = earlier.map((r) => r.id).join(",");
+  // Each earlier conductor a later one's run.created names as the one it retries (Try again).
+  const retried = new Set(events.flatMap((e) => e.eventType === EventTypes.RunCreated && typeof e.payload.retries === "string" ? [e.payload.retries] : []));
+  const earlierKey = earlier.map((r) => `${r.id}:${retried.has(r.id)}`).join(",");
   const before = useMemo(() => earlier.length === 0 ? null
-    : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} />),
-  [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids
+    : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />),
+  [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids and whether each was retried
 
   // The Runs the conductor started, decisions waited on, dude's notices.
   const dude = dudeName(task.id);

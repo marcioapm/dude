@@ -394,6 +394,8 @@ export const READ_WHEN_BACK = "Will be read when the agent is back.";
 export const NOT_STARTED = "the agent did not start. Try again starts it with this message.";
 /** The same message once a later agent took over without Try again: nothing left to try. */
 export const NOT_STARTED_TAKEN = "the agent did not start; a later agent took over.";
+/** The same message on a failed conductor a later one retries (Try again): its own ledger cannot see that, its Chat can. */
+export const NOT_STARTED_RETRIED = "the agent did not start; Try again started a new one.";
 
 export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null,
   start: StartState | null = null): SteerWait {

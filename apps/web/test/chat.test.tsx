@@ -808,4 +808,35 @@ describe("an earlier conductor's conversation", () => {
     await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation again");
     expect(client.reads).toEqual([0, last]);
   });
+
+  test("a conductor whose start failed, retried by the next: its message says Try again started a new one", async () => {
+    cursor = 300;
+    const failed = [
+      ev("run.created", { role: "conductor" }, MARCIO),
+      ev("chat.message", { text: "what changed?" }, MARCIO),
+      ev("conductor.briefed", { text: BRIEFING.replace("why 8s?", "what changed?") }),
+      ev("run.stage", { stage: "container", since: at(3), epoch: 1 }),
+      ev("run.failed", { status: "failed", error: "x", stage: "container", reason: "start-failed" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+    const retries = (named: boolean) => ({ ...ev("run.created", { role: "conductor", ...(named ? { retries: EARLIER } : {}) }, MARCIO), cursor: 10_000 });
+    class Retried extends TwoConductors {
+      constructor(private readonly named: boolean) {
+        super(failed);
+      }
+      protected override ledgerFor(params: LedgerQuery): PersistedEvent[] {
+        const base = super.ledgerFor(params);
+        return params.taskId === TASK_ID && !params.runId ? [...base, retries(this.named)].filter((e) => e.cursor > (params.after ?? 0)) : base;
+      }
+    }
+    const said = async (named: boolean) => {
+      const page = await chatPage(new Retried(named));
+      const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the failed conductor");
+      return earlier.querySelector("[data-testid=human-turn]")!.textContent ?? "";
+    };
+    const shown = await said(true);
+    expect(shown).toContain("the agent did not start; Try again started a new one.");
+    expect(shown).not.toContain("Try again starts it");
+    // Not retried (a person's next message started the next): unchanged.
+    expect(await said(false)).toContain("Try again starts it with this message.");
+  });
 });

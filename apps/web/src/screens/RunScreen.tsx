@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
@@ -927,12 +927,14 @@ export function pendingReason(wait: SteerWait) {
  * conversation, read once for the task's page (EndedLedgers), with nothing
  * to answer or steer; its images shown, and opened in the viewer, as the
  * live one's are. A read that failed says so, with a retry. A line says
- * where it ended; the latest conductor takes what is written next.
+ * where it ended; the latest conductor takes what is written next. One a
+ * later conductor retries (Try again) says its unstarted message went there.
  */
-export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status }: {
+export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status, retried = false }: {
   ledgers: EndedLedgers;
   runId: string;
   status: RunDetail["status"];
+  retried?: boolean;
 }) {
   const people = usePeople();
   const images = useSentImages(ledgers.client);
@@ -953,7 +955,12 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
       cancelled = true;
     };
   }, [ledgers, runId, attempt]);
-  const turns = useMemo(() => (events ? asides(project(events, status).turns) : []), [events, status]);
+  const turns = useMemo(() => {
+    if (!events) return [];
+    const all = project(events, status).turns;
+    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
+    return asides(all);
+  }, [events, status, retried]);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
