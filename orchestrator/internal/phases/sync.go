@@ -1995,7 +1995,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 
 // resume is the one call to lux's resume. lux keeps no secret (every resume
 // supplies all of them again, lux internal/server/api.go resumeRun), so
-// the secrets come from s.spec, fresh: a Run parked for a day needs a new
+// the secrets come from s.spec, fresh, plus any lux kept declared that the
+// fresh spec lacks (resumeSecrets): a Run parked for a day needs a new
 // registry login and forge token, not the ones it started with. Its
 // timing's row is in before lux is asked (resumeAsked); foreseen is the
 // epoch it is under, 0 when lux was not asked.
@@ -2016,7 +2017,11 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
-	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
+	secrets, err := s.resumeSecrets(ctx, r, lr.Spec, spec.Secrets)
+	if err != nil {
+		return lux.Run{}, 0, err
+	}
+	in := lux.ResumeInput{Secrets: secrets, Input: input}
 	if r.brainstorm() {
 		if err := s.sessionResume(ctx, r, spec, &in); err != nil {
 			return lux.Run{}, 0, err
@@ -2058,6 +2063,37 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
 	}
 	return resumed, foreseen, err
+}
+
+// resumeSecrets are fresh's secrets plus every other one lux's stored spec
+// declares, as lux requires a value for each at every resume. lux keeps an
+// added repository's credential declared even after its failed clone
+// dropped the repository, so the fresh spec, naming no repository, lacks
+// GIT_TOKEN: it is supplied from the forge. Any other declared secret
+// fails the resume, naming it.
+func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
+	out := fresh
+	for _, sec := range stored.Secrets {
+		if slices.ContainsFunc(out, func(f lux.Secret) bool { return f.Name == sec.Name }) {
+			continue
+		}
+		if sec.Name != gitTokenSecret {
+			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s, which dude cannot supply on a resume", sec.Name)}
+		}
+		gh, err := s.Forges.For(ctx, r.Org)
+		if err != nil {
+			return nil, errForge{err}
+		}
+		if gh == nil {
+			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s and the organisation has no forge credentials to supply it", sec.Name)}
+		}
+		token, err := gh.Token()
+		if err != nil {
+			return nil, errForge{err}
+		}
+		out = append(slices.Clone(out), lux.Secret{Name: gitTokenSecret, Value: token})
+	}
+	return out, nil
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
@@ -2178,7 +2214,8 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 		if q.Access == "write" {
 			note = "you may change it; commit there and it gets its own pull request"
 		}
-		told = append(told, fmt.Sprintf("%s is now checked out at %s (%s).", q.Name, repo.Path, note))
+		// Written before lux clones it, so hedged: settleClone tells a failure.
+		told = append(told, fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", q.Name, repo.Path, note))
 	}
 	if len(failed) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {

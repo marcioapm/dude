@@ -50,6 +50,8 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
+  // lux dropped a linked repository: it is no longer linked.
+  EventTypes.RepositoryCloneFailed,
 ]);
 
 /** The detail with one member's open state as a session.open says it: the rest as it was. */

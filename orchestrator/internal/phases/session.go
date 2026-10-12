@@ -146,7 +146,9 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		}
 		if added, ok := bySpec[name]; ok {
 			in.AddRepositories = append(in.AddRepositories, added)
-			told = append(told, fmt.Sprintf("%s/%s is now checked out at %s (read only).", repo.Key, repo.Name, added.Path))
+			// Written before lux clones it, so hedged: settleClone tells a failure.
+			told = append(told, fmt.Sprintf("A member linked %s/%s; it is checked out at %s (read only) unless dude tells you its clone failed.",
+				repo.Key, repo.Name, added.Path))
 		}
 	}
 	if len(in.AddRepositories) > 0 {
@@ -156,8 +158,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if in.Input == resumeNudge {
 			in.Input = ""
 		}
-		in.Input = strings.TrimSpace("A member linked more of a project to this session. " + strings.Join(told, " ") +
-			"\n\n" + in.Input)
+		in.Input = strings.TrimSpace(strings.Join(told, " ") + "\n\n" + in.Input)
 	}
 	return nil
 }

@@ -945,7 +945,7 @@ func TestLinkingARepositoryAddsItByResume(t *testing.T) {
 		t.Errorf("added %+v", added)
 	}
 	if !slices.ContainsFunc(v.resumes, func(in string) bool {
-		return strings.Contains(in, "WC/web is now checked out at /workspace/repos/WC/web")
+		return strings.Contains(in, "A member linked WC/web; it is checked out at /workspace/repos/WC/web (read only) unless dude tells you its clone failed.")
 	}) {
 		t.Errorf("the agent was not told where: %v", v.resumes)
 	}

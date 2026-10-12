@@ -968,10 +968,30 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 			WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, repo)
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
+	// The approved request's repository by name: none when this git.clone
+	// was translated before (the request is failed already).
+	rows, err := tx.Query(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
 		FROM repositories repo WHERE repo.id = q.repository_id AND q.run_id = $1 AND lux_name(repo.name) = $2
-		  AND q.status = 'approved'`, t.run.ID, repo, cloneErr); err != nil {
+		  AND q.status = 'approved'
+		RETURNING repo.name, repo.url`, t.run.ID, repo, cloneErr)
+	if err != nil {
 		return err
+	}
+	type requestedRepo struct{ Name, URL string }
+	requested, err := pgx.CollectRows(rows, pgx.RowToStructByPos[requestedRepo])
+	if err != nil {
+		return err
+	}
+	var repoURL string
+	if len(requested) > 0 {
+		repoURL = requested[0].URL
+		// The task's agent was told it is checked out unless dude said otherwise.
+		if !t.run.brainstorm() {
+			if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(),
+				delivery.Directive{Text: cloneFailedNote(requested[0].Name, cloneErr, taskCloneRemedy), Scope: "run"}); err != nil {
+				return err
+			}
+		}
 	}
 	// Not checked out after all: the task stops naming it.
 	if _, err := tx.Exec(ctx, `DELETE FROM task_repositories wr USING repository_requests q, repositories repo
@@ -980,13 +1000,28 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		return err
 	}
 	// A session's: unlinked, or the next resume would try it again for good.
-	if _, err := tx.Exec(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
+	// Its project stays linked: its tasks, epics and pull requests are read
+	// without a checkout, and the rail shows it with nothing checked out.
+	var key, name, linkedURL string
+	err = tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
 		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
-		  AND `+delivery.SessionSpecNameSQL+` = $2`, t.run.ID, repo); err != nil {
+		  AND `+delivery.SessionSpecNameSQL+` = $2
+		RETURNING p.key_prefix, repo.name, repo.url`, t.run.ID, repo).Scan(&key, &name, &linkedURL)
+	if err != nil && !db.IsNotFound(err) {
 		return err
 	}
-	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
-		map[string]any{"repository": repo, "error": cloneErr})
+	if linkedURL != "" {
+		repoURL = linkedURL
+	}
+	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(repoURL, cloneErr)}
+	if t.run.brainstorm() && name != "" {
+		// The session's agent was told it is checked out unless dude said otherwise.
+		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key+"/"+name, cloneErr, sessionCloneRemedy)); err != nil {
+			return err
+		}
+		payload["key"], payload["name"] = key, name
+	}
+	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem, payload)
 }
 
 // agentEvent translates the agent's own protocol messages: ACP (OpenCode

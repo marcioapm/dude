@@ -775,7 +775,8 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 		t.Errorf("the Run's repositories after resume: %v", names)
 	}
 	w.until("the agent to hear it", func() bool {
-		return len(r.Inputs) > 0 && strings.Contains(r.Inputs[0], "web is now checked out at /workspace/repos/web")
+		return len(r.Inputs) > 0 && strings.HasPrefix(r.Inputs[0], "A person approved your request. web is checked out at "+
+			"/workspace/repos/web (read only) unless dude tells you its clone failed. Carry on.")
 	})
 	// The task names it now, read only, for every later phase.
 	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND access = 'read'`, wi); n != 1 {
@@ -783,15 +784,17 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	}
 }
 
-func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
-	w := newWorld(t)
+// approvedWeb is a task's running agent that asked for the repository web
+// at url, on branch, and a person approved it.
+func (w *world) approvedWeb(url, branch string) (wi, requestID string) {
+	w.t.Helper()
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
-	t.Cleanup(tools.Close)
+	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
-	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'missing-ref')`, "repo_web_"+w.org, w.org, w.project)
+	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', $4, $5)`, "repo_web_"+w.org, w.org, w.project, url, branch)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
+	wi = w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("agent running", func() bool {
@@ -799,17 +802,23 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	})
 	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"read client"}`)
 	if status != 200 {
-		t.Fatalf("request: %d %s", status, body)
+		w.t.Fatalf("request: %d %s", status, body)
 	}
 	var req struct{ RequestID string }
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
 	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
-		t.Fatalf("approve: %d %v", status, body)
+		w.t.Fatalf("approve: %d %v", status, body)
 	}
+	return wi, req.RequestID
+}
+
+func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
+	w := newWorld(t)
+	wi, requestID := w.approvedWeb("git://127.0.0.1/acme/web.git", "missing-ref")
 	w.until("approval failed with lux error", func() bool {
-		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'failed' AND error = 'ref not found'`, req.RequestID) == 1
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'failed' AND error = 'ref not found'`, requestID) == 1
 	})
 	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND repository_id = $2`, wi, "repo_web_"+w.org); n != 0 {
 		t.Fatalf("failed repository still attached: %d", n)
@@ -821,6 +830,41 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi); n != 1 {
 		t.Fatalf("approval failure events: %d", n)
+	}
+	// The agent was told it is checked out unless dude said otherwise; dude
+	// says so, once.
+	note := "web could not be checked out (ref not found). It is not in /workspace; " +
+		"carry on without it, or ask a person to check the repository's URL and access."
+	w.until("the agent told its clone failed", func() bool {
+		return w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id
+			WHERE r.task_id = $1 AND d.text = $2 AND d.delivered_at IS NOT NULL`, wi, note) == 1
+	})
+	r := w.lux.Runs()[0]
+	if len(r.ResumeInputs) != 1 || !strings.HasPrefix(r.ResumeInputs[0], "A person approved your request. web is checked out at "+
+		"/workspace/repos/web (read only) unless dude tells you its clone failed. Carry on.") {
+		t.Errorf("the resume told %q", r.ResumeInputs)
+	}
+	if !slices.Contains(r.Inputs, note) {
+		t.Errorf("the agent's inputs: %q", r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id WHERE r.task_id = $1`, wi); n != 1 {
+		t.Errorf("%d directives, want the one note", n)
+	}
+}
+
+// A task's approved github.com repository whose clone git could not sign
+// in for is told to the members as a GitHub sign-in failure.
+func TestAResumedCloneSignInFailureNamesGitHub(t *testing.T) {
+	w := newWorld(t)
+	w.lux.CloneError = failWebClone
+	wi, _ := w.approvedWeb("https://github.com/acme/web.git", "main")
+	w.until("the clone failure in the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'
+		AND payload->>'repository' = 'web' AND payload->>'reason' = $2`, wi,
+		"dude couldn't sign in to GitHub for this repository: check its URL and that dude's GitHub access covers it."); n != 1 {
+		t.Errorf("the members' reason does not name GitHub")
 	}
 }
 
@@ -1464,7 +1508,7 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, reqID) == 1 &&
 			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
-	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is now checked out") {
+	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is checked out at") {
 		t.Errorf("resumed %d times, told %q", r.Resumed, r.Inputs)
 	}
 }

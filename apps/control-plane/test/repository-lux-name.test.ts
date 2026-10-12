@@ -158,6 +158,32 @@ test("an add and a rename at once onto one checkout name: one lands, the other i
   expect((await names(id)).filter((n) => n === "Web" || n === "web-29751047").length).toBe(1);
 }, 20_000);
 
+test("a repository at https://www.github.com/ is stored at https://github.com/ when added, changed or made with its project", async () => {
+  const urlOf = async (id: string) => ((await owner`SELECT url FROM repositories WHERE id = ${id}`)[0] as { url: string }).url;
+  const added = (await (await call("POST", `/v1/projects/${other}/repositories`,
+    { name: "billing", url: "https://www.github.com/acme/billing" })).json()) as { id: string; url: string };
+  expect(added.url).toBe("https://github.com/acme/billing");
+  expect(await urlOf(added.id)).toBe("https://github.com/acme/billing");
+
+  const { repo } = await projectWith("sdk");
+  const patched = await call("PATCH", `/v1/repositories/${repo["sdk"]}`, { url: "https://WWW.GitHub.com/acme/sdk.git" });
+  expect(patched.status).toBe(200);
+  expect(await urlOf(repo["sdk"]!)).toBe("https://github.com/acme/sdk.git");
+
+  const slug = `bill-${Bun.randomUUIDv7("hex").slice(-12)}`;
+  const made = (await (await call("POST", "/v1/projects", { name: "Billing", slug, repositories: [
+    { name: "billing", url: "https://www.github.com/acme/billing" }] })).json()) as { repositories: Array<{ id: string; url: string }> };
+  expect(made.repositories.map((r) => r.url)).toEqual(["https://github.com/acme/billing"]);
+  expect(await urlOf(made.repositories[0]!.id)).toBe("https://github.com/acme/billing");
+
+  // Only that host: another host, or ssh, is stored as given.
+  for (const url of ["https://www.github.company.com/a/b", "https://gitlab.com/www.github.com/b", "git@www.github.com:a/b.git"]) {
+    const r = (await (await call("POST", `/v1/projects/${other}/repositories`,
+      { name: `kept-${Bun.randomUUIDv7("hex").slice(-8)}`, url })).json()) as { id: string };
+    expect(await urlOf(r.id)).toBe(url);
+  }
+});
+
 test("a new project whose repositories would share a checkout name is refused whole", async () => {
   const slug = `pair-${Bun.randomUUIDv7("hex").slice(-12)}`;
   await refused(await call("POST", "/v1/projects", { name: "Pair", slug, repositories: [

@@ -305,6 +305,16 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
   // The summary it kept stays in the event, for the ledger; it can run to pages.
   [EventTypes.ContextCompacted]: { notice: "notice", text: () => "The agent compacted its context." },
+  // A session's names the repository as members know it (KEY/name), a
+  // task's by its checkout name; the reason is in plain words, and an event
+  // from before it had one says nothing more.
+  [EventTypes.RepositoryCloneFailed]: {
+    notice: "notice",
+    text: (p) => {
+      const named = typeof p.key === "string" && typeof p.name === "string" ? `${p.key}/${p.name}` : String(p.repository ?? "A repository");
+      return typeof p.reason === "string" && p.reason ? `${named} could not be checked out: ${p.reason}` : `${named} could not be checked out.`;
+    },
+  },
 };
 
 /** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
@@ -884,7 +894,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.unparked":
       case "run.idle_nudged":
       case EventTypes.SessionReplaced:
-      case EventTypes.ContextCompacted: {
+      case EventTypes.ContextCompacted:
+      case EventTypes.RepositoryCloneFailed: {
         const { notice, text } = NOTICES[event.eventType]!;
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
         if (notice === "unparked" && typeof payload.epoch === "number") {
