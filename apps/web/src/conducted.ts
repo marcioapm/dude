@@ -86,7 +86,7 @@ function pr(p: Record<string, unknown>): string {
 }
 
 /** What dude's notices about a task's relations are about: they show in Chat whoever decides, conductor or not. */
-const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_set"]);
+const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set"]);
 
 /** dude's notices about what the task waits on — unblocked, started when unblocked, or not — oldest first. */
 export function relationNotices(events: readonly PersistedEvent[]): ConductedLine[] {

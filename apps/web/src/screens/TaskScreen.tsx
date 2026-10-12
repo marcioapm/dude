@@ -47,7 +47,7 @@ import {
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -432,7 +432,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Where Deliver is offered, Talk it through is beside it: a task nothing
   // has started, neither delivered nor talked through, on its current
   // attempt (an earlier one is only to read).
-  const startable = !earlier && !started && item.decider === "policy" && ["received", "intake", "awaiting_confirmation", "queued"].includes(item.status);
+  const startable = !earlier && !started && item.decider === "policy" && NOT_STARTED_STATUSES.includes(item.status);
   // Startable but waiting on unmerged work: the ways are refused, with the reason.
   const blocked = startable && openBlockers(relations).length > 0;
   const onStartedAnyway = (how: "deliver" | "talk") => {
@@ -1134,7 +1134,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: face, text: <>{person} set it to start when unblocked — {HOW[String(p.how)] ?? String(p.how ?? "")}</> });
         break;
       case EventTypes.TaskAutoStartCancelled:
-        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} {AUTO_END[String(p.why)] ?? "cancelled start when unblocked"}</> });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: p.why === "failed"
+          ? <>Start when unblocked could not start it{typeof p.error === "string" ? `: ${p.error}` : ""}. It is no longer set: start it from here.</>
+          : <>{by ? person : <b>{dude}</b>} {AUTO_END[String(p.why)] ?? "cancelled start when unblocked"}</> });
         break;
       case EventTypes.TaskAutoStarted: {
         const setBy = typeof p.setByName === "string" ? p.setByName : "its owner";

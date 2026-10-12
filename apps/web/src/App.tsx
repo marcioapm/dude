@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
-import { boardScope, neighbourKeys, scopeTasks, type BoardFilter, type NavEpic, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
+import { boardScope, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
@@ -43,7 +43,7 @@ import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
 import { forgetModelOptions } from "./sessionModel.ts";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
-import { EpicOrder, useCardStarts } from "./screens/Relations.tsx";
+import { LitEpicOrder, useCardStarts, useLitCard } from "./screens/Relations.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 export interface AppProps {
@@ -292,9 +292,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       if (t) return go(inTree({ kind: "task", id: t.id }));
     }
   }, [go, projects]);
-  // The board's All · Can start · Blocked, and the relations of the card under the pointer, which the epic's order lights too.
+  // The board's All · Can start · Blocked, and the card under the pointer,
+  // whose relations the epic's order lights too: held outside App's state,
+  // so a hover re-renders the order, not the sidebar and header.
   const [boardFilter, setBoardFilter] = useState<BoardFilter>("all");
-  const [lit, setLit] = useState<ReadonlySet<string> | null>(null);
+  const litCard = useLitCard();
   const cardStarts = useCardStarts(client, people.you, (taskId, how) => {
     void load();
     if (how === "talk") go(inTree({ kind: "task", id: taskId }, "chat"));
@@ -449,7 +451,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         epic={scope.epic}
         overview={scope.epic ? (
           <>
-            <EpicOrder epic={scope.epic} onOpen={openByKey} highlight={lit} />
+            <LitEpicOrder lit={litCard} project={project} epic={scope.epic} onOpen={openByKey} />
             <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
           </>
         ) : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
@@ -457,7 +459,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onSelect={(ref) => go(inTree(ref))}
         filter={boardFilter}
         onFilterChange={setBoardFilter}
-        onHighlightChange={(key) => setLit(key ? litKeys(project, scope.epic, key) : null)}
+        onHighlightChange={litCard.set}
         cardStart={(card, focus) => cardStarts.start(card.task, focus)}
         groupBy={groupByEpic ? "epic" : null}
         laneMenu={(lane) => {
@@ -716,12 +718,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       </main>
     </div>
   );
-}
-
-/** A card's key and its relations' keys: what the epic's order lights beside the board. */
-function litKeys(project: NavProject, epic: NavEpic | null | undefined, key: string): ReadonlySet<string> | null {
-  const task = scopeTasks(project, epic).find((t) => t.key === key);
-  return task ? new Set([key, ...neighbourKeys(task)]) : null;
 }
 
 /** What a place is called, for the tab: a task's key and, for an agent, which one. */

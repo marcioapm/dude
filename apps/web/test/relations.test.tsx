@@ -20,7 +20,7 @@ import { conductedLines } from "../src/conducted.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { ApiError, type ChatSent, type StartAnyway, type TaskDetail } from "../src/api/client.ts";
 import { proposalOrder } from "../src/screens/SessionScreen.tsx";
-import { pickableTasks, useCardStarts } from "../src/screens/Relations.tsx";
+import { LitEpicOrder, pickableTasks, useCardStarts, useLitCard } from "../src/screens/Relations.tsx";
 import { Board } from "@dude/design-system/components";
 import type { NavProject } from "@dude/design-system";
 
@@ -291,6 +291,35 @@ describe("a Backlog card's start", () => {
   });
 });
 
+describe("an epic's order beside its board", () => {
+  test("hovering a card lights it and its relations in the order, through the lit card alone", async () => {
+    const epic = { id: "epc_1", title: "Billing", tasks: [
+      { id: "wi_41", key: "CP-41", title: "Meter", status: "review" as const, blocks: [{ key: "CP-44", title: "Billing page", status: "received" as const }],
+        edges: { blockedBy: [], blocks: ["CP-44"], related: [] } },
+      { id: "wi_44", key: "CP-44", title: "Billing page", status: "received" as const, blockedBy: [{ key: "CP-41", title: "Meter", status: "review" as const }],
+        edges: { blockedBy: ["CP-41"], blocks: [], related: [] } },
+      { id: "wi_47", key: "CP-47", title: "Copy", status: "received" as const, startable: true, edges: { blockedBy: [], blocks: [], related: [] } },
+    ] };
+    const project: NavProject = { id: "prj_cp", name: "control-plane", epics: [epic] };
+    let outerRenders = 0;
+    function Shell() {
+      outerRenders++;
+      const lit = useLitCard();
+      return <Board project={project} epic={epic} onHighlightChange={lit.set} overview={<LitEpicOrder lit={lit} project={project} epic={epic} />} />;
+    }
+    const { container, unmount } = await mount(<TooltipProvider><Shell /></TooltipProvider>);
+    mounted.push(unmount);
+    const before = outerRenders;
+    const item = container.querySelector('[data-board-key="task:wi_41"]')!.closest("li")!;
+    const strip = (k: string) => container.querySelector<HTMLElement>(`[data-testid=dependency-strip] [data-key="${k}"]`)!;
+    await act(async () => item.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    // Lit: CP-41 and CP-44; CP-47 dimmed.
+    expect(["CP-41", "CP-44", "CP-47"].map((k) => strip(k).hasAttribute("data-dim"))).toEqual([false, false, true]);
+    // The shell that holds the lit card did not render again for the hover.
+    expect(outerRenders).toBe(before);
+  });
+});
+
 describe("a proposal's order", () => {
   test("items step after what they wait on, by either side's word", () => {
     expect(proposalOrder({ items: [
@@ -351,6 +380,14 @@ describe("the task's history", () => {
       ev(EventTypes.ChatNotice, { about: "ready_to_merge", text: "Ready to merge." }),
     ]);
     expect(lines.map((l) => l.kind === "notice" && l.text)).toEqual(["CP-41 merged — CP-44 can start. Nothing started it: Deliver or Talk it through when you're ready."]);
+  });
+
+  test("a start when unblocked that could not start is said in Chat and Activity, and is no longer set", () => {
+    const text = "CP-41 merged, but CP-44 could not start: policy: bad. Start it from its page.";
+    const chat = conductedLines({ decider: "policy", runs: [] }, [ev(EventTypes.ChatNotice, { about: "auto_start_failed", text })]);
+    expect(chat.map((l) => l.kind === "notice" && l.text)).toEqual([text]);
+    const lines = activityLines([ev(EventTypes.TaskAutoStartCancelled, { how: "deliver", why: "failed", error: "policy: bad" })], people, [], [], 1, "CP-44");
+    expect(said(lines)).toEqual(["Start when unblocked could not start it: policy: bad. It is no longer set: start it from here."]);
   });
 
   test("Chat's head says it was released by a merge: ready to start, or started when unblocked", () => {

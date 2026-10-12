@@ -6,14 +6,14 @@
  * navigation tree.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AutoStartDialog, AutoStartMark, DependencyStrip, RelationList, RelationPicker, StartAnywayDialog, StartGate, StartMenu,
   type DialogBlocker, type PickableTask, type RelatedTask, type RelationGroupData, type RelationGroupKind, type RelationSide, type StripTask,
 } from "@dude/design-system/components";
 import { Callout } from "@dude/design-system/primitives";
-import { dependencySteps, firstName, formatDuration, type NavEpic, type NavProject, type NavTask } from "@dude/design-system";
-import { blockedRefusal, blockerList, type AutoStartHow, type TaskRelations, type TaskRelationView } from "@dude/domain";
+import { dependencySteps, firstName, formatDuration, neighbourKeys, scopeTasks, type NavEpic, type NavProject, type NavTask } from "@dude/design-system";
+import { blockedRefusal, blockerList, neverMergesRefusal, type AutoStartHow, type TaskRelations, type TaskRelationView } from "@dude/domain";
 import { ApiError, refusedBlockers, type ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
@@ -46,9 +46,7 @@ const dialogBlocker = (v: TaskRelationView): DialogBlocker => ({ ...related(v), 
 /** Why start when unblocked would never fire: a blocker marked done with nothing merged. */
 export function neverMerges(blockers: ReadonlyArray<{ key: string; unmerged?: boolean | undefined }>): string | null {
   const never = blockers.filter((b) => b.unmerged).map((b) => b.key);
-  if (never.length === 0) return null;
-  const keys = never.length > 1 ? `${never.slice(0, -1).join(", ")} and ${never.at(-1)}` : never[0]!;
-  return `${keys} ${never.length === 1 ? "was" : "were"} marked done with nothing merged and will never merge, so this would never start it.`;
+  return never.length === 0 ? null : neverMergesRefusal(never);
 }
 
 const ago = (at: string | number | Date) => formatDuration(Math.max(0, Date.now() - new Date(at).getTime()), { style: "age" });
@@ -332,6 +330,43 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
 export function refusedWords(err: unknown, taskKey: string): string | null {
   const blockers = refusedBlockers(err);
   return blockers && blockers.length > 0 ? blockedRefusal(taskKey, blockers) : null;
+}
+
+/** The card the board lights (hovered or focused), by key: a store, so its changes re-render only what reads it. */
+export interface LitCard {
+  readonly set: (key: string | null) => void;
+  readonly get: () => string | null;
+  readonly subscribe: (fn: () => void) => () => void;
+}
+
+/** One LitCard for the component's life. */
+export function useLitCard(): LitCard {
+  return useMemo(() => {
+    let key: string | null = null;
+    const listeners = new Set<() => void>();
+    return {
+      set: (next) => {
+        if (next === key) return;
+        key = next;
+        for (const fn of listeners) fn();
+      },
+      get: () => key,
+      subscribe: (fn) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    };
+  }, []);
+}
+
+/** The epic's order, lit with the board's lit card and its relations. */
+export function LitEpicOrder({ lit, project, epic, onOpen }: { lit: LitCard; project: NavProject; epic: NavEpic; onOpen?: ((key: string) => void) | undefined }) {
+  const key = useSyncExternalStore(lit.subscribe, lit.get);
+  const highlight = useMemo(() => {
+    const task = key ? scopeTasks(project, epic).find((t) => t.key === key) : undefined;
+    return task ? new Set([key!, ...neighbourKeys(task)]) : null;
+  }, [key, project, epic]);
+  return <EpicOrder epic={epic} onOpen={onOpen} highlight={highlight} />;
 }
 
 /** An epic's order for its board's overview: its steps and what can start; null for a single step. */
