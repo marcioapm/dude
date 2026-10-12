@@ -25,6 +25,13 @@
 > the session takeover and Reset's danger variant existed only to cross
 > pools without lux; they are gone. What is left to refuse across pools is
 > what lux refuses: a platform or a capability the pool lacks.
+>
+> **Round 6 (2026-10-12 18:37):** Márcio's answers to the last open
+> questions. lux gets a dry run (`validateOnly: true` on resume), so every
+> refusal comes before the park. A settings change that moves a size to
+> another pool moves parked Runs on their next resume (kept). The image's
+> platforms come from lux's own record of the Run's placements (lux#91),
+> so pinned external images are filtered too.
 
 Asked for by Márcio: "We want to add a tool so that an agent can ask to be
 restarted on a larger machine, and that persists for all runs of this agent
@@ -123,11 +130,14 @@ Where dude reads this:
   `platforms: ["linux/arm64"]` and `capabilities: {nestedContainers: bool}`
   on `Pool`. A lux without them filters nothing, and its 422 after the park
   is the answer (below).
-- **The image's platforms:** `images.Limits.Platform` (the builder's
-  `DUDE_BUILDER_PLATFORM`) for images dude builds; a pinned external image
-  has none recorded, and filters nothing.
+- **The image's platforms: lux's record of the Run's placements.** Since
+  lux#91 every placement reports `imagePlatforms` (every entry of the
+  image's manifest list or index, or a single-arch image's own), read from
+  `GET /v1/runs/{id}/placements`. That covers images dude builds and pinned
+  external ones alike, with no manifest reading in dude. A Run with no
+  placement reporting them yet (an older runner) filters nothing.
 
-The filter is a courtesy, not the check: lux's 422 is.
+The filter is a courtesy, not the check: lux's dry run is.
 
 ## No setting yet
 
@@ -157,19 +167,22 @@ One path for every move:
 - **A session** moves the same way (screen 7), keeping its conversation and
   its files (`archive.db`).
 
-**Where a lux refusal shows.** lux checks the pool on the resume, after the
-park. So the tool runs the same checks first, from lux's pool list (the
-platform, nested containers, the fit), before it parks anything:
+**Every refusal comes before the park.** Before parking anything, the
+tool asks lux the exact resume it would send (`resources` and, when the
+pool changes, `placement.poolId`) with `validateOnly: true`. lux runs every
+check a real resume would, on the live Run, changes nothing and answers
+`{valid: true, placement, resize}` or the same 4xx a real resume gives.
 
-- **dude can tell** (lux's pool list says the pool's platform and
-  capabilities): the call fails at once with lux's code and the same
-  sentence, and the agent never stops (screen 3, where the conductor told
-  the tester to try XL and it named a size the list had left out).
-- **Only lux can tell** (an older pool list, an external image): the move
-  is parked and resumed, lux answers 422, and the Run resumes where it was
-  without `resources` or `placement` (as `ResumeSized` falls back today).
-  Its next input is the same sentence, and the move row is settled with
-  `refused`. See Open questions.
+- **Refused:** the call fails at once with lux's code in plain words, and
+  the agent never stops (screen 3, where the conductor told the tester to
+  try XL and it named a size the list had left out).
+- **Accepted:** dude parks and resumes with the same body. A refusal at the
+  real resume (the pool changed in between) is still handled: the Run
+  resumes where it was without `resources` or `placement` (as
+  `ResumeSized` falls back today), its next input is the same sentence, and
+  the move row is settled with `refused`.
+- **An older lux** that does not know `validateOnly` answers 400; dude then
+  goes straight to the park and the fallback above.
 
 ### What a move keeps
 
@@ -191,7 +204,9 @@ stopped Run cannot change pools":
 - `Outcome` records the pool lux reports for the resumed placement, and
   `Machine.OtherPool` is no longer written.
 - The same plan now also moves a Run whose settings changed pools while it
-  was parked: it is no longer kept on its old size (see Open questions).
+  was parked: it is no longer kept on its old size. **Decided (Márcio):**
+  keep this; it is what the settings say. The resume's dry run guards it
+  the same way, and a refusal keeps the Run on its size with the Note.
 
 **Knowing lux supports it.** Proposed, in order:
 
@@ -228,7 +243,12 @@ Being built on a lux branch. What dude relies on:
 - **Event:** lux emits `resume.requested.pool {from, to}` (pool ids) on the
   Run when a resume changes its pool. dude reads it on the Run's follower
   to confirm the placement; it is not shown.
-- **An older lux** answers 400 to `placement`; dude falls back as above.
+- **Dry run:** `validateOnly: true` runs every check of that resume on a
+  live Run (state is judged as if it were stopped), changes nothing, needs
+  no secret values, and answers `{valid, placement, resize}` or the same
+  4xx. CLI `lux resume --dry-run`.
+- **An older lux** answers 400 to `placement` or `validateOnly`; dude falls
+  back as above.
 
 ## Persistence
 
@@ -565,18 +585,6 @@ Dark and light at 1440 comfortable, plus dark compact, unless noted.
 
 ## Open questions
 
-1. **lux's refusal comes after the park.** When dude's pre-check can't
-   tell, the Run is stopped before lux checks the pool, so a refused move
-   costs a park and a resume where it was (about 30 s, its processes lost).
-   Would lux take a dry run (`POST /v1/runs/{id}/resume` with
-   `validateOnly: true`) so the tool always refuses before parking, from
-   lux itself rather than from dude's copy of the checks?
-2. **Settings-driven resumes now cross pools.** With `PlanResize` sending
-   the pool, a parked Run whose role's settings moved to a size in another
-   pool moves on its next resume, where today it keeps its size. That
-   follows from one path, but it is a behaviour change outside this tool:
-   keep it, or send the pool only for `dude_pause = 'machine'`?
-3. **External images' platforms.** dude records the platform only of images
-   it builds. For a pinned external image the filter can't help, and lux's
-   422 is the first word. Should dude read the image's manifest list at
-   pin time?
+None left. Decided on 2026-10-12 (Márcio): lux's dry run so every refusal
+comes before the park; settings-driven resumes cross pools; image platforms
+from lux's placements.
