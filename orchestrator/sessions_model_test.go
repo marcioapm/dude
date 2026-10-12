@@ -574,7 +574,9 @@ func TestAChangeMidTurnQueuesTheMessageOnTheSameAgent(t *testing.T) {
 
 	// The agent ends its turn and reads the steer as its next one.
 	var luxID string
-	_ = s.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1`, run).Scan(&luxID)
+	if err := s.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1`, run).Scan(&luxID); err != nil {
+		t.Fatal(err)
+	}
 	s.lux.EndTurn(luxID)
 	s.until("the steer read", func() bool {
 		return s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = 'Márcio Martins: also this' AND delivered_at IS NOT NULL`, run) == 1
