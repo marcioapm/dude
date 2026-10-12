@@ -321,7 +321,7 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	in.Harness = delivery.HarnessClaudeCode
 	in.Options = map[string]any{"args": []any{"--verbose", "--settings", `{"model":"x","skipWebFetchPreflight":false}`,
 		"--add-dir", "/x", `--settings={"env":{"A":"1"},"model":"y"}`, "--settings", "/etc/claude.json",
-		"--settings", "null", "--settings", "[1]", "--extra"}}
+		"--settings", "null", "--settings", "[1]", "--settings-like", "x", "--extra"}}
 	cmd := buildSpec(c, in).Workload.Command
 	if n := slices.Index(cmd, "--settings"); n < 0 || slices.Index(cmd[n+1:], "--settings") >= 0 ||
 		slices.ContainsFunc(cmd, func(a string) bool { return strings.HasPrefix(a, "--settings=") || a == "/etc/claude.json" }) {
@@ -336,9 +336,10 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 		t.Errorf("settings = %v, want %v", settings, want)
 	}
 	// The tier's other args follow dude's --settings in their order, pairs
-	// kept together.
-	if tail, want := cmd[slices.Index(cmd, "--settings")+2:], []string{"--verbose", "--add-dir", "/x", "--extra"}; !slices.Equal(tail, want) {
-		t.Errorf("command ends %q, want %q", tail, want)
+	// kept together; one merely starting with --settings is one of them.
+	tail, wantTail := cmd[slices.Index(cmd, "--settings")+2:], []string{"--verbose", "--add-dir", "/x", "--settings-like", "x", "--extra"}
+	if !slices.Equal(tail, wantTail) {
+		t.Errorf("command ends %q, want %q", tail, wantTail)
 	}
 	if _, _, dropped := claudeCodeArgs(in.Options); !slices.Equal(dropped, []string{"--settings /etc/claude.json", "--settings null", "--settings [1]"}) {
 		t.Errorf("dropped = %q", dropped)
