@@ -18,6 +18,7 @@ import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/prim
 import { navProjects } from "../../../../packages/design-system/src/gallery/navFixtures.ts";
 import { TaskChat, TaskOverview } from "./TaskScreens.tsx";
 import { RunPage, SessionPage } from "./RunAndSession.tsx";
+import { MachinesSettings } from "./SettingsPage.tsx";
 import { P, SCENARIOS, SESSION, type Scenario } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
@@ -70,6 +71,7 @@ function Mock() {
           {scenario === "run" ? <RunPage />
             : scenario === "task" ? <TaskOverview />
             : scenario === "session" ? <SessionPage onDecide={decide} />
+            : settings ? <MachinesSettings where={scenario === "settings-org" ? "org" : "project"} />
             : <TaskChat key={scenario} scenario={scenario} onDecide={decide} />}
         </main>
       </div>
