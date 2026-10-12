@@ -154,6 +154,12 @@ export interface NetworkSettings {
   always: string[];
   /** Everything a Run started now gets, each once; ["*"] when unrestricted. */
   effective: string[];
+  /**
+   * Organisation settings only: whether its brainstorm sessions may reach
+   * any host, to read the web, whatever `effective` says. Every other role
+   * gets `effective`.
+   */
+  brainstorm?: { anywhere: boolean };
 }
 
 export type AgentEgressMode = "add" | "only";
@@ -211,8 +217,15 @@ export const settingsPatchSchema = z
       })
       .strict()
       .optional(),
-    /** An organisation's list, or a project's own and its mode (a project's only). */
-    network: z.object({ egress: agentEgressSchema.optional(), mode: z.enum(["add", "only"]).optional() }).strict().optional(),
+    /**
+     * An organisation's list, or a project's own and its mode (a project's
+     * only); `brainstorm`, an organisation's only: its brainstorms may reach
+     * any host.
+     */
+    network: z
+      .object({ egress: agentEgressSchema.optional(), mode: z.enum(["add", "only"]).optional(), brainstorm: z.boolean().optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;

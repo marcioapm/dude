@@ -1,4 +1,4 @@
--- 109_repository_github_host.sql — a repository at https://www.github.com/
+-- 110_repository_github_host.sql — a repository at https://www.github.com/
 -- is stored at https://github.com/.
 --
 -- GitHub redirects www.github.com to github.com, and git does not send

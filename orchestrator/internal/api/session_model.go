@@ -24,8 +24,9 @@ func checkSessionModel(ctx context.Context, tx pgx.Tx, m delivery.SessionModel) 
 
 // setSessionModel is the owner choosing the session's tier and harness;
 // null (or absent) sets one back to the organisation's. It changes no Run:
-// the next start of the session's agent reads it (phases.brainstormSpec),
-// and a live or parked one goes on with what it was submitted with.
+// a turn in progress finishes on what it started with, and the next
+// member's message replaces an agent on anything else with a fresh one
+// (delivery.BrainstormSwap); any other wake resumes it as it was submitted.
 func (s *Server) setSessionModel(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {

@@ -5,11 +5,11 @@ import { PromptHistory, type PromptHistoryVersion } from "../../components/Promp
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.tsx";
 import { Segmented } from "../../components/ScreenHeader.tsx";
-import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
+import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsMeta, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
-import { FormActions, KeyValueList } from "../../primitives/Layout.tsx";
+import { FormActions, KeyValueList, Callout } from "../../primitives/Layout.tsx";
 import { SearchResultList, SearchResultRow } from "../../components/SearchResultRow.tsx";
 import { EntityLine } from "../../components/EntityLine.tsx";
 import { AuthorLine } from "../../components/PersonAvatar.tsx";
@@ -191,6 +191,25 @@ const NETWORK_PRESETS: ReadonlyArray<HostPreset> = [
   { name: "PyPI", hosts: ["pypi.org", "files.pythonhosted.org"] },
 ];
 
+/** An organisation's switch that lifts the list for one kind of agent, with the risk said beside it while on. */
+function BrainstormDemo() {
+  const [on, setOn] = useState(true);
+  return (
+    <SettingsSection>
+      <SettingRow label="Brainstorm sessions" help="Let a brainstorm read documentation, competitors’ pages and anything else it finds while it researches. Other agents keep the list.">
+        <Switch checked={on} onCheckedChange={setOn}
+          label={on ? "On — brainstorm agents may reach any host, to read the web" : "Off — the list above applies to them too"} />
+        <SettingsMeta>A change reaches brainstorm agents started after it; one already started, running or parked, keeps the network it had until its session starts a new agent.</SettingsMeta>
+        {on ? (
+          <Callout tone="danger">
+            <b>Anything a page says can steer the agent.</b> A brainstorm has read-only checkouts of the repositories linked to its session, and the model’s key, in its container. A malicious page could talk it into sending them to any host.
+          </Callout>
+        ) : null}
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
 /** A project's Network page: the organisation's hosts read-only, its own, presets, refused names. */
 function NetworkDemo() {
   const org = ["github.com", "*.github.com", "objects.githubusercontent.com"];
@@ -206,6 +225,9 @@ function NetworkDemo() {
   };
   return (
     <Col>
+      <Label>An organisation’s page: Brainstorm sessions, on</Label>
+      <BrainstormDemo />
+      <Label>A project’s page</Label>
       <SettingsSection>
         <SettingRow label="Agents may reach" help="Acme’s hosts, then this project’s. A hostname, an address or a range.">
           <SettingSource source="organization" from="Acme" />
@@ -241,7 +263,7 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           <SettingsDemo />
         </Panes>
       </Block>
-      <Block id="s-network" title="HostChips readOnly / HostPresets / RefusedHosts / NetworkRefusedNote" note="What an agent may reach. An organisation’s hosts on a project’s page are read-only chips under “From Acme”; what is always reachable is muted. Presets add a toolchain by name and tick one the list already reaches whole. Refused recently is a table with Allow on each and Allow all. In the Run, a tool call whose output names a refused host carries the note as ToolCallCard’s note, under it, never behind a click.">
+      <Block id="s-network" title="HostChips readOnly / HostPresets / RefusedHosts / NetworkRefusedNote" note="What an agent may reach. An organisation’s hosts on a project’s page are read-only chips under “From Acme”; what is always reachable is muted. Presets add a toolchain by name and tick one the list already reaches whole. Refused recently is a table with Allow on each and Allow all. A switch that lifts the list for one kind of agent (Brainstorm sessions) says, while on, what it risks in a danger Callout under it. In the Run, a tool call whose output names a refused host carries the note as ToolCallCard’s note, under it, never behind a click.">
         <Panes mode={mode}>
           <NetworkDemo />
         </Panes>

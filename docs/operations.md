@@ -211,6 +211,22 @@ after it: lux cannot change a live Run's rules, and a Run keeps what it was
 submitted with (`runs.network`) through its resumes. A session's agent gets
 its organisation's list.
 
+**Brainstorm sessions** (Organisation settings → Network, owners and
+admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
+on, a brainstorm Run of the organisation is submitted unrestricted,
+whatever its list or the operator's says, so it can read the web; on
+OpenCode it also gets `OPENCODE_ENABLE_EXA=1`, its websearch tool (which
+reaches `mcp.exa.ai`; off, it would be refused, so the variable is not
+set). Every other role keeps the lists. The settings API carries it as
+`network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
+a project's); `network.effective` stays what other roles get. What it
+risks: anything a page says can steer the agent, and a brainstorm holds
+read-only checkouts of its session's repositories and the model key, which
+a malicious page could talk it into sending out. Like the lists, a change
+reaches brainstorm Runs submitted after it, either way: a brainstorm already
+started, running or parked, keeps the network it had (any host and Exa, or
+the list) through its resumes until its session starts a new agent.
+
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
 project's Run keeps it (`agent_egress_refusals`, one row per Run and name),
@@ -631,7 +647,11 @@ its model:
   (`phases.openCodeConfig`; the mapping per provider is in
   [`design/model-tiers.md`](design/model-tiers.md)). OpenCode deep-merges it
   over its file config, so a model the file declares keeps its `limit` and
-  `reasoning`.
+  `reasoning`;
+- `OPENCODE_DISABLE_MODELS_FETCH=1`: OpenCode otherwise fetches
+  `models.opencode.ai` at start, which egress refuses and which nothing
+  needs, since the image's file and the Run's inline config declare every
+  model the Run uses.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
@@ -703,7 +723,7 @@ arbitrary `fake/<model>` values are not accepted.
 
 A role on **Claude Code** (lux adapter `claude-code`) runs
 
-    claude --model <model> --permission-mode bypassPermissions --thinking-display summarized [--effort <e> | --thinking disabled] [<args>…]
+    claude --model <model> --permission-mode bypassPermissions --thinking-display summarized --settings '{"skipWebFetchPreflight":true}' [--effort <e> | --thinking disabled] [<args>…]
 
 with `ANTHROPIC_BASE_URL` (`llm.url` without its `/v1`, which Claude Code
 adds), `ANTHROPIC_API_KEY` (a lux env secret, the `llm.key`),
@@ -713,6 +733,13 @@ adds), `ANTHROPIC_API_KEY` (a lux env secret, the `llm.key`),
 summarized` is a flag Claude Code does not list: without it thinking comes
 back with empty text, and no setting or variable does the same. Effort
 `none` turns thinking off; no effort sends no `--effort`.
+`skipWebFetchPreflight` (every role) stops Claude Code asking
+`api.anthropic.com/api/web/domain_info?domain=<host>` before each WebFetch:
+the Run's egress refuses that host, so every fetch failed with "Unable to
+verify if domain … is safe to fetch" (the message names claude.ai, which is
+never contacted), and allowing it would send Anthropic every host an agent
+reads. The fetch itself still needs the page's host in the Run's network
+(see [Agent network](#agent-network)).
 
 A role on **Codex** (lux adapter `codex`) runs Codex on a provider of its
 own, `dude`: the proxy's Responses API (`wire_api = "responses"`, the only
@@ -735,7 +762,11 @@ model options; on Claude Code and Codex only `{"args": ["…"]}` is used, and
 any other key is logged as ignored. What the args do differs:
 
 - **Claude Code** appends them to its command as given (lux adds only plain
-  flags after them).
+  flags after them), except `--settings`: Claude Code keeps only the last
+  one, so a tier's `--settings <json>` (or `--settings=<json>`) is merged
+  into dude's, later keys winning, with `skipWebFetchPreflight` true
+  whatever it says. A `--settings` that is not an inline JSON object (a
+  file path) is dropped and logged.
 - **Codex** takes only its config overrides, `-c key=value` (or
   `--config key=value`), and writes each as a line of `config.toml`,
   replacing dude's own line for that key or adding one. The value is JSON (a

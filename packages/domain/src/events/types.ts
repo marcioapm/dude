@@ -101,10 +101,18 @@ export const EventTypes = {
   BrainstormRenamed: "session.renamed",
   /**
    * The owner chose the session's model tier and harness; each null follows
-   * the organisation's Brainstorm setting. It applies at the agent's next
-   * start. Payload: `{ by, tier: { id, name } | null, harness: Harness | null }`.
+   * the organisation's Brainstorm setting. It applies from the next
+   * member's message: a turn in progress finishes on the old model.
+   * Payload: `{ by, tier: { id, name } | null, harness: Harness | null }`.
    */
   BrainstormModelChanged: "session.model.changed",
+  /**
+   * A member's message found the session's agent between turns on another
+   * model than the session's: dude ended it and started a fresh one,
+   * briefed with the conversation, the message its first input. Payload:
+   * `{ from, to, tier: { name } | null, model, harness: Harness }`.
+   */
+  BrainstormModelApplied: "session.model.applied",
   /**
    * The tier the session chose was removed: it follows the organisation's
    * again. Written by the database (migration 106). Payload: `{ tier: { id, name } }`.

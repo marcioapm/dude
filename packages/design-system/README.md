@@ -528,9 +528,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   model, read with the item ("names no model yet"). After the first
   send the rail's **Model** block carries the
   same picker: its owner changes it, everyone else reads it
-  (`readOnly`). **A change applies at the agent's next start**, never
-  mid-turn; the Chat says so (`ChatNotice`, "Ana set the model to … ; it
-  applies the next time the agent starts").
+  (`readOnly`). **A change applies from the next message**, never
+  mid-turn: the app then has a fresh agent take over with the
+  conversation so far, and the rail says so under the picker ("Applies
+  from your next message: a fresh agent takes over with the conversation
+  so far."). The Chat says so too (`ChatNotice`, "Ana set the model to … ; it
+  applies from the next message", then "Started a fresh agent on … ; it has
+  the conversation so far.").
 - **A starter fills the composer; it never sends.** `StarterPills` write
   the start of a sentence ("I want to plan an epic for ") with the caret at
   its end, for the person to finish.
@@ -1791,7 +1795,15 @@ MarkdownCheatsheet.
   them all; the hosts agents were refused, in how many Runs, with Allow on
   each and Allow all; and, in a Run, the note a tool call whose output names a refused
   host carries as `ToolCallCard`'s `note` — under the card, folded or
-  open, with Allow for the project and Settings.
+  open, with Allow for the project and Settings. A switch that lifts the
+  list for one kind of agent (an organisation's **Brainstorm sessions**:
+  any host, to read the web) is a `Switch` in a `SettingRow`, its label
+  saying both states in words ("On — …" / "Off — …"), and a `SettingsMeta`
+  line under it saying who a change reaches (agents started after it; one
+  already started keeps what it had); while on, a
+  `Callout tone="danger"` under it says in plain words what it risks (what
+  a page can steer the agent into, and what the container holds that could
+  be sent out). Never a badge or an icon alone.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
   out among actions. **TerminalLink** is it for a run's lux terminal
   ("Open terminal in lux ↗"): in an agent session's rail, and in a branch

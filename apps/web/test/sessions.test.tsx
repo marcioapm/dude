@@ -875,7 +875,7 @@ describe("a session's model", () => {
     expect(client.chosen).toEqual([{ tier: null, harness: "claude-code" }]);
     await until(() => [...page.querySelectorAll("[data-testid=session-notice]")].find((n) => n.textContent?.includes("set the model")), "the notice");
     const notice = [...page.querySelectorAll("[data-testid=session-notice]")].map((n) => n.textContent).find((t) => t?.includes("set the model"));
-    expect(notice).toContain(`${ME.name.split(" ")[0]} set the model to the organisation's tier · Claude Code; it applies the next time the agent starts.`);
+    expect(notice).toContain(`${ME.name.split(" ")[0]} set the model to the organisation's tier · Claude Code; it applies from the next message.`);
     expect(rail.querySelector("[data-testid=model-picker]")!.getAttribute("aria-label")).toBe("Model: Thinker on Claude Code");
     expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · Claude Code");
   });
@@ -1145,7 +1145,7 @@ describe("a session's model", () => {
     expect(client.tiersRead).toBe(0);
     expect(rail.querySelectorAll("button").length).toBe(0);
     expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Coder on OpenCode");
-    expect(rail.textContent).toContain("Applies the next time the agent starts.");
+    expect(rail.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
   });
 
   test("while its agent runs, the header says the tier and harness its Run was started on, in the same words as between runs", async () => {
@@ -1163,14 +1163,18 @@ describe("a session's model", () => {
     expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · OpenCode (organisation default)");
   });
 
-  test("the Chat's words for a change, a reset and a removed tier", () => {
+  test("the Chat's words for a change, a reset, a removed tier and a fresh agent", () => {
     const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
     expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: { id: "mtr_opus", name: "Opus (High)" }, harness: "claude-code" }), people))
-      .toBe(`${ANA.name.split(" ")[0]} set the model to Opus (High) · Claude Code; it applies the next time the agent starts.`);
+      .toBe(`${ANA.name.split(" ")[0]} set the model to Opus (High) · Claude Code; it applies from the next message.`);
     expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: null, harness: null }), people))
-      .toBe(`${ANA.name.split(" ")[0]} set the model back to the organisation's default; it applies the next time the agent starts.`);
+      .toBe(`${ANA.name.split(" ")[0]} set the model back to the organisation's default; it applies from the next message.`);
     expect(sessionNotice(ev("session.model.fallback", { tier: { id: "mtr_opus", name: "Opus (High)" } }), people))
-      .toBe("The tier Opus (High) was removed: the session follows the organisation's from the agent's next start.");
+      .toBe("The tier Opus (High) was removed: the session follows the organisation's from the next message.");
+    expect(sessionNotice(ev("session.model.applied", { from: "run_a", to: "run_b", tier: { name: "Opus" }, model: "claude-opus-5", harness: "opencode" }), people))
+      .toBe("Started a fresh agent on Opus · OpenCode; it has the conversation so far.");
+    expect(sessionNotice(ev("session.model.applied", { from: "run_a", to: "run_b", tier: null, model: "gpt-6-sol", harness: "codex" }), people))
+      .toBe("Started a fresh agent on gpt-6-sol · Codex; it has the conversation so far.");
   });
 });
 

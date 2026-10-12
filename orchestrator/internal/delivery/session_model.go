@@ -11,8 +11,9 @@ import (
 
 // A session may choose its brainstorm's tier and harness (sessions.tier,
 // sessions.harness, migration 106); each left NULL follows the
-// organisation's Brainstorm setting. Read when a Run is built, so a change
-// applies at the agent's next start.
+// organisation's Brainstorm setting. Read when a Run is built, and at the
+// next member's message, which hands the conversation to a fresh agent
+// when the live one runs on something else (session_swap.go).
 
 const (
 	EvSessionModelChanged  = "session.model.changed"

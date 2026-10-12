@@ -485,6 +485,12 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /**
+   * The question a dude ask tool (`agent.tool.dude`) just asked, by the
+   * tool's name, until the next harness tool event: dude records the call
+   * before the harness reports it, so that report's row goes before it.
+   */
+  pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
@@ -512,6 +518,7 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    pendingAsk: null,
     briefed: false,
     cursor: 0,
   };
@@ -550,6 +557,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     const isToolEvent =
       event.eventType === EventTypes.ToolCalled || event.eventType === EventTypes.ToolCompleted;
     const tool = isToolEvent ? String(payload.tool ?? "tool") : "";
+    // Only the harness's next report of a tool can be the ask's own.
+    const ask = state.pendingAsk;
+    if (isToolEvent) state.pendingAsk = null;
 
     switch (event.eventType) {
       case EventTypes.PlanUpdated: {
@@ -595,7 +605,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           result: null,
         };
         toolsByCall.set(callId, turn);
-        turns.push(turn);
+        addToolTurn(state, turn, ask);
 
         state.activity = "tool";
         state.activeTool = { name: tool, since: event.occurredAt };
@@ -629,7 +639,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             result,
           };
           toolsByCall.set(turn.id, turn);
-          turns.push(turn);
+          addToolTurn(state, turn, ask);
         }
 
         if (state.activeTool?.name === tool) {
@@ -960,6 +970,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "agent.tool.dude": {
+        // dude's record of one of its tools, written while handling the
+        // call: an ask (ask_person, or a conductor's decide, which returns a
+        // question only when it asks) names the open question it just
+        // asked. decide_escalation names the answered one it acts on.
+        const name = String(payload.tool ?? "");
+        const asks = name === "ask_person" || name === "decide";
+        const result = payload.result as Record<string, unknown> | null | undefined;
+        const question = asks && typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
+        const open = question !== undefined && question.answeredAt === null && question.closedAt === null;
+        state.pendingAsk = open ? { tool: name, question } : null;
+        break;
+      }
+
       case "repository.requested": {
         const turn: RepositoryRequestTurn = {
           kind: "repositoryRequest", id: event.eventId, requestId: String(payload.requestId ?? ""),
@@ -1169,13 +1193,38 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
 }
 
 /**
+ * Add a tool call's row; if it is the call that asked `ask.question`, that
+ * question moves after the row. Only the agent's words may lie between
+ * them (OpenCode writes them when the call's first update arrives); any
+ * other turn after the question keeps it where it is.
+ */
+function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
+  const { turns } = state;
+  turns.push(turn);
+  if (!ask || dudeToolName(turn.tool) !== ask.tool) return;
+  const at = turns.lastIndexOf(ask.question);
+  if (at < 0) return;
+  for (let i = at + 1; i < turns.length - 1; i++) {
+    const kind = turns[i]!.kind;
+    if (kind !== "message" && kind !== "thought") return;
+  }
+  moveToEnd(state, ask.question);
+}
+
+// Translators record dude's tools by their bare name; a `mcp__dude__` or
+// `dude_` prefix is tolerated for a harness that passes the server's name through.
+function dudeToolName(name: string): string {
+  return name.replace(/^(?:mcp__dude__|dude_)/, "");
+}
+
+/**
  * Move a turn already in the transcript to its end — where the event now
  * being folded sits — as the same object, so it keeps its identity (and
  * its React key). The progress row's index follows the shift.
  */
 function moveToEnd(state: Projection, turn: Turn): void {
   const { turns } = state;
-  const from = turns.indexOf(turn);
+  const from = turns.lastIndexOf(turn);
   if (from < 0 || from === turns.length - 1) return;
   turns.splice(from, 1);
   turns.push(turn);
