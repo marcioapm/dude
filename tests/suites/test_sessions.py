@@ -364,6 +364,10 @@ def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(cl
                timeout=60, message="the agent never named the session")
     detail = client.get(f"/v1/brainstorms/{session}").json()["session"]
     assert detail["titledBy"] == "agent"
+    # Its start was recorded stage by stage, as the Chat's row reads it; once it runs, the session says no stage.
+    stages = [e["payload"]["stage"] for e in client.events(sessionId=session, limit=1000) if e["eventType"] == "run.stage"]
+    assert stages[:6] == ["waiting", "image", "volumes", "repositories", "container", "running"], stages
+    assert detail["run"]["stage"] is None
 
     # A reader can't rename it; someone not in it is told it does not exist.
     assert reader_client.post(f"/v1/brainstorms/{session}/title", {"title": "Mine"}).status_code == 403
