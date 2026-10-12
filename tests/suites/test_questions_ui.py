@@ -63,14 +63,14 @@ def _shoot(page: Page, name: str) -> None:
     page.evaluate("() => document.documentElement.setAttribute('data-theme', 'light')")
 
 
-def _asking(client: ApiClient, project: dict, title: str, ask: dict) -> tuple[dict, str]:
+def _asking(client: ApiClient, project: dict, title: str, ask: dict, context: str = "Plan it.") -> tuple[dict, str]:
     """A task whose conductor asks `ask` (Talk it through, then the scripted
     conductor calls ask_person as the message says), and its conductor Run."""
     models = {**project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{project['id']}/settings", {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
     task = client.create_task(project["id"], title)
-    sent = client.post(f"/v1/tasks/{task['id']}/chat", {"text": f"Plan it.\ntool: ask_person {json.dumps(ask)}"})
+    sent = client.post(f"/v1/tasks/{task['id']}/chat", {"text": f"{context}\ntool: ask_person {json.dumps(ask)}"})
     assert sent.status_code in (200, 201), sent.text
     run = sent.json()["runId"]
     wait_until(lambda: client.get(f"/v1/questions?runId={run}").json()["questions"], timeout=60, message="the conductor never asked")
@@ -191,6 +191,52 @@ def test_one_question_is_answered_with_one_click(
     assert query(owner_dsn, "SELECT answer FROM questions WHERE run_id = %s", (run,)) == [{"answer": "Retry 5xx and network only"}]
     _shoot(page, "3-one-answered")
     assert console_errors == []
+
+
+@pytest.mark.ui
+@pytest.mark.parametrize("gesture", ["wheel", "keyboard"])
+def test_open_question_is_visible_and_new_content_preserves_upward_reading(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, gesture: str
+):
+    context = "Plan the retry change.\n\n" + "\n\n".join(
+        f"Context {i}: preserve the payment retry budget and explain the provider failures." for i in range(24)
+    )
+    task, run = _asking(client, forge_project, "Read context above the open question", ONE, context)
+    page.set_viewport_size({"width": 1280, "height": 720})
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    turn = page.get_by_test_id("question-turn").last
+    expect(turn.get_by_text(ONE["question"], exact=True)).to_be_in_viewport(timeout=30_000)
+    for label in [*ONE["choices"], "Something else…"]:
+        expect(turn.get_by_role("radio", name=label, exact=True)).to_be_in_viewport()
+    viewport = page.get_by_role("log")
+    initial = viewport.evaluate("el => el.scrollTop")
+    assert initial > 100, "fixture needs earlier context above the question"
+    if gesture == "wheel":
+        viewport.hover()
+        page.mouse.wheel(0, -200)
+    else:
+        viewport.focus()
+        page.keyboard.press("PageUp")
+    wait_until(lambda: viewport.evaluate("el => el.scrollTop") < initial - 50,
+               timeout=5, message=f"{gesture} did not scroll the viewport upward")
+    # Wait for browser scrolling to settle, not for new content to arrive.
+    page.wait_for_function("""() => {
+        const el = document.querySelector('[role=log]');
+        const now = performance.now();
+        if (window.readingTop !== el.scrollTop) {
+            window.readingTop = el.scrollTop;
+            window.readingSince = now;
+        }
+        return now - window.readingSince >= 100;
+    }""")
+    reading = viewport.evaluate("el => el.scrollTop")
+    text = "New context while the question is still open."
+    response = client.post(f"/v1/tasks/{task['id']}/chat", {"text": text, "aside": True})
+    assert response.status_code in (200, 201), response.text
+    expect(page.get_by_test_id("human-turn").filter(has_text=text)).to_have_count(1, timeout=30_000)
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    assert client.get(f"/v1/questions?runId={run}").json()["questions"][0]["status"] == "open"
+    assert viewport.evaluate("el => el.scrollTop") == pytest.approx(reading, abs=2)
 
 
 @pytest.mark.ui

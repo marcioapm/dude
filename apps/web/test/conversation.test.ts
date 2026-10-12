@@ -608,10 +608,17 @@ describe("the tools a Run used, for the session rail", () => {
     }
   });
 
-  test("a call the harness reported and dude refused still counts", () => {
-    expect(toolUsage(project([called("dude_decide", "c_1"), called("dude_decide", "c_2"), dude("decide")])))
-      .toEqual([{ name: "dude decide", count: 2 }]);
-  });
+  for (const alias of ["decide", "dude_decide", "mcp__dude__decide"]) {
+    for (const [harnessCount, dudeCount] of [[2, 1], [1, 2]] as const) {
+      test(`${alias}: harness=${harnessCount}, dude=${dudeCount} preserves the larger count`, () => {
+        const events = [
+          ...Array.from({ length: harnessCount }, (_, i) => called(alias, `c_${i}`)),
+          ...Array.from({ length: dudeCount }, () => dude("decide")),
+        ];
+        expect(toolUsage(project(events))).toEqual([{ name: "dude decide", count: 2 }]);
+      });
+    }
+  }
 });
 
 describe("an ask's tool row and the question it asked", () => {

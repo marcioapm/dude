@@ -96,6 +96,34 @@ describe("ChatTranscript keepInView", () => {
     expect(viewport.scrollTop).toBe(8 * TURN - HEIGHT);
   });
 
+  for (const [name, gesture] of [
+    ["wheel up", () => new WheelEvent("wheel", { bubbles: true, deltaY: -100 })],
+    ["touch", () => new Event("touchmove", { bubbles: true })],
+    ["viewport ArrowUp", () => new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" })],
+    ["viewport PageUp", () => new KeyboardEvent("keydown", { bubbles: true, key: "PageUp" })],
+    ["viewport Home", () => new KeyboardEvent("keydown", { bubbles: true, key: "Home" })],
+    ["scrollbar", () => new PointerEvent("pointerdown", { bubbles: true, button: 0 })],
+  ] as const) {
+    test(`${name} releases the question so new content preserves upward reading`, async () => {
+      const viewport = await mount(turns(8), "[data-turn=t3]");
+      await act(async () => {
+        viewport.dispatchEvent(gesture());
+        viewport.scrollTop = TURN;
+        viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await render(turns(9), "[data-turn=t3]");
+      expect(viewport.scrollTop).toBe(TURN);
+    });
+  }
+
+  test("answering or removing the held question resumes tail following", async () => {
+    const viewport = await mount(turns(8), "[data-turn=t3]");
+    await render(turns(8));
+    expect(viewport.scrollTop).toBe(8 * TURN - HEIGHT);
+    await render(turns(9));
+    expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
+  });
+
   test("a turn that is not there yet holds nothing, and holds once it is", async () => {
     const viewport = await mount(turns(3), "[data-turn=t5]");
     expect(viewport.scrollTop).toBe(0);
