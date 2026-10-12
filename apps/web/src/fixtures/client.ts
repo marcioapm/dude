@@ -122,6 +122,9 @@ export class FixtureClient extends ApiClient {
     if (as === "refused") this.#refuse();
     if (as === "peers") this.#coordinate();
     this.#nav = navigationFor(scenario);
+    // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
+    if (this.#peers) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id !== TASK_ID ? t : {
+      ...t, runs: t.runs?.map((a) => ({ ...a, sessions: a.sessions.map((s) => (s.id === RUN_ID ? { ...s, activity: "Waiting on WC-212" } : s)) })) })) })) }));
     // The tree and the board say what the task's page does.
     if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
       epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, status: this.#task.status, runs: undefined } : t)) })) }));

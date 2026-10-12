@@ -113,6 +113,8 @@ export function implementerPeerEvents(): PersistedEvent[] {
     event(0.2 * MIN - 300, EventTypes.AgentMessageSent, { message: "pm_05", to: "WC-212", reply_to: null, lands: "next_step", text: M_WAIT.text }),
     event(0.2 * MIN - 600, EventTypes.ToolCompleted, { tool: "message", callId: "p2", status: "completed", output: json({ id: "pm_05", to: "WC-212", lands: "next_step" }) }),
     event(0.16 * MIN, EventTypes.ToolCalled, { tool: "wait_for_reply", callId: "p3", input: { message: "pm_05" }, title: "wait_for_reply" }),
+    event(0.15 * MIN + 200, EventTypes.ToolCompleted, { tool: "wait_for_reply", callId: "p3", status: "completed",
+      output: json({ waiting: { on: "WC-212", message: "pm_05" }, next: "End your turn: the reply resumes you." }) }),
     event(0.15 * MIN, EventTypes.AgentPeerWaiting, { message: "pm_05", on: "WC-212", how: "wait", parks_at: iso(-9.85 * MIN) }),
   ].map((e) => ({ ...e, actor: e.eventType.startsWith("agent.message") || e.eventType.startsWith("agent.peer") || e.eventType === EventTypes.AgentNoteTold ? dude : e.actor }));
 }
