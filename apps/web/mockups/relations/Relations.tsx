@@ -85,8 +85,8 @@ export function relationWords(kind: RelationChipKind, tasks: ReadonlyArray<Relat
   return `${kind === "blocked-by" ? "Blocked by" : "Blocks"} ${keyList(tasks.map((t) => `${t.key} (${stateWord(t)})`))}`;
 }
 
-/** "it can start once that is merged" / "once they are merged": the one sentence every refusal ends with. */
-export const onceMerged = (n: number) => `it can start once ${n === 1 ? "that is" : "they are"} merged`;
+/** "it can start once that's merged" / "once they're merged": the one sentence every refusal ends with. */
+export const onceMerged = (n: number) => `it can start once ${n === 1 ? "that's" : "they're"} merged`;
 
 /**
  * On a board card, between the title and its people: why it cannot start,

@@ -110,7 +110,7 @@ export function TaskPage({ k, view, onView, override, onOverride, auto: autoOpen
                 ? null
                 : unmerged.length === blockers.length
                   ? "Only merged work releases what waits on it."
-                  : `It can start once ${blockers.length === 1 ? "that is" : "they are"} merged; nothing starts it on its own then.`}
+                  : `It can start once ${blockers.length === 1 ? "that's" : "they're"} merged; nothing starts it on its own then.`}
             </span>
             {autoView ? (
               <p className={styles["callAuto"]} data-testid="auto-line">
