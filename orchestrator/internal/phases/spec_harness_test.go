@@ -276,17 +276,23 @@ func TestACodexHeaderWithDELIsValidTOML(t *testing.T) {
 	}
 }
 
+// everyRole turns goldenInput's implementer Run into each kind of Run: a
+// phase that publishes, one that does not, a task's conductor and a
+// session's brainstorm.
+var everyRole = map[string]func(*specInput){
+	"implementer": func(*specInput) {},
+	"reviewer":    func(in *specInput) { in.Phase, in.Role, in.PushBranch = "review", "reviewer", "" },
+	"conductor":   func(in *specInput) { in.Phase, in.Role = "", "conductor" },
+	"brainstorm": func(in *specInput) {
+		in.Phase, in.Role, in.TaskID, in.SessionID, in.PushBranch = "", "brainstorm", "", "ssn_1", ""
+	},
+}
+
 // Claude Code never asks api.anthropic.com about a host before a WebFetch,
 // on any role or effort: its command carries --settings with the check
 // off, as JSON Claude Code parses.
 func TestClaudeCodeSkipsTheWebFetchPreflightOnEveryRole(t *testing.T) {
-	roles := map[string]func(*specInput){
-		"implementer": func(*specInput) {},
-		"reviewer":    func(in *specInput) { in.Phase, in.Role, in.PushBranch = "review", "reviewer", "" },
-		"conductor":   func(in *specInput) { in.Phase, in.Role = "", "conductor" },
-		"brainstorm":  func(in *specInput) { in.Phase, in.Role, in.TaskID, in.SessionID, in.PushBranch = "", "brainstorm", "", "ssn_1", "" },
-	}
-	for role, edit := range roles {
+	for role, edit := range everyRole {
 		for _, effort := range []string{"", "none", "high"} {
 			c, in := goldenInput("claude-sonnet-5")
 			in.Harness, in.Effort = delivery.HarnessClaudeCode, effort
