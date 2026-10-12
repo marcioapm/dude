@@ -812,7 +812,7 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID string,
 		// Its notes, pinned as the filer's from the session, in order.
 		for _, text := range item.Notes {
 			if _, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epicID, Text: text, Person: f.Person,
-				Session: sessionID, Actor: f.ActorID}); err != nil {
+				Session: sessionID, ActorType: f.ActorType, Actor: f.ActorID}); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -830,7 +830,7 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID string,
 			return "", "", "", delivery.NoteRefusal{Reason: "no_epic", Msg: fmt.Sprintf("no epic %q in %s", item.Epic, item.Project)}
 		}
 		pinned, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epic, Text: item.Text, Replaces: item.Replaces,
-			Person: f.Person, Session: sessionID, Actor: f.ActorID})
+			Person: f.Person, Session: sessionID, ActorType: f.ActorType, Actor: f.ActorID})
 		if err != nil {
 			return "", "", "", err
 		}

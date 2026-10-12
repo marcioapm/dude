@@ -22,6 +22,7 @@ import { registerArtifactRoutes } from "./api/routes/artifacts.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
+import { registerCoordinationRoutes } from "./api/routes/coordination.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { registerPushRoutes } from "./api/routes/push.ts";
 import { registerPeopleRoutes } from "./api/routes/people.ts";
@@ -67,6 +68,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerProjectRoutes(router);
   registerWorkRoutes(router);
   registerStructureRoutes(router);
+  registerCoordinationRoutes(router);
   registerInterventionRoutes(router);
   registerPushRoutes(router);
   registerPeopleRoutes(router);

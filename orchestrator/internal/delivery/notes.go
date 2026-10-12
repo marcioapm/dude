@@ -57,13 +57,13 @@ type Note struct {
 
 // PinInput is one note pinned: by an agent's Run (Run) or a person
 // (Person, from a brainstorm session's proposal when Session), replacing
-// note Replaces when it is not 0. Actor is the ledger's actor id for a
-// person's (their key, or themselves).
+// note Replaces when it is not 0. ActorType and Actor are the ledger's
+// actor for a person's (their key, or themselves; human by default).
 type PinInput struct {
-	EpicID, Text           string
-	Replaces               int
-	Run                    RunRef
-	Person, Session, Actor string
+	EpicID, Text                      string
+	Replaces                          int
+	Run                               RunRef
+	Person, Session, ActorType, Actor string
 }
 
 // Pinned is a note pinned: its number, the note it replaced, how many live
@@ -225,6 +225,19 @@ func RetireNoteTx(ctx context.Context, tx pgx.Tx, org, epicID string, n int, per
 	return *retired, nil
 }
 
+// NoteRefusedTx records a person's note refused past the limit, on the
+// epic: epic.note.refused, as an agent's is on its Run.
+func NoteRefusedTx(ctx context.Context, tx pgx.Tx, org, epicID string, w Writer, refused NoteRefusal) error {
+	var projectID string
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM epics WHERE id = $1`, epicID).Scan(&projectID); err != nil {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvNoteRefused, OrganizationID: org, ProjectID: projectID,
+		ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: epicID,
+		Payload: map[string]any{"reason": refused.Reason, "current": refused.Current, "epicId": epicID}})
+	return err
+}
+
 // noteEvent records epic.note.pinned: on the pinning Run for an agent's,
 // on the epic (its correlation) for a person's.
 func noteEvent(ctx context.Context, tx pgx.Tx, org, projectID string, in PinInput, typ string, payload map[string]any) error {
@@ -233,7 +246,10 @@ func noteEvent(ctx context.Context, tx pgx.Tx, org, projectID string, in PinInpu
 		_, err := ledger.Append(ctx, tx, ev)
 		return err
 	}
-	actorType, actorID := ledger.ActorHuman, in.Actor
+	actorType, actorID := in.ActorType, in.Actor
+	if actorType == "" {
+		actorType = ledger.ActorHuman
+	}
 	if actorID == "" {
 		actorID = in.Person
 	}
