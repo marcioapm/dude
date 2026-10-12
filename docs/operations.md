@@ -220,14 +220,16 @@ reaches `mcp.exa.ai`; off, it would be refused, so the variable is not
 set). On Codex it gets `web_search = "live"`, pinned so a change of Codex's
 default or a tier's `-c web_search` cannot turn it off. Web search on Codex
 and Claude Code is server-side, through the LLM proxy, so egress never sees
-it: Codex sends the Responses API's hosted search tool by default on every
-role (Codex 0.144's default, which dude leaves alone on every other Run), as
-Claude Code's WebSearch is on for every role. Per-role control of search
-comes with agent capabilities. The brainstorm is also told, after
-its instructions and whatever the organisation's prompt says: "You can read
-the web: search for and fetch public pages when the conversation needs facts
-from outside the linked repositories. Say where each fact came from, with its
-URL." Off, it is told nothing about the web. Every other role keeps the
+it: Codex 0.144 sends the Responses API's hosted search tool by default,
+which dude leaves alone on every other Run, and Claude Code's WebSearch is
+on for every role. Per-role control of search comes with agent
+capabilities. The brainstorm is also told, after its instructions and
+whatever the organisation's prompt says: "You can read the web: search for
+and fetch public pages when the conversation needs facts from outside the
+linked repositories. Say where each fact came from, with its URL." Off, it
+is told nothing about the web. A brainstorm made unrestricted by `*` in the
+operator's or the organisation's list, with the setting off, gets the same
+(Exa, Codex's pinned search and the web line). Every other role keeps the
 lists. The settings API carries it as
 `network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
 a project's); `network.effective` stays what other roles get. What it
@@ -241,11 +243,6 @@ starts a new agent. A resume writes Codex's `config.toml` again, from the
 network recorded on the Run (`runs.network`), not from the setting as it is
 now; briefed again after a lost conversation, the brainstorm is told what
 that network allows.
-
-A brainstorm whose network is unrestricted for any reason may reach any
-host, and is treated as one: `*` in the operator's or the organisation's
-list, with the setting off, also gets Exa, Codex's pinned search and the
-web line in its first prompt.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
