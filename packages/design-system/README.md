@@ -1104,10 +1104,12 @@ here.
   the header's status already says Running, so the diff has no Live pill.
 - Beside the conversation, a `SessionRail` on the chrome shade: what the
   header does not say (agent, attempt), the tools it used (`ToolUsage`:
-  the harness's by its existing name, successful recorded dude actions as
+  the harness's by its own name, a harness call of one of dude's tools as
+  "dude update task (called)", successful recorded dude actions as
   "dude update task (completed)". These are separate, overlapping sources,
-  not an additive total: harness calls include failures, and completed dude
-  actions may also appear in the harness list. The names share
+  not an additive total: harness calls include failures and may repeat the
+  completed dude actions, which the rail says under the list when it has any
+  completed dude action. The names share
   one column, as wide as the longest up to 60% of the rail, so the bars
   start together), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
