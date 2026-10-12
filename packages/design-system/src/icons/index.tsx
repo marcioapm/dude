@@ -114,7 +114,9 @@ export type IconName =
   // attaching
   | "paperclip"
   | "chevron-left"
-  | "upload";
+  | "upload"
+  // agents on an epic
+  | "pin";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -264,6 +266,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   "chevron-left": { d: "M10 4l-4 4 4 4" },
   /* An arrow out of a tray: drop a file here. */
   upload: { d: "M8 10V2.5M5 5.5l3-3 3 3M2.5 10.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" },
+  /* A push pin: what is pinned for every agent on an epic. Epic notes alone. */
+  pin: { d: "M9.5 2.5 13.5 6.5M10.5 3.5 7 7l-3 .5L8.5 12 9 9l3.5-3.5M6.25 9.75 2.5 13.5" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

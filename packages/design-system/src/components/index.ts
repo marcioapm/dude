@@ -146,3 +146,11 @@ export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
 export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
 export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
+export {
+  EpicNote, EpicNoteCount, EpicNoteHistory, EpicNoteNotice, EpicNoteRow, PeerList, PeerMessage, PeerThread, PeerWaitLine, PeerWaitMark,
+  SinceDigest, TaskChip, noteLine, noteTitle, noteWordChange,
+} from "./Peer.tsx";
+export type {
+  DigestItem, EpicNoteAuthor, EpicNoteData, EpicNoteNoticeProps, EpicNoteProps, PeerDelivery, PeerListProps, PeerMessageData,
+  PeerMessageProps, PeerRow, PeerTask, PeerThreadProps, PeerThreadState, PeerWaitEnd, PeerWaitLineProps, SinceDigestProps, TaskChipProps,
+} from "./Peer.tsx";

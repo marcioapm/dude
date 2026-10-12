@@ -62,12 +62,16 @@ export interface SectionProps extends Omit<HTMLAttributes<HTMLElement>, "title">
   readonly title?: ReactNode;
   /** After the title, muted: how many. */
   readonly count?: number | undefined;
+  /** The most `count` may be: "3 of 10", named "3 of at most 10". */
+  readonly limit?: number | undefined;
+  /** What `count` counts, for its accessible name with `limit` ("notes"). */
+  readonly countNoun?: string | undefined;
   /** On the right of the title. */
   readonly actions?: ReactNode;
 }
 
 /** A titled part of a page. */
-export function Section({ title, count, actions, className, children, ...rest }: SectionProps) {
+export function Section({ title, count, limit, countNoun, actions, className, children, ...rest }: SectionProps) {
   const titleId = useId();
   return (
     <section className={cx(styles["section"], className)} aria-labelledby={title ? titleId : undefined} {...rest}>
@@ -76,7 +80,12 @@ export function Section({ title, count, actions, className, children, ...rest }:
           {title ? (
             <h2 id={titleId} className={cx(styles["sectionTitle"], "ds-label")}>
               {title}
-              {count !== undefined ? <span className={styles["sectionCount"]}>{count}</span> : null}
+              {count !== undefined && limit !== undefined ? (
+                <span className={cx(styles["sectionCount"], styles["sectionLimit"])} data-testid="section-limit"
+                  aria-label={`${count} of at most ${limit}${countNoun ? ` ${countNoun}` : ""}`}>
+                  {count} of {limit}
+                </span>
+              ) : count !== undefined ? <span className={styles["sectionCount"]}>{count}</span> : null}
             </h2>
           ) : null}
           {actions ? <div className={styles["actions"]}>{actions}</div> : null}

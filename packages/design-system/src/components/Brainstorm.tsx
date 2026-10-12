@@ -6,6 +6,7 @@ import { Icon } from "../icons/index.tsx";
 import { firstName } from "../util/format.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { Markdown } from "./Markdown.tsx";
 import styles from "./Brainstorm.module.css";
 
 /*
@@ -113,14 +114,16 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
 // The proposal card
 // ---------------------------------------------------------------------------
 
-export type ProposalKind = "epic" | "task" | "edit" | "comment";
+export type ProposalKind = "epic" | "task" | "edit" | "comment" | "note";
 
 export interface ProposalCardItem {
   readonly kind: ProposalKind;
-  /** The title: a new epic's or task's, or what an edit or comment is on ("Edit BL-58 · Daily rollup"). */
+  /** The title: a new epic's or task's, or what an edit, comment or note is on ("Edit BL-58 · Daily rollup", "Note on Usage"). */
   readonly title: ReactNode;
   /** One line under it: a task's goal, an epic's description, the comment's words. */
   readonly detail?: ReactNode;
+  /** A proposed epic's notes, pinned for its agents when it is filed: Markdown, in order. */
+  readonly notes?: ReadonlyArray<string> | undefined;
   /** An edit's text before and after. */
   readonly before?: ReactNode;
   readonly after?: ReactNode;
@@ -164,12 +167,12 @@ export interface ProposalCardProps extends Omit<HTMLAttributes<HTMLElement>, "ti
 }
 
 const KIND_WORD: Record<ProposalKind, [string, string]> = {
-  epic: ["epic", "epics"], task: ["task", "tasks"], edit: ["edit", "edits"], comment: ["comment", "comments"],
+  epic: ["epic", "epics"], task: ["task", "tasks"], edit: ["edit", "edits"], comment: ["comment", "comments"], note: ["note", "notes"],
 };
 
 /** "2 tasks, 1 edit": what a set of items is, by kind, in the card's order. */
 export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
-  const order: ProposalKind[] = ["epic", "task", "edit", "comment"];
+  const order: ProposalKind[] = ["epic", "task", "edit", "comment", "note"];
   return order
     .map((k) => [k, kinds.filter((x) => x === k).length] as const)
     .filter(([, n]) => n > 0)
@@ -293,10 +296,12 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
               <div className={styles["itemBody"]}>
                 <div className={styles["itemTitle"]}>
                   {item.kind === "epic" ? <span className={styles["kind"]}>Epic</span> : null}
+                  {item.kind === "note" ? <span className={styles["kind"]}><Icon name="pin" size={12} /> Note</span> : null}
                   {item.title}
                   {item.tag ? <span className={styles["tag"]}>{item.tag}</span> : null}
                 </div>
                 {item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.notes && item.notes.length > 0 ? <ProposedNotes notes={item.notes} /> : null}
                 {item.before !== undefined || item.after !== undefined ? (
                   <div className={styles["beforeAfter"]}>
                     <div><div className="ds-label">Now</div>{item.before}</div>
@@ -339,6 +344,19 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
 // ---------------------------------------------------------------------------
 // A session in a list, and the shared marker
 // ---------------------------------------------------------------------------
+
+/** A proposed epic's notes, under its description: what every agent on it is told once it is filed, and only then. */
+function ProposedNotes({ notes }: { readonly notes: ReadonlyArray<string> }) {
+  return (
+    <div className={styles["notes"]} data-testid="proposed-notes">
+      <div className={styles["notesHead"]}><Icon name="pin" size={12} />
+        {notes.length === 1 ? "1 epic note" : `${notes.length} epic notes`}, pinned when it is filed</div>
+      <ol className={styles["notesList"]}>
+        {notes.map((n, i) => <li key={i}><Markdown source={n} unmeasured /></li>)}
+      </ol>
+    </div>
+  );
+}
 
 /**
  * A session someone else is in too: the shared glyph, and the owner's face
