@@ -86,28 +86,26 @@ export const SESSION = {
 };
 
 /**
- * The stages a resize goes through, in the startup design's words
- * (github/design/agent-startup, STAGE_WORDS), led by the park that a
- * resize in place is: lux stops the container, keeps its state, and
- * resumes it with the new resources.
+ * Stand-in for the design system's shared stage-words map (agent-startup,
+ * with its `park` entry): what each stage says while current and once done.
  */
-export const MOVE_STAGES = [
-  { id: "park", label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept" },
-  { id: "waiting", label: "Waiting for a machine", doneLabel: "Machine found" },
-  { id: "volumes", label: "Restoring its workspace", doneLabel: "Workspace restored" },
-  { id: "container", label: "Starting the container", doneLabel: "Container started" },
-  { id: "running", label: "Starting the agent", doneLabel: "Agent started" },
-] as const;
+export const STAGE_WORDS = {
+  park: { label: "Stopping it, keeping its work", doneLabel: "Stopped, work kept" },
+  waiting: { label: "Waiting for a machine", doneLabel: "Machine found" },
+  image: { label: "Getting the image ready", doneLabel: "Image ready" },
+  volumes: { label: "Restoring its workspace", doneLabel: "Workspace restored" },
+  repositories: { label: "Checking out repositories", doneLabel: "Repositories checked out" },
+  container: { label: "Starting the container", doneLabel: "Container started" },
+  running: { label: "Starting the agent", doneLabel: "Agent started" },
+} as const;
 
-/** A fresh Run's start, the startup design's stages unchanged. */
-export const START_STAGES = [
-  { id: "waiting", label: "Waiting for a machine", doneLabel: "Machine found" },
-  { id: "image", label: "Getting the image ready", doneLabel: "Image ready" },
-  { id: "volumes", label: "Restoring its workspace", doneLabel: "Workspace restored" },
-  { id: "repositories", label: "Checking out repositories", doneLabel: "Repositories checked out" },
-  { id: "container", label: "Starting the container", doneLabel: "Container started" },
-  { id: "running", label: "Starting the agent", doneLabel: "Agent started" },
-] as const;
+export type StageId = keyof typeof STAGE_WORDS;
+
+/** A resize in place: lux parks the container, keeping its state, and resumes it with the new resources. */
+export const MOVE_STAGES: readonly StageId[] = ["park", "waiting", "volumes", "container", "running"];
+
+/** A fresh Run's start, the startup design's list unchanged. */
+export const START_STAGES: readonly StageId[] = ["waiting", "image", "volumes", "repositories", "container", "running"];
 
 export type Scenario =
   | "move" | "move-pool" | "refused" | "refused-largest" | "run" | "task" | "reset" | "reset-pool"

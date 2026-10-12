@@ -20,7 +20,7 @@ import { AgentAvatar, StatusMark, TextButton, ToolCallCard } from "@dude/design-
 import { Button, Dialog, DialogClose, Tooltip } from "@dude/design-system/primitives";
 import mc from "../../../../packages/design-system/src/components/Machines.module.css";
 import ss from "../../../../packages/design-system/src/components/ServersSummary.module.css";
-import type { Size } from "./data.ts";
+import { STAGE_WORDS, type Size, type StageId } from "./data.ts";
 import s from "./bigmachine.module.css";
 
 type Role = "implementer" | "brainstorm" | "qa_browser" | "simplifier";
@@ -240,10 +240,14 @@ function Clock({ since, muted }: { since: number; muted?: boolean }) {
   return <span role="timer" className={cx(s.tick, muted && s.tickMuted)}>{formatDuration(Math.max(0, now - since), { style: "clock" })}</span>;
 }
 
-/** The stages at a moment: `done` finished, the next live for 4s. */
-export function stepsAt(stages: ReadonlyArray<Pick<StartStep, "id" | "label" | "doneLabel">>, done: number, at: number, took: readonly number[]): StartStep[] {
-  return stages.map((st, i) => ({
-    ...st,
+/**
+ * Stand-in for the design system's shared helper: the steps for a list of
+ * stage ids, words from STAGE_WORDS, `done` of them finished (with their
+ * times) and the next current for 4s.
+ */
+export function startSteps(ids: readonly StageId[], done: number, at: number, took: readonly number[]): StartStep[] {
+  return ids.map((id, i) => ({
+    id, ...STAGE_WORDS[id],
     state: i < done ? "done" : i === done ? "current" : "pending",
     tookMs: took[i], since: i === done ? at - 4_000 : undefined,
   }));

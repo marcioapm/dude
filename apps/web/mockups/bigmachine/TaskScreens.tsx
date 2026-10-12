@@ -12,7 +12,7 @@ import {
   StepList, StepRow, TaskHistory, ToolCallCard,
 } from "@dude/design-system/components";
 import { Button, Callout, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { MachineRaises, MachineRequestCall, ResetMachineConfirm, StartProgress, stepsAt } from "./components.tsx";
+import { MachineRaises, MachineRequestCall, ResetMachineConfirm, StartProgress, startSteps } from "./components.tsx";
 import { ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_LARGE, REASON_XL, START_STAGES, TASK, size } from "./data.ts";
 
 const MIN = 60_000;
@@ -95,7 +95,7 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
                 <ChatNotice kind="restart" by={DUDE} at={asked + 2_000} data-testid="move-notice"
                   text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
                 <ChatRunLine role="implementer" status="starting" statusLabel="Starting" what={WHAT} facts={["XL", TASK.fresh]} onOpen={() => undefined} />
-                <StartProgress verb="Starting" steps={stepsAt(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 2_000} defaultOpen
+                <StartProgress verb="Starting" steps={startSteps(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 2_000} defaultOpen
                   avatar={<AgentAvatar role="implementer" size="chat" />} />
               </>
             ) : (
@@ -107,7 +107,7 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
                 </ChatAside>
                 <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
                   text="Moving the implementer to Large: it keeps its conversation and work. Later implementer Runs in this task run on Large too." />
-                <StartProgress verb="Moving to Large" steps={stepsAt(MOVE_STAGES, 2, Date.now(), [6_400, 11_200])} startedAt={asked + 1_000} defaultOpen
+                <StartProgress verb="Moving to Large" steps={startSteps(MOVE_STAGES, 2, Date.now(), [6_400, 11_200])} startedAt={asked + 1_000} defaultOpen
                   avatar={<AgentAvatar role="implementer" size="chat" />} />
               </>
             )}
