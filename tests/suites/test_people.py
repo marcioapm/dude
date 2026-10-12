@@ -490,9 +490,9 @@ _SHOW_UNFOCUSED = """() => {
 @pytest.mark.ui
 def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, client: ApiClient, owner_dsn: str,
                                                      console_errors: list, presence_session):
-    """A tab nobody is using reads nothing while hidden and sends no
-    `x-dude-active`, so its person goes offline five minutes after they last
-    used it, whatever the tab does."""
+    """A hidden tab does no background people polling and sends no
+    `x-dude-active`, so its person goes offline five minutes after the last
+    recorded active request, whatever the tab does."""
     me = client.get("/v1/me").json()["person"]
     people_reads: list[str | None] = []
     sent: list[str | None] = []

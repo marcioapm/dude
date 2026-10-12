@@ -5,10 +5,10 @@
  *
  * Read once for the shell, again each minute while the page is shown and
  * at once when it is shown again — `online` lapses by the clock, five
- * minutes after someone last used dude — and on a live `person.seen`,
+ * minutes after the last recorded active request — and on a live `person.seen`,
  * which the shell's event stream hands to `seen`. While the tab is in use
  * (activity.ts) that minute's read is also what keeps you online when you
- * read without touching anything; a hidden tab reads nothing.
+ * read without touching anything; the minute read stops while hidden.
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";

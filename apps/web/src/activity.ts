@@ -48,10 +48,6 @@ export function createActivity(doc: DocumentLike, loadedAt: number): Activity {
 // This page's: created when the app's code first loads, which is the page load.
 const page = typeof document === "undefined" ? null : createActivity(document, Date.now());
 
-export function markActive(now: number): void {
-  page?.markActive(now);
-}
-
 export function isActive(now: number): boolean {
   return page?.isActive(now) ?? false;
 }

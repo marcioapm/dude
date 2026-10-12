@@ -1,9 +1,9 @@
 /**
- * Presence: who is using dude. A request counts only when it says so with
+ * Presence: who is using dude. A person-session request counts only with
  * `x-dude-active: 1`, which the web app sends from a shown, focused tab
- * that had input in the last five minutes (apps/web/src/activity.ts); the
- * CLI, MCP, scripts and the event stream never send it, so they never
- * count. `people.last_seen_at` is touched at most once a minute per
+ * that had input in the last five minutes (apps/web/src/activity.ts). API
+ * keys never count, even with the header; ordinary automation and the event
+ * stream do not send it. `people.last_seen_at` is touched at most once a minute per
  * person (this process remembers when it last did), and each touch is
  * announced as a live `person.seen` event so open pages update their
  * Online row. No Redis: at this size a row per person is enough, and the
