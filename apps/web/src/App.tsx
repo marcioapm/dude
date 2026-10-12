@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { Board, Breadcrumb, ScreenHeader, Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
@@ -35,6 +35,8 @@ import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
+import { EpicCoordination } from "./screens/EpicCoordination.tsx";
+import type { EpicView } from "./place.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { SessionsScreen } from "./screens/SessionsScreen.tsx";
@@ -423,13 +425,22 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     );
   } else if (scope) {
     const project = scope.project;
+    const epic = scope.epic;
     flush = true;
-    main = (
+    const epicView = place?.view === "tree" && place.epicView === "coordination" ? "coordination" : "board";
+    const newTask = (
+      <Button size="sm" variant="primary" leadingIcon="plus" data-testid="new-task"
+        onClick={() => act({ kind: "newTask", projectId: project.id, epicId: epic?.id ?? null })}>
+        New task
+      </Button>
+    );
+    const board = (
       <Board
         project={project}
         you={people.you}
-        epic={scope.epic}
-        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
+        epic={epic}
+        hideHeader={Boolean(epic)}
+        overview={epic ? <EpicMetricsSection client={client} epicId={epic.id} version={version} />
           : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
@@ -439,40 +450,55 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           const items = rowActions(project, { kind: "epic", id: lane.epic.id }, act);
           return items ? <RowMenu items={items} label={`Actions for ${lane.title}`} size="sm" /> : null;
         }}
-        headerActions={
+        headerActions={epic ? undefined : (
           <>
-            {scope.epic ? (
-              <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
-                onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, scope.epic!) })}>
-                Edit epic
-              </Button>
-            ) : (
-              <>
-                <Button size="sm" variant={groupByEpic ? "secondary" : "quiet"} leadingIcon="layers" aria-pressed={groupByEpic}
-                  data-testid="group-by-epic"
-                  onClick={() => {
-                    localStorage.setItem(GROUP_BY_EPIC, groupByEpic ? "0" : "1");
-                    setGroupByEpic(!groupByEpic);
-                  }}>
-                  Group by epic
-                </Button>
-                <Button size="sm" variant="secondary" leadingIcon="layers" data-testid="new-epic"
-                  onClick={() => act({ kind: "newEpic", projectId: project.id })}>
-                  New epic
-                </Button>
-                <Button size="sm" variant="quiet" leadingIcon="settings" data-testid="project-settings-button"
-                  onClick={() => go({ view: "projectSettings", projectId: project.id })}>
-                  Settings
-                </Button>
-              </>
-            )}
-            <Button size="sm" variant="primary" leadingIcon="plus" data-testid="new-task"
-              onClick={() => act({ kind: "newTask", projectId: project.id, epicId: scope.epic?.id ?? null })}>
-              New task
+            <Button size="sm" variant={groupByEpic ? "secondary" : "quiet"} leadingIcon="layers" aria-pressed={groupByEpic}
+              data-testid="group-by-epic"
+              onClick={() => {
+                localStorage.setItem(GROUP_BY_EPIC, groupByEpic ? "0" : "1");
+                setGroupByEpic(!groupByEpic);
+              }}>
+              Group by epic
             </Button>
+            <Button size="sm" variant="secondary" leadingIcon="layers" data-testid="new-epic"
+              onClick={() => act({ kind: "newEpic", projectId: project.id })}>
+              New epic
+            </Button>
+            <Button size="sm" variant="quiet" leadingIcon="settings" data-testid="project-settings-button"
+              onClick={() => go({ view: "projectSettings", projectId: project.id })}>
+              Settings
+            </Button>
+            {newTask}
           </>
-        }
+        )}
+        {...(epic ? { id: "epic-board-panel", role: "tabpanel", "aria-labelledby": "epic-board-tab" } : {})}
       />
+    );
+    main = !epic ? board : (
+      // An epic's page: its board, or how its tasks' agents coordinate, under one header.
+      <div className="screen epicScreen" data-testid="epic-screen">
+        <ScreenHeader className="epicHeader"
+          lead={<Breadcrumb items={[
+            { id: project.id, label: project.name, onSelect: () => go(inTree({ kind: "project", id: project.id })) },
+            { id: epic.id, label: epic.title, icon: "layers" },
+          ]} />}
+          meta={<Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
+            onChange={(v) => go({ view: "tree", ref: { kind: "epic", id: epic.id }, ...(v === "coordination" ? { epicView: v } : {}) }, true)}
+            options={[
+              { value: "board", label: "Board" },
+              { value: "coordination", label: <>Coordination<OpenWaits client={client} epicId={epic.id} version={version} /></> },
+            ]} />}
+          actions={<>
+            <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
+              onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, epic) })}>
+              Edit epic
+            </Button>
+            {newTask}
+          </>} />
+        {epicView === "board" ? board : (
+          <EpicCoordination client={client} epicId={epic.id} epic={epic} version={version} onOpenTask={(id) => go(inTree({ kind: "task", id }))} />
+        )}
+      </div>
     );
   } else if (selected?.kind === "task" || sessionTask) {
     // A session opens on its task's page, beside the task's other sessions.
@@ -685,6 +711,19 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       </main>
     </div>
   );
+}
+
+/** How many of an epic's agents wait on a peer's reply now: the Coordination switch's count, none at zero. */
+function OpenWaits({ client, epicId, version }: { client: ApiClient; epicId: string; version: number }) {
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    let current = true;
+    client.epicThreads(epicId).then((t) => current && setWaiting(t.waiting), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [client, epicId, version]);
+  return waiting > 0 ? <span className="ds-tnum runCount" aria-label={`, ${waiting} waiting`}>{waiting}</span> : null;
 }
 
 /** What a place is called, for the tab: a task's key and, for an agent, which one. */

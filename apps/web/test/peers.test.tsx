@@ -6,14 +6,22 @@
  * render compactly, and the turns draw with the epic's threads and notes.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { EventTypes, type EpicNotes, type EpicPeers, type EpicThreads, type PersistedEvent } from "@dude/domain";
+import { act, click, mount, until } from "./dom.ts";
+import { ApiError } from "../src/api/client.ts";
+import { FixtureClient } from "../src/fixtures/client.ts";
+import { EPIC, RUN_ID } from "../src/fixtures/data.ts";
+import { CONDUCTOR_ID } from "../src/fixtures/peers.ts";
+import { EpicCoordination } from "../src/screens/EpicCoordination.tsx";
 import { project, type DigestTurn, type PeerWaitTurn, type ToolTurn } from "../src/api/conversation.ts";
-import { renderTurn } from "../src/screens/RunScreen.tsx";
+import { RunScreen, renderTurn } from "../src/screens/RunScreen.tsx";
 import { listedPeers, messagesById, noPeers, waitWords, type PeerContext } from "../src/coordination.tsx";
 import { PeerList } from "@dude/design-system/components";
-import type { People } from "../src/people.tsx";
+import { PeopleProvider, type People } from "../src/people.tsx";
 
 let cursor = 0;
 function ev(eventType: string, payload: Record<string, unknown> = {}, at?: string): PersistedEvent {
@@ -197,5 +205,112 @@ describe("the turns, drawn", () => {
     const now = Date.parse("2026-10-12T13:47:02Z");
     expect(waitWords("ABS-2", "2026-10-12T13:57:02Z", false, now)).toBe("Waiting on ABS-2 · parks in 10 min");
     expect(waitWords("ABS-2", null, true, now)).toBe("Waiting on ABS-2 · parked");
+  });
+});
+
+let mounted: Array<() => Promise<void>> = [];
+beforeEach(() => localStorage.setItem("dude.fixtures.run", "peers"));
+afterEach(async () => {
+  for (const unmount of mounted) await unmount();
+  mounted = [];
+  localStorage.clear();
+});
+async function show(node: ReactNode, client: FixtureClient) {
+  const { container, unmount } = await mount(
+    <TooltipProvider><ToastProvider><PeopleProvider client={client}>{node}</PeopleProvider></ToastProvider></TooltipProvider>,
+  );
+  mounted.push(unmount);
+  return container;
+}
+const setText = (el: HTMLTextAreaElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+});
+
+describe("an epic's Coordination view", () => {
+  async function view(client = new FixtureClient("a")) {
+    const opened: string[] = [];
+    const page = await show(<EpicCoordination client={client} epicId={EPIC.id} epic={null} version={0} onOpenTask={(id) => opened.push(id)} />, client);
+    await until(() => page.querySelector("[data-testid=coordination]"), "the view");
+    return { page, client, opened };
+  }
+
+  test("has the epic's notes, its threads newest first, and its tasks; a task opens", async () => {
+    const { page, opened } = await view();
+    const notes = page.querySelector("[data-testid=epic-notes]")!;
+    expect(notes.textContent).toContain("Read them with useTotals(country)");
+    expect(notes.textContent).toContain("Everything new in checkout goes behind checkout_v2");
+    const threads = page.querySelector("[data-testid=epic-threads]")!;
+    const text = threads.textContent ?? "";
+    expect(text.indexOf("still write billing.country")).toBeLessThan(text.indexOf("Which hook gives the totals"));
+    expect(text).toContain("only the two agents write in it");
+    const peers = page.querySelector<HTMLElement>("[data-testid=epic-peers]")!;
+    expect(peers.textContent).toContain("WC-212");
+    const row = [...peers.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent?.includes("WC-215"))!;
+    await click(row);
+    expect(opened).toEqual(["t_215"]);
+  });
+
+  test("a person pins a note, replaces one with its words to start from, and retires one", async () => {
+    const { page } = await view();
+    const field = page.querySelector<HTMLTextAreaElement>("textarea[data-testid=note-text], [data-testid=note-text] textarea")!;
+    await setText(field, "**Copy.** Button labels come from `checkout.json`.");
+    await click(page.querySelector("[data-testid=pin-note]")!);
+    await until(() => page.querySelector("[data-testid=epic-notes] ul")!.textContent?.includes("Button labels come from checkout.json"), "the pinned note");
+    expect(field.value).toBe("");
+
+    const replace = [...page.querySelectorAll<HTMLElement>("[data-testid=epic-notes] button")].find((b) => b.textContent === "Replace")!;
+    await click(replace);
+    expect(field.value).not.toBe("");
+    expect(page.querySelector("[data-testid=pin-note]")!.textContent).toMatch(/^Replace note \d+$/);
+    const replacing = Number(page.querySelector("[data-testid=pin-note]")!.textContent!.replace(/\D/g, ""));
+    await setText(field, "**Copy.** Labels come from `checkout.v2.json`.");
+    await click(page.querySelector("[data-testid=pin-note]")!);
+    await until(() => page.querySelector("[data-testid=epic-notes] ul")!.textContent?.includes("checkout.v2.json"), "the replacement");
+    const current = page.querySelector("[data-testid=epic-notes] ul")!.textContent ?? "";
+    expect(current).not.toContain("checkout.json");
+    expect(replacing).toBeGreaterThan(0);
+
+    const before = page.querySelectorAll("[data-testid=epic-notes] ul > *").length;
+    const retire = [...page.querySelectorAll<HTMLElement>("[data-testid=epic-notes] ul button")].find((b) => b.textContent === "Retire")!;
+    await click(retire);
+    await click(await until(() => document.querySelector("[data-testid=retire-confirm]"), "the confirmation"));
+    await until(() => page.querySelectorAll("[data-testid=epic-notes] ul > *").length === before - 1, "the note retired");
+  });
+
+  test("a pin the orchestrator refuses keeps the words and says why", async () => {
+    const client = new FixtureClient("a");
+    client.pinEpicNote = () => Promise.reject(new ApiError(409, "note_limit", "The epic has 10 notes; replace or retire one first."));
+    const { page } = await view(client);
+    const field = page.querySelector<HTMLTextAreaElement>("textarea[data-testid=note-text], [data-testid=note-text] textarea")!;
+    await setText(field, "One more.");
+    await click(page.querySelector("[data-testid=pin-note]")!);
+    await until(() => page.textContent?.includes("The epic has 10 notes; replace or retire one first."), "the refusal");
+    expect(field.value).toBe("One more.");
+  });
+});
+
+describe("a Run on an epic", () => {
+  test("its header says whom it waits on, its rail its peers and the epic's notes, its transcript its peer turns", async () => {
+    const client = new FixtureClient("a");
+    const page = await show(<RunScreen client={client} runId={RUN_ID} onBack={() => {}} />, client);
+    const waiting = await until(() => page.querySelector("[data-testid=run-waiting-peer]"), "the header's wait");
+    expect(waiting.textContent).toMatch(/^Waiting on WC-212 · parks in \d+ min$/);
+    const rail = await until(() => page.querySelector("[data-testid=rail-peers]"), "the rail's peers");
+    expect(rail.textContent).toContain("WC-215");
+    expect(rail.textContent).not.toContain("WC-214");
+    expect(page.querySelector("[data-testid=rail-notes]")!.textContent).toContain("2 of 10 pinned · all read");
+    const text = page.textContent ?? "";
+    expect(text).toContain("useTotals(country)");
+    expect(text).toContain("Epic note replaced: 3 → 4");
+  });
+
+  test("an ended conductor's transcript has the digest it was briefed with, before its briefing", async () => {
+    const client = new FixtureClient("a");
+    const page = await show(<RunScreen client={client} runId={CONDUCTOR_ID} onBack={() => {}} />, client);
+    const digest = await until(() => [...page.querySelectorAll("*")].find((e) => e.children.length < 6 && e.textContent?.startsWith("Since the conductor last looked")), "the digest");
+    expect(digest.textContent).toContain("4 messages · 1 note change · WC-215 awaiting input");
+    const text = page.textContent ?? "";
+    expect(text.indexOf("Since the conductor last looked")).toBeLessThan(text.indexOf("Conductor for WC-214."));
   });
 });
