@@ -2,16 +2,25 @@ package agenttools_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // The trailer's address: commit email, else the GitHub noreply address
@@ -94,6 +103,80 @@ func TestARunReadsOnlyItsOwnTasksCoauthors(t *testing.T) {
 	mustExec(t, f.owner, `DELETE FROM task_people WHERE person_id = $1`, "per_a_"+f.org)
 	if _, body := get(mine); body != "Co-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>\n" {
 		t.Errorf("after the owner left: %q", body)
+	}
+}
+
+// appForges is an organisation connected to GitHub as an App, served by a
+// fake GitHub whose GET /app waits appDelay first.
+type appForges struct{ gh *forge.GitHub }
+
+func (a appForges) For(context.Context, string) (*forge.GitHub, error) { return a.gh, nil }
+
+func newAppForges(t *testing.T, appDelay time.Duration) appForges {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := fakegithub.NewApp(9101, "dude-co", &key.PublicKey)
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 11} })
+	h := app.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app" {
+			select {
+			case <-time.After(appDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	block := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return appForges{forge.NewGitHub(forge.Credential{Auth: "github_app", Secret: string(block), AppID: "9101", APIBaseURL: srv.URL})}
+}
+
+// getCoauthors is GET /git/coauthors as a Run with token.
+func (f *fixture) getCoauthors(t *testing.T, token string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", f.url+"/git/coauthors", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
+}
+
+// With a GitHub App, the endpoint reads the App's bot and leaves out a
+// person whose address is the bot's.
+func TestARunsCoauthorsLeaveOutTheAppsBot(t *testing.T) {
+	f := setupWith(t, &agenttools.Server{Forges: newAppForges(t, 0)})
+	f.coauthorTask(t)
+	mustExec(t, f.owner, `UPDATE people SET commit_email = '4242+dude-co[bot]@users.noreply.github.com' WHERE id = $1`, "per_a_"+f.org)
+	token := f.run(t, "run_co_app", "implementer", "running")
+	if status, body := f.getCoauthors(t, token); status != 200 || body != "Co-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>\n" {
+		t.Errorf("with the App's bot on the task: %d %q, want Bo alone", status, body)
+	}
+}
+
+// GitHub slow to say who the App's bot is: the people's trailers come
+// within the endpoint's bound, the bot left in only if a person is it.
+func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
+	f := setupWith(t, &agenttools.Server{Forges: newAppForges(t, 10*time.Second)})
+	f.coauthorTask(t)
+	token := f.run(t, "run_co_slow", "implementer", "running")
+	start := time.Now()
+	status, body := f.getCoauthors(t, token)
+	if took := time.Since(start); took >= 3*time.Second {
+		t.Errorf("the endpoint took %s, want under 3s", took)
+	}
+	if status != 200 || body != "Co-authored-by: Ana Lima <ana@corp.example>\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>\n" {
+		t.Errorf("with GitHub slow: %d %q, want both people", status, body)
 	}
 }
 
@@ -183,6 +266,47 @@ func TestTheCommitHookAddsTheTasksPeopleAsCoauthors(t *testing.T) {
 	r.git("commit", "-q", "--allow-empty", "--no-verify", "-m", "Quick")
 	if got := r.message(); !strings.HasSuffix(got, want) {
 		t.Errorf("message with --no-verify:\n%s", got)
+	}
+}
+
+// A commit git replays keeps the people it was written with: a rebase
+// after the task changed hands adds nobody to it, and the next new commit
+// names the new owner.
+func TestARebasedCommitKeepsItsCoauthors(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	mustExec(t, f.owner, `DELETE FROM task_people WHERE person_id = $1`, "per_b_"+f.org)
+	token := f.run(t, "run_hook_rebase", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	old := "Co-authored-by: Ana Lima <ana@corp.example>"
+	r.git("commit", "-q", "--allow-empty", "-m", "Base")
+	r.git("commit", "-q", "--allow-empty", "-m", "Under Ana")
+	before := r.git("rev-parse", "HEAD")
+
+	// The task passes from Ana to Bo.
+	mustExec(t, f.owner, `DELETE FROM task_people WHERE person_id = $1`, "per_a_"+f.org)
+	mustExec(t, f.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`,
+		f.item, "per_b_"+f.org, f.org)
+	// Committed at another time, so the replayed commit is a new one.
+	env := r.env
+	r.env = append(slices.Clone(env), "GIT_COMMITTER_DATE=2001-01-01T00:00:00Z")
+	r.git("rebase", "-q", "--force-rebase", "--keep-empty", "HEAD~1")
+	r.env = env
+	if r.git("rev-parse", "HEAD") == before {
+		t.Fatal("the rebase did not rewrite the commit")
+	}
+	if got := r.message(); got != "Under Ana\n\n"+old {
+		t.Errorf("the rebased commit:\n%s\nwant Ana alone", got)
+	}
+	// A cherry-pick of it, the same.
+	r.git("switch", "-q", "-c", "side", "HEAD~1")
+	r.git("cherry-pick", "--allow-empty", "--keep-redundant-commits", "main")
+	if got := r.message(); got != "Under Ana\n\n"+old {
+		t.Errorf("the cherry-picked commit:\n%s\nwant Ana alone", got)
+	}
+	r.git("commit", "-q", "--allow-empty", "-m", "Under Bo")
+	if got := r.message(); got != "Under Bo\n\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>" {
+		t.Errorf("a new commit after the rebase:\n%s\nwant Bo", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -84,6 +85,9 @@ func taskCoauthors(ctx context.Context, tx pgx.Tx, c Caller) ([]CoauthorPerson, 
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[CoauthorPerson])
 }
 
+// botLookup bounds the co-authors endpoint's wait for the App's bot.
+const botLookup = 2 * time.Second
+
 // coauthors is GET /git/coauthors: the Co-authored-by trailers for a commit
 // the calling Run makes now, one a line, as text — what the commit hook in
 // the agent's image appends. Not a tool, and not in the ledger: it is read
@@ -100,13 +104,17 @@ func (s *Server) coauthors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The bot commits with a GitHub App: never its own co-author. Not known
-	// (no forge, GitHub down) leaves nobody out on its account.
+	// (no forge, GitHub down or slow) leaves nobody out on its account: a
+	// commit waits at most botLookup on GitHub, well inside the CLI's own
+	// timeout, so its people are never lost to a slow GitHub.
 	bot := ""
 	if s.Forges != nil && len(people) > 0 {
 		if gh, err := s.Forges.For(r.Context(), c.Org); err == nil && gh != nil && gh.IsApp() {
-			if id, err := gh.Bot(r.Context()); err == nil {
+			ctx, cancel := context.WithTimeout(r.Context(), botLookup)
+			if id, err := gh.Bot(ctx); err == nil {
 				bot = id.Email
 			}
+			cancel()
 		}
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

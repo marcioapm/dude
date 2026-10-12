@@ -8,8 +8,10 @@
 # runs for every commit, `git commit -m`, --amend and --no-verify included
 # (--no-verify skips only pre-commit and commit-msg). A trailer the message
 # has already is not added again (--if-exists addIfDifferent), so an amend
-# keeps one of each. Without dude's tools the commit goes ahead without
-# trailers, said in one line on stderr: never a refusal.
+# keeps one of each. A commit git replays (rebase, cherry-pick, revert) gets
+# none added: it keeps the co-authors it was written with. Without dude's
+# tools the commit goes ahead without trailers, said in one line on stderr:
+# never a refusal.
 #
 # Under every name it then runs the repository's own hook of that name, with
 # the same arguments and stdin, and exits as it does. A system core.hooksPath
@@ -35,7 +37,20 @@ EOF
   git interpret-trailers --in-place --if-exists addIfDifferent "$@" "$msg"
 }
 
-if [ "$name" = prepare-commit-msg ] && [ -n "$1" ]; then
+# rewriting: git is replaying commits already made (a rebase, a cherry-pick,
+# a revert). Their co-authors are the people on the task when they were
+# written, which they carry already; today's are not added to them.
+rewriting() {
+  for p in rebase-merge rebase-apply; do
+    d=$(git rev-parse --git-path "$p" 2>/dev/null) && [ -d "$d" ] && return 0
+  done
+  for p in CHERRY_PICK_HEAD REVERT_HEAD; do
+    f=$(git rev-parse --git-path "$p" 2>/dev/null) && [ -f "$f" ] && return 0
+  done
+  return 1
+}
+
+if [ "$name" = prepare-commit-msg ] && [ -n "$1" ] && ! rewriting; then
   if ! command -v dude >/dev/null 2>&1; then
     echo "dude: committing without co-authors: no dude CLI on PATH" >&2
   elif trailers=$(dude git coauthors 2>&1); then
