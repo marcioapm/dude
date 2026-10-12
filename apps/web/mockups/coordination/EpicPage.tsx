@@ -11,7 +11,7 @@
 import { Board, Breadcrumb, EpicCard, ScreenHeader, Segmented, type EpicSummary } from "@dude/design-system/components";
 import { Button, RowMenu, Section, Textarea } from "@dude/design-system/primitives";
 import { EpicNote, EpicNoteHistory, PeerList, PeerMessage, PeerThread, PeerWaitMark } from "./Peer.tsx";
-import { EPIC, EPIC_ID, KEYS, MSG, NOTES, NOTE_INDEX, P, PEERS, PROJECT, REPLACED, THREADS, at, navAbs, type TaskKey } from "./data.ts";
+import { EPIC, EPIC_ID, KEYS, MSG, NOTES, P, PEERS, PLANNED, PROJECT, REPLACED, THREADS, at, navAbs, type TaskKey } from "./data.ts";
 import s from "./screens.module.css";
 
 export type EpicView = "board" | "coordination";
@@ -40,7 +40,7 @@ export function EpicPage({ view, onView, moment, historyOpen, onProject, onOpenT
   const project = navAbs(moment === "waiting");
   const epic = project.epics![0]!;
   const open = moment === "waiting" ? 1 : 0;
-  const notes = moment === "waiting" ? [NOTE_INDEX] : NOTES;
+  const notes = moment === "waiting" ? PLANNED : NOTES;
   return (
     <div className="screen">
       <ScreenHeader className={s.headerPad}
@@ -102,7 +102,7 @@ export function EpicPage({ view, onView, moment, historyOpen, onProject, onOpenT
             <Section title="Tasks on this epic" count={KEYS.length}>
               <PeerList peers={KEYS.map((k) => PEERS[k])} onOpen={onOpenTask}
                 overrides={moment === "answered"
-                  ? { "ABS-4": { waitingOn: undefined, lastSaid: "Note 3 renames `_var` to `_variance`; changed the client's column to match. Writing the panel.", head: "a41d0e2", files: [{ path: "frontend/src/metrics/previewClient.ts", add: 76, del: 0 }] } }
+                  ? { "ABS-4": { waitingOn: undefined, lastSaid: "Note 4 renames `_var` to `_variance`; changed the client's column to match. Writing the panel.", head: "a41d0e2", files: [{ path: "frontend/src/metrics/previewClient.ts", add: 76, del: 0 }] } }
                   : { "ABS-2": { head: "c02b9e8", files: [{ path: "backend/src/engine/client.ts", add: 6, del: 1 }], lastSaid: "ABS-4 is waiting on my contract. Checking what ABS-1 has before I fix anything; asked it for its engine path." } }} />
             </Section>
           </div>

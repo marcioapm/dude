@@ -11,14 +11,15 @@ import "@dude/design-system/tokens.css";
 import "@dude/design-system/base.css";
 import "../../src/app.css";
 import { ThemeProvider, useTheme, type ThemePreference } from "@dude/design-system";
-import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarToggle } from "@dude/design-system/components";
+import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle } from "@dude/design-system/components";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
 import { EpicPage, ProjectPage, type EpicView } from "./EpicPage.tsx";
+import { BrainstormProposal } from "./Proposal.tsx";
 import { Abs2Transcript, Abs4Reviewer, Abs4Transcript, ConductorChat, GuardsTranscript } from "./Transcripts.tsx";
-import { EPIC_ID, KEYS, P, PEERS, navAbs, type TaskKey } from "./data.ts";
+import { EPIC_ID, KEYS, P, PEERS, SESSION, navAbs, type TaskKey } from "./data.ts";
 
-type Screen = "1" | "2" | "3" | "4" | "5" | "6";
+type Screen = "1" | "2" | "3" | "4" | "5" | "6" | "8";
 
 const SCREENS: ReadonlyArray<{ value: Screen; label: string }> = [
   { value: "1", label: "1 Epic · Coordination" },
@@ -27,6 +28,7 @@ const SCREENS: ReadonlyArray<{ value: Screen; label: string }> = [
   { value: "4", label: "4 Conductor" },
   { value: "5", label: "5 Rate limit" },
   { value: "6", label: "6 Board" },
+  { value: "8", label: "8 Brainstorm" },
 ];
 
 /** What each screen's Moment switch offers. */
@@ -72,6 +74,7 @@ function Mock() {
     case "4": main = <ConductorChat key={moment} open={moment === "open"} />; break;
     case "5": main = <GuardsTranscript />; break;
     case "6": main = <ProjectPage onOpenEpic={() => go("1", "answered")} onOpenTask={openTask} />; break;
+    case "8": main = <BrainstormProposal />; break;
   }
 
   return (
@@ -89,7 +92,9 @@ function Mock() {
         <Sidebar
           projects={[navAbs(screen === "6" || (screen === "1" && moment === "waiting") || (screen === "2" && moment === "waiting"))]}
           title="dude"
-          selected={selected}
+          selected={screen === "8" ? null : selected}
+          sessions={<SidebarSessions sessions={[{ id: SESSION.id, title: SESSION.title, shared: true }]} selected={screen === "8" ? SESSION.id : null}
+            onSelect={() => go("8")} onNew={() => undefined} />}
           onSelect={(ref) => {
             if (ref.kind === "project") go("6");
             else if (ref.kind === "epic") go("1");

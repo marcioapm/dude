@@ -207,35 +207,54 @@ export interface Note {
   readonly replaces?: number | undefined;
   /** Set once a newer note replaced it: it leaves the current notes for the history. */
   readonly replacedBy?: { readonly n: number; readonly at: Date } | undefined;
+  /** Proposed in a brainstorm session and pinned when a person filed the proposal. */
+  readonly fromSession?: { readonly id: string; readonly title: string } | undefined;
 }
+
+export const SESSION = { id: "ssn_0mv5ab1", title: "Metric preview: plan the epic" };
 
 const ABS2_IMPL: NoteAuthor = { kind: "agent", task: "ABS-2", role: "implementer", for: P["jonas"]! };
 const CONTRACT = (variance: string) =>
-  `**Preview API (ABS-2).** \`POST /v1/metrics/preview/history\` and \`/histogram\`. Body \`{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}\`. Columns \`metric_<id>_mean\`, \`${variance}\`, \`_min\`, \`_bins\`, and \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1).`;
+  `**Preview API body and response (ABS-2).** Both routes take \`{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}\`; \`draft\` is the form's value, not a saved metric. Columns \`metric_<id>_mean\`, \`${variance}\`, \`_min\`, \`_bins\`, and \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1).`;
 
+/** Proposed by the brainstorm that planned the epic, pinned when Márcio filed it. */
 export const NOTE_INDEX: Note = {
   id: "en_1",
   n: 1,
   text: "Read `.ai/personal/marcio/docs/llm-agent/INDEX.md` for how to run tests here.",
   by: { kind: "person", person: P["marcio"]! },
-  at: at("13:41:00"),
+  at: at("13:40:30"),
   readBy: 4,
+  fromSession: SESSION,
 };
 
-/** ABS-2's contract as first pinned, before it renamed `_var`. */
+/** The contract as far as it was known at planning: the paths and who owns what. */
+export const NOTE_PATHS: Note = {
+  id: "en_2",
+  n: 2,
+  text: "**Preview API (ABS-2).** ABS-2 serves `POST /v1/metrics/preview/history` and `/histogram`; ABS-4 calls them. The engine's estimate histogram is ABS-1's: ABS-2 calls it and never builds it.",
+  by: { kind: "person", person: P["marcio"]! },
+  at: at("13:40:30"),
+  readBy: 4,
+  fromSession: SESSION,
+};
+
+/** ABS-2's body and response as first pinned, before it renamed `_var`. */
 export const NOTE_CONTRACT_1: Note = {
-  id: "en_2", n: 2, text: CONTRACT("_var"), by: ABS2_IMPL, at: at("13:48:40"), readBy: 4,
-  replacedBy: { n: 3, at: at("13:51:20") },
+  id: "en_3", n: 3, text: CONTRACT("_var"), by: ABS2_IMPL, at: at("13:48:40"), readBy: 4,
+  replacedBy: { n: 4, at: at("13:51:20") },
 };
 
-/** The same contract after ABS-2 renamed the column to match the engine's. */
+/** The same after ABS-2 renamed the column to match the engine's. */
 export const NOTE_CONTRACT: Note = {
-  id: "en_3", n: 3, text: CONTRACT("_variance"), by: ABS2_IMPL, at: at("13:51:20"), readBy: 3, replaces: 2,
+  id: "en_4", n: 4, text: CONTRACT("_variance"), by: ABS2_IMPL, at: at("13:51:20"), readBy: 3, replaces: 3,
 };
 
 /** The epic's notes at 13:52: the current ones, newest first, then the replaced ones. */
-export const NOTES: readonly Note[] = [NOTE_CONTRACT, NOTE_INDEX];
+export const NOTES: readonly Note[] = [NOTE_CONTRACT, NOTE_PATHS, NOTE_INDEX];
 export const REPLACED: readonly Note[] = [NOTE_CONTRACT_1];
+/** What the brainstorm filed: the epic's notes before any task started. */
+export const PLANNED: readonly Note[] = [NOTE_PATHS, NOTE_INDEX];
 
 /** One line for a note in a notice or a digest: its text, unformatted. */
 export function noteLine(n: Note): string {

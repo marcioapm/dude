@@ -112,9 +112,10 @@ Before you assume anything about them, look: \`dude task list --epic mine\` show
 ${notes}`;
 }
 
-const NOTES_1 = `**Epic notes (1)**
+const NOTES_1 = `**Epic notes (2)**
 
-- Read \`.ai/personal/marcio/docs/llm-agent/INDEX.md\` for how to run tests here. — Márcio, 13:41`;
+- **Note 2 · Preview API (ABS-2).** ABS-2 serves \`POST /v1/metrics/preview/history\` and \`/histogram\`; ABS-4 calls them. The engine's estimate histogram is ABS-1's: ABS-2 calls it and never builds it. — from a brainstorm session, filed by Márcio, 13:40
+- **Note 1.** Read \`.ai/personal/marcio/docs/llm-agent/INDEX.md\` for how to run tests here. — from a brainstorm session, filed by Márcio, 13:40`;
 
 // --------------------------------------------------------------------------- Screen 2: ABS-4
 
@@ -146,9 +147,9 @@ export function Abs4Transcript({ moment }: { readonly moment: "waiting" | "answe
                   result={<PeerList variant="tool" self="ABS-4" peers={KEYS.map((k) => PEERS[k])} overrides={PEERS_THEN} />} />
                 <ToolCallCard name="run_diff" icon="file-diff" status="completed" summary={<><code>dude diff --task ABS-2</code> · 1 file +6 −1, no routes yet</>} durationMs={210}
                   result={"backend/src/engine/client.ts  +6 −1\n(no file under backend/src/routes/metrics/ yet)"} />
-                <ThinkingBlock text="ABS-2 owns /v1/metrics/preview/* and has not written the routes, and no epic note has its contract. If I pick a body shape now, one of us rewrites later. Only ABS-2 can say: ask, and wait, since nothing else in this task is independent of the contract." />
+                <ThinkingBlock text="Note 2 gives ABS-2's paths but not the body or the response, and ABS-2 has not written the routes. If I pick a body shape now, one of us rewrites later. Only ABS-2 can say: ask, and wait, since nothing else in this task is independent of the contract." />
               </ChatAside>
-              <ChatMessage role="implementer" content="ABS-2 hasn't written the preview routes yet and there's no note with its contract. Rather than guess the body and response, I'm asking it and waiting for the answer." startedAt={at("13:43:12")} />
+              <ChatMessage role="implementer" content="Note 2 has the paths, not the body or response, and ABS-2 hasn't written the routes yet. Rather than guess, I'm asking ABS-2 and waiting for the answer." startedAt={at("13:43:12")} />
               <ChatAside>
                 <ToolCallCard name="message" icon="message" status="completed" durationMs={90}
                   summary={<><code>dude message ABS-2 --wait</code> · lands at ABS-2's next step; this turn ends until it replies</>}
@@ -160,12 +161,12 @@ export function Abs4Transcript({ moment }: { readonly moment: "waiting" | "answe
                 <>
                   <EpicNoteNotice change="added" note={NOTE_CONTRACT_1} read={{ at: at("13:49:06") }} />
                   <PeerMessage msg={reply} viewer="ABS-4" replyToText={MSG["pm_1"]!.text} />
-                  <ChatMessage role="implementer" content="ABS-2 answered and pinned it as note 2. Coding the client to that contract: body `draft`, columns `metric_<id>_mean|_var|_min|_bins`, and `sample_fraction`." startedAt={at("13:49:20")} />
+                  <ChatMessage role="implementer" content="ABS-2 answered and pinned it as note 3. Coding the client to that contract: body `draft`, columns `metric_<id>_mean|_var|_min|_bins`, and `sample_fraction`." startedAt={at("13:49:20")} />
                   <ChatAside>
                     <ToolCallCard name="write" status="completed" summary="frontend/src/metrics/previewClient.ts" durationMs={60} />
                   </ChatAside>
                   <EpicNoteNotice change="replaced" note={NOTE_CONTRACT} was={NOTE_CONTRACT_1} changed={{ now: "_variance", was: "_var" }} read={{ at: at("13:51:24"), after: "Write" }} />
-                  <ChatMessage role="implementer" content="Note 3 renames `_var` to `_variance`. Changing the client's column to match." startedAt={at("13:51:30")} />
+                  <ChatMessage role="implementer" content="Note 4 renames `_var` to `_variance`. Changing the client's column to match." startedAt={at("13:51:30")} />
                   <ChatAside>
                     <ToolCallCard name="edit" status="completed" summary="frontend/src/metrics/previewClient.ts · _var → _variance" durationMs={50} />
                   </ChatAside>
@@ -173,7 +174,7 @@ export function Abs4Transcript({ moment }: { readonly moment: "waiting" | "answe
                 </>
               )}
             </ChatTranscript>
-            <Rail me="ABS-4" role="implementer" model="claude-opus-5-5" notes={waiting ? 1 : 2} peersOverride={waiting ? PEERS_THEN : undefined} />
+            <Rail me="ABS-4" role="implementer" model="claude-opus-5-5" notes={waiting ? 2 : 3} peersOverride={waiting ? PEERS_THEN : undefined} />
           </div>
         </div>
       </div>
@@ -187,12 +188,13 @@ const REVIEW_BRIEFING = `**ABS-4 · Frontend: preview panel in the metric form**
 
 Review the client and panel the implementer wrote for how they call the backend. Report findings; don't change code.
 
-## Epic notes (2)
+## Epic notes (3)
 
 Check the code against these: they are what the tasks on this epic agreed.
 
-- **Note 3 · Preview API (ABS-2).** \`POST /v1/metrics/preview/history\` and \`/histogram\`. Body \`{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}\`. Columns \`metric_<id>_mean\`, \`_variance\`, \`_min\`, \`_bins\`, and \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1). — ABS-2's implementer, 13:51, replaces note 2
-- **Note 1.** Read \`.ai/personal/marcio/docs/llm-agent/INDEX.md\` for how to run tests here. — Márcio, 13:41
+- **Note 4 · Preview API body and response (ABS-2).** Both routes take \`{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}\`; \`draft\` is the form's value, not a saved metric. Columns \`metric_<id>_mean\`, \`_variance\`, \`_min\`, \`_bins\`, and \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1). — ABS-2's implementer, 13:51, replaces note 3
+- **Note 2 · Preview API (ABS-2).** ABS-2 serves \`POST /v1/metrics/preview/history\` and \`/histogram\`; ABS-4 calls them. The engine's estimate histogram is ABS-1's: ABS-2 calls it and never builds it. — from a brainstorm session, filed by Márcio, 13:40
+- **Note 1.** Read \`.ai/personal/marcio/docs/llm-agent/INDEX.md\` for how to run tests here. — from a brainstorm session, filed by Márcio, 13:40
 
 \`dude task list --epic mine\` and \`dude diff --task KEY\` read the other tasks; you can't message them.`;
 
@@ -207,13 +209,13 @@ export function Abs4Reviewer() {
             <ChatTranscript fill live revision={1} turns={6}
               footer={<ChatComposer mode="steer" placeholder="Steer the reviewer…" onSubmit={() => true} sentAs="Márcio" landsHint={steerHint("ABS-4", false)} canInterrupt />}>
               <ChatMessage role="system" name="His Dudeness" avatar={<DudeFace />} intent="prompt" content={REVIEW_BRIEFING} startedAt={at("14:31:02")} />
-              <ChatMessage role="reviewer" content="Checking the client against note 3, then ABS-2's routes against the client." startedAt={at("14:31:30")} />
+              <ChatMessage role="reviewer" content="Checking the client against note 4, then ABS-2's routes against the client." startedAt={at("14:31:30")} />
               <ChatAside>
                 <ToolCallCard name="read" status="completed" summary="frontend/src/metrics/previewClient.ts" durationMs={30} />
                 <ToolCallCard name="run_diff" icon="file-diff" status="completed" durationMs={240}
                   summary={<><code>dude diff --task ABS-2 backend/src/routes/metrics/preview.ts</code> · +188, reads <code>body.draft</code>, returns <code>_variance</code></>} />
               </ChatAside>
-              <ChatMessage role="reviewer" content={"**api: no findings.** The client posts `draft` and reads `metric_<id>_mean`, `_variance`, `_min`, `_bins` and `sample_fraction`, as note 3 says; ABS-2's routes read and return the same. The engine path is ABS-1's, as the note says."} startedAt={at("14:34:40")} />
+              <ChatMessage role="reviewer" content={"**api: no findings.** The client posts `draft` and reads `metric_<id>_mean`, `_variance`, `_min`, `_bins` and `sample_fraction`, as note 4 says; ABS-2's routes read and return the same. The engine call is ABS-1's path, as notes 2 and 4 say."} startedAt={at("14:34:40")} />
             </ChatTranscript>
             <Rail me="ABS-4" role="reviewer" model="claude-opus-5-5"
               peersOverride={{ "ABS-4": { waitingOn: undefined }, "ABS-2": { status: "review", phase: "review", role: "reviewer" } }} />
@@ -251,7 +253,7 @@ export function Abs2Transcript() {
               <ChatAside>
                 <ToolCallCard name="list_tasks" icon="layers" status="completed" summary={<><code>dude task list --epic mine</code> · 4 tasks, 1 message for you (ABS-4, waits on your reply)</>} durationMs={120} />
                 <ToolCallCard name="run_diff" icon="file-diff" status="completed" summary={<><code>dude diff --task ABS-1</code> · EstimateMetricsHistogramQueryHandler.java +214, Routes.java +6 −1</>} durationMs={260} />
-                <ThinkingBlock text="ABS-1 has a histogram handler, but its route isn't in the diff's Routes.java hunk I can see without paths, and no note says. Only ABS-1 knows which path it means to keep: ask it, without waiting." />
+                <ThinkingBlock text="Note 2 says the engine histogram is ABS-1's and I call it. ABS-1 has a histogram handler, but which path it will keep isn't in the diff or a note; only ABS-1 knows. Ask it, without waiting." />
                 <ToolCallCard name="message" icon="message" status="completed" durationMs={80}
                   summary={<><code>dude message ABS-1</code> · lands at ABS-1's next step; carrying on</>} />
               </ChatAside>
@@ -263,7 +265,7 @@ export function Abs2Transcript() {
               <ChatMessage role="implementer" content="ABS-1 has the handler on its branch, so I won't add one here: `PREVIEW_HISTOGRAM_URL` points at its path. Pinning the contract for the epic and answering ABS-4." startedAt={at("13:47:10")} />
               <ChatAside>
                 <ToolCallCard name="note" icon="layers" status="completed" durationMs={70}
-                  summary={<><code>dude note</code> · note 2, told to 3 agents at their next step</>} />
+                  summary={<><code>dude note</code> · note 3, told to 3 agents at their next step</>} />
                 <EpicNoteRow note={NOTE_CONTRACT_1} />
                 <ToolCallCard name="message" icon="message" status="completed" durationMs={60}
                   summary={<><code>dude message ABS-4 --reply-to pm_1</code> · ABS-4 is waiting: the reply resumes it</>} />
@@ -274,11 +276,11 @@ export function Abs2Transcript() {
                 <ToolCallCard name="run_diff" icon="file-diff" status="completed" durationMs={180}
                   summary={<><code>dude diff --task ABS-1 HistogramBins.java</code> · columns <code>_mean</code>, <code>_variance</code>, <code>_min</code>, <code>_bins</code></>} />
               </ChatAside>
-              <ChatMessage role="implementer" content="The engine says `_variance`, not `_var`. Renaming the column in the routes and replacing note 2: every agent on the epic is told at its next step, so ABS-4 needs no message." startedAt={at("13:50:55")} />
+              <ChatMessage role="implementer" content="The engine says `_variance`, not `_var`. Renaming the column in the routes and replacing note 3: every agent on the epic is told at its next step, so ABS-4 needs no message." startedAt={at("13:50:55")} />
               <ChatAside>
                 <ToolCallCard name="edit" status="completed" summary="backend/src/routes/metrics/preview.ts · _var → _variance" durationMs={60} />
                 <ToolCallCard name="note" icon="layers" status="completed" durationMs={70}
-                  summary={<><code>dude note --replaces 2</code> · note 3, told to 3 agents at their next step</>} />
+                  summary={<><code>dude note --replaces 3</code> · note 4, told to 3 agents at their next step</>} />
                 <EpicNoteRow note={NOTE_CONTRACT} />
               </ChatAside>
               <ChatMessage role="implementer" activity="streaming" streaming content="Back to the route tests, one per column, and" />
@@ -310,7 +312,8 @@ Messages to or from ABS-2:
 - 13:45 ABS-2 → ABS-1: "Which path does your estimate histogram use?" ABS-1 answered 13:46: \`POST /v1/query/estimate/histogram/metrics\`.
 
 Epic notes added or replaced:
-- 13:51 note 3, ABS-2's implementer, replaces note 2 (13:48): Preview API … \`_variance\` (was \`_var\`) … \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1).
+- 13:48 note 3, ABS-2's implementer: Preview API body and response.
+- 13:51 note 4, ABS-2's implementer, replaces note 3: … \`_variance\` (was \`_var\`) … \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1).
 
 Peers that changed:
 - ABS-1 moved to review at 14:12; head 3f9a2c1 → 9d04e7a.
@@ -358,14 +361,14 @@ export function ConductorChat({ open }: { readonly open: boolean }) {
                     { id: "d2", lead: <TaskChip task="ABS-1" />, text: <>answered the engine path: <code>POST /v1/query/estimate/histogram/metrics</code></>, at: at("13:46") },
                   ] },
                   { title: "Epic notes added or replaced", items: [
-                    { id: "d3", lead: <PinGlyph />, text: <>Note 3 replaces note 2 (13:48): Preview API (ABS-2), body <code>{"{draft, …}"}</code>, <code>_variance</code> (was <code>_var</code>), <code>sample_fraction</code></>, at: at("13:51") },
+                    { id: "d3", lead: <PinGlyph />, text: <>Note 3, then note 4 in its place: Preview API body and response (ABS-2), <code>{"{draft, …}"}</code>, <code>_variance</code> (was <code>_var</code>), <code>sample_fraction</code></>, at: at("13:51") },
                   ] },
                   { title: "Peers that changed", items: [
                     { id: "d4", lead: <TaskChip task="ABS-1" status="review" role="reviewer" />, text: "moved to review; head 3f9a2c1 → 9d04e7a", at: at("14:12") },
                   ] },
                 ]} />
               <ChatMessage role="system" name="Duder" avatar={<DudeFace />} intent="briefing" content={WAKE_BRIEFING} startedAt={at("14:20:06")} />
-              <ChatMessage role="conductor" content="The implementer coded to ABS-1's path and didn't add an engine handler, so there's nothing to reconcile with ABS-1's branch. The contract ABS-4 builds on is pinned as note 3. Starting review on the routes and the engine client." startedAt={at("14:20:40")} />
+              <ChatMessage role="conductor" content="The implementer coded to ABS-1's path and didn't add an engine handler, so there's nothing to reconcile with ABS-1's branch. The contract ABS-4 builds on is pinned as note 4. Starting review on the routes and the engine client." startedAt={at("14:20:40")} />
               <ChatRunLine role="reviewer" status="running" what="correctness, api" facts={["1m 10s"]} onOpen={() => undefined} />
             </ChatTranscript>
           </div>

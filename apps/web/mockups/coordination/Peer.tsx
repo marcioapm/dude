@@ -142,6 +142,13 @@ export function PeerMessage({ msg, viewer, compact, replyToText, waiting, refuse
 
 function NoteBy({ note }: { readonly note: Note }) {
   const b = note.by;
+  if (note.fromSession && b.kind === "person") {
+    return (
+      <span className={s.noteByWho} title={note.fromSession.title}>
+        <Icon name="brainstorm" size={12} />From a brainstorm session, filed by {b.person.name.split(" ")[0]}
+      </span>
+    );
+  }
   return b.kind === "person" ? (
     <span className={s.noteByWho}><PersonAvatar person={b.person} size={16} />{b.person.name}</span>
   ) : (
