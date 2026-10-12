@@ -36,8 +36,6 @@
         "-c",
         "model_supports_reasoning_summaries=true",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -98,7 +96,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },
@@ -194,8 +192,6 @@
         "-c",
         "model_reasoning_effort=\"high\"",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -256,7 +252,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },
@@ -350,8 +346,6 @@
         "-c",
         "model_supports_reasoning_summaries=true",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -412,7 +406,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"claude-sonnet-5\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },
@@ -505,8 +499,6 @@
         "-c",
         "model_supports_reasoning_summaries=true",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -567,7 +559,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },
@@ -663,8 +655,6 @@
         "-c",
         "model_reasoning_effort=\"high\"",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -725,7 +715,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_reasoning_effort=\"high\"\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },
@@ -819,8 +809,6 @@
         "-c",
         "model_supports_reasoning_summaries=true",
         "-c",
-        "web_search=\"disabled\"",
-        "-c",
         "model_verbosity=\"low\""
       ],
       "prompt": "Do the thing.",
@@ -881,7 +869,7 @@
       },
       {
         "name": "CODEX_CONFIG",
-        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nweb_search=\"disabled\"\nmodel_verbosity=\"low\"\n",
+        "value": "approval_policy=\"never\"\nsandbox_mode=\"danger-full-access\"\ncheck_for_update_on_startup=false\nmodel=\"gpt-6-sol\"\nmodel_provider=\"dude\"\nmodel_providers.dude={name=\"dude\", base_url=\"https://llm.example/v1\", env_key=\"OPENAI_API_KEY\", wire_api=\"responses\", http_headers={\"X-Team\"=\"dude\", \"anthropic-beta\"=\"context-1m\"}}\nmodel_reasoning_summary=\"detailed\"\nmodel_supports_reasoning_summaries=true\nmodel_verbosity=\"low\"\n",
         "as": "file",
         "path": "/home/agent/.codex/config.toml"
       },

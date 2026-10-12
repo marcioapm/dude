@@ -423,11 +423,11 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 	}
 }
 
-// Codex sends its hosted web_search tool unless told not to: on every role,
-// a Run on Codex searches live only when it may reach any host, and says
-// "disabled" otherwise. A tier's -c web_search changes neither way and is
-// dropped.
-func TestCodexSearchesTheWebOnlyWhenItsRunMayReachAnyHost(t *testing.T) {
+// On every role, a Codex Run that may reach any host searches live, pinned
+// in config.toml and on the command, and a tier's -c web_search is dropped.
+// Any other Codex Run gets no web_search line from dude (Codex's own
+// default), and a tier's -c web_search is kept as it wrote it.
+func TestACodexRunThatMayReachAnyHostSearchesLive(t *testing.T) {
 	configOf := func(spec lux.Spec) string {
 		for _, s := range spec.Secrets {
 			if s.Name == "CODEX_CONFIG" {
@@ -436,6 +436,14 @@ func TestCodexSearchesTheWebOnlyWhenItsRunMayReachAnyHost(t *testing.T) {
 		}
 		t.Fatal("no CODEX_CONFIG secret")
 		return ""
+	}
+	searchLines := func(cmd []string) (lines []string) {
+		for i, a := range cmd {
+			if strings.HasPrefix(a, "web_search=") && i > 0 && cmd[i-1] == "-c" {
+				lines = append(lines, a)
+			}
+		}
+		return lines
 	}
 	for role, edit := range everyRole {
 		for _, anywhere := range []bool{false, true} {
@@ -446,20 +454,28 @@ func TestCodexSearchesTheWebOnlyWhenItsRunMayReachAnyHost(t *testing.T) {
 				if tier != "" {
 					in.Options = map[string]any{"args": []any{"-c", "web_search=" + tier}}
 				}
-				want := map[bool]string{false: "disabled", true: "live"}[anywhere]
 				spec := buildSpec(c, in)
 				name := fmt.Sprintf("%s, anywhere %v, tier web_search %q", role, anywhere, tier)
-				if got := parsedCodexTOML(t, configOf(spec))["web_search"]; got != want {
-					t.Errorf("%s: config.toml web_search = %v, want %s", name, got, want)
-				}
-				line := `web_search="` + want + `"`
-				if n := slices.Index(spec.Workload.Command, line); n < 1 || spec.Workload.Command[n-1] != "-c" ||
-					slices.ContainsFunc(spec.Workload.Command, func(a string) bool { return strings.HasPrefix(a, "web_search=") && a != line }) {
-					t.Errorf("%s: command = %q, want -c %s alone", name, spec.Workload.Command, line)
-				}
+				got, has := parsedCodexTOML(t, configOf(spec))["web_search"]
 				_, dropped := codexSettings(c, in)
-				if tier != "" && !slices.Equal(dropped, []string{"-c web_search=" + tier}) {
-					t.Errorf("%s: dropped = %q", name, dropped)
+				switch {
+				case anywhere:
+					if got != "live" || !slices.Equal(searchLines(spec.Workload.Command), []string{`web_search="live"`}) {
+						t.Errorf("%s: config.toml web_search = %v, command %q, want live alone", name, got, searchLines(spec.Workload.Command))
+					}
+					if tier != "" && !slices.Equal(dropped, []string{"-c web_search=" + tier}) {
+						t.Errorf("%s: dropped = %q, want the tier's web_search", name, dropped)
+					}
+				case tier == "":
+					if has || len(searchLines(spec.Workload.Command)) != 0 {
+						t.Errorf("%s: dude wrote web_search (%v, command %q), want Codex's default", name, got, searchLines(spec.Workload.Command))
+					}
+				default:
+					want := strings.Trim(tier, `"`)
+					if got != want || !slices.Equal(searchLines(spec.Workload.Command), []string{`web_search="` + want + `"`}) || len(dropped) != 0 {
+						t.Errorf("%s: config.toml web_search = %v, command %q, dropped %q, want the tier's %s kept",
+							name, got, searchLines(spec.Workload.Command), dropped, want)
+					}
 				}
 			}
 		}

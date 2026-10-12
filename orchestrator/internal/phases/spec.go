@@ -546,9 +546,9 @@ func anthropicBaseURL(llmURL string) string {
 //
 // Codex's web search is the Responses API's hosted web_search tool: OpenAI
 // runs the search, through the proxy, so egress never sees it. Codex 0.144
-// sends it unless web_search says "disabled" (its default is "cached",
-// which full access promotes to live), so every Run says: "live" for one
-// that may reach any host, "disabled" for the rest.
+// sends it by default on every Run ("cached", which full access promotes to
+// live). A Run that may reach any host pins it "live", whatever a later
+// default or its tier says; the rest keep Codex's default.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
@@ -571,8 +571,8 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // string, number, boolean or array of those, or else a bare word, taken as
 // a string, as Codex takes an unparseable value. An override inside or
 // above a table dude sets (model_providers.dude.*) would rewrite it, and is
-// dropped, as is web_search (the Run's network decides it) and every other
-// argument.
+// dropped, as is web_search on a Run that may reach any host (dude pins it
+// live) and every other argument.
 func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
 		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
@@ -597,11 +597,9 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
-	search := "disabled"
 	if in.Anywhere {
-		search = "live"
+		settings = append(settings, "web_search="+tomlString("live"))
 	}
-	settings = append(settings, "web_search="+tomlString(search))
 	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""
@@ -623,7 +621,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 			k, _, _ := strings.Cut(s, "=")
 			return key == "model_providers.dude" || strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
 		})
-		if !ok || !codexKey.MatchString(key) || nested || key == "web_search" {
+		if !ok || !codexKey.MatchString(key) || nested || (in.Anywhere && key == "web_search") {
 			dropped = append(dropped, arg+" "+override)
 			continue
 		}
