@@ -31,7 +31,7 @@ function ProposedNotes() {
   );
 }
 
-const TASK_GOALS: Record<TaskKey, string> = {
+const TASK_GOALS: Record<Exclude<TaskKey, "JERV-2">, string> = {
   "ABS-1": "Add POST /v1/query/estimate/histogram/metrics to the engine: binned values of a metric over a sample.",
   "ABS-2": "Add /v1/metrics/preview/history and /histogram: a draft metric's history and histogram through the estimate path.",
   "ABS-3": "Let custom SQL metrics go through the estimate path's sampling, as built-in ones do.",

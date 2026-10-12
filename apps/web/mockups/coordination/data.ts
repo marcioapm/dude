@@ -25,9 +25,9 @@ export function at(hm: string): Date {
   return new Date(2026, 9, 12, h ?? 0, m ?? 0, s ?? 0);
 }
 
-export type TaskKey = "ABS-1" | "ABS-2" | "ABS-3" | "ABS-4";
+export type TaskKey = "ABS-1" | "ABS-2" | "ABS-3" | "ABS-4" | "JERV-2";
 
-/** A task as `list_tasks --epic mine` returns it, and as the Coordination view's task list shows it. */
+/** A task as `list_tasks --peers` returns it, and as the Coordination view's task list shows it. */
 export interface Peer {
   readonly key: TaskKey;
   readonly id: string;
@@ -47,6 +47,11 @@ export interface Peer {
   readonly waitingOn?: TaskKey | undefined;
   /** Its unread messages to the caller, and whether it waits on the caller's reply. */
   readonly forYou?: { readonly count: number; readonly waits: boolean } | undefined;
+  /**
+   * A peer by a "depends on" link rather than by the epic: which way the
+   * link runs, and the project when it is not the caller's.
+   */
+  readonly link?: { readonly dependsOn: TaskKey; readonly project?: string | undefined } | undefined;
 }
 
 export const PEERS: Record<TaskKey, Peer> = {
@@ -118,12 +123,29 @@ export const PEERS: Record<TaskKey, Peer> = {
     branch: "dude/wi_0mv5au4/attempt-1",
     head: "—",
     files: [],
-    lastSaid: "Reading the metric form. ABS-2 owns the preview routes; asking it for the body and response before writing the client.",
+    lastSaid: "Asked ABS-2 for the preview body and response; building the panel and the chart from mock data meanwhile.",
     owner: P["marcio"]!,
-    waitingOn: "ABS-2",
+  },
+  // Not on the epic: a peer of ABS-2 because it depends on ABS-2, in another project.
+  "JERV-2": {
+    key: "JERV-2",
+    id: "wi_0mv6jr2",
+    title: "Metric preview in the experiment setup",
+    status: "running",
+    phase: "implement",
+    role: "implementer",
+    run: "running",
+    live: true,
+    branch: "dude/wi_0mv6jr2/attempt-1",
+    head: "71ac3d0",
+    files: [{ path: "web/src/setup/MetricStep.tsx", add: 42, del: 6 }],
+    lastSaid: "Reusing ABS-2's preview endpoint for the setup's metric step; reading its routes before calling them.",
+    owner: P["jonas"]!,
+    link: { dependsOn: "ABS-2", project: "jervasion" },
   },
 };
 
+/** The epic's tasks. */
 export const KEYS: readonly TaskKey[] = ["ABS-1", "ABS-2", "ABS-3", "ABS-4"];
 
 // --------------------------------------------------------------------------- messages and notes
@@ -133,7 +155,7 @@ export type Delivery =
   | { readonly kind: "queued" }
   /** Read by the recipient's agent, after what it finished. */
   | { readonly kind: "read"; readonly at: Date; readonly after?: string | undefined }
-  /** The recipient has no live Run: it is in that task's next Run briefing. */
+  /** The recipient has no Run going: it reads it when its next Run starts. */
   | { readonly kind: "inbox" };
 
 export interface PeerMsg {
@@ -145,7 +167,7 @@ export interface PeerMsg {
   readonly sentAt: Date;
   readonly delivery: Delivery;
   readonly replyTo?: string | undefined;
-  /** The sender's Run waits for a reply (`wait`). */
+  /** The sender's Run opened a wait on this message (`dude wait`, or its turn ended with it unanswered). */
   readonly waits?: boolean | undefined;
 }
 
@@ -207,6 +229,8 @@ export interface Note {
   readonly replaces?: number | undefined;
   /** Set once a newer note replaced it: it leaves the current notes for the history. */
   readonly replacedBy?: { readonly n: number; readonly at: Date } | undefined;
+  /** Set when a person retired it without a replacement: it leaves the current notes for the history. */
+  readonly retired?: { readonly by: Person; readonly at: Date } | undefined;
   /** Proposed in a brainstorm session and pinned when a person filed the proposal. */
   readonly fromSession?: { readonly id: string; readonly title: string } | undefined;
 }
@@ -255,6 +279,8 @@ export const NOTES: readonly Note[] = [NOTE_CONTRACT, NOTE_PATHS, NOTE_INDEX];
 export const REPLACED: readonly Note[] = [NOTE_CONTRACT_1];
 /** What the brainstorm filed: the epic's notes before any task started. */
 export const PLANNED: readonly Note[] = [NOTE_PATHS, NOTE_INDEX];
+/** Current notes an epic may have; a replace doesn't count against it. */
+export const NOTE_LIMIT = 10;
 
 /** One line for a note in a notice or a digest: its text, unformatted. */
 export function noteLine(n: Note): string {

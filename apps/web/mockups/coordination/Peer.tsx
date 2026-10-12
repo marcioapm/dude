@@ -1,7 +1,8 @@
 /*
  * Proposed design-system components for agents coordinating on an epic:
  * TaskChip, PeerMessage, EpicNote (with its history and its transcript
- * row), EpicNoteNotice, PeerThread, SinceDigest, PeerWaitMark and PeerList.
+ * row), EpicNoteNotice, PeerThread, SinceDigest, PeerWaitMark, PeerWaitLine
+ * and PeerList.
  * Each composes existing parts (AgentAvatar, StatusMark, PersonAvatar,
  * Markdown, Icon, Button) and styles itself from tokens only. The proposed
  * `pin` glyph is drawn here until it joins the icon set.
@@ -62,7 +63,7 @@ export function TaskChip({ task, role, status, onOpen, showRole }: {
 // Where an unread message lands, in a steer's words; a read one says it in its header.
 function deliveryNote(d: Delivery, to: TaskKey): ReactNode {
   if (d.kind === "queued") return <span>Lands at <b>{to}</b>'s next step. Nothing is interrupted.</span>;
-  if (d.kind === "inbox") return <span><b>{to}</b> has no live agent: it is in {to}'s next Run briefing.</span>;
+  if (d.kind === "inbox") return <span><b>{to}</b> has no Run going; it will see this when its next Run starts.</span>;
   return null;
 }
 
@@ -76,6 +77,8 @@ export interface PeerMessageProps {
   readonly replyToText?: string | undefined;
   /** The sender waits for the reply (`wait`): one muted line with the wait's clock. */
   readonly waiting?: { readonly since: Date; readonly parksIn?: string | undefined } | undefined;
+  /** In the sender's transcript: the send returned at once and the agent carried on. */
+  readonly carryingOn?: boolean | undefined;
   /** Refused: the reason, in danger ink, where the delivery line would be. */
   readonly refused?: string | undefined;
 }
@@ -87,7 +90,7 @@ export interface PeerMessageProps {
  * with a person's face. Header: sender's key and role → recipient, a neutral
  * "Peer" tag (or "Reply"), and its delivery in words, as a steer's.
  */
-export function PeerMessage({ msg, viewer, compact, replyToText, waiting, refused }: PeerMessageProps) {
+export function PeerMessage({ msg, viewer, compact, replyToText, waiting, carryingOn, refused }: PeerMessageProps) {
   const outgoing = viewer === msg.from;
   const d = msg.delivery;
   const to = msg.to === viewer ? "you" : msg.to;
@@ -126,6 +129,13 @@ export function PeerMessage({ msg, viewer, compact, replyToText, waiting, refuse
         ) : d.kind !== "read" ? (
           <div className={s.note}><Icon name="clock" size={12} />{deliveryNote(d, msg.to)}</div>
         ) : null}
+        {carryingOn && !refused ? (
+          <div className={s.note}>
+            <Icon name="arrow-right" size={12} />
+            <span><b>Sent · carrying on.</b></span>
+            <span className={s.noteMuted}>The reply lands at your next step; nothing waits on it unless you run <code>dude wait {msg.id}</code>.</span>
+          </div>
+        ) : null}
         {waiting ? (
           <div className={s.note}>
             <Icon name="clock" size={12} />
@@ -135,6 +145,52 @@ export function PeerMessage({ msg, viewer, compact, replyToText, waiting, refuse
         ) : null}
       </div>
     </article>
+  );
+}
+
+// --------------------------------------------------------------------------- PeerWaitLine
+
+/**
+ * Where a Run stopped to wait on a peer's reply, in its own transcript: one
+ * quiet line on the text column, a clock, neutral ink. `how` says why the
+ * turn ended: the agent ran `dude wait`, or it ended its turn with the
+ * question unanswered, which counts as the same wait. Once answered, the
+ * line keeps the span it waited.
+ */
+export function PeerWaitLine({ on, msg, how, since, parksAt, answered }: {
+  readonly on: TaskKey;
+  /** The message waited on. */
+  readonly msg: string;
+  readonly how: "wait" | "turn-ended";
+  readonly since: Date;
+  /** When the Run parks if no reply comes (`parkAfterMinutes` after `since`). */
+  readonly parksAt: Date;
+  readonly answered?: Date | undefined;
+}) {
+  const why = how === "wait" ? <>ran <code className={s.noteNoticeCode}>dude wait {msg}</code></> : <>turn ended with its question to {on} unanswered</>;
+  const label = answered
+    ? `Waited on ${on} from ${clock(since)} to ${clock(answered)}: answered`
+    : `Waiting on ${on} since ${clock(since)}; parks at ${clock(parksAt)} if no reply`;
+  return (
+    <div className={s.waitLine} role="status" aria-label={label} data-state={answered ? "answered" : "waiting"}>
+      <span className={s.noteNoticeGlyph}><Icon name="clock" size={12} /></span>
+      <div className={s.noteNoticeBody}>
+        {answered ? (
+          <>
+            <span className={s.noteNoticeLead}>Waited on {on}</span>
+            <span className={s.noteNoticeBy}> · {why} · </span>
+            <span className={s.noteNoticeText}>{clock(since)} → {clock(answered)}, answered; the reply resumed the turn</span>
+          </>
+        ) : (
+          <>
+            <span className={s.noteNoticeLead}>Waiting on {on}</span>
+            <span className={s.noteNoticeBy}> · {why} · </span>
+            <span className={s.noteNoticeText}>parks in {Math.round((parksAt.getTime() - since.getTime()) / 60_000)} min, at {clock(parksAt)}, if no reply; the reply resumes it</span>
+          </>
+        )}
+      </div>
+      <time className={s.time} dateTime={since.toISOString()}>{formatTimestamp(since, "time")}</time>
+    </div>
   );
 }
 
@@ -159,18 +215,22 @@ function NoteBy({ note }: { readonly note: Note }) {
 /**
  * A fact pinned for every agent on the epic: the pin, its number, the words,
  * who pinned it and when, how many agents have it. A note is never edited:
- * `replacedBy` folds it into the history; `onReplace` is a person's way to
- * pin a new one in its place.
+ * `replacedBy` or `retired` folds it into the history; `onReplace` is a
+ * person's way to pin a new one in its place, `onRetire` to take it off
+ * with none (agents can't).
  */
-export function EpicNote({ note, live, isNew, onReplace }: {
+export function EpicNote({ note, live, isNew, onReplace, onRetire }: {
   readonly note: Note;
   readonly live: number;
   readonly isNew?: boolean | undefined;
   readonly onReplace?: (() => void) | undefined;
+  readonly onRetire?: (() => void) | undefined;
 }) {
   const replaced = note.replacedBy;
+  const retired = note.retired;
+  const gone = replaced || retired;
   return (
-    <li className={cx(s.epicNote, replaced && s.epicNoteReplaced)} data-note={note.id}>
+    <li className={cx(s.epicNote, gone && s.epicNoteReplaced)} data-note={note.id}>
       <span className={s.pin}><PinGlyph /></span>
       <div>
         <Markdown source={note.text} unmeasured className={s.noteText} />
@@ -180,15 +240,20 @@ export function EpicNote({ note, live, isNew, onReplace }: {
           <time dateTime={note.at.toISOString()}>{clock(note.at)}</time>
           {replaced ? (
             <span className={s.noteReplacedBy}>Replaced by note {replaced.n} at {clock(replaced.at)}</span>
+          ) : retired ? (
+            <span className={s.noteReplacedBy}>Retired by {retired.by.name.split(" ")[0]} at {clock(retired.at)}</span>
           ) : (
             <>
               {note.replaces ? <span>replaces note {note.replaces}</span> : null}
               <span>read by {note.readBy} of {live} agents</span>
             </>
           )}
-          {isNew && !replaced ? <span className={s.tag}><span className="ds-cap">New</span></span> : null}
-          {onReplace && !replaced ? (
-            <Button size="sm" variant="quiet" className={s.noteAction} onClick={onReplace} aria-label={`Replace note ${note.n}`}>Replace</Button>
+          {isNew && !gone ? <span className={s.tag}><span className="ds-cap">New</span></span> : null}
+          {!gone && (onReplace || onRetire) ? (
+            <span className={s.noteAction}>
+              {onReplace ? <Button size="sm" variant="quiet" onClick={onReplace} aria-label={`Replace note ${note.n}`}>Replace</Button> : null}
+              {onRetire ? <Button size="sm" variant="quiet" onClick={onRetire} aria-label={`Retire note ${note.n}`}>Retire</Button> : null}
+            </span>
           ) : null}
         </div>
       </div>
@@ -196,7 +261,19 @@ export function EpicNote({ note, live, isNew, onReplace }: {
   );
 }
 
-/** The epic's replaced notes, folded under its current ones: what agents were told before, kept for the record. */
+/**
+ * The current notes against the epic's limit, after the section title:
+ * Section's muted count with its bound. Named in full for screen readers.
+ */
+export function EpicNoteCount({ count, limit }: { readonly count: number; readonly limit: number }) {
+  return (
+    <span className={s.noteCount} aria-label={`${count} of at most ${limit} notes`}>
+      {count} of {limit}
+    </span>
+  );
+}
+
+/** The epic's replaced and retired notes, folded under its current ones: what agents were told before, kept for the record. */
 export function EpicNoteHistory({ notes, live, defaultOpen }: {
   readonly notes: ReadonlyArray<Note>;
   readonly live: number;
@@ -205,11 +282,17 @@ export function EpicNoteHistory({ notes, live, defaultOpen }: {
   const [open, setOpen] = useState(defaultOpen ?? false);
   const body = useId();
   if (notes.length === 0) return null;
+  const retired = notes.filter((n) => n.retired).length;
+  const replaced = notes.length - retired;
+  const words = [
+    replaced ? (replaced === 1 ? "1 replaced note" : `${replaced} replaced notes`) : null,
+    retired ? (retired === 1 ? "1 retired note" : `${retired} retired notes`) : null,
+  ].filter(Boolean).join(", ");
   return (
     <div className={s.noteHistory}>
       <button type="button" className={s.noteHistoryLine} aria-expanded={open} aria-controls={body} onClick={() => setOpen((o) => !o)}>
         <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
-        <span>{notes.length === 1 ? "1 replaced note" : `${notes.length} replaced notes`}</span>
+        <span>{words}</span>
         <span className={s.noteHistoryHint}>· no agent is briefed with these any more</span>
       </button>
       {open ? (
@@ -244,7 +327,7 @@ export function EpicNoteRow({ note }: { readonly note: Note }) {
 
 /**
  * What every agent on the epic is told at its next step when a note is
- * added or replaced: one quiet line in the transcript's margin, as a
+ * added, replaced or retired: one quiet line in the transcript's margin, as a
  * ChatNotice is. No face, no rail and no tag: it is the epic's record
  * changing, not anyone speaking. An added note's text is clamped to two
  * lines; a replaced one shows its title and the words that changed
@@ -252,24 +335,32 @@ export function EpicNoteRow({ note }: { readonly note: Note }) {
  * "was:". The full text is the note row's, a click away in the aside.
  */
 export function EpicNoteNotice({ change, note, was, changed, read }: {
-  readonly change: "added" | "replaced";
+  readonly change: "added" | "replaced" | "retired";
+  /** The new note; for `retired`, the note taken off. */
   readonly note: Note;
   readonly was?: Note | undefined;
   readonly changed?: { readonly now: string; readonly was: string } | undefined;
   /** When the agent read it, and after which tool. */
   readonly read: { readonly at: Date; readonly after?: string | undefined };
 }) {
-  const by = note.by.kind === "person" ? note.by.person.name : `${note.by.task}'s ${ROLE_LABEL[note.by.role].toLowerCase()}`;
+  const by = change === "retired" && note.retired ? note.retired.by.name
+    : note.by.kind === "person" ? note.by.person.name : `${note.by.task}'s ${ROLE_LABEL[note.by.role].toLowerCase()}`;
   const wasN = was?.n ?? note.replaces;
-  const label = change === "added" ? `Epic note ${note.n} added by ${by}` : `Epic note ${note.n} replaced note ${wasN}, by ${by}`;
+  const label = change === "added" ? `Epic note ${note.n} added by ${by}`
+    : change === "retired" ? `Epic note ${note.n} retired by ${by}`
+    : `Epic note ${note.n} replaced note ${wasN}, by ${by}`;
   const title = noteTitle(note);
   return (
     <div className={s.noteNotice} role="note" aria-label={label} data-change={change}>
       <span className={s.noteNoticeGlyph}><PinGlyph size={12} /></span>
-      <div className={cx(s.noteNoticeBody, change === "added" && s.noteNoticeClamp)}>
-        <span className={s.noteNoticeLead}>{change === "added" ? `Epic note added: ${note.n}` : `Epic note replaced: ${wasN} → ${note.n}`}</span>
+      <div className={cx(s.noteNoticeBody, change !== "replaced" && s.noteNoticeClamp)}>
+        <span className={s.noteNoticeLead}>
+          {change === "added" ? `Epic note added: ${note.n}` : change === "retired" ? `Epic note retired: ${note.n}` : `Epic note replaced: ${wasN} → ${note.n}`}
+        </span>
         <span className={s.noteNoticeBy}> · {by} · </span>
-        {change === "added" || !changed ? (
+        {change === "retired" ? (
+          <span className={s.noteNoticeWas}>no longer in force: {noteLine(note)}</span>
+        ) : change === "added" || !changed ? (
           <span className={s.noteNoticeText}>{noteLine(note)}</span>
         ) : (
           <span className={s.noteNoticeText}>
@@ -295,7 +386,7 @@ function noteTitle(n: Note): string | null {
 
 export type ThreadState =
   | { readonly kind: "waiting"; readonly on: TaskKey; readonly since: Date }
-  /** Asked without `wait`: the sender carries on. */
+  /** Asked, and the sender carried on: no wait is open on it. */
   | { readonly kind: "open"; readonly on: TaskKey }
   | { readonly kind: "answered"; readonly at: Date };
 
@@ -404,11 +495,13 @@ export function PeerWaitMark({ pairs }: { readonly pairs: ReadonlyArray<readonly
 // --------------------------------------------------------------------------- PeerList
 
 /**
- * The epic's tasks as `list_tasks --epic mine` returns them: status, phase
- * and role, live or parked, branch and head, files by churn, what its agent
- * last said, and its messages waiting for the caller.
+ * A task's peers as `list_tasks --peers` returns them: the tasks on its
+ * epic, then the tasks linked to it by "depends on" (marked, with their
+ * project when it is another). Status, phase and role, live or parked,
+ * branch and head, files by churn, what its agent last said, and its
+ * messages waiting for the caller.
  */
-export function PeerList({ peers, variant = "page", onOpen, overrides, self }: {
+export function PeerList({ peers, variant = "page", onOpen, overrides, self, label = "Peers" }: {
   readonly peers: ReadonlyArray<Peer>;
   /**
    * `page`: rows on the raised shade with what each last said. `tool`: a
@@ -421,9 +514,11 @@ export function PeerList({ peers, variant = "page", onOpen, overrides, self }: {
   readonly overrides?: Partial<Record<TaskKey, Partial<Peer>>> | undefined;
   /** The caller's own task, in a tool result: its row says "you" and nothing else. */
   readonly self?: TaskKey | undefined;
+  /** The list's accessible name. */
+  readonly label?: string | undefined;
 }) {
   return (
-    <ul className={cx(s.peers, variant !== "page" && s.dense)} aria-label="Tasks on this epic">
+    <ul className={cx(s.peers, variant !== "page" && s.dense)} aria-label={label}>
       {peers.map((base) => {
         const p = { ...base, ...overrides?.[base.key] };
         if (p.key === self) {
@@ -442,12 +537,20 @@ export function PeerList({ peers, variant = "page", onOpen, overrides, self }: {
             <span className={s.peerLine}>
               <TaskChip task={p.key} onOpen={onOpen ? () => onOpen(p.key) : undefined} />
               <span className={s.peerTitle}>{p.title}</span>
+              {p.link && variant !== "rail" ? (
+                <span className={s.waitMark} title="Linked by &quot;depends on&quot;, not on this epic: no shared epic notes">
+                  <Icon name="link" size={12} />depends on {p.link.dependsOn}{p.link.project ? ` · project ${p.link.project}` : ""}
+                </span>
+              ) : null}
               {p.waitingOn ? <PeerWaitMark pairs={[[p.key, p.waitingOn]]} /> : null}
               {variant === "tool" && p.forYou ? (
                 <span className={s.waitMark}><Icon name="message" size={12} />{p.forYou.count === 1 ? "1 message for you" : `${p.forYou.count} messages for you`}{p.forYou.waits ? ", waits on your reply" : ""}</span>
               ) : null}
             </span>
             <span className={s.peerFacts}>
+              {p.link && variant === "rail" ? (
+                <span className={s.peerLink}><Icon name="link" size={12} />depends on {p.link.dependsOn}{p.link.project ? ` · ${p.link.project}` : ""}</span>
+              ) : null}
               <span>{p.phase} · {ROLE_LABEL[p.role].toLowerCase()} · {p.live ? "live" : "parked"}</span>
               {variant !== "rail" ? (
                 <>

@@ -248,7 +248,17 @@ button.taskChip:focus-visible {
   color: var(--ds-color-text-secondary);
 }
 .noteAction {
+  display: inline-flex;
+  gap: var(--ds-space-4);
   margin-left: auto;
+}
+/* Section's count, with its bound: muted, tabular, out of the label's capitals. */
+.noteCount {
+  margin-left: var(--ds-space-6);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ds-color-text-muted);
 }
 /* A replaced note: kept for the record, its words in secondary ink. */
 .epicNoteReplaced .noteText {
@@ -372,6 +382,15 @@ button.taskChip:focus-visible {
 }
 .noteNoticeWas {
   color: var(--ds-color-text-muted);
+}
+
+/*
+ * PeerWaitLine: where the Run stopped to wait on a peer. The notice's
+ * grid and inks with the clock in place of the pin: the Run's own state,
+ * neutral, never attention.
+ */
+.waitLine {
+  composes: noteNotice;
 }
 
 /* --- PeerThread (the Coordination view) ------------------------------------ */
@@ -522,7 +541,7 @@ button.taskChip:focus-visible {
   white-space: nowrap;
 }
 
-/* --- PeerList: what `peers` returns, and the Coordination view's tasks ---- */
+/* --- PeerList: what `list_tasks --peers` returns, and the Coordination view's tasks ---- */
 
 .peers {
   display: flex;
@@ -565,6 +584,14 @@ button.taskChip:focus-visible {
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-xs);
   min-width: 0;
+}
+/* A peer by "depends on" in a rail: the link on its own line, secondary ink. */
+.peerLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  flex-basis: 100%;
+  color: var(--ds-color-text-secondary);
 }
 .mono {
   font-family: var(--ds-font-mono);
