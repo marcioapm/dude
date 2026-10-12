@@ -88,23 +88,55 @@ CREATE FUNCTION task_blocked_by(task text) RETURNS TABLE (key text, status task_
 -- writer holds the organisation's relation lock
 -- (pg_advisory_xact_lock(hashtext('task_relations:' || org))) around this
 -- and the insert, so two writers cannot each close half of one.
+--
+-- Every task is visited once: reachability is a UNION walk, and only when
+-- src is reached does a breadth-first pass record one parent per task to
+-- name the shortest loop. Enumerating paths instead is exponential on a
+-- diamond-shaped plan, and runs under that organisation-wide lock.
 CREATE FUNCTION task_relation_would_cycle(src text, dst text) RETURNS text[]
-  LANGUAGE sql STABLE
+  LANGUAGE plpgsql STABLE
   AS $$
-    WITH RECURSIVE walk (task, path) AS (
-      SELECT dst, ARRAY[dst]
-      UNION ALL
-      SELECT r.to_task_id, w.path || r.to_task_id
-        FROM walk w
-        JOIN task_relations r ON r.from_task_id = w.task AND r.kind = 'blocks'
-       WHERE NOT r.to_task_id = ANY (w.path)
-    ), found AS (
-      SELECT path FROM walk WHERE task = src ORDER BY array_length(path, 1) LIMIT 1
-    )
-    SELECT array_agg(p.key_prefix || '-' || t.number ORDER BY s.n)
-      FROM found, unnest(found.path || dst) WITH ORDINALITY AS s(task, n)
-      JOIN tasks t ON t.id = s.task
-      JOIN projects p ON p.id = t.project_id
+  DECLARE
+    parents  jsonb := jsonb_build_object(dst, NULL);
+    frontier text[] := ARRAY[dst];
+    layer    jsonb;
+    walked   text[] := ARRAY[src];
+    cur      text := src;
+  BEGIN
+    IF NOT EXISTS (
+      WITH RECURSIVE reach (task) AS (
+        SELECT dst
+        UNION
+        SELECT r.to_task_id FROM reach JOIN task_relations r ON r.from_task_id = reach.task AND r.kind = 'blocks'
+      )
+      SELECT 1 FROM reach WHERE task = src
+    ) THEN
+      RETURN NULL;
+    END IF;
+    -- One query per layer; each newly reached task keeps one parent.
+    WHILE NOT parents ? src LOOP
+      SELECT jsonb_object_agg(e.to_task_id, e.from_task_id) INTO layer
+        FROM (SELECT DISTINCT ON (r.to_task_id) r.to_task_id, r.from_task_id
+                FROM task_relations r
+               WHERE r.kind = 'blocks' AND r.from_task_id = ANY (frontier) AND NOT parents ? r.to_task_id
+               ORDER BY r.to_task_id, r.from_task_id) e;
+      IF layer IS NULL THEN
+        RETURN NULL;
+      END IF;
+      parents := parents || layer;
+      frontier := ARRAY(SELECT jsonb_object_keys(layer));
+    END LOOP;
+    WHILE cur <> dst LOOP
+      cur := parents ->> cur;
+      walked := array_prepend(cur, walked);
+    END LOOP;
+    RETURN (
+      SELECT array_agg(p.key_prefix || '-' || t.number ORDER BY s.n)
+        FROM unnest(array_append(walked, dst)) WITH ORDINALITY AS s(task, n)
+        JOIN tasks t ON t.id = s.task
+        JOIN projects p ON p.id = t.project_id
+    );
+  END
   $$;
 
 -- unblocked: the task's last open blocker merged; its conductor, if one is

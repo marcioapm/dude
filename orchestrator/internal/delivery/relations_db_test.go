@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -134,6 +135,53 @@ func TestTaskRelationWouldCycleNamesTheLoop(t *testing.T) {
 	}
 	if got := loop(4, 1); got != nil {
 		t.Fatalf("CP-4 blocks CP-1 is no loop, got %v", got)
+	}
+}
+
+// A plan shaped like a ladder, each step waiting on every task of the step
+// before, has exponentially many paths but few tasks: the check visits each
+// task once, so it answers in milliseconds, not minutes, under the
+// organisation's relation lock. Asked for an edge between the two tops, it
+// walks the whole ladder and finds no loop; asked from the bottom to the
+// top, it names one shortest loop.
+func TestTaskRelationWouldCycleIsLinearOnADiamondLadder(t *testing.T) {
+	for _, width := range []int{2, 3} {
+		layers := 46 / width
+		w, in := newRelWorld(t, width*layers)
+		task := func(layer, i int) int { return layer*width + i + 1 }
+		for l := 0; l+1 < layers; l++ {
+			for a := range width {
+				for b := range width {
+					w.blocks(task(l, a), task(l+1, b))
+				}
+			}
+		}
+		ask := func(src, dst int) ([]string, time.Duration) {
+			var out []string
+			start := time.Now()
+			if err := in(func(tx pgx.Tx) error {
+				// The path-enumerating walk takes minutes here; fail in seconds instead.
+				if _, err := tx.Exec(context.Background(), `SET LOCAL statement_timeout = '5s'`); err != nil {
+					return err
+				}
+				return tx.QueryRow(context.Background(), `SELECT task_relation_would_cycle($1, $2)`, w.id(src), w.id(dst)).Scan(&out)
+			}); err != nil {
+				t.Fatalf("%d-wide ladder: %v", width, err)
+			}
+			return out, time.Since(start)
+		}
+		got, took := ask(task(0, 1), task(0, 0))
+		if got != nil {
+			t.Fatalf("%d-wide ladder: an edge between the two tops is no loop, got %v", width, got)
+		}
+		if took > 2*time.Second {
+			t.Fatalf("%d-wide ladder of %d tasks: the check took %v", width, width*layers, took)
+		}
+		bottom := task(layers-1, 0)
+		got, _ = ask(bottom, task(0, 0))
+		if len(got) != layers+1 || got[0] != "CP-1" || got[len(got)-1] != "CP-1" || got[len(got)-2] != "CP-"+strconv.Itoa(bottom) {
+			t.Fatalf("%d-wide ladder: loop %v, want CP-1 down %d layers to CP-%d and back", width, got, layers, bottom)
+		}
 	}
 }
 
