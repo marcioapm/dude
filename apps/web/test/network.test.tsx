@@ -132,7 +132,7 @@ describe("an organisation's Network page", () => {
   test("Brainstorm sessions: off, the list applies; on, they reach any host, and the page says what that risks", async () => {
     const { container, client } = await organisation();
     expect(byRole(container, "switch", OFF).getAttribute("aria-checked")).toBe("false");
-    expect(container.textContent).toContain("one already started, running or parked, keeps any host until its session starts a new agent");
+    expect(container.textContent).toContain("A change reaches brainstorm agents started after it; one already started, running or parked, keeps the network it had until its session starts a new agent");
     expect(risk(container)).toBeNull();
     await click(byRole(container, "switch", OFF));
     await settle(150);

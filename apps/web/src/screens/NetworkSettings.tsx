@@ -89,7 +89,7 @@ function BrainstormAnywhere({ scope }: { scope: SettingsScope }) {
       <Switch checked={on} disabled={!settings.canEdit} testId="network-brainstorm-switch"
         label={on ? "On — brainstorm agents may reach any host, to read the web" : "Off — the list above applies to them too"}
         onCheckedChange={(next) => void scope.patch({ network: { brainstorm: next } }, next ? "Brainstorms may read the web" : "Brainstorms keep to the list").catch(() => {})} />
-      <SettingsMeta>Turning it off reaches brainstorm agents started after it; one already started, running or parked, keeps any host until its session starts a new agent.</SettingsMeta>
+      <SettingsMeta>A change reaches brainstorm agents started after it; one already started, running or parked, keeps the network it had until its session starts a new agent.</SettingsMeta>
       {on ? (
         <Callout tone="danger" data-testid="network-brainstorm-anywhere">
           <b>Anything a page says can steer the agent.</b> A brainstorm has read-only checkouts of the repositories linked to its session, and the model’s key, in its container. A malicious page could talk it into sending them to any host.
