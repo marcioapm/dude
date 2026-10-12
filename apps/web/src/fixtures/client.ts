@@ -372,7 +372,7 @@ export class FixtureClient extends ApiClient {
   #patch(project: boolean, patch: SettingsPatch): SettingsResponse {
     const refused = patch.network?.egress?.map(egressProblem).find((p) => p !== null);
     if (refused) throw new ApiError(400, "invalid_request", `network.egress: ${refused}`);
-    if (project && patch.network?.brainstorm !== undefined) throw new ApiError(400, "invalid_request", "brainstorm sessions span projects");
+    if (project && patch.network?.brainstorm !== undefined) throw new ApiError(400, "invalid_request", "brainstorm sessions span projects: whether they may reach any host is the organisation's setting");
     if (patch.network?.egress) {
       const list = [...new Set(patch.network.egress.map((e) => e.trim().toLowerCase()))];
       if (project) this.#projectEgress = list;

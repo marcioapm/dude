@@ -194,8 +194,8 @@ function projectMode(v: VersionRow | undefined): ProjectPromptMode {
  * the project's ("add"), or the project's alone ("only"), each once; ["*"]
  * when any says anywhere, or when nothing is listed anywhere and there is
  * no model to restrict to. A project's own list or mode is its override.
- * On the organisation's settings, whether its brainstorms reach any host
- * besides: they alone, so `effective` stays what every other role gets.
+ * The organisation's settings also carry `brainstorm.anywhere`; `effective`
+ * stays what every other role gets, since only brainstorms ignore it.
  */
 export function network(layers: Layers, defaults: NetworkDefaults): NetworkSettings {
   const { org, project } = layers;
