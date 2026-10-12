@@ -37,8 +37,6 @@ def presence_session(env):
             wait_until(lambda: _healthy(base_url, proc), timeout=20, message="presence test server did not start")
 
             class Session:
-                url = base_url
-
                 def acquire(self, who):
                     session = requests.Session()
                     resp = session.post(base_url + "/test/presence-session", timeout=10,
@@ -60,7 +58,6 @@ def presence_session(env):
                             for cookie in session.cookies])
                     page.add_init_script("localStorage.clear()")
                     page.goto(base_url)
-                    from playwright.sync_api import expect
                     expect(page.get_by_test_id("shell")).to_be_visible()
 
             yield Session()
