@@ -411,6 +411,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the question stays open. It lasts for that question: `waitingKey` (the
   question's id) says which, and the next question steps the composer back
   again, even when it is asked in the same breath as the answer.
+- **The question waiting on the reader is in view.** `ChatTranscript
+  keepInView` names its turn (a selector): following the tail stops at
+  its top, so a transcript opens on the question rather than on the
+  replies and notices after it, and what arrives later does not push it
+  out. The reader's own scroll, or Jump to latest, lets it go; the next
+  question named is scrolled to again.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. In grayscale it is still the only barred, tinted turn.

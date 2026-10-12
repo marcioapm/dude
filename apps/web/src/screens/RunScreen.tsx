@@ -623,6 +623,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
     ? (chat ? "The conductor" : runLabel(run)) : undefined;
+  // The question you are to answer is what the conversation opens on, whatever was said after it.
+  const keepInView = waitingForYou && asked ? questionTurnSelector(asked.questionId) : undefined;
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -637,6 +639,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -794,6 +797,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -1371,6 +1375,9 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
     }
   }
 }
+
+/** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
+export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
 
 /** Whom a session's question waits on: none when it is put to you, else their first name. */
 function questionFor(to: { id: string; name: string | null }, people: People): string | undefined {

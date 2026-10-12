@@ -566,6 +566,31 @@ describe("a steer read at the agent's next step", () => {
   });
 });
 
+describe("the agent's task and what it did with it", () => {
+  const kinds = (events: PersistedEvent[]) => project(events).turns.map((t) => t.kind);
+
+  test("a question dude recorded before the syncer read the prompt still goes after the prompt", () => {
+    // DASH-6: ask_person's question.asked reached the ledger before lux's record of the prompt was read.
+    const events = [ev(EventTypes.PlanUpdated, { todos: [] }), ev(EventTypes.ToolCalled, { tool: "read", callId: "c_1" }),
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "q_1", prompt: "Should FACTORY.md be in English?" }),
+      ev("agent.tool.dude", { tool: "ask_person", result: { questionId: "q_1" } }),
+      ev(EventTypes.PromptDelivered, { text: "Localise the settings screens." }),
+      ev(EventTypes.AgentMessage, { text: "I asked; waiting for the answer." })];
+    expect(kinds(events)).toEqual(["prompt", "tool", "question", "message"]);
+  });
+
+  test("a notice before the agent did anything stays before the prompt", () => {
+    expect(kinds([ev("run.parked", { reason: "person" }), ev(EventTypes.PromptDelivered, { text: "Go." })])).toEqual(["notice", "prompt"]);
+  });
+
+  test("the progress row keeps its place when the prompt goes before it", () => {
+    const state = apply(emptyProjection(), [ev("agent.custom.progress", { data: { done: 1, of: 3 } }), ev(EventTypes.PromptDelivered, { text: "Go." })]);
+    apply(state, [ev("agent.custom.progress", { data: { done: 2, of: 3 } })]);
+    expect(state.turns.map((t) => t.kind)).toEqual(["prompt", "progress"]);
+    expect(state.turns[1]).toMatchObject({ done: 2 });
+  });
+});
+
 describe("the tools a Run used, for the session rail", () => {
   const dude = (tool: string) => ev("agent.tool.dude", { tool, arguments: {}, result: {} });
   const called = (tool: string, callId: string) => ev(EventTypes.ToolCalled, { tool, callId, input: {} });

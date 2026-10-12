@@ -71,10 +71,21 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
   readonly live?: boolean | undefined;
   /** Fill the parent's height instead of `maxHeight`. */
   readonly fill?: boolean | undefined;
+  /**
+   * A selector for the turn that waits on the reader (a `QuestionCard`):
+   * following the tail never scrolls its top out of view, so it is what a
+   * transcript opens on. The person's own scroll, or Jump to latest,
+   * lets it go until it names another.
+   */
+  readonly keepInView?: string | undefined;
   readonly maxHeight?: number | string | undefined;
   readonly emptyMessage?: ReactNode;
   readonly children?: ReactNode;
 }
+
+/** Room left above a turn kept in view, so it does not sit flush on the transcript's edge. */
+const HELD_MARGIN = 12;
+const SCROLL_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
 /**
  * The transcript: the operator's day-to-day screen. A header states what
@@ -86,7 +97,9 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
  * scroll up it stops, and a "Jump to latest" pill appears — with a count
  * of turns that arrived while you were reading. Streaming text that grows
  * the last turn also follows, via a ResizeObserver on the content, so a
- * long answer does not run off the bottom of the viewport.
+ * long answer does not run off the bottom of the viewport. A turn waiting on
+ * the reader (`keepInView`) bounds the following: its top stays in view, so
+ * a question with replies after it still opens where it can be answered.
  */
 export function ChatTranscript({
   session,
@@ -97,6 +110,7 @@ export function ChatTranscript({
   turns,
   live,
   fill,
+  keepInView,
   maxHeight = 560,
   emptyMessage = "No turns yet.",
   className,
@@ -114,12 +128,32 @@ export function ChatTranscript({
   const lastRevision = useRef(revision);
   const turnCount = turns ?? Children.count(children);
   const lastCount = useRef(turnCount);
+  /** The turn kept in view, until the person scrolls or jumps past it. */
+  const held = useRef(keepInView);
 
+  // Following stops at the held turn's top: never past it, so it stays read.
   const scrollToBottom = useCallback((smooth: boolean) => {
     const el = viewportRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    let top = el.scrollHeight;
+    const turn = held.current ? el.querySelector<HTMLElement>(held.current) : null;
+    if (turn) top = Math.min(top, el.scrollTop + turn.getBoundingClientRect().top - el.getBoundingClientRect().top - HELD_MARGIN);
+    el.scrollTo({ top, behavior: smooth ? "smooth" : "auto" });
   }, []);
+
+  // A new turn to keep in view (or none now): follow again, to it.
+  useLayoutEffect(() => {
+    if (held.current === keepInView) return;
+    held.current = keepInView;
+    followingRef.current = true;
+    setFollowing(true);
+    scrollToBottom(false);
+  }, [keepInView, scrollToBottom]);
+
+  // The person moving the transcript themselves lets the held turn go.
+  const release = () => {
+    held.current = undefined;
+  };
 
   // New revision or new turns: follow if following, else remember what was missed.
   useLayoutEffect(() => {
@@ -150,7 +184,10 @@ export function ChatTranscript({
   const onScroll = () => {
     const el = viewportRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 12;
+    // Held at the turn kept in view is following too: it is as far as following goes.
+    const turn = held.current ? el.querySelector<HTMLElement>(held.current) : null;
+    const atHeld = turn !== null && turn.getBoundingClientRect().top - el.getBoundingClientRect().top >= HELD_MARGIN - 2;
+    const atBottom = atHeld || el.scrollHeight - el.scrollTop - el.clientHeight < 12;
     if (atBottom !== followingRef.current) {
       followingRef.current = atBottom;
       setFollowing(atBottom);
@@ -162,6 +199,7 @@ export function ChatTranscript({
   };
 
   const jump = () => {
+    release();
     followingRef.current = true;
     setFollowing(true);
     setMissed(0);
@@ -176,7 +214,11 @@ export function ChatTranscript({
       {session ? <SessionHeader session={session} actions={headerActions} /> : null}
       {pinned !== undefined ? <div className={styles["pinned"]}>{pinned}</div> : null}
       <div className={styles["scroller"]}>
-        <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} role="log" aria-live={live ? "polite" : "off"} aria-relevant="additions text" tabIndex={0}>
+        <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} onWheel={release} onTouchMove={release}
+          onKeyDown={(e) => e.target === e.currentTarget && SCROLL_KEYS.has(e.key) && release()}
+          // A drag of the scrollbar, which is the viewport's own: not a click inside a turn.
+          onPointerDown={(e) => e.target === e.currentTarget && release()}
+          role="log" aria-live={live ? "polite" : "off"} aria-relevant="additions text" tabIndex={0}>
           <div ref={contentRef} className={styles["content"]}>
             {hasChildren ? children : <div className={styles["empty"]}>{emptyMessage}</div>}
           </div>

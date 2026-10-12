@@ -33,7 +33,7 @@ import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
-import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { EventLog, asides, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
@@ -342,6 +342,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={yours ? questionTurnSelector(yours.id) : undefined}
               live={live}
               revision={events.length + (detail.proposals?.length ?? 0)}
               turns={conversation.turns.length}
