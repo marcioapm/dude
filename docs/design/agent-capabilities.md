@@ -407,21 +407,39 @@ Gallery: the settings page's existing phone frame.
    later, deliberate change.
 2. **A project's Brainstorm capabilities apply to sessions.** Brainstorm
    only runs in sessions, so a project override that never applied would be
-   useless. A session that links one project follows that project's
-   Brainstorm settings; which project wins for a session spanning several
-   is still open (below).
+   useless. A session follows the Brainstorm settings of the projects it
+   links, combined by the rule in 5.
 3. **Any project editor may widen on a project**, as with every other
    project setting today (no admin gate). The widened state is shown
    (Beyond Acme), and an audit event is still worth having.
 4. **"dude only" keeps the operator's floor:** a role on dude only still
    reaches what the operator lists; the level's description says so where
    the operator lists hosts.
+5. **A session spanning several projects: the agent's own capabilities
+   widen, project-scoped actions stay per project.** Capabilities split in
+   two kinds:
+   - **Agent-wide** (they apply to the agent itself, not to what it does
+     with a project): Internet level, Web search, Containers, and the dude
+     tools that don't target a project (Ask people, Remember to the
+     organisation). The session's agent gets the **widest** value among the
+     linked projects (and the organisation's when it links none): any
+     linked project that allows Web search turns it on for the session.
+     Internet takes the widest level, and a list level gets the union of
+     the linked projects' lists.
+   - **Project-scoped** (they act on one project): writing or pushing to its
+     repositories, creating tasks or proposing in it, requesting its
+     repositories, replying on its pull requests. Each stays enforced **per
+     project**: the agent may create a task in project A only if A allows
+     it, whatever B says. The tools take the project as an argument and
+     check that project's value.
+   - The session shows the result and where each widened value comes from
+     ("Web search: on, from billing").
+   - Linking or unlinking a project changes the agent-wide values; like a
+     model change (#112), they take effect when the session next starts an
+     agent, and the session says so.
 
 ## Open questions
 
-1. **A session spanning several projects:** whose Brainstorm settings
-   apply (e.g. the first-linked project's, or the widest), and how the
-   session shows which.
-2. **Per-host lists per role** (the implementer gets `registry.npmjs.org`,
+1. **Per-host lists per role** (the implementer gets `registry.npmjs.org`,
    the reviewer does not) are not in this proposal: the three levels cover
    the asks so far. If wanted, it would be a fourth level, "Its own list".
