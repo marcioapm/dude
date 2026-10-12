@@ -1,8 +1,10 @@
 package phases
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -346,6 +348,30 @@ func TestATiersClaudeCodeSettingsAreMergedWithThePreflightOff(t *testing.T) {
 	}
 	if _, _, dropped := claudeCodeArgs(map[string]any{"args": []any{"--settings"}}); !slices.Equal(dropped, []string{"--settings"}) {
 		t.Errorf("a --settings with no value: dropped = %q", dropped)
+	}
+}
+
+// A tier's --settings that Claude Code leaves out is the operator's to see:
+// a Run on Claude Code warns with what it dropped. One whose settings are
+// all inline JSON, or a Run on OpenCode, which passes no args, does not.
+func TestClaudeCodeWarnsOfTheTiersSettingsItDropped(t *testing.T) {
+	path := map[string]any{"args": []any{"--settings", "/etc/c.json"}}
+	for _, tc := range []struct {
+		name, harness string
+		options       map[string]any
+		warn          bool
+	}{
+		{"a path on Claude Code", delivery.HarnessClaudeCode, path, true},
+		{"inline JSON on Claude Code", delivery.HarnessClaudeCode, map[string]any{"args": []any{"--settings", `{"model":"y"}`}}, false},
+		{"a path on OpenCode", delivery.HarnessOpenCode, path, false},
+	} {
+		var logs bytes.Buffer
+		s := &Syncer{Log: slog.New(slog.NewTextHandler(&logs, nil))}
+		s.logIgnoredOptions(phaseRun{ID: "run_1"}, specInput{Harness: tc.harness, ModelTier: "T", Options: tc.options})
+		warned := strings.Contains(logs.String(), "level=WARN")
+		if warned != tc.warn || (tc.warn && !strings.Contains(logs.String(), `dropped="[--settings /etc/c.json]"`)) {
+			t.Errorf("%s: logged %q, want a warn naming the path %v", tc.name, logs.String(), tc.warn)
+		}
 	}
 }
 
