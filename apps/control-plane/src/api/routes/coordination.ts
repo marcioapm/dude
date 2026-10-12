@@ -182,6 +182,8 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
          (SELECT count(*)::int FROM peer_messages m WHERE m.to_task_id = t.id AND m.read_at IS NULL AND m.briefed_run_id IS NULL) AS inbox
       FROM tasks t JOIN projects p ON p.id = t.project_id
       LEFT JOIN LATERAL (SELECT r.id, r.branch, r.heads, r.phase::text AS phase,
+          -- delivery.PromptRoleForPhase in Go; repeated here because the role is read in this one statement
+          -- and neither process can import the other's constants.
           (CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
             WHEN 'simplify' THEN 'simplifier' WHEN 'test' THEN 'qa_browser' WHEN 'investigate' THEN 'investigator' END) AS role,
           r.status FROM runs r

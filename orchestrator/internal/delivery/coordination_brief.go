@@ -270,7 +270,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 		groups = append(groups, g.String())
 	}
 
-	// Note changes: pins and replacements, and retirements, in full.
+	// Note changes: pins and replacements, and retirements, each clipped as a message is.
 	rows, err := tx.Query(ctx, `SELECT at, line, n, change, was FROM (
 			SELECT n.created_at AS at, 'note ' || n.n || ', ' || n.by_label ||
 				COALESCE(', replaces note ' || (SELECT o.n FROM epic_notes o WHERE o.id = n.replaces_id), '') || ': ' || n.text AS line,
@@ -300,9 +300,9 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 		var g strings.Builder
 		g.WriteString("Epic notes added, replaced or retired:")
 		for _, c := range changes {
-			line := strings.ReplaceAll(c.Line, "\n", " ")
+			line := clip(strings.ReplaceAll(c.Line, "\n", " "), digestLine)
 			fmt.Fprintf(&g, "\n- %s %s", c.At.UTC().Format("15:04"), line)
-			item := map[string]any{"at": c.At, "n": c.N, "change": c.Change, "line": clip(line, digestLine)}
+			item := map[string]any{"at": c.At, "n": c.N, "change": c.Change, "line": line}
 			if c.Was != 0 {
 				item["was"] = c.Was
 			}

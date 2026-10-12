@@ -53,13 +53,6 @@ func PeerByKey(ctx context.Context, tx pgx.Tx, taskID, key string) (Peer, bool, 
 	return p, err == nil, err
 }
 
-// IsPeer says whether other is a peer of taskID.
-func IsPeer(ctx context.Context, tx pgx.Tx, taskID, other string) (bool, error) {
-	var ok bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM task_peers($1) WHERE peer_id = $2)`, taskID, other).Scan(&ok)
-	return ok, err
-}
-
 // NotAPeer is the refusal for a task that is not one of the caller's
 // peers, whatever the tool.
 func NotAPeer(key string) string {

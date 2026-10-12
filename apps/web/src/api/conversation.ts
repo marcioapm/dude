@@ -306,7 +306,7 @@ export interface PeerWaitTurn {
   how: "wait" | "turn_ended";
   since: string;
   parksAt: string | null;
-  ended: { at: string; by: "reply" | "self" | "run_ended" | "peer_ended"; status: string | null } | null;
+  ended: { at: string; by: "reply" | "self" | "run_ended" | "peer_ended"; status: string | null; line?: string | null } | null;
 }
 
 /** A note change this Run was told at its step (agent.note.told): the EpicNoteNotice. */
@@ -1143,7 +1143,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const wait = state.peerWaits.get(String(payload.message ?? ""));
         const by = payload.by;
         if (wait && wait.ended === null && (by === "reply" || by === "self" || by === "run_ended" || by === "peer_ended")) {
-          wait.ended = { at: event.occurredAt, by, status: stringOrNull(payload.status) };
+          wait.ended = { at: event.occurredAt, by, status: stringOrNull(payload.status), line: stringOrNull(payload.line) };
         }
         break;
       }

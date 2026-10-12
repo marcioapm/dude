@@ -545,7 +545,7 @@ func TestTheConductorIsNeverWokenAndItsDigestIsBoundedAndNotRepeated(t *testing.
 	w.exec(t, `UPDATE runs SET created_at = now() - interval '3 hours' WHERE id = 'run_cond'`)
 	w.send(t, three, "ABS-1", "not about ABS-2", "")
 	w.in(t, func(tx pgx.Tx) error {
-		_, err := delivery.PinNoteTx(ctx, tx, w.org, delivery.PinInput{EpicID: w.epic, Text: "Body is {metric}", Run: one})
+		_, err := delivery.PinNoteTx(ctx, tx, w.org, delivery.PinInput{EpicID: w.epic, Text: "Body is {metric} " + strings.Repeat("long ", 300), Run: one})
 		return err
 	})
 	w.exec(t, `UPDATE tasks SET status = 'review' WHERE id = $1`, w.tasks["ABS-1"])
@@ -576,7 +576,7 @@ func TestTheConductorIsNeverWokenAndItsDigestIsBoundedAndNotRepeated(t *testing.
 		t.Errorf("the digest is not bounded to the newest 10 of ABS-2's own:\n%s", digest)
 	}
 	if strings.Contains(digest, strings.Repeat("long ", 60)) {
-		t.Errorf("a message is not clipped:\n%s", digest)
+		t.Errorf("a message or note is not clipped:\n%s", digest)
 	}
 	// Told: the next says nothing of it.
 	w.in(t, func(tx pgx.Tx) error {
@@ -696,7 +696,8 @@ func TestATaskEndingWithoutReplyingReleasesItsWaiters(t *testing.T) {
 		t.Errorf("a wait on another task was closed")
 	}
 	if n := w.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_one' AND event_type = 'agent.peer.wait_ended'
-		AND payload->>'by' = 'peer_ended' AND payload->>'status' = 'aborted' AND payload->>'on' = 'ABS-2'`); n != 1 {
+		AND payload->>'by' = 'peer_ended' AND payload->>'status' = 'aborted' AND payload->>'on' = 'ABS-2'
+		AND payload->>'line' = 'ABS-2 ended without replying (status: aborted). Carry on with your assumption, or ask a person.'`); n != 1 {
 		t.Errorf("%d peer_ended events", n)
 	}
 	var text string

@@ -157,6 +157,8 @@ export function PeerTurnView({ turn, ctx }: { turn: PeerTurn; ctx: PeerContext }
     delivery: sent ? (turn.lands === "next_run" ? { kind: "inbox" } : { kind: "queued" }) : { kind: "read", at: turn.at },
   };
   if (sent && turn.text) Object.assign(msg, { text: turn.text });
+  // A held message says what the orchestrator told its sender.
+  if (sent && msg.delivery.kind === "inbox" && turn.notice) Object.assign(msg, { delivery: { kind: "inbox", notice: turn.notice } });
   if (!sent) {
     // Read here: when, and after what, as this Run read it.
     Object.assign(msg, { delivery: { kind: "read", at: turn.at, after: turn.via === "briefing" ? "in its briefing" : turn.after ? toolLabel(turn.after) : undefined } });
@@ -169,7 +171,7 @@ export function PeerTurnView({ turn, ctx }: { turn: PeerTurn; ctx: PeerContext }
 export function PeerWaitView({ turn }: { turn: PeerWaitTurn }) {
   return (
     <PeerWaitLine on={turn.on} msg={turn.message} how={turn.how === "turn_ended" ? "turn-ended" : "wait"} since={turn.since} parksAt={turn.parksAt}
-      ended={turn.ended ? (turn.ended.by === "peer_ended" ? { at: turn.ended.at, by: "peer_ended", status: turn.ended.status ?? undefined }
+      ended={turn.ended ? (turn.ended.by === "peer_ended" ? { at: turn.ended.at, by: "peer_ended", status: turn.ended.status ?? undefined, line: turn.ended.line ?? undefined }
         : { at: turn.ended.at, by: turn.ended.by }) : undefined} />
   );
 }

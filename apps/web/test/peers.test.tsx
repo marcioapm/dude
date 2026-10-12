@@ -71,9 +71,9 @@ describe("the projection", () => {
   test("a wait the peer's end released says so, with its status", () => {
     const c = project([
       ev(EventTypes.AgentPeerWaiting, { message: "pm_1", on: "ABS-2", how: "turn_ended", parks_at: null }),
-      ev(EventTypes.AgentPeerWaitEnded, { message: "pm_1", on: "ABS-2", by: "peer_ended", status: "aborted" }),
+      ev(EventTypes.AgentPeerWaitEnded, { message: "pm_1", on: "ABS-2", by: "peer_ended", status: "aborted", line: "Go's line." }),
     ], "running");
-    expect((c.turns[0] as PeerWaitTurn).ended).toMatchObject({ by: "peer_ended", status: "aborted" });
+    expect((c.turns[0] as PeerWaitTurn).ended).toMatchObject({ by: "peer_ended", status: "aborted", line: "Go's line." });
     expect(c.openWait).toBeNull();
   });
 
@@ -136,8 +136,8 @@ const THREADS: EpicThreads = {
   ] }],
 };
 const PEERS: EpicPeers = { epicId: "e", tasks: [
-  { ...ref("ABS-2"), status: "running", phase: "implement", role: "implementer", run: "live", runId: "r2", waitingOn: null, inbox: 0 },
-  { ...ref("ABS-4"), status: "running", phase: "implement", role: "implementer", run: "live", runId: "r4", waitingOn: null, inbox: 0 },
+  { ...ref("ABS-2"), status: "running", phase: "implement", role: "implementer", run: "live", runId: "r2", waitingOn: null, inbox: 0, branch: null, head: null, files: [], lastSaid: null },
+  { ...ref("ABS-4"), status: "running", phase: "implement", role: "implementer", run: "live", runId: "r4", waitingOn: null, inbox: 0, branch: null, head: null, files: [], lastSaid: null },
 ] };
 const CTX: PeerContext = { self: "ABS-4", role: "implementer", coordination: { notes: NOTES, threads: THREADS, peers: PEERS }, messages: messagesById(THREADS), people: PEOPLE };
 const draw = (events: PersistedEvent[], ctx: PeerContext = CTX) =>
@@ -155,8 +155,11 @@ describe("the turns, drawn", () => {
   test("a message sent here carries on, and a held one says its peer has no Run going", () => {
     const [carry] = draw([ev(EventTypes.AgentMessageSent, { message: "pm_1", to: "ABS-2", lands: "next_step", text: "Which body?" })]);
     expect(carry).toContain("Sent · carrying on.");
-    const [held] = draw([ev(EventTypes.AgentMessageSent, { message: "pm_9", to: "ABS-3", lands: "next_run", text: "Bins?" })], noPeers("implementer", PEOPLE));
-    expect(held).toContain("ABS-3 has no Run going; it will see this when its next Run starts.");
+    const notice = "ABS-3 has no Run going; it will see this when its next Run starts.";
+    const [held] = draw([ev(EventTypes.AgentMessageSent, { message: "pm_9", to: "ABS-3", lands: "next_run", text: "Bins?", notice })], noPeers("implementer", PEOPLE));
+    expect(held).toContain(notice);
+    const [plain] = draw([ev(EventTypes.AgentMessageSent, { message: "pm_9", to: "ABS-3", lands: "next_run", text: "Bins?", notice: "Said by Go." })], noPeers("implementer", PEOPLE));
+    expect(plain).toContain("Said by Go.");
   });
 
   test("a replaced note is told with the words that changed", () => {

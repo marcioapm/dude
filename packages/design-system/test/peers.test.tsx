@@ -68,12 +68,14 @@ describe("PeerMessage", () => {
     expect(el.querySelector('[data-testid="peer-lands"]')).toBeNull();
   });
 
-  test("queued, it lands at the peer's next step; held, it says the peer has no Run going", async () => {
+  test("queued, it lands at the peer's next step; held, it says the orchestrator's notice", async () => {
     const queued = await mount(<PeerMessage msg={{ ...ASK, delivery: { kind: "queued" } }} />);
     expect(words(queued.querySelector('[data-testid="peer-lands"]')!)).toBe("Lands at ABS-2's next step. Nothing is interrupted.");
     expect(queued.querySelector("article")!.getAttribute("data-unread")).toBe("true");
+    await act(async () => root!.render(<PeerMessage msg={{ ...ASK, delivery: { kind: "inbox", notice: "Notice from the payload." } }} />));
+    expect(words(queued.querySelector('[data-testid="peer-lands"]')!)).toBe("Notice from the payload.");
     await act(async () => root!.render(<PeerMessage msg={{ ...ASK, delivery: { kind: "inbox" } }} />));
-    expect(words(queued.querySelector('[data-testid="peer-lands"]')!)).toBe("ABS-2 has no Run going; it will see this when its next Run starts.");
+    expect(words(queued.querySelector('[data-testid="peer-lands"]')!)).toBe("Held for ABS-2's next Run.");
   });
 
   test("in the sender's transcript it carries on, and names the wait it does not open", async () => {
@@ -96,20 +98,22 @@ describe("PeerMessage", () => {
 
 describe("PeerWaitLine", () => {
   test("waiting, it says why and when the Run parks; answered, the span it waited", async () => {
-    const el = await mount(<PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={t("13:47:02")} parksAt={t("13:57:02")} />);
+    const el = await mount(<PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={t("13:47:02")} parksAt={t("13:57:02")} now={t("13:53:02")} />);
     const line = byRole(el, "status", "Waiting on ABS-2 since 13:47; parks at 13:57 if no reply");
     expect(words(line)).toContain("ran dude wait pm_1");
-    expect(words(line)).toContain("parks in 10 min, at 13:57, if no reply");
+    // The time left at `now`, not the whole grace.
+    expect(words(line)).toContain("parks in 4 min, at 13:57, if no reply");
     await act(async () => root!.render(<PeerWaitLine on="ABS-2" msg="pm_1" how="turn-ended" since={t("13:47:02")} parksAt={t("13:57:02")}
       ended={{ at: t("13:49:06"), by: "reply" }} />));
     const done = byRole(el, "status", "Waited on ABS-2 from 13:47 to 13:49: answered; the reply resumed the turn");
     expect(words(done)).toContain("turn ended with its question to ABS-2 unanswered");
   });
 
-  test("a peer that ended without replying is said, with its status", async () => {
+  test("a peer that ended without replying says the orchestrator's line", async () => {
+    const line = "ABS-2 ended without replying (status: aborted). Carry on with your assumption, or ask a person.";
     const el = await mount(<PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={t("13:47:02")}
-      ended={{ at: t("13:50:00"), by: "peer_ended", status: "aborted" }} />);
-    expect(words(el)).toContain("ABS-2 ended without replying (status: aborted)");
+      ended={{ at: t("13:50:00"), by: "peer_ended", status: "aborted", line }} />);
+    expect(words(el)).toContain(line);
   });
 });
 
@@ -156,8 +160,8 @@ describe("EpicNote", () => {
 
   test("the history folds to one line that controls the list it opens", async () => {
     const el = await mount(<EpicNoteHistory live={4} notes={[
-      { ...NOTE, n: 3, replacedBy: { n: 4, at: t("13:51:20") } },
-      { ...NOTE, n: 2, retired: { by: "Márcio Martins", at: t("15:26:00") } },
+      { ...NOTE, id: "en_3", n: 3, replacedBy: { n: 4, at: t("13:51:20") } },
+      { ...NOTE, id: "en_2", n: 2, retired: { by: "Márcio Martins", at: t("15:26:00") } },
     ]} />);
     const line = byRole(el, "button");
     expect(words(line)).toBe("1 replaced note, 1 retired note· no agent is briefed with these any more");

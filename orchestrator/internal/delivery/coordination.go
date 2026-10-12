@@ -328,7 +328,7 @@ func PeerEndedTx(ctx context.Context, tx pgx.Tx, org, taskID, status string) ([]
 	for _, c := range done {
 		ref := RunRef{Org: org, ProjectID: c.Project, TaskID: c.Task, RunID: c.Run}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvPeerWaitEnded, ledger.ActorSystem,
-			map[string]any{"message": c.Message, "on": key, "by": "peer_ended", "status": status})); err != nil {
+			map[string]any{"message": c.Message, "on": key, "by": "peer_ended", "status": status, "line": line})); err != nil {
 			return nil, err
 		}
 		if _, _, err := QueueDirective(ctx, tx, ref, Directive{Text: line, Scope: "run"}); err != nil {

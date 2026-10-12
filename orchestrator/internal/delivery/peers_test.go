@@ -88,7 +88,7 @@ func TestPeersAreTheEpicMinusSelf(t *testing.T) {
 				t.Errorf("%s is ABS-2's peer (%v)", key, err)
 			}
 		}
-		if ok, err := delivery.IsPeer(ctx, tx, w.tasks["ABS-1"], w.tasks["ABS-5"]); err != nil || ok {
+		if _, ok, err := delivery.PeerByKey(ctx, tx, w.tasks["ABS-1"], "ABS-5"); err != nil || ok {
 			t.Errorf("another epic's task is a peer (%v)", err)
 		}
 		return nil

@@ -75,11 +75,11 @@ export function TaskChip({ task, showRole, onOpen, className }: TaskChipProps) {
 
 // --------------------------------------------------------------------------- PeerMessage
 
-/** Where a message is: on its way to the recipient's next step, read there, or held for its next Run. */
+/** Where a message is: on its way to the recipient's next step, read there, or held for its next Run (with the orchestrator's notice). */
 export type PeerDelivery =
   | { readonly kind: "queued" }
   | { readonly kind: "read"; readonly at: When; readonly after?: string | undefined }
-  | { readonly kind: "inbox" };
+  | { readonly kind: "inbox"; readonly notice?: string | undefined };
 
 export interface PeerMessageData {
   readonly id: string;
@@ -170,7 +170,7 @@ export function PeerMessage({ msg, viewer, compact, replyToText, waiting, carryi
             <span>Lands at <b>{msg.to.key}</b>'s next step. Nothing is interrupted.</span></div>
         ) : d.kind === "inbox" ? (
           <div className={styles["note"]} data-testid="peer-lands"><Icon name="clock" size={12} />
-            <span><b>{msg.to.key}</b> has no Run going; it will see this when its next Run starts.</span></div>
+            <span>{d.notice ?? <>Held for <b>{msg.to.key}</b>'s next Run.</>}</span></div>
         ) : null}
         {carryingOn && !refused ? (
           <div className={styles["note"]} data-testid="peer-carrying-on">
@@ -196,7 +196,7 @@ export function PeerMessage({ msg, viewer, compact, replyToText, waiting, carryi
 /** How a wait on a peer ended: its reply, the waiter's own answer, its Run, or the peer's task ending. */
 export type PeerWaitEnd =
   | { readonly at: When; readonly by: "reply" | "self" | "run_ended" }
-  | { readonly at: When; readonly by: "peer_ended"; readonly status?: string | undefined };
+  | { readonly at: When; readonly by: "peer_ended"; readonly status?: string | undefined; readonly line?: string | undefined };
 
 export interface PeerWaitLineProps {
   /** The peer waited on, by key. */
@@ -208,6 +208,8 @@ export interface PeerWaitLineProps {
   /** When the Run parks if no reply comes; unknown, the line does not say. */
   readonly parksAt?: When | null | undefined;
   readonly ended?: PeerWaitEnd | undefined;
+  /** The clock "parks in N min" counts down from: the time left, as the Run header says it. */
+  readonly now?: When | undefined;
 }
 
 function endedWords(on: string, e: PeerWaitEnd): string {
@@ -215,7 +217,8 @@ function endedWords(on: string, e: PeerWaitEnd): string {
     case "reply": return "answered; the reply resumed the turn";
     case "self": return "it went ahead on its own assumption";
     case "run_ended": return "its Run ended";
-    case "peer_ended": return `${on} ended without replying${e.status ? ` (status: ${e.status.replace(/_/g, " ")})` : ""}`;
+    // The orchestrator's line (PeerEndedLine), as the waiting agent was told it.
+    case "peer_ended": return e.line ?? `${on} ended`;
   }
 }
 
@@ -224,7 +227,7 @@ function endedWords(on: string, e: PeerWaitEnd): string {
  * line on the text column, a clock, neutral ink. It waits on an agent, not
  * on you.
  */
-export function PeerWaitLine({ on, msg, how, since, parksAt, ended }: PeerWaitLineProps) {
+export function PeerWaitLine({ on, msg, how, since, parksAt, ended, now }: PeerWaitLineProps) {
   const why = how === "wait" ? <>ran <code className={styles["noticeCode"]}>dude wait {msg}</code></> : <>turn ended with its question to {on} unanswered</>;
   const parks = parksAt ? at(parksAt) : null;
   const label = ended
@@ -240,7 +243,7 @@ export function PeerWaitLine({ on, msg, how, since, parksAt, ended }: PeerWaitLi
           {ended
             ? `${clock(since)} → ${clock(ended.at)}, ${endedWords(on, ended)}`
             : parks
-              ? `parks in ${Math.max(0, Math.round((parks.getTime() - at(since).getTime()) / 60_000))} min, at ${clock(parks)}, if no reply; the reply resumes it`
+              ? `parks in ${Math.max(0, Math.round((parks.getTime() - (now === undefined ? Date.now() : at(now).getTime())) / 60_000))} min, at ${clock(parks)}, if no reply; the reply resumes it`
               : "the reply resumes it"}
         </span>
       </div>

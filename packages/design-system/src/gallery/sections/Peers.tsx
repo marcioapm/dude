@@ -43,7 +43,7 @@ const PATH_Q: PeerMessageData = {
   delivery: { kind: "read", at: at("13:45:31"), after: "Edit" },
 };
 const NO_RUN: PeerMessageData = {
-  id: "pm_9", from: T["ABS-4"]!, to: { ...T["ABS-3"]!, live: false }, sentAt: at("15:08:40"), delivery: { kind: "inbox" },
+  id: "pm_9", from: T["ABS-4"]!, to: { ...T["ABS-3"]!, live: false }, sentAt: at("15:08:40"), delivery: { kind: "inbox", notice: "ABS-3 has no Run going; it will see this when its next Run starts." },
   text: "Do custom SQL metrics come back with the same `metric_<id>_bins` column, or can it be missing?",
 };
 
