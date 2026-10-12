@@ -15,7 +15,7 @@ import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarToggle } from "
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
 import { EpicPage, ProjectPage, type EpicView } from "./EpicPage.tsx";
-import { Abs2Transcript, Abs4Transcript, ConductorChat, GuardsTranscript } from "./Transcripts.tsx";
+import { Abs2Transcript, Abs4Reviewer, Abs4Transcript, ConductorChat, GuardsTranscript } from "./Transcripts.tsx";
 import { EPIC_ID, KEYS, P, PEERS, navAbs, type TaskKey } from "./data.ts";
 
 type Screen = "1" | "2" | "3" | "4" | "5" | "6";
@@ -25,14 +25,14 @@ const SCREENS: ReadonlyArray<{ value: Screen; label: string }> = [
   { value: "2", label: "2 ABS-4 asks" },
   { value: "3", label: "3 ABS-2 answers" },
   { value: "4", label: "4 Conductor" },
-  { value: "5", label: "5 Guards" },
+  { value: "5", label: "5 Rate limit" },
   { value: "6", label: "6 Board" },
 ];
 
 /** What each screen's Moment switch offers. */
 const MOMENTS: Partial<Record<Screen, ReadonlyArray<{ value: string; label: string }>>> = {
-  "1": [{ value: "answered", label: "13:52 answered" }, { value: "waiting", label: "13:45 waiting" }, { value: "reply", label: "A person replies" }, { value: "board", label: "Board view" }],
-  "2": [{ value: "waiting", label: "13:47 waiting" }, { value: "answered", label: "13:52 answered" }],
+  "1": [{ value: "answered", label: "13:52 answered" }, { value: "waiting", label: "13:45 waiting" }, { value: "history", label: "Replaced notes" }, { value: "board", label: "Board view" }],
+  "2": [{ value: "waiting", label: "13:47 waiting" }, { value: "answered", label: "13:52 answered" }, { value: "reviewer", label: "14:34 reviewer" }],
   "4": [{ value: "collapsed", label: "Digest folded" }, { value: "open", label: "Digest open" }],
 };
 
@@ -64,10 +64,10 @@ function Mock() {
     case "1": {
       const view: EpicView = moment === "board" ? "board" : "coordination";
       main = <EpicPage view={view} onView={(v) => setMoment(v === "board" ? "board" : "answered")} moment={moment === "waiting" ? "waiting" : "answered"}
-        replying={moment === "reply"} onProject={() => go("6")} onOpenTask={openTask} />;
+        historyOpen={moment === "history"} onProject={() => go("6")} onOpenTask={openTask} />;
       break;
     }
-    case "2": main = <Abs4Transcript key={moment} moment={moment === "waiting" ? "waiting" : "answered"} />; break;
+    case "2": main = moment === "reviewer" ? <Abs4Reviewer /> : <Abs4Transcript key={moment} moment={moment === "waiting" ? "waiting" : "answered"} />; break;
     case "3": main = <Abs2Transcript />; break;
     case "4": main = <ConductorChat key={moment} open={moment === "open"} />; break;
     case "5": main = <GuardsTranscript />; break;

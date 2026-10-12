@@ -27,7 +27,7 @@ export function at(hm: string): Date {
 
 export type TaskKey = "ABS-1" | "ABS-2" | "ABS-3" | "ABS-4";
 
-/** A peer as `peers` returns it, and as the Coordination view's task list shows it. */
+/** A task as `list_tasks --epic mine` returns it, and as the Coordination view's task list shows it. */
 export interface Peer {
   readonly key: TaskKey;
   readonly id: string;
@@ -45,6 +45,8 @@ export interface Peer {
   readonly owner: Person;
   /** Waiting on another task's reply. */
   readonly waitingOn?: TaskKey | undefined;
+  /** Its unread messages to the caller, and whether it waits on the caller's reply. */
+  readonly forYou?: { readonly count: number; readonly waits: boolean } | undefined;
 }
 
 export const PEERS: Record<TaskKey, Peer> = {
@@ -83,7 +85,7 @@ export const PEERS: Record<TaskKey, Peer> = {
       { path: "backend/src/engine/client.ts", add: 24, del: 3 },
       { path: "backend/src/routes/metrics/preview.test.ts", add: 141, del: 0 },
     ],
-    lastSaid: "Pinned the preview contract as an epic note. Routes read `body.draft`; the engine path is ABS-1's, so I'm not adding a handler here.",
+    lastSaid: "Replaced the contract note: `_var` is now `_variance`, as ABS-1's engine returns it. The engine path is ABS-1's, so I'm not adding a handler here.",
     owner: P["jonas"]!,
   },
   "ABS-3": {
@@ -138,8 +140,7 @@ export interface PeerMsg {
   readonly id: string;
   readonly from: TaskKey;
   readonly fromRole: AgentRole;
-  /** A task, or the whole epic. */
-  readonly to: TaskKey | "epic";
+  readonly to: TaskKey;
   readonly text: string;
   readonly sentAt: Date;
   readonly delivery: Delivery;
@@ -195,30 +196,51 @@ export type NoteAuthor =
 
 export interface Note {
   readonly id: string;
+  /** The note's number on its epic: what `note --replaces N` names. */
+  readonly n: number;
   readonly text: string;
   readonly by: NoteAuthor;
   readonly at: Date;
   /** How many of the epic's live agents have read it. */
   readonly readBy: number;
+  /** The note this one replaced. */
+  readonly replaces?: number | undefined;
+  /** Set once a newer note replaced it: it leaves the current notes for the history. */
+  readonly replacedBy?: { readonly n: number; readonly at: Date } | undefined;
 }
 
-export const NOTES: readonly Note[] = [
-  {
-    id: "en_2",
-    text:
-      "**Preview API (ABS-2).** `POST /v1/metrics/preview/history` and `/histogram`. Body `{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}`. Columns `metric_<id>_mean`, `_var`, `_min`, `_bins`, and `sample_fraction`. Engine call: `POST /v1/query/estimate/histogram/metrics` (ABS-1).",
-    by: { kind: "agent", task: "ABS-2", role: "implementer", for: P["jonas"]! },
-    at: at("13:48:40"),
-    readBy: 3,
-  },
-  {
-    id: "en_1",
-    text: "Read `.ai/personal/marcio/docs/llm-agent/INDEX.md` for how to run tests here.",
-    by: { kind: "person", person: P["marcio"]! },
-    at: at("13:41:00"),
-    readBy: 4,
-  },
-];
+const ABS2_IMPL: NoteAuthor = { kind: "agent", task: "ABS-2", role: "implementer", for: P["jonas"]! };
+const CONTRACT = (variance: string) =>
+  `**Preview API (ABS-2).** \`POST /v1/metrics/preview/history\` and \`/histogram\`. Body \`{draft, unit_type_id, applications, from, sample, period, cumulative, bin_count, include_non_achievers}\`. Columns \`metric_<id>_mean\`, \`${variance}\`, \`_min\`, \`_bins\`, and \`sample_fraction\`. Engine call: \`POST /v1/query/estimate/histogram/metrics\` (ABS-1).`;
+
+export const NOTE_INDEX: Note = {
+  id: "en_1",
+  n: 1,
+  text: "Read `.ai/personal/marcio/docs/llm-agent/INDEX.md` for how to run tests here.",
+  by: { kind: "person", person: P["marcio"]! },
+  at: at("13:41:00"),
+  readBy: 4,
+};
+
+/** ABS-2's contract as first pinned, before it renamed `_var`. */
+export const NOTE_CONTRACT_1: Note = {
+  id: "en_2", n: 2, text: CONTRACT("_var"), by: ABS2_IMPL, at: at("13:48:40"), readBy: 4,
+  replacedBy: { n: 3, at: at("13:51:20") },
+};
+
+/** The same contract after ABS-2 renamed the column to match the engine's. */
+export const NOTE_CONTRACT: Note = {
+  id: "en_3", n: 3, text: CONTRACT("_variance"), by: ABS2_IMPL, at: at("13:51:20"), readBy: 3, replaces: 2,
+};
+
+/** The epic's notes at 13:52: the current ones, newest first, then the replaced ones. */
+export const NOTES: readonly Note[] = [NOTE_CONTRACT, NOTE_INDEX];
+export const REPLACED: readonly Note[] = [NOTE_CONTRACT_1];
+
+/** One line for a note in a notice or a digest: its text, unformatted. */
+export function noteLine(n: Note): string {
+  return n.text.replace(/\*\*|`/g, "");
+}
 
 // --------------------------------------------------------------------------- the tree and the board
 
