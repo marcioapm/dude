@@ -163,6 +163,55 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 	}
 }
 
+// A preview's own secret named like an owner's token (stored before the
+// name was reserved) is the project's: a resume sends its value, once, and
+// mints nothing for an owner "deploy".
+func TestAPreviewSecretNamedLikeAnOwnersTokenKeepsTheProjectsValue(t *testing.T) {
+	w := newWorld(t)
+	app := w.asApp()
+	w.previews.Minute = time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.secret("GIT_TOKEN_DEPLOY", "deploy-key-project")
+	task := w.task()
+	code, out := w.do("POST", "/internal/tasks/"+task+"/preview", nil)
+	if code != 201 {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("web ready", func() bool {
+		runs := w.luxRuns()
+		return len(runs) == 1 && w.lux.ServerStates(runs[0].ID)["web"] == "ready"
+	})
+	r := w.luxRuns()[0]
+	mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+	w.previews.Minute = time.Millisecond
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	w.previews.Minute = time.Hour
+	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code >= 300 {
+		t.Fatalf("start web on the parked preview = %d %v", code, body)
+	}
+	w.until("web ready again", func() bool { return w.luxCalls(r.ID, "resume") == 1 && w.lux.ServerStates(r.ID)["web"] == "ready" })
+	var values []string
+	for _, s := range r.ResumeSecrets[0] {
+		if s.Name == "GIT_TOKEN_DEPLOY" {
+			values = append(values, s.Value)
+		}
+	}
+	if len(values) != 1 || values[0] != "deploy-key-project" {
+		t.Errorf("the resume sent GIT_TOKEN_DEPLOY as %v, want the project's value once", values)
+	}
+	if env := w.lux.ServerEnv(r.ID, "web"); env["GIT_TOKEN_DEPLOY"] != "deploy-key-project" {
+		t.Errorf("web's GIT_TOKEN_DEPLOY = %q", env["GIT_TOKEN_DEPLOY"])
+	}
+	app.Set(func(a *fakegithub.App) {
+		if n := a.Lookups["/users/deploy/installation"]; n != 0 {
+			t.Errorf("dude looked up an installation for %q %d times", "deploy", n)
+		}
+	})
+}
+
 // Verify mints a token for one linked repository and reads the bot, or
 // says GitHub's reason it could not.
 func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {

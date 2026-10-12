@@ -34,7 +34,12 @@ describe("a secret's name", () => {
   });
 
   test("the names dude sets itself are refused", () => {
-    expect(secretNameProblem("GIT_TOKEN", project)).toEqual({ kind: "invalid", message: "dude sets GIT_TOKEN itself, from the GitHub connection." });
+    const gitToken = { kind: "invalid", message: "dude sets GIT_TOKEN and every GIT_TOKEN_ name itself, from the GitHub connection." };
+    expect(secretNameProblem("GIT_TOKEN", project)).toEqual(gitToken);
+    // A GitHub App's token for another repository owner.
+    expect(secretNameProblem("GIT_TOKEN_X", project)).toEqual(gitToken);
+    expect(secretNameProblem("GIT_TOKEN_DEPLOY", project)).toEqual(gitToken);
+    expect(secretNameProblem("GIT_TOKENS", project)).toBeNull();
     expect(secretNameProblem("DUDE_TOOLS_AUTH", project)?.kind).toBe("invalid");
     // A preview's registry login, beside its own secrets.
     expect(secretNameProblem("DUDE_REGISTRY_AUTH", project)).toEqual({ kind: "invalid", message: "dude sets DUDE_REGISTRY_AUTH itself." });

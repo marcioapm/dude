@@ -203,6 +203,11 @@ func ResumeCredentials(ctx context.Context, gh *forge.GitHub, stored lux.StoredS
 	}
 	var out []lux.Secret
 	for _, sec := range stored.Secrets {
+		// dude declares its tokens runner-only; a preview's own secret of a
+		// like name is the workload's and keeps the project's value.
+		if !sec.RunnerOnly {
+			continue
+		}
 		scope := ownerOfSecret(sec.Name)
 		if sec.Name != gitTokenSecret && scope == "" {
 			continue
