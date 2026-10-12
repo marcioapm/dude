@@ -18,7 +18,7 @@ type Approval = "off" | "ask" | "auto";
 const APPROVAL_OPTIONS = (ceiling: string) => [
   { value: "off" as const, label: "Off", description: "Agents are not offered the tool. They run on their settings' size, and say in their work when it was too small." },
   { value: "ask" as const, label: "Ask a person", description: "The task's owner decides in its Chat, or a session's owner in the session. Nothing moves until they approve." },
-  { value: "auto" as const, label: `Automatically, up to ${ceiling}`, description: `A request up to ${ceiling} is approved at once and said in Chat. A larger one asks a person.` },
+  { value: "auto" as const, label: `Automatically, up to ${ceiling}`, description: `A request up to ${ceiling}, in the same pool, is approved at once and said in Chat. A larger one, or one in another pool, asks a person.` },
 ];
 
 export function MachinesSettings({ where }: { where: "org" | "project" }) {
@@ -84,7 +84,7 @@ export function MachinesSettings({ where }: { where: "org" | "project" }) {
               ) : null}
               {project && mode === "auto" ? <SettingsMeta>{ORG}: Ask a person. billing approves up to {ceilingName} without asking.</SettingsMeta> : null}
               {mode === "auto" && ceiling === "ms_xl" ? (
-                <Callout tone="attention">XL is in another pool: an agent moved to it starts fresh and loses what it had not pushed. Automatic approval still says so in Chat.</Callout>
+                <Callout tone="attention">XL is in another pool: a request for it always asks a person, because the agent would start fresh and lose what it had not pushed.</Callout>
               ) : null}
             </div>
           </SettingRow>

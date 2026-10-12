@@ -58,7 +58,7 @@ export const REASON_LARGE =
 
 export const REASON_XL =
   "Loading the full 2025 invoice fixture (2.1 million rows) into the export's in-memory sort needs about 20 GiB; " +
-  "it was OOM-killed at 7.9 of 8 GiB. Large would not fit it either. I committed and pushed my work at a41c9e2 before asking.";
+  "it was OOM-killed at 7.9 of 8 GiB. Large would not fit it either. I pushed what passes at a41c9e2; the sort in stream.ts is uncommitted because it does not pass yet.";
 
 export const DECLINE_NOTE = "Run the suite with --maxWorkers 2 and only the export tests; CI runs the whole thing.";
 
