@@ -268,7 +268,7 @@ test("deliver and talk pass a person's override and note to the orchestrator", a
 
 type NavTaskOut = {
   key: string; merged: boolean; startable: boolean; canStart: boolean;
-  blockedBy: Array<{ key: string; status: string; unmerged?: boolean; project?: string }>;
+  blockedBy: Array<{ key: string; title: string; status: string; unmerged?: boolean; project?: string }>;
   blocks: Array<{ key: string }>;
   edges: { blockedBy: string[]; blocks: string[]; related: string[] };
   autoStart: { how: string; by: { name: string } } | null;
