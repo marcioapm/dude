@@ -1,7 +1,8 @@
 # Agents coordinating on an epic
 
-**Status: design mockup, 2026-10-12, round 3.** Asked by Márcio, with Jonas.
-Nothing here is built. Mockup: `docs/design/mockups/coordination/index.html`
+**Status: design mockup, 2026-10-12, round 3; part A built (see "As
+built").** Asked by Márcio, with Jonas.
+Mockup: `docs/design/mockups/coordination/index.html`
 (opens from disk, interactive; source in `apps/web/mockups/coordination`,
 built with `MOCKUP=coordination bunx vite build --config mockups/vite.config.ts`
 from `apps/web`). Screens in `docs/design/mockups/coordination/screens/`.
@@ -896,6 +897,60 @@ branch names are as they were.
 
 Ordering between tasks ("depends on") is designed separately. Peers use
 those links as they are; they add nothing to them and order nothing.
+
+## As built (part A: orchestrator, API, CLI)
+
+Built on `feat/agent-coordination`; migration
+`111_agent_coordination.sql`. Where the build chose differently from the
+sections above, or where they were silent:
+
+- **Peers are the epic only.** "Depends on" links are not built, so no
+  linked peer exists yet. The rule is the SQL function `task_peers(task)`
+  (migration 111), returning `(peer_id, via)`; every tool, briefing and the
+  API read it through `delivery.Peers` / `PeerByKey` / `IsPeer`
+  (`orchestrator/internal/delivery/peers.go`). Links join it as a `UNION`
+  there, with `via = 'depends_on'`.
+- **A message's bound is `SteerTextMax`** (the brief), not 8 KiB; past it:
+  "say less, or pin a note".
+- **Who a message is queued on.** The Run that speaks for a task is its
+  newest live implementer, fixer or investigator (not ending). A reply goes
+  to the Run that asked while it is live; a conductor that asked hears a
+  reply only while it runs or waits on that reply. Otherwise the message is
+  held, and the task's next implementer, fixer or investigator has it in its
+  prompt ("Messages from your peers, sent while no Run of this task was
+  going"); reviewers, the simplifier and QA never take a task's mail. A
+  message whose Run ended unread is held again for the next.
+- **Conductors are told nothing at a step.** Note changes are told to live
+  phase Runs on the epic (not the pinner), never to a conductor; a message
+  is never queued on a conductor it would wake. The conductor reads both in
+  its digest.
+- **The digest's "since"** is the last digest written for the task's
+  conductor (`conductor_digests.through`), in a briefing or a wake note,
+  not the conductor's last turn: what one said is never repeated. It lists
+  at most 10 messages to or from the task (newest first, each clipped to 200
+  characters), at most 20 note changes, and peers whose **status** changed
+  (head changes are not tracked). A live conductor woken for any reason gets
+  it appended to its wake note; a new one in its briefing.
+- **Data, as built:** `peer_waits` keeps closed waits (`id`, `closed_at`,
+  `closed_by` reply / self / run_ended, `parks_at`; one open per Run by a
+  partial unique index). `epic_notes` stores `by_label` (who pinned it, as
+  written) and references `people` for `by_person` and `retired_by`.
+  `epic_note_reads` has `change` (added, replaced, retired, briefing) and the
+  `directive_id` it rode on.
+- **Events, as built:** `agent.message.sent` also carries `text` and
+  `toTaskId` (and `notice` when held); `agent.message.received` has `via:
+  "briefing"` when read in a prompt; `agent.message.refused` reasons also
+  include `empty` and `reply` (a reply outside its thread);
+  `agent.peer.wait_ended` `by` is reply, self or run_ended. Times in refusals
+  are UTC.
+- **Not built:** resuming a waiting sender when the recipient's task ends
+  without replying ("ABS-2 ended without replying"). The wait stays open
+  until a reply, a self-reply, or the sender's Run ending.
+- **People** pin, replace and retire through `POST /v1/epics/:id/notes` and
+  `POST /v1/epics/:id/notes/:n/retire` (the orchestrator's
+  `/internal/epics/…`), read `GET /v1/epics/:id/notes`, `/threads` and
+  `/peers`. There is no route to write in a thread. A thread is a reply
+  chain from its first message, between that message's two tasks.
 
 ## Open questions
 
