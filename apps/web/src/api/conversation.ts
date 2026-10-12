@@ -1198,7 +1198,7 @@ function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pending
   if (at < 0) return;
   for (let i = at + 1; i < turns.length - 1; i++) {
     const kind = turns[i]!.kind;
-    if (kind !== "message" && kind !== "thought" && kind !== "question") return;
+    if (kind !== "message" && kind !== "thought") return;
   }
   moveToEnd(state, ask.question);
 }
