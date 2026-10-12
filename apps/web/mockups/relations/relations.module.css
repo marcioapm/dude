@@ -50,6 +50,9 @@
   font-variant-numeric: tabular-nums;
   font-weight: var(--ds-weight-medium);
 }
+.chipNote {
+  color: var(--ds-color-text-muted);
+}
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -179,6 +182,89 @@
 .rowStatus {
   flex-shrink: 0;
   min-width: 96px;
+}
+.rowUnmerged {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+/* Where the remove would be, for a reader who may not: the columns stay aligned. */
+.removeSlot {
+  flex-shrink: 0;
+  width: var(--ds-size-control-sm);
+}
+/* Who may remove a row, said in its group's head while the row is hovered or focused. */
+.removeHint {
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  opacity: 0;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.removeHintOn {
+  opacity: 1;
+}
+
+/* -- Start when unblocked, once set -- */
+.autoWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.autoWho {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.auto {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  outline: none;
+}
+.auto:focus-visible {
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.autoCompact {
+  height: auto;
+  padding: 0;
+  background: none;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: normal;
+  align-items: flex-start;
+}
+.autoCompact .glyph {
+  margin-top: 0.2em;
+}
+.autoWords {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* -- StartMenu: the card's start, a quiet sm button with its chevron. -- */
+.startTrigger {
+  gap: var(--ds-space-4);
+  padding: 0 var(--ds-space-6);
+}
+.startTrigger[data-state="open"] {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+}
+/* Blocked: the words in muted ink beside the lock, still operable (its menu has the ways around). */
+.startBlocked {
+  color: var(--ds-color-text-muted);
 }
 
 /* -- StartGate -- */

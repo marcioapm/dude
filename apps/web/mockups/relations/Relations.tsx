@@ -7,15 +7,18 @@
  *   RelationGlyph   the `lock`, `blocks` and `link` glyphs on the icon grid
  *   RelationChip    "Blocked by CP-41" / "Blocked by 2" / "Blocks 3" on a card
  *   RelationList    a task's Relations: Blocked by, Blocks, Related
- *   StartGate       a start that is refused, why, and Start anyway
+ *   StartGate       a start that is refused, why, Start when unblocked and Start anyway
+ *   AutoStartMark   "Starts when CP-41 merges · Deliver", once set
+ *   StartMenu       a Backlog card's start: Talk it through or Deliver, and the ways around a block
  *   DependencyStrip an epic's order, in steps, with what can start
  */
 
-import { useId, type ReactNode } from "react";
+import { forwardRef, useId, useState, type ReactNode } from "react";
 import type { TaskStatus } from "@dude/domain";
 import { Icon } from "@dude/design-system";
 import { PersonAvatar, RefLead, StatusMark, type Person } from "@dude/design-system/components";
-import { Button, IconButton, Tooltip } from "@dude/design-system/primitives";
+import { Button, IconButton, RowMenu, Tooltip, type RowMenuItem } from "@dude/design-system/primitives";
+import type { ButtonProps } from "../../../../packages/design-system/src/primitives/Button.tsx";
 import type { AgentRole } from "@dude/domain";
 import styles from "./relations.module.css";
 
@@ -53,13 +56,15 @@ export interface RelatedTask {
   readonly status: TaskStatus;
   /** Its project, when it is not the board's: said in the tooltip. */
   readonly project?: string | undefined;
+  /** Done with nothing merged: settled for its owner, still blocking. */
+  readonly unmerged?: boolean | undefined;
 }
 
 export type RelationChipKind = "blocked-by" | "blocks";
 
 export interface RelationChipProps {
   readonly kind: RelationChipKind;
-  /** The open edges only: a blocker that is done no longer shows. */
+  /** The open edges only: a blocker that has merged no longer shows. */
   readonly tasks: ReadonlyArray<RelatedTask>;
   readonly className?: string | undefined;
 }
@@ -69,13 +74,19 @@ const STATUS_WORD: Partial<Record<TaskStatus, string>> = {
   failed: "failed", aborted: "aborted", received: "not started", queued: "not started", intake: "being shaped", awaiting_confirmation: "plan to confirm",
 };
 const word = (s: TaskStatus) => STATUS_WORD[s] ?? s.replace(/_/g, " ");
+/** A task's state in the words a blocker is named with: "in review", "done, nothing merged". */
+export const stateWord = (t: Pick<RelatedTask, "status" | "unmerged">) => (t.unmerged ? "done, nothing merged" : word(t.status));
+
+/** "CP-41 and CP-43", "CP-40, CP-41 and CP-43". */
+export const keyList = (keys: ReadonlyArray<string>) => (keys.length > 1 ? `${keys.slice(0, -1).join(", ")} and ${keys.at(-1)}` : (keys[0] ?? ""));
 
 /** "Blocked by CP-41 (in review) and CP-43 (in progress)": the chip's name, so it is never a glyph alone. */
 export function relationWords(kind: RelationChipKind, tasks: ReadonlyArray<RelatedTask>): string {
-  const list = tasks.map((t) => `${t.key} (${word(t.status)})`);
-  const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : (list[0] ?? "");
-  return `${kind === "blocked-by" ? "Blocked by" : "Blocks"} ${joined}`;
+  return `${kind === "blocked-by" ? "Blocked by" : "Blocks"} ${keyList(tasks.map((t) => `${t.key} (${stateWord(t)})`))}`;
 }
+
+/** "it can start once that is merged" / "once they are merged": the one sentence every refusal ends with. */
+export const onceMerged = (n: number) => `it can start once ${n === 1 ? "that is" : "they are"} merged`;
 
 /**
  * On a board card, between the title and its people: why it cannot start,
@@ -95,11 +106,12 @@ export function RelationChip({ kind, tasks, className }: RelationChipProps) {
       side="bottom"
       content={
         <span className={styles["tip"]}>
-          <span className={styles["tipHead"]}>{blocked ? "Can't start until these are done" : "These wait on it"}</span>
+          <span className={styles["tipHead"]}>{blocked ? "Can't start until these are merged" : "These wait on it"}</span>
           {tasks.map((t) => (
             <span key={t.key} className={styles["tipRow"]}>
               <RefLead type="task" taskKey={t.key} status={t.status} />
               <span className={styles["tipTitle"]}>{t.title}</span>
+              {t.unmerged ? <span className={styles["tipProject"]}>nothing merged</span> : null}
               {t.project ? <span className={styles["tipProject"]}>{t.project}</span> : null}
             </span>
           ))}
@@ -117,8 +129,10 @@ export function RelationChip({ kind, tasks, className }: RelationChipProps) {
         <span className="ds-cap">{blocked ? "Blocked by" : "Blocks"}</span>
         {one ? (
           <>
-            <StatusMark status={one.status} iconOnly size="sm" />
+            {/* Done with nothing merged takes no status mark: its check would read as released. */}
+            {one.unmerged ? null : <StatusMark status={one.status} iconOnly size="sm" />}
             <span className={styles["chipKey"]}>{one.key}</span>
+            {one.unmerged ? <span className={styles["chipNote"]}>not merged</span> : null}
           </>
         ) : (
           <span className={styles["chipCount"]}>{tasks.length}</span>
@@ -135,8 +149,13 @@ export function RelationChip({ kind, tasks, className }: RelationChipProps) {
 export interface RelationRowData extends RelatedTask {
   readonly owner: Person;
   readonly agent?: AgentRole | undefined;
-  /** A blocker that is done: shown settled, "Done". */
+  /** A blocker that is merged: shown settled. */
   readonly settled?: boolean | undefined;
+  /**
+   * Who may remove this edge when the reader may not: "Only Márcio, the
+   * owner, can remove this". Absent, the row has its remove.
+   */
+  readonly removeHint?: string | undefined;
 }
 
 export interface RelationGroupData {
@@ -149,12 +168,14 @@ const GROUP_GLYPH: Record<RelationGroupData["kind"], RelationGlyphName> = { "blo
 
 export interface RelationListProps {
   readonly groups: ReadonlyArray<RelationGroupData>;
-  /** Given, each row has a quiet remove, and the head an Add. */
+  /** Given, each row the reader may change has a quiet remove, and the head an Add. */
   readonly onRemove?: ((group: RelationGroupData["kind"], key: string) => void) | undefined;
   readonly onAdd?: (() => void) | undefined;
   readonly onOpen?: ((key: string) => void) | undefined;
   /** The add form, open under the head (a `RelationPicker`). */
   readonly adding?: ReactNode;
+  /** The row whose hint shows from the start, for a static picture of hovering it. */
+  readonly hinting?: string | undefined;
 }
 
 /**
@@ -163,10 +184,15 @@ export interface RelationListProps {
  * mark and key, its title, its status in words, its owner (with the agent
  * at work on their face), a quiet remove. A group with nothing in it is
  * left out; with no relations at all, one line says so.
+ *
+ * A row the reader may not remove has no remove. Hovering or focusing it
+ * shows who may in the group's head, where the line has room, so nothing
+ * in the row moves; the same words are the row's description.
  */
-export function RelationList({ groups, onRemove, onAdd, onOpen, adding }: RelationListProps) {
+export function RelationList({ groups, onRemove, onAdd, onOpen, adding, hinting }: RelationListProps) {
   const shown = groups.filter((g) => g.rows.length > 0);
   const headId = useId();
+  const [hovered, setHovered] = useState<string | null>(hinting ?? null);
   return (
     <section className={styles["relations"]} aria-labelledby={headId}>
       <header className={styles["relationsHead"]}>
@@ -174,9 +200,10 @@ export function RelationList({ groups, onRemove, onAdd, onOpen, adding }: Relati
         {onAdd && !adding ? <Button variant="quiet" size="sm" leadingIcon="plus" onClick={onAdd}>Add relation</Button> : null}
       </header>
       {adding}
-      {shown.length === 0 && !adding ? <p className={styles["muted"]}>No relations. A task that must wait for another says so here, and can't start before it.</p> : null}
+      {shown.length === 0 && !adding ? <p className={styles["muted"]}>No relations. A task that must wait for another says so here, and can't start before it is merged.</p> : null}
       {shown.map((g) => {
         const open = g.kind === "blocked-by" ? g.rows.filter((r) => !r.settled).length : null;
+        const hint = g.rows.find((r) => `${g.kind}:${r.key}` === hovered)?.removeHint;
         return (
           <div key={g.kind} className={styles["group"]} role="group" aria-label={GROUP_LABEL[g.kind]}>
             <div className={styles["groupHead"]}>
@@ -185,22 +212,36 @@ export function RelationList({ groups, onRemove, onAdd, onOpen, adding }: Relati
               <span className={styles["groupCount"]}>
                 {open !== null && open < g.rows.length ? `${open} of ${g.rows.length} open` : g.rows.length}
               </span>
+              <span className={[styles["removeHint"], hint ? styles["removeHintOn"] : ""].join(" ")} aria-hidden data-testid={hint ? "remove-hint" : undefined}>
+                {hint ?? ""}
+              </span>
             </div>
             <ul className={styles["rows"]}>
-              {g.rows.map((r) => (
-                <li key={r.key} className={[styles["row"], r.settled ? styles["settled"] : ""].join(" ")} data-key={r.key}>
-                  <button type="button" className={styles["rowOpen"]} onClick={() => onOpen?.(r.key)} aria-label={`${r.key} ${r.title}, ${word(r.status)}`}>
-                    <RefLead type="task" taskKey={r.key} status={r.status} />
-                    <span className={styles["rowTitle"]}>{r.title}</span>
-                    {r.project ? <span className={styles["rowProject"]}>{r.project}</span> : null}
-                  </button>
-                  <StatusMark status={r.status} size="sm" className={styles["rowStatus"]} />
-                  <PersonAvatar person={r.owner} size={20} agent={r.agent} live={r.agent ? true : undefined} title={r.agent ? `${r.owner.name}'s ${r.agent} is working` : r.owner.name} />
-                  {onRemove ? (
-                    <IconButton size="sm" icon="close" label={`Remove ${GROUP_LABEL[g.kind].toLowerCase()} ${r.key}`} onClick={() => onRemove(g.kind, r.key)} />
-                  ) : null}
-                </li>
-              ))}
+              {g.rows.map((r) => {
+                const id = `${g.kind}:${r.key}`;
+                const hintId = `${headId}-${g.kind}-${r.key}`;
+                const on = () => setHovered(id);
+                const off = () => setHovered((h) => (h === id ? null : h));
+                return (
+                  <li key={r.key} className={[styles["row"], r.settled ? styles["settled"] : ""].join(" ")} data-key={r.key}
+                    onMouseEnter={r.removeHint ? on : undefined} onMouseLeave={r.removeHint ? off : undefined}
+                    onFocus={r.removeHint ? on : undefined} onBlur={r.removeHint ? off : undefined}>
+                    <button type="button" className={styles["rowOpen"]} onClick={() => onOpen?.(r.key)} aria-label={`${r.key} ${r.title}, ${stateWord(r)}`}
+                      aria-describedby={r.removeHint ? hintId : undefined}>
+                      <RefLead type="task" taskKey={r.key} status={r.status} />
+                      <span className={styles["rowTitle"]}>{r.title}</span>
+                      {r.project ? <span className={styles["rowProject"]}>{r.project}</span> : null}
+                    </button>
+                    {r.removeHint ? <span id={hintId} className="ds-sr-only">{r.removeHint}</span> : null}
+                    {r.unmerged ? <span className={styles["rowUnmerged"]}>nothing merged</span> : null}
+                    <StatusMark status={r.status} size="sm" className={styles["rowStatus"]} />
+                    <PersonAvatar person={r.owner} size={20} agent={r.agent} live={r.agent ? true : undefined} title={r.agent ? `${r.owner.name}'s ${r.agent} is working` : r.owner.name} />
+                    {onRemove && !r.removeHint ? (
+                      <IconButton size="sm" icon="close" label={`Remove ${GROUP_LABEL[g.kind].toLowerCase()} ${r.key}`} onClick={() => onRemove(g.kind, r.key)} />
+                    ) : onRemove ? <span className={styles["removeSlot"]} aria-hidden /> : null}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         );
@@ -220,17 +261,22 @@ export interface StartGateProps {
   readonly starts: ReadonlyArray<{ readonly id: string; readonly label: string; readonly icon: "message" | "zap" }>;
   /** A person may override; an agent never sees this. */
   readonly onStartAnyway?: (() => void) | undefined;
+  /** The owner only: opens the choice of how it starts once unblocked. Absent once set: the notice under the header says so. */
+  readonly onStartWhenUnblocked?: (() => void) | undefined;
 }
 
 /**
  * Where Deliver and Talk it through sit, on a task that is blocked: both
  * stay, disabled — never gone — with the reason in their tooltip and in
- * their description (`aria-describedby`), and a quiet "Start anyway…"
- * after them that opens the confirmation naming the blockers.
+ * their description (`aria-describedby`). After them, for its owner, "Start
+ * when unblocked…" (once set, the notice under the header carries
+ * `AutoStartMark` with its Cancel instead, so the header keeps its room for
+ * the path); then a quiet "Start anyway…" that opens the confirmation
+ * naming the blockers.
  */
-export function StartGate({ blockers, starts, onStartAnyway }: StartGateProps) {
+export function StartGate({ blockers, starts, onStartAnyway, onStartWhenUnblocked }: StartGateProps) {
   const reasonId = useId();
-  const reason = `${relationWords("blocked-by", blockers)}: it starts once ${blockers.length === 1 ? "that is" : "they are"} done.`;
+  const reason = `${relationWords("blocked-by", blockers)}: ${onceMerged(blockers.length)}.`;
   return (
     <span className={styles["gate"]} data-testid="start-gate">
       <span id={reasonId} className="ds-sr-only">{reason}</span>
@@ -244,12 +290,138 @@ export function StartGate({ blockers, starts, onStartAnyway }: StartGateProps) {
           </span>
         </Tooltip>
       ))}
+      {onStartWhenUnblocked ? (
+        <Button variant="quiet" leadingIcon="play" onClick={onStartWhenUnblocked} data-testid="start-when-unblocked">
+          Start when unblocked…
+        </Button>
+      ) : null}
       {onStartAnyway ? (
         <Button variant="quiet" onClick={onStartAnyway} data-testid="start-anyway">
           Start anyway…
         </Button>
       ) : null}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Start when unblocked: how it reads once set
+// ---------------------------------------------------------------------------
+
+export interface AutoStartView {
+  readonly how: "deliver" | "talk";
+  /** Who set it, by first name, and how long ago. */
+  readonly by: string;
+  readonly ago: string;
+  /** The owner only: takes it back. Absent, the mark is read only. */
+  readonly onCancel?: (() => void) | undefined;
+}
+
+const HOW: Record<AutoStartView["how"], string> = { deliver: "Deliver", talk: "Talk it through" };
+
+/** "Starts when CP-41 merges", "Starts when CP-41 and CP-43 merge". */
+export const startsWhen = (blockers: ReadonlyArray<{ readonly key: string }>) =>
+  `Starts when ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}`;
+
+/**
+ * A blocked task set to start on its own: the play glyph, "Starts when
+ * CP-41 merges · Deliver", who set it in the tooltip, and for the owner a
+ * quiet Cancel. On a card (`compact`) it is one muted line with no Cancel:
+ * the card's start menu has it.
+ */
+export function AutoStartMark({ auto, blockers, compact }: { readonly auto: AutoStartView; readonly blockers: ReadonlyArray<RelatedTask>; readonly compact?: boolean | undefined }) {
+  const words = `${startsWhen(blockers)} · ${HOW[auto.how]}`;
+  const who = `${auto.by} set it ${auto.ago} ago. Every blocker is checked again when it fires: if one is open, nothing starts.`;
+  const mark = (
+    <span className={[styles["auto"], compact ? styles["autoCompact"] : ""].join(" ")} data-testid="auto-start" tabIndex={compact ? -1 : 0}
+      aria-label={`${words}. ${who}`}>
+      <Icon name="play" size={12} className={styles["glyph"]} />
+      <span className={styles["autoWords"]}>{words}</span>
+    </span>
+  );
+  return (
+    <span className={styles["autoWrap"]}>
+      <Tooltip content={who} side="bottom">{mark}</Tooltip>
+      {!compact ? <span className={styles["autoWho"]} aria-hidden>{auto.by} set it {auto.ago} ago</span> : null}
+      {!compact && auto.onCancel ? (
+        <Button variant="quiet" size="sm" onClick={auto.onCancel} data-testid="cancel-auto-start" aria-label={`Cancel: ${words}`}>Cancel</Button>
+      ) : null}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The card's start
+// ---------------------------------------------------------------------------
+
+/** The menu's trigger with the reason as its tooltip: one element takes both slots' props and ref. */
+const StartTrigger = forwardRef<HTMLButtonElement, ButtonProps & { readonly tip: string | null }>(function StartTrigger({ tip, ...rest }, ref) {
+  const button = <Button ref={ref} {...rest} />;
+  return tip ? <Tooltip content={tip} side="bottom">{button}</Tooltip> : button;
+});
+
+export interface StartMenuProps {
+  /** The task, by key: names the trigger ("Start CP-44"). */
+  readonly taskKey: string;
+  /** Open blockers; none, the start works. */
+  readonly blockers: ReadonlyArray<RelatedTask>;
+  readonly onStart: (how: "deliver" | "talk") => void;
+  /** A person may: the same dialog as the task page's. */
+  readonly onStartAnyway?: (() => void) | undefined;
+  readonly auto?: AutoStartView | undefined;
+  /** The owner sets it; anyone else sees the item disabled, saying whose it is. */
+  readonly onStartWhenUnblocked?: (() => void) | undefined;
+  /** Why it can't be set even by the owner: a blocker that will never merge. */
+  readonly startWhenUnblockedRefused?: string | null | undefined;
+  /** The owner's first name, for the reason the item is someone else's. */
+  readonly ownerName: string;
+  readonly open?: boolean | undefined;
+  readonly onOpenChange?: ((open: boolean) => void) | undefined;
+  readonly tabIndex?: number | undefined;
+}
+
+/**
+ * A Backlog card's start: "Start" with a chevron, opening `RowMenu` with
+ * Talk it through and Deliver side by side, neither first by default
+ * (starting is a choice, so no split button: a split button's face is one
+ * way preselected). Blocked, the trigger carries the lock and the reason
+ * as its tooltip, both ways are disabled items with the reason, and the
+ * menu still offers Start when unblocked… and Start anyway…, which is why
+ * the trigger itself stays operable.
+ */
+export function StartMenu({ taskKey, blockers, onStart, onStartAnyway, auto, onStartWhenUnblocked, startWhenUnblockedRefused, ownerName, open, onOpenChange, tabIndex }: StartMenuProps) {
+  const blocked = blockers.length > 0;
+  const reason = blocked ? `${relationWords("blocked-by", blockers)}: ${onceMerged(blockers.length)}.` : null;
+  const ways: RowMenuItem[] = [
+    { id: "talk", label: "Talk it through", icon: "message", description: "The conductor plans with you first", disabled: blocked, disabledReason: reason ?? undefined, onSelect: () => onStart("talk") },
+    { id: "deliver", label: "Deliver", icon: "zap", description: "The automatic pipeline", disabled: blocked, disabledReason: reason ?? undefined, onSelect: () => onStart("deliver") },
+  ];
+  const around: RowMenuItem[] = !blocked ? [] : [
+    { kind: "separator" },
+    ...(auto ? [
+      { kind: "note" as const, id: "auto-note", text: `${startsWhen(blockers)} · ${HOW[auto.how]}, as ${auto.by} set ${auto.ago} ago.` },
+      auto.onCancel
+        ? { id: "auto-cancel", label: "Cancel start when unblocked", icon: "close" as const, onSelect: auto.onCancel }
+        : { id: "auto-cancel", label: "Cancel start when unblocked", icon: "close" as const, disabled: true, disabledReason: `Only ${ownerName}, its owner, can cancel this.` },
+    ] : [
+      onStartWhenUnblocked && !startWhenUnblockedRefused
+        ? { id: "auto", label: "Start when unblocked…", icon: "play" as const, onSelect: onStartWhenUnblocked }
+        : { id: "auto", label: "Start when unblocked…", icon: "play" as const, disabled: true,
+            disabledReason: startWhenUnblockedRefused ?? `Only ${ownerName}, its owner, can set this.` },
+    ]),
+    ...(onStartAnyway ? [{ id: "anyway", label: "Start anyway…", icon: "arrow-right" as const, onSelect: onStartAnyway }] : []),
+  ];
+  return (
+    <RowMenu items={[...ways, ...around]} align="end" open={open} onOpenChange={onOpenChange}
+      trigger={
+        <StartTrigger tip={reason} size="sm" variant="quiet" tabIndex={tabIndex}
+          className={[styles["startTrigger"], blocked ? styles["startBlocked"] : ""].join(" ")}
+          aria-label={blocked ? `Start ${taskKey}: ${reason}` : `Start ${taskKey}`} data-testid={`start-menu-${taskKey}`}>
+          {blocked ? <RelationGlyph name="lock" size={12} /> : <Icon name="play" size={12} />}
+          <span>Start</span>
+          <Icon name="chevron-down" size={12} />
+        </StartTrigger>
+      } />
   );
 }
 
@@ -266,7 +438,7 @@ export interface StripTask extends RelatedTask {
 export interface DependencyStripProps {
   /** Steps in order: each step's tasks wait only on earlier steps'. */
   readonly steps: ReadonlyArray<ReadonlyArray<StripTask>>;
-  readonly counts: { readonly startable: number; readonly blocked: number; readonly working: number; readonly done: number; readonly failed: number };
+  readonly counts: { readonly startable: number; readonly blocked: number; readonly working: number; readonly merged: number; readonly doneUnmerged: number; readonly failed: number };
   readonly onOpen?: ((key: string) => void) | undefined;
   /** Highlighted (hovered or focused): this key and its neighbours stay, the rest dims. */
   readonly highlight?: ReadonlySet<string> | null | undefined;
@@ -282,7 +454,7 @@ export interface DependencyStripProps {
 export function DependencyStrip({ steps, counts, onOpen, highlight }: DependencyStripProps) {
   const parts: ReactNode[] = [];
   const say = (n: number, w: string) => (n > 0 ? <span key={w}><b className={styles["stripNum"]}>{n}</b> {w}</span> : null);
-  parts.push(say(counts.startable, "can start"), say(counts.blocked, "blocked"), say(counts.working, "in progress or review"), say(counts.done, "done"), say(counts.failed, "failed"));
+  parts.push(say(counts.startable, "can start"), say(counts.blocked, "blocked"), say(counts.working, "in progress or review"), say(counts.merged, "merged"), say(counts.doneUnmerged, "done, nothing merged"), say(counts.failed, "failed"));
   return (
     <section className={styles["strip"]} aria-label="Order of work">
       <div className={styles["stripHead"]}>
