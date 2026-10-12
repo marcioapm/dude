@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -130,10 +129,12 @@ var ErrNothingToRetry = errors.New("the session's agent did not fail to start")
 // lock; returns the new Run.
 func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer) (string, error) {
 	var failed, briefing string
+	// The latest brainstorm, failed: none live can be newer, and an older
+	// live one cannot exist (runs_live_brainstorm_idx; a racing start is a
+	// unique violation, which the API answers 409).
 	err := tx.QueryRow(ctx, `SELECT r.id, r.prompt FROM runs r WHERE r.session_id = $1 AND r.role = 'brainstorm' AND r.kind = 'agent'
 			AND r.status = 'failed' AND r.started_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.session_id = r.session_id AND n.role = 'brainstorm' AND n.created_at > r.created_at)
-			AND NOT EXISTS (SELECT 1 FROM runs l WHERE l.session_id = r.session_id AND `+strings.ReplaceAll(LiveBrainstorm, "r.", "l.")+`)
 		ORDER BY r.created_at DESC LIMIT 1`, sessionID).Scan(&failed, &briefing)
 	if db.IsNotFound(err) {
 		return "", ErrNothingToRetry
