@@ -4,11 +4,10 @@
  * and face for every id the ledger records as an actor, and who is online.
  *
  * Read once for the shell, again each minute while the page is shown and
- * at once when it is shown again — `online` lapses by the clock, five
- * minutes after the last recorded active request — and on a live `person.seen`,
- * which the shell's event stream hands to `seen`. While the tab is in use
- * (activity.ts) that minute's read is also what keeps you online when you
- * read without touching anything; the minute read stops while hidden.
+ * at once when it is shown again — `online` lapses by the clock — and on a
+ * live `person.seen`, which the shell's event stream hands to `seen`. The
+ * minute read is also presence's heartbeat (docs/CONTRIBUTING.md, "Online
+ * and last seen").
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";

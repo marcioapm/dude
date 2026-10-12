@@ -34,9 +34,8 @@ like the existing ones (`ENABLE` + `FORCE ROW LEVEL SECURITY`, policy on
   backfills one person per existing user key (name from the key's name).
 - Every API response that names a person uses the shape
   `{ id: string; name: string; photoUrl: string | null; online: boolean }`
-  (`online` = `last_seen_at` within 5 minutes; `last_seen_at` moves only for
-  a person session's request from a tab in use, `x-dude-active: 1`; never for
-  API keys (the CLI, MCP, scripts) or the event stream: CONTRIBUTING, "Online and last seen"). Type `PersonRef` in
+  (`online` = `last_seen_at` within 5 minutes; what moves `last_seen_at`:
+  CONTRIBUTING, "Online and last seen"). Type `PersonRef` in
   `packages/domain/src/hierarchy.ts` (people track adds it; fe may add it
   first if it needs it — identical definition).
 - `GET /v1/me` → `{ person: PersonRef & { email, role }, organization: { id, name } }`.
