@@ -1,7 +1,7 @@
 /**
  * Presence counts a person using dude, and is cheap. A request counts only
- * with `x-dude-active: 1`, as the web app sends from a tab in use; the CLI,
- * scripts and the event stream never change who is online. A person's row
+ * with a person session and `x-dude-active: 1`, as the web app sends from
+ * a tab in use; API keys and the event stream never change who is online. A person's row
  * is touched at most once a minute.
  *
  * The router against the DATABASE_URL database (owner role; the app role
@@ -101,7 +101,7 @@ test("a person is touched at most once a minute", () => {
 
 test("a request from a tab in use says where its person is, and announces it", async () => {
   const ana = await someone("Ana");
-  const res = await call("/v1/me", { authorization: `Bearer ${ana.key}`, "x-dude-active": "1", "x-dude-where": "TEXT-14" });
+  const res = await call("/v1/me", { "x-test-person": ana.personId, "x-dude-active": "1", "x-dude-where": "TEXT-14" });
   expect(res.status).toBe(200);
   const row = await seen(ana.personId);
   expect(row.last_seen_at).not.toBeNull();
@@ -116,7 +116,7 @@ test("a request from a tab in use says where its person is, and announces it", a
 
 test("an API key's request without the header (the CLI, a script, MCP) changes nothing", async () => {
   const cli = await someone("Cli");
-  for (const active of [undefined, "0", "true", "", "yes"]) {
+  for (const active of [undefined, "0", "true", "", "yes", "1"]) {
     const headers: Record<string, string> = { authorization: `Bearer ${cli.key}`, "x-dude-where": "TEXT-9" };
     if (active !== undefined) headers["x-dude-active"] = active;
     expect([active, (await call("/v1/navigation", headers)).status]).toEqual([active, 200]);
@@ -124,7 +124,7 @@ test("an API key's request without the header (the CLI, a script, MCP) changes n
   expect(await seen(cli.personId)).toEqual({ last_seen_at: null, last_seen_where: null });
   expect(await announced(cli.personId, 400)).toEqual([]);
   // Not the minute limit: the same person, from a tab in use, is seen at once.
-  await call("/v1/navigation", { authorization: `Bearer ${cli.key}`, "x-dude-active": "1" });
+  await call("/v1/navigation", { "x-test-person": cli.personId, "x-dude-active": "1" });
   expect((await seen(cli.personId)).last_seen_at).not.toBeNull();
 });
 
@@ -151,7 +151,7 @@ test("opening the event stream, key in the query as a browser does, changes noth
 test("a brainstorm session's request, in use, says only that it is a session", async () => {
   const bea = await someone("Bea");
   // The orchestrator it forwards to is not there; the person is seen before the route answers.
-  await call("/v1/brainstorms/ssn_secret", { authorization: `Bearer ${bea.key}`, "x-dude-active": "1", "x-dude-where": "Usage-based billing" });
+  await call("/v1/brainstorms/ssn_secret", { "x-test-person": bea.personId, "x-dude-active": "1", "x-dude-where": "Usage-based billing" });
   expect((await seen(bea.personId)).last_seen_where).toBe(SESSION_WHERE);
   const events = await waitAnnounced(bea.personId);
   expect((events[0]!.payload["person"] as { where: string }).where).toBe(SESSION_WHERE);

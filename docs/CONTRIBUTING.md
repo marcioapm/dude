@@ -321,15 +321,16 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   that had a pointer, key, wheel or touch, focus, or being shown
   again, in the last five minutes (`ACTIVE_WINDOW_MS`, apps/web
   `activity.ts`; opening the page counts). Only then does the web app send
-  `x-dude-active: 1`, and only a request carrying it touches
+  `x-dude-active: 1`, and only a person-session request carrying it touches
   `people.last_seen_at` and `last_seen_where` and announces `person.seen`
-  (`router.ts`, `presence.ts`), whatever its credential. The CLI, MCP,
-  scripts, tests and the event stream never send it, so they never count;
-  `api_keys.last_used_at` records key use apart. `online` is
-  `last_seen_at` within five minutes (`person_ref()`), so someone goes
-  offline five to ten minutes after their last input. While a tab is in
-  use the people's minute read is the heartbeat; a hidden tab reads
-  nothing (`useVisibleInterval`).
+  (`router.ts`, `presence.ts`). API-key requests never establish presence,
+  even with that header; `api_keys.last_used_at` records key use separately.
+  Signing in does not record a presence timestamp. Ordinary automation and
+  the event stream do not send the header; presence test fixtures may.
+  `online` is `last_seen_at` within five minutes (`person_ref()`), so someone
+  goes offline five to ten minutes after their last input. While a tab is in
+  use the people's minute read is the heartbeat; background polling stops
+  while hidden (`useVisibleInterval`), not every event-driven request.
 
 ## Decisions already made
 
