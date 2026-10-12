@@ -34,7 +34,7 @@ describe("a secret's name", () => {
   });
 
   test("the names dude sets itself are refused", () => {
-    const gitToken = { kind: "invalid", message: "dude sets GIT_TOKEN and every GIT_TOKEN_ name itself, from the GitHub connection." };
+    const gitToken = { kind: "invalid" as const, message: "dude sets GIT_TOKEN and every GIT_TOKEN_ name itself, from the GitHub connection." };
     expect(secretNameProblem("GIT_TOKEN", project)).toEqual(gitToken);
     // A GitHub App's token for another repository owner.
     expect(secretNameProblem("GIT_TOKEN_X", project)).toEqual(gitToken);
