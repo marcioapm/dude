@@ -35,6 +35,8 @@ type PromptInput struct {
 	Tools bool
 	// It also has the dude CLI (lux serves dude's tools in the container).
 	CLI bool
+	// A brainstorm that may reach any host, and is told it can read the web.
+	Anywhere bool
 	// The organization's prompt for the phase's role, when it has saved
 	// one: it replaces dude's built-in instructions. nil runs dude's.
 	OrgPrompt *string

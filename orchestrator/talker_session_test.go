@@ -4,6 +4,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A talker resumed into a new harness session — lux could not reload its
@@ -113,6 +118,107 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A brainstorm briefed again is told of the web by the network it was
+// submitted with, which its resumes keep, not by the setting as changed
+// since: started able to reach any host, it is still told it can read the
+// web; started on the list, it is not.
+func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
+	for _, anywhere := range []bool{true, false} {
+		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
+			s := newSessionWorld(t)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = $2 WHERE id = $1`, s.org, anywhere)
+			id := s.session()
+			tk := &talking{world: s.world, kind: "brainstorm", park: "session"}
+			tk.write = func(text string) (int, string) {
+				status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+				run, _ := out["runId"].(string)
+				return status, run
+			}
+			tk.latest = func() string { run, _ := s.brainstorm(id); return run }
+			tk.syncer.ConductorWarm = time.Hour
+			tk.write("what do competitors charge?")
+			var run string
+			tk.until("the brainstorm's network to be recorded", func() bool {
+				run = tk.latest()
+				return run != "" && tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND network IS NOT NULL AND turn_done_at IS NOT NULL`, run) == 1
+			})
+			if got := tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND (network->>'unrestricted')::boolean IS TRUE`, run) == 1; got != anywhere {
+				t.Fatalf("recorded unrestricted %v, want %v", got, anywhere)
+			}
+			mustExec(t, tk.owner, `UPDATE organizations SET brainstorm_anywhere = $2 WHERE id = $1`, tk.org, !anywhere)
+			tk.lux.LoseSession(tk.luxRunOf(run))
+			tk.stopOnItsOwn(run, "stopped")
+			tk.parked(run)
+			tk.write("still with me?")
+			tk.until("the briefing again queued", func() bool {
+				return tk.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'restarted without') > 0`, run) == 1
+			})
+			var text string
+			if err := tk.owner.QueryRow(t0(), `SELECT text FROM directives WHERE run_id = $1 AND strpos(text, 'restarted without') > 0`,
+				run).Scan(&text); err != nil {
+				t.Fatal(err)
+			}
+			if told := strings.Contains(text, webNote); told != anywhere {
+				t.Errorf("told it can read the web %v, want %v:\n%s", told, anywhere, text)
+			}
+		})
+	}
+}
+
+// A Codex brainstorm resumed after the setting changed still searches live,
+// as it did when submitted, whichever way the setting went.
+func TestAResumedCodexBrainstormStillSearchesLive(t *testing.T) {
+	for _, anywhere := range []bool{true, false} {
+		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.syncer.ConductorWarm = time.Hour
+			s.lux.Decide = hang
+			mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = $2 WHERE id = $1`, s.org, anywhere)
+			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": "codex"})["id"].(string)
+			run, _, _, harness := s.submitted(id)
+			if harness != "codex" {
+				t.Fatalf("submitted on %s", harness)
+			}
+			if !codexSearchesLive(t, s.luxRun(run).spec.Secrets) {
+				t.Fatal("submitted without web_search live")
+			}
+			s.runningIdle(run)
+			mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = $2 WHERE id = $1`, s.org, !anywhere)
+			mustExec(t, s.owner, `UPDATE runs SET turn_done_at = now() - interval '2 hours' WHERE id = $1`, run)
+			s.until("the session parked", func() bool {
+				return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, run) == 1
+			})
+			s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+			s.until("the session resumed", func() bool { v := s.luxRun(run); return v != nil && v.resumed == 1 })
+			var secrets []lux.Secret
+			for _, r := range s.lux.Runs() {
+				if r.Resumed == 1 {
+					secrets = r.ResumeSecrets[0]
+				}
+			}
+			if !codexSearchesLive(t, secrets) {
+				t.Error("the resume does not pin web_search live")
+			}
+		})
+	}
+}
+
+// codexSearchesLive says whether CODEX_CONFIG among secrets, parsed as
+// TOML, pins web_search "live".
+func codexSearchesLive(t *testing.T, secrets []lux.Secret) bool {
+	t.Helper()
+	i := slices.IndexFunc(secrets, func(s lux.Secret) bool { return s.Name == "CODEX_CONFIG" })
+	if i < 0 {
+		t.Fatalf("no CODEX_CONFIG among %v", secretNames(secrets))
+	}
+	var config map[string]any
+	if err := toml.Unmarshal([]byte(secrets[i].Value), &config); err != nil {
+		t.Fatalf("CODEX_CONFIG: %v", err)
+	}
+	return config["web_search"] == "live"
 }
 
 // A resume that keeps its session records nothing more.

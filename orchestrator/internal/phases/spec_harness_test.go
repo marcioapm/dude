@@ -389,8 +389,9 @@ func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
 }
 
 // A Run that may reach any host is unrestricted whatever the lists say, on
-// every harness and on the scripted agent; on OpenCode it also gets Exa,
-// its websearch tool. A Run on the lists gets neither.
+// every harness and on the scripted agent. A Run on the lists keeps them,
+// with mcp.exa.ai only on OpenCode. OpenCode has Exa, its websearch tool,
+// either way; no other harness, nor the scripted agent, has it.
 func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T) {
 	harnesses := []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex}
 	for _, model := range []string{"claude-sonnet-5", "fake/scripted"} {
@@ -404,9 +405,13 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 				if spec.Network == nil || spec.Network.Unrestricted != anywhere || anywhere != (len(spec.Network.Egress) == 0) {
 					t.Errorf("%s: network = %+v", name, spec.Network)
 				}
+				opencode := harness == delivery.HarnessOpenCode && model != "fake/scripted"
+				if exa := slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "mcp.exa.ai"}); exa != (opencode && !anywhere) {
+					t.Errorf("%s: mcp.exa.ai listed %v, want %v: %+v", name, exa, opencode && !anywhere, spec.Network.Egress)
+				}
 				exa, has := spec.Env["OPENCODE_ENABLE_EXA"]
-				if want := anywhere && harness == delivery.HarnessOpenCode && model != "fake/scripted"; has != want || (has && exa != "1") {
-					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, want)
+				if has != opencode || (has && exa != "1") {
+					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, opencode)
 				}
 			}
 		}
@@ -419,6 +424,90 @@ func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T)
 		c.ToolsURL, in.Egress, in.Harness, in.Anywhere = "", nil, harness, true
 		if spec := buildSpec(c, in); len(spec.Workload.MCPServers) > 0 || !reflect.DeepEqual(spec.Network, &lux.Network{Unrestricted: true}) {
 			t.Errorf("fake/scripted on %s, anywhere, no lists or MCP: mcp = %v, network = %+v", harness, spec.Workload.MCPServers, spec.Network)
+		}
+	}
+}
+
+// Every role on OpenCode searches the web through Exa: OPENCODE_ENABLE_EXA
+// is set and, on a list, mcp.exa.ai is on it. On Claude Code and Codex the
+// list has no mcp.exa.ai. An unrestricted network ("*" in a list, or
+// nothing to restrict to) stays unrestricted on every harness.
+func TestEveryOpenCodeRunSearchesThroughExa(t *testing.T) {
+	for role, edit := range everyRole {
+		for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+			name := role + " on " + harness
+			c, in := goldenInput("claude-sonnet-5")
+			edit(&in)
+			in.Harness, in.Egress = harness, []string{"pypi.org"}
+			spec := buildSpec(c, in)
+			opencode := harness == delivery.HarnessOpenCode
+			if got := spec.Env["OPENCODE_ENABLE_EXA"]; (got == "1") != opencode {
+				t.Errorf("%s: OPENCODE_ENABLE_EXA = %q, want set %v", name, got, opencode)
+			}
+			if spec.Network == nil || spec.Network.Unrestricted ||
+				!slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "pypi.org"}) ||
+				slices.Contains(spec.Network.Egress, lux.EgressRule{Host: "mcp.exa.ai"}) != opencode {
+				t.Errorf("%s: network = %+v, want the list with mcp.exa.ai %v", name, spec.Network, opencode)
+			}
+			for what, set := range map[string]func(){
+				"* in the list":       func() { in.Egress = []string{"pypi.org", "*"} },
+				"nothing to restrict": func() { c.LLMURL, c.Egress, in.Egress = "", nil, nil },
+			} {
+				c, in = goldenInput("claude-sonnet-5")
+				edit(&in)
+				in.Harness = harness
+				set()
+				if n := buildSpec(c, in).Network; !reflect.DeepEqual(n, &lux.Network{Unrestricted: true}) {
+					t.Errorf("%s, %s: network = %+v, want unrestricted", name, what, n)
+				}
+			}
+		}
+	}
+}
+
+// On every role, a Codex Run searches live, pinned in config.toml and on
+// the command. A tier's -c web_search replaces the pin on a Run that may
+// not reach any host, and is dropped on one that may.
+func TestEveryCodexRunSearchesLiveUnlessItsTierSaysOtherwise(t *testing.T) {
+	for role, edit := range everyRole {
+		for _, anywhere := range []bool{false, true} {
+			for _, tier := range []string{"", `"live"`, "disabled"} {
+				c, in := goldenInput("gpt-6-sol")
+				edit(&in)
+				in.Harness, in.Anywhere = delivery.HarnessCodex, anywhere
+				if tier != "" {
+					in.Options = map[string]any{"args": []any{"-c", "web_search=" + tier}}
+				}
+				spec := buildSpec(c, in)
+				name := fmt.Sprintf("%s, anywhere %v, tier web_search %q", role, anywhere, tier)
+				i := slices.IndexFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == "CODEX_CONFIG" })
+				if i < 0 {
+					t.Fatalf("%s: no CODEX_CONFIG secret", name)
+				}
+				got := parsedCodexTOML(t, spec.Secrets[i].Value)["web_search"]
+				var onCommand []string
+				for j, a := range spec.Workload.Command {
+					if strings.HasPrefix(a, "web_search=") && j > 0 && spec.Workload.Command[j-1] == "-c" {
+						onCommand = append(onCommand, a)
+					}
+				}
+				_, dropped := codexSettings(c, in)
+				switch {
+				case anywhere || tier == "":
+					if got != "live" || !slices.Equal(onCommand, []string{`web_search="live"`}) {
+						t.Errorf("%s: config.toml web_search = %v, command %q, want live alone", name, got, onCommand)
+					}
+					if tier != "" && !slices.Equal(dropped, []string{"-c web_search=" + tier}) {
+						t.Errorf("%s: dropped = %q, want the tier's web_search", name, dropped)
+					}
+				default:
+					want := strings.Trim(tier, `"`)
+					if got != want || !slices.Equal(onCommand, []string{`web_search="` + want + `"`}) || len(dropped) != 0 {
+						t.Errorf("%s: config.toml web_search = %v, command %q, dropped %q, want the tier's %s kept",
+							name, got, onCommand, dropped, want)
+					}
+				}
+			}
 		}
 	}
 }
@@ -436,7 +525,8 @@ func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 // Prints the command, env and secret names buildSpec gives a phase Run on
 // a harness, as JSON, for running the real CLI with them
 // (scripts/real_harnesses.py). Only when DUDE_PRINT_HARNESS_SPEC is
-// "HARNESS MODEL [EFFORT]"; the LLM URL is DUDE_LLM_URL, and the key is a
+// "HARNESS MODEL [EFFORT [anywhere]]"; anywhere makes it a brainstorm that
+// may reach any host. The LLM URL is DUDE_LLM_URL, and the key is a
 // placeholder the script replaces.
 func TestPrintAHarnessSpec(t *testing.T) {
 	args := strings.Fields(os.Getenv("DUDE_PRINT_HARNESS_SPEC"))
@@ -446,6 +536,9 @@ func TestPrintAHarnessSpec(t *testing.T) {
 	in := specInput{Phase: delivery.PhaseImplement, Harness: args[0], Model: args[1], ModelTier: "Probe"}
 	if len(args) > 2 {
 		in.Effort = args[2]
+	}
+	if len(args) > 3 && args[3] == "anywhere" {
+		in.Phase, in.Role, in.Anywhere = "", delivery.RoleBrainstorm, true
 	}
 	spec := buildSpec(AgentConfig{LLMURL: os.Getenv("DUDE_LLM_URL"), LLMKey: "<key>"}, in)
 	secrets := map[string]any{}

@@ -1236,6 +1236,10 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
 			return "", fmt.Errorf("load the session's organization: %w", err)
 		}
+		var err error
+		if in.Anywhere, err = s.brainstormAnywhere(ctx, tx, r.ID); err != nil {
+			return "", err
+		}
 		models = []json.RawMessage{orgModels}
 		repos, err := delivery.SessionRepositories(ctx, tx, r.SessionID)
 		if err != nil {

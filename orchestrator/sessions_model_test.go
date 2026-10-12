@@ -414,6 +414,52 @@ func TestATierChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
 	conversationThenFirst(t, s.prompt(next), "Márcio Martins: hello", "Márcio Martins: now on Sol")
 }
 
+// The fresh agent a change hands over to takes the setting as it is at the
+// swap: with brainstorm_anywhere turned on, a swap to Codex is told it can
+// read the web and searches live over its tier's web_search=disabled; with
+// it turned off again, the next swap gets neither.
+func TestAFreshAgentAfterAChangeTakesTheSettingAsItIsNow(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	sol := s.tierOn("Sol", "gpt-6-sol")
+	opus := s.tierOn("Opus", "claude-opus-5")
+	mustExec(t, s.owner, `UPDATE model_tiers SET options = '{"args":["-c","web_search=disabled"]}' WHERE id IN ($1, $2)`, sol, opus)
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello"})["id"].(string)
+	run, _, _, _ := s.submitted(id)
+	s.runningIdle(run)
+
+	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = true WHERE id = $1`, s.org)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": sol, "harness": "codex"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "now on Codex"})
+	onCodex := s.freshAgent(id, run)
+	if _, model, _, harness := s.submitted(id); model != "gpt-6-sol" || harness != "codex" {
+		t.Fatalf("the fresh agent runs on %s · %s, want gpt-6-sol · codex", model, harness)
+	}
+	v := s.luxRun(onCodex)
+	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the fresh agent with the setting on is not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
+	if !codexSearchesLive(t, v.spec.Secrets) {
+		t.Error("the fresh agent with the setting on is not pinned to search live")
+	}
+
+	s.runningIdle(onCodex)
+	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": opus, "harness": "codex"})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "now on Opus"})
+	onOpus := s.freshAgent(id, onCodex)
+	if _, model, _, harness := s.submitted(id); model != "claude-opus-5" || harness != "codex" {
+		t.Fatalf("the next fresh agent runs on %s · %s, want claude-opus-5 · codex", model, harness)
+	}
+	v = s.luxRun(onOpus)
+	if strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the fresh agent with the setting off is told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
+	if codexSearchesLive(t, v.spec.Secrets) {
+		t.Error("the fresh agent with the setting off is pinned to search live")
+	}
+}
+
 // A tier on the same model at another effort is a change: the next
 // message hands over to a fresh agent requesting the new effort.
 func TestAnEffortChangeHandsTheNextMessageToAFreshAgent(t *testing.T) {
