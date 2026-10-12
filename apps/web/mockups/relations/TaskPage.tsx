@@ -1,8 +1,10 @@
 /*
  * Screens 2, 3, 4, 7 and 8: a blocked task's page (CP-44), its Start anyway
- * confirmation, its relation editor, and its history. The frame is the
- * app's task screen (apps/web's `taskTop`, `taskHead`, `taskPane` layout
- * classes from app.css); everything drawn in it is the design system's or
+ * and Start when unblocked dialogs, its relation editor, the page as
+ * someone who doesn't own the task reads it (CP-42), a blocker marked done
+ * with nothing merged (CP-51), and the history. The frame is the app's
+ * task screen (apps/web's `taskTop`, `taskHead`, `taskPane` layout classes
+ * from app.css); everything drawn in it is the design system's or
  * Relations.tsx's.
  */
 
@@ -10,40 +12,55 @@ import { useCallback, useState } from "react";
 import {
   AgentAvatar, Breadcrumb, ChatNotice, Markdown, PersonAvatar, PersonLine, RefLead, SearchPicker, StatusMark, TaskHistory, Timeline, TimelineItem,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, EmptyState, Select, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
-import { CP44, NOT_STARTED, P, allTasks, blockedOf, blockersOf, openBlockers, relatedOf, resolved, task, type By, type Task } from "./data.ts";
-import { RelationGlyph, RelationList, StartGate, relationWords, type RelationGroupData, type RelationRowData } from "./Relations.tsx";
+import { Button, Callout, EmptyState, Select, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import {
+  CP44, EDGES, HOW_WORDS, NOT_STARTED, P, YOU, allTasks, autoStartOf, blockedOf, blockersOf, doneUnmerged, isOwner, neverFires, openBlockers, relatedOf, removeHint, resolved, task,
+  type By, type Edge, type Task,
+} from "./data.ts";
+import { AutoStartMark, RelationGlyph, RelationList, StartGate, keyList, relationWords, type RelationGroupData, type RelationRowData } from "./Relations.tsx";
+import { AutoStartDialog, OverrideDialog } from "./StartDialogs.tsx";
 import styles from "./pages.module.css";
 
-const row = (t: Task, here: Task): RelationRowData => ({
+const firstName = (n: string) => n.split(" ")[0]!;
+
+const row = (t: Task, here: Task, e: Edge): RelationRowData => ({
   key: t.key, title: t.title, status: t.status, owner: t.owner, agent: t.agent?.role,
-  project: t.project !== here.project ? t.project : undefined, settled: resolved(t),
+  project: t.project !== here.project ? t.project : undefined, settled: resolved(t), unmerged: doneUnmerged(t),
+  removeHint: removeHint(e, here.key) ?? undefined,
 });
 
 export type TaskView = "overview" | "chat" | "activity";
 export type EditorState = "closed" | "open" | "cycle";
+export type OverrideState = "closed" | "open" | "comms";
 
 export interface TaskPageProps {
   readonly k: string;
   readonly view: TaskView;
   readonly onView: (v: TaskView) => void;
-  readonly override: boolean;
-  readonly onOverride: (open: boolean) => void;
+  readonly override: OverrideState;
+  readonly onOverride: (o: OverrideState) => void;
+  readonly auto: boolean;
+  readonly onAuto: (open: boolean) => void;
   readonly editor: EditorState;
   readonly onEditor: (e: EditorState) => void;
   readonly onOpen: (key: string) => void;
   readonly onBoard: () => void;
 }
 
-export function TaskPage({ k, view, onView, override, onOverride, editor, onEditor, onOpen, onBoard }: TaskPageProps) {
+export function TaskPage({ k, view, onView, override, onOverride, auto: autoOpen, onAuto, editor, onEditor, onOpen, onBoard }: TaskPageProps) {
   const t = task(k);
   const blockers = NOT_STARTED.has(t.status) ? openBlockers(k) : [];
   const groups: RelationGroupData[] = [
-    { kind: "blocked-by", rows: blockersOf(k).map((b) => row(b.task, t)) },
-    { kind: "blocks", rows: blockedOf(k).map((b) => row(b.task, t)) },
-    { kind: "related", rows: relatedOf(k).map((b) => row(b.task, t)) },
+    { kind: "blocked-by", rows: blockersOf(k).map((b) => row(b.task, t, b.edge)) },
+    { kind: "blocks", rows: blockedOf(k).map((b) => row(b.task, t, b.edge)) },
+    { kind: "related", rows: relatedOf(k).map((b) => row(b.task, t, b.edge)) },
   ];
   const failedBlocker = blockers.find((b) => b.status === "failed" || b.status === "aborted");
+  const unmerged = blockers.filter(doneUnmerged);
+  const mine = isOwner(t);
+  const autoSet = blockers.length ? autoStartOf(k) : undefined;
+  const never = neverFires(k);
+  const autoView = autoSet ? { how: autoSet.how, by: autoSet.by.id === YOU.id ? "You" : firstName(autoSet.by.name), ago: autoSet.ago, onCancel: mine ? () => undefined : undefined } : undefined;
 
   return (
     <div className="screen taskScreen" data-testid="task-screen">
@@ -57,7 +74,8 @@ export function TaskPage({ k, view, onView, override, onOverride, editor, onEdit
         </div>
         <span className="taskTopActions">
           {blockers.length > 0 ? (
-            <StartGate blockers={blockers} onStartAnyway={() => onOverride(true)}
+            <StartGate blockers={blockers.map((b) => ({ ...b, unmerged: doneUnmerged(b) }))} onStartAnyway={() => onOverride("open")}
+              onStartWhenUnblocked={mine && !never && !autoSet ? () => onAuto(true) : undefined}
               starts={[{ id: "talk", label: "Talk it through", icon: "message" }, { id: "deliver", label: "Deliver", icon: "zap" }]} />
           ) : NOT_STARTED.has(t.status) ? (
             <>
@@ -79,7 +97,7 @@ export function TaskPage({ k, view, onView, override, onOverride, editor, onEdit
           </div>
         </div>
         <div className="taskPeople">
-          <PersonLine person={t.owner} size={56} detail="Owner" />
+          <PersonLine person={t.owner} size={56} detail={mine ? "Owner · you" : "Owner"} />
         </div>
       </div>
 
@@ -87,11 +105,27 @@ export function TaskPage({ k, view, onView, override, onOverride, editor, onEdit
         <div className="taskNotices">
           <Callout tone="neutral" data-testid="blocked-callout">
             <span className={styles["blockedNote"]}>
-              <b>{relationWords("blocked-by", blockers)}.</b> It can start once {blockers.length === 1 ? "that is" : "they are"} done; nothing starts it on its own then.
+              <b>{relationWords("blocked-by", blockers.map((b) => ({ ...b, unmerged: doneUnmerged(b) })))}.</b>{" "}
+              {autoSet
+                ? null
+                : unmerged.length === blockers.length
+                  ? "Only merged work releases what waits on it."
+                  : `It can start once ${blockers.length === 1 ? "that is" : "they are"} merged; nothing starts it on its own then.`}
             </span>
+            {autoView ? (
+              <p className={styles["callAuto"]} data-testid="auto-line">
+                <AutoStartMark auto={autoView} blockers={blockers} />
+              </p>
+            ) : null}
+            {unmerged.length > 0 ? (
+              <p className={styles["callLine"]} data-testid="unmerged-line">
+                {keyList(unmerged.map((b) => b.key))} {unmerged.length === 1 ? "was" : "were"} marked done by {firstName(unmerged[0]!.owner.name)} with nothing merged, so {unmerged.length === 1 ? "it" : "they"} will never release {t.key}.
+                {" "}{mine ? "Remove the relation if its answer is all this needed, or start this anyway." : `${firstName(t.owner.name)}, the owner, can remove the relation; anyone can start this anyway.`}
+              </p>
+            ) : null}
             {failedBlocker ? (
               <p className={styles["callLine"]}>
-                {failedBlocker.key} failed. It keeps blocking until someone picks it back up, removes the relation, or starts this anyway.
+                {failedBlocker.key} failed. It keeps blocking until someone picks it back up and it merges, the owner removes the relation, or someone starts this anyway.
               </p>
             ) : null}
           </Callout>
@@ -133,7 +167,9 @@ export function TaskPage({ k, view, onView, override, onOverride, editor, onEdit
                 <h2 className="ds-label">Pipeline</h2>
                 {blockers.length > 0 ? (
                   <EmptyState compact icon="clock" title="Waiting on its blockers"
-                    description={`Deliver and Talk it through open once ${blockers.map((b) => b.key).join(" and ")} ${blockers.length === 1 ? "is" : "are"} done. A person can start it anyway; an agent can't.`} />
+                    description={autoSet
+                      ? `${HOW_WORDS[autoSet.how]} starts here once ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}. A person can start it sooner; an agent can't.`
+                      : `Deliver and Talk it through open once ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "is" : "are"} merged. A person can start it anyway; an agent can't.`} />
                 ) : (
                   <EmptyState compact icon="git-pr" title={NOT_STARTED.has(t.status) ? "Not started" : "Under way"}
                     description={NOT_STARTED.has(t.status) ? "Nothing waits in front of it: Deliver or Talk it through when you're ready." : "Its sessions are on the Sessions tab."} />
@@ -152,49 +188,10 @@ export function TaskPage({ k, view, onView, override, onOverride, editor, onEdit
         </TabPanel>
       </Tabs>
 
-      <OverrideDialog open={override} onOpenChange={onOverride} here={t} blockers={blockers} />
+      <OverrideDialog open={override !== "closed"} comms={override === "comms"} onOpenChange={(o) => onOverride(o ? "open" : "closed")} here={t}
+        blockers={blockers.map((b) => ({ ...b, unmerged: doneUnmerged(b) }))} />
+      <AutoStartDialog open={autoOpen} onOpenChange={onAuto} here={t} blockers={blockers} chosen={autoOpen ? "deliver" : undefined} />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Screen 3: Start anyway
-// ---------------------------------------------------------------------------
-
-function OverrideDialog({ open, onOpenChange, here, blockers }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly here: Task; readonly blockers: ReadonlyArray<Task> }) {
-  const [how, setHow] = useState<"deliver" | "talk">("talk");
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} size="md" tone="attention"
-      title={`Start ${here.key} anyway?`}
-      footerStart={<span>Recorded in {here.key}'s history, with your note.</span>}
-      footer={
-        <>
-          <Button variant="quiet" onClick={() => onOpenChange(false)} autoFocus>Keep waiting</Button>
-          <Button variant="primary" leadingIcon={how === "deliver" ? "zap" : "message"} data-testid="confirm-start-anyway">
-            {how === "deliver" ? "Deliver anyway" : "Talk it through anyway"}
-          </Button>
-        </>
-      }>
-      <div className={styles["dialogBody"]}>
-        <p>It waits on {blockers.length === 1 ? "this, which isn't" : `these ${blockers.length}, which aren't`} done. Its agents start from <span className={styles["keyMono"]}>main</span> as it is now: what {blockers.length === 1 ? "it changes" : "they change"} won't be there.</p>
-        <ul className={styles["blockerList"]} aria-label="Blocked by">
-          {blockers.map((b) => (
-            <li key={b.key}>
-              <RefLead type="task" taskKey={b.key} status={b.status} />
-              <span className={styles["blockerTitle"]}>{b.title}</span>
-              <StatusMark status={b.status} size="sm" />
-              <PersonAvatar person={b.owner} size={20} agent={b.agent?.role} live={b.agent ? true : undefined} />
-            </li>
-          ))}
-        </ul>
-        <Select label="Start with" value={how} onValueChange={(v) => setHow(v)}
-          options={[
-            { value: "talk", label: "Talk it through", meta: "the conductor plans with you first" },
-            { value: "deliver", label: "Deliver", meta: "the automatic pipeline" },
-          ]} />
-        <Textarea label="Why (optional)" rows={2} placeholder="CP-43's sync is enough for the page's first version" hint="The relations stay: it still shows as after them on the board." />
-      </div>
-    </Dialog>
   );
 }
 
@@ -215,7 +212,7 @@ function RelationEditor({ here, state, onState }: { readonly here: Task; readonl
   return (
     <div className={styles["editor"]} data-testid="relation-editor">
       <Select label="Relation" value={kind} onValueChange={(v) => setKind(v)}
-        options={(Object.keys(KIND_WORDS) as Kind[]).map((k) => ({ value: k, label: KIND_WORDS[k], description: k === "related" ? "For reading: never stops a start." : k === "blocks" ? "It can't start until this is done." : "This can't start until it is done." }))} />
+        options={(Object.keys(KIND_WORDS) as Kind[]).map((k) => ({ value: k, label: KIND_WORDS[k], description: k === "related" ? "For reading: never stops a start." : k === "blocks" ? "It can't start until this is merged." : "This can't start until it is merged." }))} />
       <div>
         <SearchPicker<Task>
           label="Task"
@@ -272,14 +269,15 @@ function TaskChatHistory({ k }: { readonly k: string }) {
   if (k !== "CP-42") return <EmptyState compact icon="message" title="Nobody has written here yet" description="Your message starts planning this task with its conductor." />;
   return (
     <div className={styles["history"]} data-testid="chat-history">
-      <TaskHistory icon="clock" lead="Not started · ready to start" steps={[]} facts={["was blocked by CP-41 for 3d"]} />
-      <ChatNotice kind="notice" by="El Duderino" text="Ana filed this from her Brainstorm session, after CP-41: it can't start until CP-41 is done." at={T0 - 3 * 86_400_000} />
-      <ChatNotice kind="notice" by="El Duderino" data-testid="unblocked-notice" text="CP-41 merged — CP-42 can start. Nothing started it: Deliver or Talk it through when you're ready." at={T0} />
+      <TaskHistory icon="play" lead="Started when unblocked · Deliver" steps={["implementer"]} facts={["was blocked by CP-41 for 3d"]} />
+      <ChatNotice kind="notice" by="El Duderino" text="Ana filed this from her Brainstorm session, after CP-41: it can't start until CP-41 is merged." at={T0 - 3 * 86_400_000} />
+      <ChatNotice kind="notice" by="El Duderino" text="Ana set this to start when it's unblocked, with Deliver. Nothing starts before CP-41 merges." at={T0 - 2 * 86_400_000} />
+      <ChatNotice kind="notice" by="El Duderino" data-testid="unblocked-notice" text="CP-41 merged — CP-42 started (Deliver), as Ana asked. Nothing else was waiting in front of it." at={T0} />
     </div>
   );
 }
 
-/** The task's Activity: who changed its relations, and what they unblocked. */
+/** The task's Activity: who changed its relations, what they unblocked, and what started it. */
 function ActivityLines({ k }: { readonly k: string }) {
   if (k === "CP-49") {
     return (
@@ -290,10 +288,24 @@ function ActivityLines({ k }: { readonly k: string }) {
             <b>Tom</b> started it anyway, past <RelationGlyph name="lock" size={12} /> <b>CP-38</b> (failed) — Talk it through
           </TimelineItem>
           <TimelineItem who={<AgentAvatar role="system" size="lg" />} when="2d">
-            <b>CP-38</b> failed. It still blocks <b>CP-49</b> until someone picks it back up, removes the relation, or starts CP-49 anyway.
+            <b>CP-38</b> failed. It still blocks <b>CP-49</b> until it is picked back up and merges, Tom removes the relation, or someone starts CP-49 anyway.
           </TimelineItem>
           <TimelineItem who={<Who by={{ kind: "person", person: P.tom }} size={28} />} when="5d">
             <b>Tom</b> added <RelationGlyph name="lock" size={12} /> blocked by <b>CP-38</b>
+          </TimelineItem>
+        </Timeline>
+      </div>
+    );
+  }
+  if (k === "CP-51") {
+    return (
+      <div className={styles["history"]} data-testid="activity">
+        <Timeline aria-label="Activity">
+          <TimelineItem who={<AgentAvatar role="system" size="lg" />} when="1d" data-testid="unmerged-activity">
+            <b>CP-37</b> was marked done by <b>Tom</b> with nothing merged. It still blocks <b>CP-51</b>: only merged work releases what waits on it.
+          </TimelineItem>
+          <TimelineItem who={<Who by={{ kind: "person", person: P.marcio }} size={28} />} when="3d">
+            <b>Márcio</b> added <RelationGlyph name="lock" size={12} /> blocked by <b>CP-37</b>
           </TimelineItem>
         </Timeline>
       </div>
@@ -304,11 +316,14 @@ function ActivityLines({ k }: { readonly k: string }) {
   return (
     <div className={styles["history"]} data-testid="activity">
       <Timeline aria-label="Activity">
-        <TimelineItem who={<AgentAvatar role="system" size="lg" />} when="09:00" data-testid="unblocked-line">
-          <b>CP-41</b> merged (#431) — <b>CP-42</b> can start. It waits for a person: nothing starts on its own.
+        <TimelineItem who={<Who by={{ kind: "person", person: P.ana }} size={28} />} when="09:00" data-testid="auto-fired-line">
+          <b>CP-41</b> merged (#431) — <b>CP-42</b> started (Deliver), as <b>Ana</b> asked. Every blocker was checked again: none open.
         </TimelineItem>
         <TimelineItem who={<Who by={{ kind: "person", person: P.marcio }} size={28} />} when="yesterday">
           <b>Márcio</b> removed <RelationGlyph name="link" size={12} /> related <b>WEB-9</b>
+        </TimelineItem>
+        <TimelineItem who={<Who by={{ kind: "person", person: P.ana }} size={28} />} when="2d" data-testid="auto-set-line">
+          <b>Ana</b> set it to start when unblocked — Deliver
         </TimelineItem>
         <TimelineItem who={<Who by={conductor} size={28} />} when="2d" data-testid="agent-added-line"
           quote="The line items read usage_events directly; CP-40 has to be in first.">
