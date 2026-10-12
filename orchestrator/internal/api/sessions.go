@@ -991,13 +991,20 @@ func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr
 	return delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, delivery.Attributed(name, text), text)
 }
 
+// settleSessionQuestion marks the agent's open question answered by p.
+// Before the agent's Run ends, so runs_cancel_open_questions leaves it be.
+func settleSessionQuestion(ctx context.Context, tx pgx.Tx, questionID string, a delivery.Answered, p principal) error {
+	answers, _ := json.Marshal(a.Answers)
+	_, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $4::jsonb, answered_at = now(),
+		answered_by_person = $3 WHERE id = $1`, questionID, a.Text, p.Person, answers)
+	return err
+}
+
 // answerSessionQuestion settles the agent's open question with a member's
 // answer, queued as its next input, naming who answered.
 func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, questionID, prompt string,
 	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
-	answers, _ := json.Marshal(a.Answers)
-	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $4::jsonb, answered_at = now(),
-		answered_by_person = $3 WHERE id = $1`, questionID, a.Text, p.Person, answers); err != nil {
+	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
 	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
@@ -1019,10 +1026,7 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 // replays read it as heard. Returns the fresh agent.
 func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to delivery.SessionModelApplied, questionID, prompt string,
 	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
-	answers, _ := json.Marshal(a.Answers)
-	// Answered before the old Run ends, so runs_cancel_open_questions leaves it be.
-	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $4::jsonb, answered_at = now(),
-		answered_by_person = $3 WHERE id = $1`, questionID, a.Text, p.Person, answers); err != nil {
+	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
 	next, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(), delivery.AnswerDirective(prompt, items, a, name, true), "")

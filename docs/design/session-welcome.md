@@ -240,12 +240,17 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   message it was not sent is not swapped either, so a fresh agent never
   reads a newer message before an older one; a later message swaps it.
   Any other wake (a repository linked, dude telling it something)
-  resumes it on what it was submitted with. The owner's chip is a button
-  at once; its menu reads
-  the organisation's tiers when it first opens, and says "Could not load
-  the tiers" when it cannot. A pick shows at once and the detail takes
-  over once the last pick is answered; a failed pick cancels the picks
-  queued behind it, which carried its half.
+  resumes it on what it was submitted with. The comparison is what a
+  fresh start would resolve to, so an admin editing the model or effort
+  of the tier a session follows swaps its agent at its next message too;
+  a tier's options and headers are not recorded on Runs and not compared,
+  so a change to them alone swaps nothing. The old agent's Run ends
+  `aborted`, which has the syncer cancel its lux Run. The owner's chip is
+  a button at once; its menu reads the organisation's tiers when it first
+  opens, and says "Could not load the tiers" when it cannot. A pick
+  shows at once and the detail takes over once the last pick is
+  answered; a failed pick cancels the picks queued behind it, which
+  carried its half.
 - **A tier removed falls back.** A trigger on `model_tiers` sets each
   session that chose it back to the organisation's tier, under the row's
   lock, and records `session.model.fallback` on each one it changed, so
