@@ -508,10 +508,14 @@ func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {
 // The conductor's checkout is synced with fresh credentials: an App's
 // installation token, minted for the sync.
 func TestAConductorsSyncCarriesAFreshAppToken(t *testing.T) {
-	e := newEditing(t)
-	app := e.asApp()
-	e.wokenWith(e.task, "after implement")
-	r := runFor(e.world, e.luxRunOf(e.cond))
+	w := conducting(t)
+	app := w.asApp()
+	task := w.task()
+	cond := w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.wokenWith(task, "after implement")
+	r := runFor(w, w.luxRunOf(cond))
 	if r == nil || len(r.SyncCredentials) == 0 {
 		t.Fatal("the conductor's checkout was never synced")
 	}
