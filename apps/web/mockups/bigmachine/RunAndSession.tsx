@@ -115,7 +115,7 @@ function Refused({ view, t0 }: { view: "refused" | "refused-largest"; t0: number
           : "The sort passes on the 100k fixture. The full 2.1M-row fixture needs about 20 GiB; Large would not fit it, so XL."} />
       <ChatAside>
         <ToolCallCard name="bash" status="failed" summary={<code>npx jest --maxWorkers 1 export/full-fixture</code>} exitCode={137}
-          error="Killed" durationMs={largest ? 212_000 : 96_000} />
+          error="Killed" defaultExpanded={false} durationMs={largest ? 212_000 : 96_000} />
         <MachineRequestCall from={largest ? xl : standard} to={largest ? "a larger one" : xl} refused fresh={false}
           reason={largest ? "The full fixture's sort was OOM-killed at 32 GiB." : REASON_XL}
           answer={largest ? REFUSED_LARGEST : REFUSED_UNPUSHED} startedAt={t0 - 50_000} durationMs={1_400} defaultExpanded />
@@ -126,7 +126,7 @@ function Refused({ view, t0 }: { view: "refused" | "refused-largest"; t0: number
       {largest ? null : (
         <ChatAside>
           <ToolCallCard name="bash" status="completed" summary={<code>git add -A && git commit -m "Test the sort on the full fixture"</code>} durationMs={600} />
-          <ToolCallCard name="push" icon="git-branch" status="running" summary={<><code>dude push</code> · 2 commits to <code>{TASK.runBranch}</code></>} startedAt={t0 - 6_000} />
+          <ToolCallCard name="push" icon="git-branch" status="running" summary={<>2 commits to <code>{TASK.runBranch}</code></>} startedAt={t0 - 6_000} />
         </ChatAside>
       )}
     </>

@@ -77,7 +77,7 @@ export function RoleSettings({ where }: { where: "org" | "project" }) {
             ) : null}>
             <span className={s.switchStack} data-testid="may-ask">
               <Switch id={`larger-${role}`} testId="may-ask-switch" checked={may} onCheckedChange={setMay}
-                label={may ? (project ? `On in ${PROJECT}` : "On") : project ? `Off in ${PROJECT}` : "Off"} />
+                label={may ? "On" : project ? `Off in ${PROJECT}` : "Off"} />
               <small className={s.switchHint}>
                 {may ? `It may move itself to a larger size when something runs out, saying what. Later ${label.toLowerCase()} Runs in the task run on it too.`
                   : `It is not offered the tool, and its prompt does not mention it. It runs on its Machine.`}

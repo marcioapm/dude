@@ -85,13 +85,12 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
             {otherPool ? (
               <>
                 <ChatRunLine data-testid="chat-run" role="implementer" status="aborted" statusLabel="Replaced" what={WHAT}
-                  facts={["Standard", "38m", "$1.72"]} onOpen={() => undefined}
-                  replacement={<a href="#run_q8w2">Open replacement Run</a>} />
+                  facts={["Standard", "38m", "$1.72"]} onOpen={() => undefined} />
                 <ChatAside>
                   <ToolCallCard name="push" icon="git-branch" status="completed" startedAt={asked - 30_000} endedAt={asked - 21_000}
-                    summary={<><code>dude push</code> · 1 commit to <code>{TASK.runBranch}</code></>}
+                    summary={<>1 commit to <code>{TASK.runBranch}</code></>}
                     result={`Pushed ${TASK.commit} “Stream the CSV through pg-cursor” to ${TASK.runBranch}. Nothing uncommitted.`} />
-                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={900} />
+                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={900} defaultExpanded />
                 </ChatAside>
                 <ChatNotice kind="restart" by={DUDE} at={asked + 2_000} data-testid="move-notice"
                   text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
@@ -104,7 +103,7 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
                 <ChatRunLine data-testid="chat-run" role="implementer" status="starting" statusLabel="Moving to Large" what={WHAT}
                   facts={["Large", "38m", "$1.72"]} onOpen={() => undefined} />
                 <ChatAside>
-                  <MachineRequestCall from={standard} to={large} reason={REASON_LARGE} answer={ANSWER_LARGE} startedAt={asked} durationMs={700} />
+                  <MachineRequestCall from={standard} to={large} reason={REASON_LARGE} answer={ANSWER_LARGE} startedAt={asked} durationMs={700} defaultExpanded />
                 </ChatAside>
                 <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
                   text="Moving the implementer to Large: it keeps its conversation and work. Later implementer Runs in this task run on Large too." />
