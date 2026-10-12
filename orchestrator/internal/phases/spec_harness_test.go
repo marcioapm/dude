@@ -324,6 +324,30 @@ func TestOpenCodeNeverFetchesTheModelsCatalogue(t *testing.T) {
 	}
 }
 
+// A Run that may reach any host is unrestricted whatever the lists say, on
+// every harness and on the scripted agent; on OpenCode it also gets Exa,
+// its websearch tool. A Run on the lists gets neither.
+func TestARunThatMayReachAnywhereIsUnrestrictedAndOpenCodeSearches(t *testing.T) {
+	for _, model := range []string{"claude-sonnet-5", "fake/scripted"} {
+		for _, harness := range []string{delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+			for _, anywhere := range []bool{false, true} {
+				c, in := goldenInput(model)
+				everyRole["brainstorm"](&in)
+				c.Egress, in.Egress, in.Harness, in.Anywhere = []string{"mirror.internal"}, []string{"pypi.org"}, harness, anywhere
+				spec := buildSpec(c, in)
+				name := fmt.Sprintf("%s on %s, anywhere %v", model, harness, anywhere)
+				if spec.Network == nil || spec.Network.Unrestricted != anywhere || anywhere != (len(spec.Network.Egress) == 0) {
+					t.Errorf("%s: network = %+v", name, spec.Network)
+				}
+				exa, has := spec.Env["OPENCODE_ENABLE_EXA"]
+				if want := anywhere && harness == delivery.HarnessOpenCode && model != "fake/scripted"; has != want || (has && exa != "1") {
+					t.Errorf("%s: OPENCODE_ENABLE_EXA = %q (set %v), want set %v", name, exa, has, want)
+				}
+			}
+		}
+	}
+}
+
 // A resumed Run goes on with the harness it was submitted on.
 func TestAResumeKeepsTheHarnessItWasSubmittedOn(t *testing.T) {
 	if got := submittedHarness(delivery.HarnessCodex, delivery.HarnessClaudeCode); got != delivery.HarnessCodex {

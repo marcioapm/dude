@@ -349,6 +349,7 @@ export class FixtureClient extends ApiClient {
   #orgEgress = [...SETTINGS.network.organizationEgress!];
   #projectEgress: string[] = [];
   #mode: AgentEgressMode = "add";
+  #brainstormAnywhere = false;
   #refused = [...REFUSED];
 
   /** The settings, with the network as the API resolves it (routes/settings.ts network). */
@@ -361,7 +362,9 @@ export class FixtureClient extends ApiClient {
       ...(project ? SETTINGS : org),
       network: {
         egress: { value: own, source: project && own.length ? "project" : "organization" },
-        ...(project ? { mode: { value: this.#mode, source: this.#mode === "only" ? "project" : "organization" }, organizationEgress: this.#orgEgress } : {}),
+        ...(project
+          ? { mode: { value: this.#mode, source: this.#mode === "only" ? "project" : "organization" }, organizationEgress: this.#orgEgress }
+          : { brainstorm: { anywhere: this.#brainstormAnywhere } }),
         operator: [], always: SETTINGS.network.always, effective: effective.includes("*") ? ["*"] : effective,
       },
     };
@@ -369,12 +372,14 @@ export class FixtureClient extends ApiClient {
   #patch(project: boolean, patch: SettingsPatch): SettingsResponse {
     const refused = patch.network?.egress?.map(egressProblem).find((p) => p !== null);
     if (refused) throw new ApiError(400, "invalid_request", `network.egress: ${refused}`);
+    if (project && patch.network?.brainstorm !== undefined) throw new ApiError(400, "invalid_request", "brainstorm sessions span projects");
     if (patch.network?.egress) {
       const list = [...new Set(patch.network.egress.map((e) => e.trim().toLowerCase()))];
       if (project) this.#projectEgress = list;
       else this.#orgEgress = list;
     }
     if (project && patch.network?.mode) this.#mode = patch.network.mode;
+    if (!project && patch.network?.brainstorm !== undefined) this.#brainstormAnywhere = patch.network.brainstorm;
     return this.#settings(project);
   }
   override organizationSettings(): Promise<SettingsResponse> {

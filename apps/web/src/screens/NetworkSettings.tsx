@@ -4,7 +4,8 @@
  * of it may reach; a project adds its own, or runs on its own alone. What
  * is always reachable (the model, dude's tools) is shown, never listed. A
  * project's page also lists what its agents were refused lately, with
- * Allow. A Run gets the lists as they are when it starts.
+ * Allow. The organisation may also let its brainstorm sessions reach any
+ * host. A Run gets the lists as they are when it starts.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -69,9 +70,31 @@ function OrganizationNetwork({ scope }: { scope: SettingsScope }) {
             label={anywhere ? "On — agents may reach any host" : "Off — only the list above"}
             onCheckedChange={(on) => void scope.patch({ network: { egress: on ? [ANYWHERE, ...hosts] : hosts } }, on ? "Agents may reach anywhere" : "Only the list applies").catch(() => {})} />
         </SettingRow>
+        <BrainstormAnywhere scope={scope} />
         <ChangeNote settings={settings} />
       </SettingsSection>
     </>
+  );
+}
+
+/**
+ * Brainstorm sessions research: with this on their Runs reach any host,
+ * whatever the list says; every other role keeps it.
+ */
+function BrainstormAnywhere({ scope }: { scope: SettingsScope }) {
+  const { settings } = scope;
+  const on = settings.network.brainstorm?.anywhere ?? false;
+  return (
+    <SettingRow label="Brainstorm sessions" help="Let a brainstorm read documentation, competitors’ pages and anything else it finds while it researches. Other agents keep the list.">
+      <Switch checked={on} disabled={!settings.canEdit} testId="network-brainstorm-switch"
+        label={on ? "On — brainstorm agents may reach any host, to read the web" : "Off — the list above applies to them too"}
+        onCheckedChange={(next) => void scope.patch({ network: { brainstorm: next } }, next ? "Brainstorms may read the web" : "Brainstorms keep to the list").catch(() => {})} />
+      {on ? (
+        <Callout tone="danger" data-testid="network-brainstorm-anywhere">
+          <b>Anything a page says can steer the agent.</b> A brainstorm has read-only checkouts of the repositories linked to its session, and the model’s key, in its container. A malicious page could talk it into sending them to any host.
+        </Callout>
+      ) : null}
+    </SettingRow>
   );
 }
 

@@ -1,0 +1,13 @@
+-- 109_brainstorm_anywhere.sql — an organisation may let its brainstorm
+-- sessions reach any host, to read the web.
+--
+-- true: a brainstorm Run of the organisation is submitted unrestricted
+-- (lux network.unrestricted), whatever agent_egress says; every other role
+-- keeps the lists (098). Read when the Run is built (phases.brainstormSpec);
+-- a resumed Run keeps the network it was submitted with. Off by default.
+--
+-- Catalog only: a constant default is stored in the catalog, so adding the
+-- column rewrites no row and holds organizations' ACCESS EXCLUSIVE lock for
+-- the catalog update alone. organizations keeps its RLS policy and grants;
+-- the new column is covered by them.
+ALTER TABLE organizations ADD COLUMN brainstorm_anywhere boolean NOT NULL DEFAULT false;

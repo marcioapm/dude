@@ -211,6 +211,20 @@ after it: lux cannot change a live Run's rules, and a Run keeps what it was
 submitted with (`runs.network`) through its resumes. A session's agent gets
 its organisation's list.
 
+**Brainstorm sessions** (Organisation settings → Network, owners and
+admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
+on, a brainstorm Run of the organisation is submitted unrestricted,
+whatever its list or the operator's says, so it can read the web; on
+OpenCode it also gets `OPENCODE_ENABLE_EXA=1`, its websearch tool (which
+reaches `mcp.exa.ai`; off, it would be refused, so the variable is not
+set). Every other role keeps the lists. The settings API carries it as
+`network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
+a project's); `network.effective` stays what other roles get. What it
+risks: anything a page says can steer the agent, and a brainstorm holds
+read-only checkouts of its session's repositories and the model key, which
+a malicious page could talk it into sending out. Like the lists, a change
+reaches brainstorm Runs submitted after it; a resumed one keeps its network.
+
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
 project's Run keeps it (`agent_egress_refusals`, one row per Run and name),

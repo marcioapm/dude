@@ -113,14 +113,15 @@ async function networkDefaults(ctx: RequestContext): Promise<NetworkDefaults> {
 const builtinPrompts = constant<Record<PromptRole, string>>("/internal/prompts/builtin");
 
 export interface Layers {
-  org: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json; agentEgress: string[] };
+  org: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json; agentEgress: string[]; brainstormAnywhere: boolean };
   project?: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json; agentEgress: string[]; agentEgressMode: AgentEgressMode };
 }
 
 async function loadLayers(scope: OrgScope, projectId?: string, lock = false): Promise<Layers | null> {
   const forUpdate = scope.sql.unsafe(lock ? "FOR UPDATE" : "");
   const orgs = (await scope.sql`
-    SELECT id, name, default_agent_models AS "agentModels", delivery_policy AS "deliveryPolicy", agent_egress AS "agentEgress"
+    SELECT id, name, default_agent_models AS "agentModels", delivery_policy AS "deliveryPolicy", agent_egress AS "agentEgress",
+      brainstorm_anywhere AS "brainstormAnywhere"
     FROM organizations WHERE id = ${scope.organizationId} ${forUpdate}`) as Array<Layers["org"]>;
   if (!orgs[0]) return null;
   if (!projectId) return { org: orgs[0] };
@@ -193,6 +194,8 @@ function projectMode(v: VersionRow | undefined): ProjectPromptMode {
  * the project's ("add"), or the project's alone ("only"), each once; ["*"]
  * when any says anywhere, or when nothing is listed anywhere and there is
  * no model to restrict to. A project's own list or mode is its override.
+ * On the organisation's settings, whether its brainstorms reach any host
+ * besides: they alone, so `effective` stays what every other role gets.
  */
 export function network(layers: Layers, defaults: NetworkDefaults): NetworkSettings {
   const { org, project } = layers;
@@ -207,7 +210,7 @@ export function network(layers: Layers, defaults: NetworkDefaults): NetworkSetti
           mode: { value: project.agentEgressMode, source: project.agentEgressMode === "only" ? "project" : "organization" },
           organizationEgress: org.agentEgress,
         }
-      : {}),
+      : { brainstorm: { anywhere: org.brainstormAnywhere } }),
     operator: defaults.operator,
     always: defaults.always,
     effective: anywhere ? ["*"] : effective,
@@ -425,7 +428,8 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
-        agent_egress = ${scope.sql.array(patch.network?.egress ?? layers.org.agentEgress, "text")}::text[], updated_at = now()
+        agent_egress = ${scope.sql.array(patch.network?.egress ?? layers.org.agentEgress, "text")}::text[],
+        brainstorm_anywhere = ${patch.network?.brainstorm ?? layers.org.brainstormAnywhere}, updated_at = now()
       WHERE id = ${scope.organizationId}`;
     await recordSettings(scope, ctx, null, patch);
   });
@@ -440,6 +444,7 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
   await requireProjectEditor(ctx, projectId);
   const patch = await parseBody(ctx.request, settingsPatchSchema);
+  if (patch.network?.brainstorm !== undefined) throw badRequest("brainstorm sessions span projects: whether they may reach any host is the organisation's setting");
   await withOrg(ctx.principal.organizationId, async (scope) => {
     // Sizes, tiers and images before the organization and project rows: the order their removal or archiving locks them in.
     await checkReferences(scope, patch);

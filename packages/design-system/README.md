@@ -1791,7 +1791,13 @@ MarkdownCheatsheet.
   them all; the hosts agents were refused, in how many Runs, with Allow on
   each and Allow all; and, in a Run, the note a tool call whose output names a refused
   host carries as `ToolCallCard`'s `note` — under the card, folded or
-  open, with Allow for the project and Settings.
+  open, with Allow for the project and Settings. A switch that lifts the
+  list for one kind of agent (an organisation's **Brainstorm sessions**:
+  any host, to read the web) is a `Switch` in a `SettingRow`, its label
+  saying both states in words ("On — …" / "Off — …"); while on, a
+  `Callout tone="danger"` under it says in plain words what it risks (what
+  a page can steer the agent into, and what the container holds that could
+  be sent out). Never a badge or an icon alone.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
   out among actions. **TerminalLink** is it for a run's lux terminal
   ("Open terminal in lux ↗"): in an agent session's rail, and in a branch

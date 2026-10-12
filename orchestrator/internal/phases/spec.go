@@ -154,6 +154,9 @@ type specInput struct {
 	Machine *delivery.Machine
 	// What it may reach besides the operator's floor (RunEgress).
 	Egress []string
+	// Any host, whatever Egress and the operator's floor say: a brainstorm
+	// of an organisation that lets them read the web (brainstorm_anywhere).
+	Anywhere bool
 }
 
 // MachineSpec puts a machine size on a lux spec: its resources, memory and
@@ -386,6 +389,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			// reach; it needs no model.
 			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in.Egress)
 		}
+		if in.Anywhere {
+			spec.Network = &lux.Network{Unrestricted: true}
+		}
 		return spec
 	}
 
@@ -399,6 +405,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		openCodeWorkload(c, in, &spec)
 	}
 	spec.Network = egress(c, in.Egress)
+	if in.Anywhere {
+		spec.Network = &lux.Network{Unrestricted: true}
+	}
 	return spec
 }
 
@@ -415,6 +424,11 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	}
 	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
 	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
+	// OpenCode's websearch tool exists only with Exa on, and reaches
+	// mcp.exa.ai: only a Run that may reach any host gets it.
+	if in.Anywhere {
+		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
+	}
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
