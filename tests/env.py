@@ -17,6 +17,7 @@ import socket
 import sys
 import signal
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -132,9 +133,24 @@ def _signal(proc: subprocess.Popen, sig: int, group: bool) -> None:
 
 
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return int(s.getsockname()[1])
+    """A free port this process has not handed out before.
+
+    The kernel may hand the same ephemeral port to two binds once the first
+    socket is closed, so two callers (an orchestrator and its tools, say)
+    could otherwise get the same port before either listens on it.
+    """
+    with _ports_lock:
+        while True:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", 0))
+                port = int(s.getsockname()[1])
+            if port not in _ports_given:
+                _ports_given.add(port)
+                return port
+
+
+_ports_given: set[int] = set()
+_ports_lock = threading.Lock()
 
 
 @dataclass
