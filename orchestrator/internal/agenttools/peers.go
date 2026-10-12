@@ -156,9 +156,11 @@ func peerRow(ctx context.Context, tx pgx.Tx, c Caller, p delivery.Peer) (peerOut
 		return out, err
 	}
 	var said string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT e.payload->>'text' FROM events e JOIN runs r ON r.id = e.run_id
-			WHERE r.task_id = $1 AND r.phase IS NOT NULL AND e.event_type = 'agent.message'
-			ORDER BY e.cursor DESC LIMIT 1), '')`, p.ID).Scan(&said); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT last.payload->>'text' FROM runs r CROSS JOIN LATERAL (
+			SELECT e.payload, e.cursor FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.message'
+			ORDER BY e.cursor DESC LIMIT 1) last
+			WHERE r.task_id = $1 AND r.phase IS NOT NULL
+			ORDER BY last.cursor DESC LIMIT 1), '')`, p.ID).Scan(&said); err != nil {
 		return out, err
 	}
 	out.LastSaid = paragraph(said, peerLastMessage)

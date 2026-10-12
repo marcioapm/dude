@@ -45,7 +45,7 @@ CREATE TABLE peer_messages (
   CHECK (from_task_id <> to_task_id)
 );
 -- What waits for a task: its next briefing reads these.
-CREATE INDEX peer_messages_to_idx ON peer_messages (to_task_id, created_at) WHERE read_at IS NULL AND briefed_run_id IS NULL;
+CREATE INDEX peer_messages_to_idx ON peer_messages (to_task_id, created_at);
 CREATE INDEX peer_messages_pair_idx ON peer_messages (from_task_id, to_task_id, created_at);
 -- The rate limit: what a Run sent in the last hour.
 CREATE INDEX peer_messages_from_run_idx ON peer_messages (from_run_id, created_at);
@@ -74,6 +74,7 @@ CREATE TABLE peer_waits (
 );
 CREATE UNIQUE INDEX peer_waits_open_idx ON peer_waits (run_id) WHERE closed_at IS NULL;
 CREATE INDEX peer_waits_message_idx ON peer_waits (message_id);
+CREATE INDEX peer_waits_run_closed_idx ON peer_waits (run_id, closed_at);
 
 -- A note on an epic: a short working fact every agent on it must follow.
 -- Never edited: a replacement is a new note (replaces_id), the old one
