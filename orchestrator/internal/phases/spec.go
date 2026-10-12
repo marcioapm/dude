@@ -487,8 +487,6 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	}
 }
 
-const claudeCodeSettings = `{"skipWebFetchPreflight":true}`
-
 // claudeCodeArgs are a Claude Code Run's --settings value and the tier's
 // other args. Each of the tier's `--settings <json>` (or --settings=) that
 // is a JSON object is merged into dude's, later keys over earlier, with
@@ -517,9 +515,6 @@ func claudeCodeArgs(options map[string]any) (settings string, args, dropped []st
 			continue
 		}
 		maps.Copy(merged, tier)
-	}
-	if len(merged) == 0 {
-		return claudeCodeSettings, args, dropped
 	}
 	merged["skipWebFetchPreflight"] = true
 	b, _ := json.Marshal(merged)
