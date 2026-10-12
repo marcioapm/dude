@@ -654,6 +654,28 @@ describe("an ask's tool row and the question it asked", () => {
       called("c_2")])).toEqual(["q:q_2", "human", "tool:c_2"]);
   });
 
+  test("a refused second ask, with no record of its own, stays after the question", () => {
+    const first = ask("q_1", "c_1");
+    const refused = [called("c_2"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_2", status: "error" })];
+    expect(order([...first, ...refused])).toEqual(["tool:c_1", "q:q_1", "tool:c_2"]);
+    // Asked through the dude CLI: the bash call's completion ends the pairing.
+    const cli = [called("b_1", "bash"), asked("q_2"), dudeRecord("q_2"), ev(EventTypes.ToolCompleted, { tool: "bash", callId: "b_1" }), called("c_3")];
+    expect(order(cli)).toEqual(["tool:b_1", "q:q_2", "tool:c_3"]);
+  });
+
+  test("a call the harness reports only once finished goes before its question", () => {
+    expect(order([asked("q_1"), dudeRecord("q_1"), ev(EventTypes.ToolCompleted, { tool: "ask_person", callId: "c_1", status: "completed" })]))
+      .toEqual(["tool:c_1", "q:q_1"]);
+  });
+
+  test("events replayed after a reconnect change nothing", () => {
+    const events = [ev(EventTypes.AgentMessage, { text: "Let me ask." }), ...ask("q_1", "c_1"), ...ask("q_2", "c_2")];
+    const state = apply(emptyProjection(), events.slice(0, 3));
+    apply(state, events);
+    apply(state, events);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+  });
+
   test("folded one event at a time, the order is the same, and the progress row stays found", () => {
     const events = [ev("agent.custom.progress", { data: { done: 1, of: 2 } }), ...ask("q_1", "c_1"),
       ev("agent.custom.progress", { data: { done: 2, of: 2 } })];
