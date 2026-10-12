@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	pemfile "encoding/pem"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,28 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 	}
 	if app.Installation(resumedWith) != 71 || resumedWith == submittedWith {
 		t.Errorf("resumed with GIT_TOKEN %q (submitted with %q), want a fresh installation token", resumedWith, submittedWith)
+	}
+}
+
+// Verify mints a token for one linked repository and reads the bot, or
+// says GitHub's reason it could not.
+func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE repositories SET url = 'https://github.com/acme/target.git' WHERE id = $1`, w.repoID)
+	app := w.asApp()
+	status, out := w.call("/internal/github/verify-app", map[string]any{})
+	if status != 200 || out["ok"] != true || out["repository"] != "acme/target" || out["bot"] != "dude-bot-test[bot]" {
+		t.Errorf("verify: %d %v", status, out)
+	}
+	// asApp's tokens are always due for refresh: the bot's lookup mints one too.
+	if app.ExchangesFor(71) == 0 {
+		t.Error("verify minted no token")
+	}
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{} })
+	mustExec(t, w.owner, `UPDATE repositories SET url = 'https://github.com/elsewhere/target.git' WHERE id = $1`, w.repoID)
+	status, out = w.call("/internal/github/verify-app", map[string]any{})
+	if reason, _ := out["reason"].(string); status != 200 || out["ok"] != false || !strings.Contains(reason, "not installed on elsewhere/target") {
+		t.Errorf("verify, not installed: %d %v", status, out)
 	}
 }
 

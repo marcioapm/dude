@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { AgentAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
+import { AgentAvatar, Segmented, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -19,6 +19,7 @@ import {
   Input,
   KeyValueList,
   Spinner,
+  Textarea,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection, ForgeVerification, Member } from "../api/client.ts";
 import { MembersSection } from "./MembersSection.tsx";
@@ -195,8 +196,15 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
         />
         <CardBody>
           {connection.connected ? (
-            <KeyValueList items={[
-              { label: "Authentication", value: connection.auth === "pat" ? "Personal access token" : "GitHub App" },
+            <KeyValueList items={connection.auth === "github_app" ? [
+              { label: "Authentication", value: "GitHub App" },
+              { label: "App ID", value: connection.appId ?? "—", mono: true },
+              { label: "Installation", value: connection.installationId ?? "found per repository owner", mono: Boolean(connection.installationId) },
+              { label: "Private key", value: "stored" },
+              { label: "API", value: connection.apiBaseUrl ?? "https://api.github.com", mono: true },
+              { label: "Webhook", value: webhookUrl, mono: true },
+            ] : [
+              { label: "Authentication", value: "Personal access token" },
               { label: "Token", value: `…${connection.secretHint}`, mono: true },
               { label: "API", value: connection.apiBaseUrl ?? "https://api.github.com", mono: true },
               { label: "Webhook", value: webhookUrl, mono: true },
@@ -219,7 +227,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
           ) : null}
           {admin ? (
             <Button variant={connection.connected ? "quiet" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
-              {connection.connected ? "Replace token" : "Connect GitHub"}
+              {connection.connected ? (connection.auth === "github_app" ? "Replace credentials" : "Replace token") : "Connect GitHub"}
             </Button>
           ) : null}
         </CardFooter>
@@ -235,6 +243,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
       <TokenDialog
         client={client}
         open={replacing}
+        auth={connection.connected ? connection.auth : "pat"}
         onOpenChange={setReplacing}
         publicUrl={(connection.connected ? connection.webhook.publicUrl : null) ?? window.location.origin}
         onSaved={() => {
@@ -248,29 +257,44 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
 }
 
 /**
- * Mounted only while open, so each opening starts empty. Saving registers
- * dude's webhook on every repository, delivering to `publicUrl` (where
- * this browser reaches dude, or where the organization's hooks already
- * deliver), which dude keeps: a project or repository added later gets
- * its webhook there too.
+ * Mounted only while open, so each opening starts empty. A token: saving
+ * registers dude's webhook on every repository, delivering to `publicUrl`
+ * (where this browser reaches dude, or where the organization's hooks
+ * already deliver), which dude keeps: a project or repository added later
+ * gets its webhook there too. A GitHub App: its private key, App ID and,
+ * optionally, a default installation; its webhook is set in the App.
+ * Neither secret is ever shown again.
  */
-function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
+function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; auth: "pat" | "github_app";
+  onOpenChange: (open: boolean) => void; onSaved: () => void }) {
+  const [auth, setAuth] = useState<"pat" | "github_app">(props.auth);
   const [token, setToken] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [appId, setAppId] = useState("");
+  const [installationId, setInstallationId] = useState("");
   const [apiBase, setApiBase] = useState("");
   const { busy, problem, save } = useSave();
+  const app = auth === "github_app";
+  const ready = app ? Boolean(privateKey.trim()) && /^\d+$/.test(appId.trim()) && /^\d*$/.test(installationId.trim())
+    : Boolean(token.trim());
   return (
     <FormDialog
       open={props.open}
       onOpenChange={props.onOpenChange}
       title="Connect GitHub"
-      description="A personal access token with repository access. It is stored for this organization and never shown again."
+      description={app
+        ? "A GitHub App: pull requests and commits are the App's. Its private key is stored for this organization and never shown again."
+        : "A personal access token with repository access. It is stored for this organization and never shown again."}
       submitLabel="Save"
       submitTestId="forge-save"
-      canSubmit={!busy && Boolean(token.trim())}
+      canSubmit={!busy && ready}
       problem={problem}
       onSubmit={() =>
         void save(
-          () => props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
+          () => app
+            ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim() },
+              apiBase.trim() || undefined)
+            : props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {
             props.onOpenChange(false);
             props.onSaved();
@@ -279,8 +303,23 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
         )
       }
     >
-      <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}
-        onChange={(e) => setToken(e.target.value)} data-testid="forge-token" />
+      <Segmented label="Authenticate with" value={auth} onChange={setAuth} data-testid="forge-auth"
+        options={[{ value: "pat", label: "Personal access token" }, { value: "github_app", label: "GitHub App" }]} />
+      {app ? (
+        <>
+          <Input label="App ID" mono autoComplete="off" autoFocus value={appId} inputMode="numeric"
+            onChange={(e) => setAppId(e.target.value)} data-testid="forge-app-id" />
+          <Input label="Installation ID (optional)" mono autoComplete="off" value={installationId} inputMode="numeric"
+            hint="Leave empty: dude finds the installation for each repository's owner."
+            onChange={(e) => setInstallationId(e.target.value)} data-testid="forge-installation-id" />
+          <Textarea label="Private key" rows={6} mono spellCheck={false} autoComplete="off" value={privateKey}
+            placeholder="-----BEGIN RSA PRIVATE KEY-----" hint="The whole .pem file GitHub generated for the App."
+            onChange={(e) => setPrivateKey(e.target.value)} data-testid="forge-private-key" />
+        </>
+      ) : (
+        <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}
+          onChange={(e) => setToken(e.target.value)} data-testid="forge-token" />
+      )}
       <Input label="API base URL" mono value={apiBase} placeholder="https://api.github.com"
         hint="Only for GitHub Enterprise." onChange={(e) => setApiBase(e.target.value)} />
     </FormDialog>

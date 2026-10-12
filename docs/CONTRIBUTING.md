@@ -528,8 +528,9 @@ In rough priority order.
 3. **Budgets as loop bounds** — a cost cap per Run and per task.
 4. **The tester phase** (browser QA with recorded evidence) and artifacts
    from lux. Design in [`phased-runs.md`](phased-runs.md).
-5. **GitHub App** in place of the PAT. (Webhooks are registered when a
-   project or repository is added, and on connecting in Settings.)
+5. **Merging as the GitHub App.** An organization can connect an App
+   ([github.md](github.md#github-app)); a merge it asks for goes through the
+   same client as everything else, and has not been tried against GitHub.
 6. **lux push with an expected base commit**, which would remove the
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any

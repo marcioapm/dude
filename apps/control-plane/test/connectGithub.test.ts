@@ -104,6 +104,11 @@ test("a GitHub App connects with its App ID alone; the installation is found per
   expect(res.status).toBe(200);
   const [cred] = await owner`SELECT auth::text, app_id, installation_id FROM forge_credentials WHERE organization_id = ${ORG}`;
   expect(cred).toEqual({ auth: "github_app", app_id: "9001", installation_id: null });
+  // The key is write-only: no part of it comes back.
+  const shown = await router.handle(new Request("http://dude.test/v1/forge/credential", { headers: { authorization: `Bearer ${key.key}` } }));
+  const body = (await shown.json()) as Record<string, unknown>;
+  expect(body).toMatchObject({ connected: true, auth: "github_app", appId: "9001", installationId: null, secretHint: "" });
+  expect(JSON.stringify(body)).not.toContain("BEGIN");
 });
 
 test("an App's deliveries are taken with the credential's secret; its installation events are answered and ignored", async () => {

@@ -1,8 +1,8 @@
 # GitHub credentials and permissions
 
-Dude uses an organization's GitHub credential both for Git clone/push (passed to lux) and for the forge API: pull requests, checks, reviewer requests, branch updates, merges and webhooks. Configure it in the organization's GitHub settings.
+Dude uses an organization's GitHub credential both for Git clone/push (passed to lux) and for the forge API: pull requests, checks, reviewer requests, branch updates, merges and webhooks. Configure it in the organization's GitHub settings: a personal access token, or a [GitHub App](#github-app).
 
-Use a **fine-grained personal access token (PAT)** limited to the repositories dude should work on, **unless dude must read CI check runs** (GitHub Actions and most CI apps report that way): GitHub offers fine-grained tokens no permission that reads check runs, so only a classic token with `repo` (or, once dude supports one, a GitHub App) can. With a fine-grained token, dude sees only commit statuses and every pull request shows "CI unavailable". For a fine-grained token, select its resource owner, then **Only select repositories**. The token owner must also have the necessary repository access. Token permissions do not grant rights the owner lacks; organization approval, SSO policies and branch rules still apply.
+Use a **fine-grained personal access token (PAT)** limited to the repositories dude should work on, **unless dude must read CI check runs** (GitHub Actions and most CI apps report that way): GitHub offers fine-grained tokens no permission that reads check runs, so only a classic token with `repo` (or a GitHub App) can. With a fine-grained token, dude sees only commit statuses and every pull request shows "CI unavailable". For a fine-grained token, select its resource owner, then **Only select repositories**. The token owner must also have the necessary repository access. Token permissions do not grant rights the owner lacks; organization approval, SSO policies and branch rules still apply.
 
 **Verify** (Organization settings → GitHub) tests each of these on every repository of the organization's projects without changing anything on GitHub, and says which is missing, or why one could not be tested.
 
@@ -38,9 +38,46 @@ Classic scopes are broader and not restricted to selected repositories, but a cl
 
 Do not confuse the classic `workflow` scope with the fine-grained Workflows permission. GitHub's Git rejection may say “without `workflow` scope” even when the remedy for a fine-grained token is **Workflows: Read and write**.
 
-## GitHub Apps
+## GitHub App
 
-The current orchestrator supports PAT authentication. Its schema/UI may mention GitHub Apps, but `GitHub.Token()` currently rejects `github_app` authentication as not implemented. Do not use an App private key or installation id as a working substitute for a PAT until installation-token support is implemented.
+An organization can connect dude as a GitHub App instead of with a token (Organization settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
+
+### Creating the App
+
+On GitHub: Settings → Developer settings → GitHub Apps → New GitHub App (under the organization's settings for an organization-owned App).
+
+Repository permissions:
+
+- **Contents: Read and write** — clone, push, task branches, fast-forwards.
+- **Pull requests: Read and write** — open and read pull requests, reviews and comments, request reviewers.
+- **Workflows: Read and write** — push changes under `.github/workflows/`.
+- **Checks: Read** — read check runs (GitHub Actions and most CI). Unlike a fine-grained token, an App can.
+- **Actions: Read** — read workflow runs and jobs.
+- **Commit statuses: Read** — read CI that reports statuses.
+- **Metadata: Read** — granted automatically.
+
+Subscribe to the events **pull_request**, **pull_request_review**, **pull_request_review_comment**, **issue_comment**, **check_run** and **check_suite**. The App's webhook URL and secret are the ones the Webhooks card shows once the App is connected (**Show secret**); content type `application/json`. An App has one webhook for every repository it is installed on, so dude registers no repository hooks for it.
+
+An App that is **public** ("Any account" can install it) can be installed by link on more than one account; a private one only on the account that owns it. To have dude work on a personal account's repositories and an organization's, make it public and install it on each, giving it access to the repositories dude works on. One credential serves every installation: dude finds the installation of each repository's owner (`GET /repos/{owner}/{repo}/installation`) and keeps it.
+
+### Connecting it
+
+1. Generate a private key in the App's settings; GitHub downloads a `.pem` file.
+2. In dude, choose **GitHub App**, enter the **App ID** (on the App's settings page) and paste the whole `.pem` file, `-----BEGIN RSA PRIVATE KEY-----` to `-----END RSA PRIVATE KEY-----`, into **Private key**. Like a token, the key is stored for the organization and never shown again.
+3. **Installation ID** is optional: leave it empty and dude finds each owner's installation. When set, it is used for an owner GitHub names no installation for, and for requests about no repository.
+4. Set the App's webhook URL and secret from the Webhooks card.
+5. **Verify** mints an installation token for one linked repository and reads the App's bot, and says GitHub's reason when it cannot (the App not installed on that owner, a key that is not the App's).
+
+dude signs a short-lived JWT with the key, exchanges it for an installation token (one hour), and mints a fresh one before every clone, push and sync it asks lux for, so a Run that outlives a token keeps pushing. A lux too old to take fresh credentials on a push is pushed with the token the Run was started or resumed with, and dude logs a warning: upgrade lux.
+
+### Co-authors
+
+Every commit an agent makes carries a `Co-authored-by:` trailer for each person on the task when the commit is made, owner first; with a token too, where the commits are authored by `dude`. If people change mid-task, earlier commits keep the people they had. Each person sets, in Settings → You → Profile:
+
+- **GitHub username** — dude stores GitHub's numeric id for it and names them by their noreply address, `<id>+<login>@users.noreply.github.com`, which GitHub links to their account whatever addresses they keep private. A username GitHub does not know is refused.
+- **Commit email** — used instead, when set: an address on their GitHub account.
+
+The address used is the commit email, else the noreply address, else the email they sign in with; someone with none is left out, and nobody is named twice. The runtime image's commit hook adds the trailers (`dude git coauthors`), and runs the repository's own hooks after it. Agents are told not to add or remove them.
 
 ## Troubleshooting
 

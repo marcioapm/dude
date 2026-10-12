@@ -28,3 +28,18 @@ test("connecting GitHub sends the token with the public URL", async () => {
     { method: "POST", path: "/v1/forge/credential", body: { auth: "pat", secret: "ghp_bare" } },
   ]);
 });
+
+test("connecting a GitHub App sends its key as the secret, its App ID, and no public URL to register at", async () => {
+  const sent: unknown[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return Response.json({});
+  }) as typeof fetch;
+  const client = new ApiClient({ apiKey: "k" });
+  await client.connectGithubApp({ privateKey: "PEM", appId: "9001" });
+  await client.connectGithubApp({ privateKey: "PEM", appId: "9001", installationId: "71" }, "https://ghe.example.com/api/v3");
+  expect(sent).toEqual([
+    { auth: "github_app", secret: "PEM", appId: "9001", installationId: null },
+    { auth: "github_app", secret: "PEM", appId: "9001", installationId: "71", apiBaseUrl: "https://ghe.example.com/api/v3" },
+  ]);
+});

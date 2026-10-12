@@ -134,6 +134,9 @@ export type ForgeConnection =
       connected: true;
       auth: "pat" | "github_app";
       secretHint: string;
+      /** A GitHub App's id, and its default installation (none: found per repository owner). */
+      appId?: string | null;
+      installationId?: string | null;
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;
@@ -170,7 +173,16 @@ export type ForgeVerification =
       tokenKind: "classic" | "fine_grained" | "unknown";
       repositories: ForgeRepositoryPermissions[];
     }
+  /** A GitHub App: a token was minted for `repository`, and its bot is `bot`. */
+  | { ok: true; app: true; bot: string | null; repository: string | null }
   | { ok: false; reason: string };
+
+/** A GitHub App's credential: its private key (PEM), App ID and, optionally, a default installation. */
+export interface GithubAppInput {
+  privateKey: string;
+  appId: string;
+  installationId?: string;
+}
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
@@ -533,6 +545,12 @@ export class ApiClient {
   connectForge(token: string, apiBaseUrl?: string, publicUrl?: string): Promise<unknown> {
     return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}),
       ...(publicUrl ? { publicUrl } : {}) });
+  }
+
+  /** Store the organization's GitHub App: its webhook is the App's own, so nothing is registered. */
+  connectGithubApp(app: GithubAppInput, apiBaseUrl?: string): Promise<unknown> {
+    return this.#request("POST", "/v1/forge/credential", { auth: "github_app", secret: app.privateKey, appId: app.appId,
+      installationId: app.installationId || null, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
   }
 
   githubSettings(): Promise<GithubSettings> {

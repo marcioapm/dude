@@ -31,6 +31,7 @@ export function webhookSummary(h: WebhookHealth, app = false): { ok: boolean; te
 /** Verify's verdict in one line: who the token is, and whether delivery has what it needs. */
 export function verificationSummary(v: ForgeVerification): { ok: boolean; text: string } {
   if ("reason" in v) return { ok: false, text: v.reason };
+  if ("app" in v) return { ok: true, text: `The App has a token for ${v.repository ?? "the repository"}; it commits as ${v.bot ?? "its bot"}` };
   const who = `Connected as ${v.login ?? "an unnamed account"}${v.scopes ? ` · scopes: ${v.scopes}` : ""}`;
   if (v.ok) return { ok: true, text: who };
   const repos = v.repositories.filter((r) => r.permissions.some((p) => p.level === "required" && p.outcome === "missing")).length;
@@ -43,7 +44,7 @@ export function verificationSummary(v: ForgeVerification): { ok: boolean; text: 
  * with everything granted is one line.
  */
 export function ForgePermissionList({ verification }: { verification: ForgeVerification }) {
-  if ("reason" in verification || verification.repositories.length === 0) return null;
+  if ("reason" in verification || "app" in verification || verification.repositories.length === 0) return null;
   const rank = (p: ForgePermission) => (p.outcome === "missing" ? (p.level === "required" ? 0 : 1) : 2);
   return (
     <ul className="webhookRepos forgePermissions" data-testid="forge-permissions">
