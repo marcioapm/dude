@@ -226,7 +226,8 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
       </Card>
       {connection.connected ? (
         <>
-          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} admin={admin} />
+          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} admin={admin}
+            app={connection.auth === "github_app"} webhookUrl={webhookUrl} />
           <GithubBehaviour client={client} admin={admin} />
         </>
       ) : null}

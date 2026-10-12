@@ -207,6 +207,23 @@ func TestARegistrationFailedBeforeAttemptsWereTimedIsRetried(t *testing.T) {
 	})
 }
 
+// A GitHub App's webhook is the App's own, for every repository it is
+// installed on: connecting and the repair register none.
+func TestAnAppRegistersNoRepositoryWebhooks(t *testing.T) {
+	w := hookingWorld(t, 3)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET auth = 'github_app', app_id = '1', public_url = 'https://dude.example.com',
+		webhook_url = $2 WHERE organization_id = $1`, w.org, hookURL)
+	if status, _ := w.register(map[string]any{"url": hookURL}); status != http.StatusOK {
+		t.Fatalf("connecting: %d", status)
+	}
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := w.gh.callsSoFar(); len(calls) != 0 {
+		t.Errorf("an App's organisation asked GitHub for hooks: %v", calls)
+	}
+}
+
 // The reconciler's repair registers a few repositories per pass where an
 // organization has a public URL and a repository has no healthy hook;
 // GitHub's rate limit stops the pass, and the next pass goes on.

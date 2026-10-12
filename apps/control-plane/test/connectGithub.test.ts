@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
@@ -103,4 +104,28 @@ test("a GitHub App connects with its App ID alone; the installation is found per
   expect(res.status).toBe(200);
   const [cred] = await owner`SELECT auth::text, app_id, installation_id FROM forge_credentials WHERE organization_id = ${ORG}`;
   expect(cred).toEqual({ auth: "github_app", app_id: "9001", installation_id: null });
+});
+
+test("an App's deliveries are taken with the credential's secret; its installation events are answered and ignored", async () => {
+  const [{ secret }] = await owner`SELECT webhook_secret AS secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  const deliver = (event: string, payload: unknown, id: string) => {
+    const body = JSON.stringify(payload);
+    return router.handle(new Request(`http://dude.test/v1/webhooks/github/${ORG}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": event, "x-github-delivery": id,
+        "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}` },
+      body,
+    }));
+  };
+  const installation = { id: 71, account: { login: "acme" } };
+  for (const event of ["installation", "installation_repositories"]) {
+    const res = await deliver(event, { action: "created", installation }, `d-${event}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ignored: event });
+  }
+  const pr = await deliver("pull_request", { action: "opened", installation, number: 1, pull_request: { number: 1 },
+    repository: { full_name: "acme/api" } }, "d-pr");
+  expect(pr.status).toBe(202);
+  const stored = await owner`SELECT id, event FROM webhook_deliveries WHERE organization_id = ${ORG} ORDER BY id`;
+  expect([...stored]).toEqual([{ id: "d-pr", event: "pull_request" }]);
 });
