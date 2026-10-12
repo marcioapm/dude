@@ -105,7 +105,7 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	id := strings.TrimSpace(in.Message)
 	var fromRun, toTask, toKey string
 	err := tx.QueryRow(ctx, `SELECT m.from_run_id, m.to_task_id, p.key_prefix || '-' || t.number FROM peer_messages m
-		JOIN tasks t ON t.id = m.to_task_id JOIN projects p ON p.id = t.project_id WHERE m.id = $1`, id).Scan(&fromRun, &toTask, &toKey)
+		JOIN tasks t ON t.id = m.to_task_id JOIN projects p ON p.id = t.project_id WHERE m.id = $1 FOR NO KEY UPDATE OF m`, id).Scan(&fromRun, &toTask, &toKey)
 	if db.IsNotFound(err) || err == nil && fromRun != c.RunID {
 		return waitOut{}, refuse("%s is not a message you sent: wait only on the reply to your own", id)
 	}

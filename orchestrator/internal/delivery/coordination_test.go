@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -54,6 +55,59 @@ func TestEndedPeersAcceptNeitherMessagesNorWaits(t *testing.T) {
 			}
 			if n := w.count(t, `SELECT count(*) FROM peer_messages`); n != 1 {
 				t.Errorf("%d messages, want only the pre-end question", n)
+			}
+		})
+	}
+}
+
+func TestRepliesAndWaitsSerializeOnTheAskedMessage(t *testing.T) {
+	for _, replyFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint("replyFirst=", replyFirst), func(t *testing.T) {
+			w := newEpicWorld(t)
+			ctx := context.Background()
+			one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+			two := w.run(t, "run_two", "ABS-2", "implement", "implementer", "running")
+			q := w.send(t, one, "ABS-2", "Which path?", "")
+			peer := w.peer(t, "ABS-2", "ABS-1")
+			reply := func(tx pgx.Tx) error {
+				_, err := delivery.SendMessageTx(ctx, tx, two, delivery.MessageInput{To: peer, Text: "Here.", ReplyTo: q.ID})
+				return err
+			}
+			wait := func(tx pgx.Tx) error {
+				_, err := delivery.OpenWaitTx(ctx, tx, one, q.ID, "wait")
+				return err
+			}
+			first, second := wait, reply
+			if replyFirst {
+				first, second = reply, wait
+			}
+			tx, err := w.owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if err := first(tx); err != nil {
+				t.Fatal(err)
+			}
+			err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+				if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
+					return err
+				}
+				return second(other)
+			})
+			var blocked *pgconn.PgError
+			if !errors.As(err, &blocked) || blocked.Code != "55P03" {
+				t.Fatalf("second transaction did not block on the message: %v", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			w.in(t, second)
+			if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
+				t.Fatalf("%d stranded waits", n)
+			}
+			if n := w.count(t, `SELECT count(*) FROM peer_messages WHERE reply_to = $1`, q.ID); n != 1 {
+				t.Errorf("%d replies", n)
 			}
 		})
 	}

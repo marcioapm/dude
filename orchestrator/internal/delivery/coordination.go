@@ -144,7 +144,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 	}
 	var thread struct{ From, To, FromRun string }
 	if in.ReplyTo != "" {
-		err := tx.QueryRow(ctx, `SELECT from_task_id, to_task_id, from_run_id FROM peer_messages WHERE id = $1`, in.ReplyTo).
+		err := tx.QueryRow(ctx, `SELECT from_task_id, to_task_id, from_run_id FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE`, in.ReplyTo).
 			Scan(&thread.From, &thread.To, &thread.FromRun)
 		switch {
 		case db.IsNotFound(err):
@@ -366,6 +366,17 @@ const parkSecs = `(SELECT COALESCE((p.delivery_policy->>'parkAfterMinutes')::flo
 // the same message is it; on another, refused.
 func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string) (Waiting, error) {
 	var w Waiting
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE`, message); err != nil {
+		return w, err
+	}
+	var answered bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM peer_messages WHERE reply_to = $1)`, message).Scan(&answered); err != nil {
+		return w, err
+	}
+	if answered {
+		w.Notice = "The message has already been answered: carry on with the reply."
+		return w, nil
+	}
 	var current string
 	err := tx.QueryRow(ctx, `SELECT message_id FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, ref.RunID).Scan(&current)
 	switch {
