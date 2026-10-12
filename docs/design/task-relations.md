@@ -1,9 +1,11 @@
 # Task relations: blocks, related
 
-**Status: mockups for review, round 2, 2026-10-12.** Asked for by Márcio after a
-session with Jonas; round 2 applies his answers to the first round's open
-questions (see *Decided*). Nothing is built: no table, route, tool or component
-exists yet. Mockup: `docs/design/mockups/relations/index.html` (it opens
+**Status: built, 2026-10-12.** Asked for by Márcio after a session with
+Jonas; round 2 applied his answers to the first round's open questions, and
+the build settled the three left open (see *Decided*). Migration 111 holds
+the table and functions; the routes, agent tools, CLI flags, components and
+screens below exist. Where the build departs from this text, *As built*
+says so. Mockup: `docs/design/mockups/relations/index.html` (it opens
 from disk and you can click through it; the source is in `apps/web/mockups/relations`, built with
 `MOCKUP=relations bunx vite build --config mockups/vite.config.ts` from
 `apps/web`). Screens are in `docs/design/mockups/relations/screens/`. The bar
@@ -221,9 +223,10 @@ per task. Confirming a plan (`awaiting_confirmation`) isn't
 reachable from any route today (`chat.go:253` only lists it), so it has no
 path of its own. When it is built, it goes through the same guard.
 
-### Start over and Try again (still open)
+### Start over and Try again
 
-*Not decided. The mockup keeps both unguarded.* Proposed, pending Márcio:
+*Decided (build): as proposed below.* Try again and Resume stay unguarded;
+Start over is guarded, with Start anyway.
 
 - **Try again and Resume continue the same attempt**, on its branch, from
   what it pushed. Its blockers were merged (or overridden) at its first
@@ -1192,28 +1195,44 @@ No change: the lines are built from existing parts.
 |---|---|---|---|
 | 1 | Opt-in "Start when unblocked"? | Yes: per task, off by default, the way chosen up front, recorded with who and when. The owner sets it; no agent may. | *Start when unblocked*, path 11 |
 | 2 | Notify on unblock? | A Chat notice and an Activity line; no browser push. | *Unblocking*, *History* |
-| 3 | Start over / Try again guarded? | Still open; unchanged (unguarded). | *Start over and Try again*, open question 1 |
+| 3 | Start over / Try again guarded? | Start over is guarded, with Start anyway; Try again and Resume continue the same attempt and stay unguarded. (Decided at build.) | *Start over and Try again* |
 | 4 | Done or merged? | Merged only. Done without a merge does not release dependants. | *Resolved*, `task_blocked_by`, *Unblocking* |
 | 5 | Who removes a relation? | The owner of the task whose relation it is; for "blocked by", the blocked task's owner. Adding stays open. Agents remove only what their task's agents added. | *Who may add and remove a relation* |
 | 6 | Cross-project chip? | Tooltip only, as mocked. | *Across epics and projects* |
 | 7 | Card start? | Yes: a compact menu on Backlog cards. | *The board*, `StartMenu` |
+| 8 | Start when unblocked on a change of owner? | Dropped, and Activity says so (`task.auto_start_cancelled`, `why: owner_changed`): the new owner didn't ask for it. (Decided at build.) | *Start when unblocked* |
+| 9 | Start when unblocked when the last blocker is removed? | The request ends without firing (`why: unblocked_by_removal`) and the task is simply startable: the person removing it is present and acting. (Decided at build.) | *Start when unblocked* |
 
 Round 1 listed two deviations from the brief that these answers retire:
 "done releases" (now merged only) and "no start on the card" (now back).
 The two that remain: the blocked filter is a board view, not a triage
 bucket, and the hover highlight adds nothing visible above the board.
 
+## As built
+
+Where the build departs from the text above:
+
+- **Start over in `PickUpDialog`** is not disabled up front. Its confirm
+  sends the start; refused as `blocked`, the dialog says why in the shared
+  words and offers **Start over anyway** in its footer, which sends the
+  same request with `override`. No second dialog.
+- **The implement step's guard (path 5)** parks a blocked delivery
+  (`AwaitSignals relations.unblocked`, re-reading its blockers every 5
+  minutes) and sets the task queued, "blocked by …". A person's Start anyway
+  releases it (`OverrideParkedTx`).
+- **The conductor's first implementer (path 4)** is refused inside the
+  tool's transaction, which rolls back, so no `task.start_refused` is kept
+  for it.
+- **Mark done with nothing merged** records `task.blocker_unmerged {by,
+  person?}` on each dependant, for Activity's "marked done by Tom with
+  nothing merged" line.
+- **`relations.changed`** is live only (`pg_notify`), not in the ledger.
+- **The brainstorm's `relate`** proposes its own card item, `kind:
+  "relation"`, rather than editing an existing task item.
+- **The `unblocked` wake** is recorded only for a task with a live
+  conductor: a wake would otherwise start one.
+
 ## Open questions for Márcio
 
-1. **Start over / Try again on a task whose blocker has since failed or
-   been reopened.** Unchanged in this round: both unguarded, as mocked.
-   *Proposed, pending Márcio:* Try again and Resume continue the same
-   attempt and stay unguarded; Start over is a fresh attempt from `main`,
-   so it gets the same guard and the same Start anyway escape (see *Start
-   over and Try again*).
-2. **Start when unblocked on a change of owner.** Proposed: dropped, said
-   in Activity, because the new owner didn't ask for it. Or should it pass
-   to them?
-3. **Start when unblocked when the last blocker is removed rather than
-   merged.** Proposed: the request ends and the task is simply startable,
-   because the owner is the one acting. Or should removal fire it too?
+None left from the proposal. Out of scope still: parallel starts with agent
+comms, `duplicates`, relations between epics, push notifications.
