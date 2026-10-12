@@ -191,6 +191,11 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	if !slices.Contains(p.Phases(), in.Phase) {
 		return "", refusef("%s cannot start at this decision (%s); it can start %s", in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
+	if p.Point == PointStart {
+		if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
+			return "", err
+		}
+	}
 	if Publishes[in.Phase] {
 		if err := RefuseWhileMovingTx(ctx, tx, ref.TaskID); errors.Is(err, ErrPublishMoving) {
 			return "", refusef("your publish is moving the task branch now; start %s again in a moment", in.Phase)
@@ -347,6 +352,11 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 	case "ask_person":
 		return ask(ctx, tx, ref, d, note)
 	case "next":
+		if p.Point == PointStart {
+			if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
+				return nil, err
+			}
+		}
 		switch p.Policy {
 		case "review":
 			if err := reviewBound(st); err != nil {

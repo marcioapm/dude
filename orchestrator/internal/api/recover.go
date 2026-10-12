@@ -207,11 +207,21 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 	var body struct {
 		Action string `json:"action"`
 		Note   string `json:"note"`
+		// Start over past open blockers (Start anyway): a person only.
+		Override bool `json:"override"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
 	note := strings.TrimSpace(body.Note)
+	var override *delivery.Override
+	if body.Action == "restart" {
+		o, err := overrideFor(r, startOverride{Override: body.Override, Note: note}, "deliver")
+		if err != nil {
+			return err
+		}
+		override = o
+	}
 	var wfID string
 	var closePRs []string
 	attempt := 0
@@ -234,6 +244,14 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "pick up"); err != nil {
 			return err
 		}
+		// Starting over is a fresh attempt from the default branch: a start,
+		// guarded as one (path 6). Resume and Try again carry on the same
+		// attempt and are not.
+		if body.Action == "restart" {
+			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
+				return err
+			}
+		}
 		// Out of aborted, the one way: the status change says who and why.
 		if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
 			return err
@@ -253,7 +271,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		case "restart":
 			attempt = t.Attempt + 1
 			st := t.State
-			if wfID, err = s.startOver(r.Context(), tx, org, taskID, t.ProjectID, st.Policy, attempt); err != nil {
+			if wfID, err = s.startOver(r.Context(), tx, org, taskID, t.ProjectID, st.Policy, attempt, override != nil); err != nil {
 				return err
 			}
 			closePRs = st.PullRequestIDs
@@ -268,7 +286,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 				"runIds": db.NonNil(t.Kept)})
 	})
 	if err != nil {
-		return err
+		return s.refusedStart(r.Context(), org, taskID, "start_over", principalOf(r), err)
 	}
 	// The last attempt's pull requests are closed after: best effort, as a
 	// person can close one on GitHub, and the new attempt does not wait on it.
@@ -322,7 +340,7 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 
 // startOver starts the task's next attempt: a delivery of its own, on a
 // branch of its own, from the default branch.
-func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int) (string, error) {
+func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int, overridden bool) (string, error) {
 	// The last attempt's delivery is over, whatever state it stopped in.
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL,
 			awaiting_signals = '[]'::jsonb, locked_by = NULL, locked_until = NULL
@@ -333,7 +351,7 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
 		IdempotencyKey: fmt.Sprintf("delivery:%s:attempt-%d", taskID, attempt),
 		Input: delivery.State{TaskID: taskID, ProjectID: projectID, Policy: policy, Attempt: attempt,
-			Branch: delivery.BranchFor(taskID, attempt)},
+			Branch: delivery.BranchFor(taskID, attempt), Overridden: overridden},
 	})
 }
 

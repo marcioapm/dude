@@ -214,12 +214,14 @@ type httpError struct {
 	status  int
 	code    string
 	message string
+	// details, when set, go with the error as its body's details.
+	details any
 }
 
 func (e *httpError) Error() string { return e.message }
 
 func fail(status int, code, format string, a ...any) error {
-	return &httpError{status, code, fmt.Sprintf(format, a...)}
+	return &httpError{status: status, code: code, message: fmt.Sprintf(format, a...)}
 }
 
 func (s *Server) auth(h handler) http.Handler {
@@ -242,7 +244,11 @@ func (s *Server) auth(h handler) http.Handler {
 		if err != nil {
 			var he *httpError
 			if errors.As(err, &he) {
-				write(w, he.status, errBody(he.code, he.message))
+				body := errBody(he.code, he.message)
+				if he.details != nil {
+					body["error"].(map[string]any)["details"] = he.details
+				}
+				write(w, he.status, body)
 				return
 			}
 			if errors.Is(err, delivery.ErrPublishMoving) {
@@ -272,16 +278,37 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	var body struct {
 		Policy  json.RawMessage `json:"policy"`
 		ActorID string          `json:"actorId"`
+		startOverride
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
+	override, err := overrideFor(r, body.startOverride, "deliver")
+	if err != nil {
+		return err
+	}
 	var projectID string
 	var policy delivery.Policy
-	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+	var parked string
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
 		if projectID, policy, err = policyFor(r.Context(), tx, taskID); err != nil {
 			return err
+		}
+		d, err := delivery.LoadDelivery(r.Context(), tx, taskID)
+		if err != nil {
+			return err
+		}
+		if d == nil || !d.Live() {
+			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
+				return err
+			}
+		} else if override != nil && !d.State.Overridden {
+			// Its delivery is parked on its blockers (the implement step's
+			// backstop): Start anyway lets it go on.
+			if parked, err = delivery.OverrideParkedTx(r.Context(), tx, org, taskID, d, *override); err != nil {
+				return err
+			}
 		}
 		// The prompt's images are the ones the task's text references,
 		// kept so by the backend on every save (delivery.PromptAttachments).
@@ -290,7 +317,12 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return delivery.NameOnlyRepository(r.Context(), tx, taskID)
 	})
 	if err != nil {
-		return err
+		return s.refusedStart(r.Context(), org, taskID, "deliver", principalOf(r), err)
+	}
+	if parked != "" {
+		s.kick()
+		write(w, http.StatusOK, map[string]any{"workflowRunId": parked, "taskId": taskID, "alreadyRunning": true})
+		return nil
 	}
 
 	// The task's own policy, over the layers policyFor resolved.
@@ -307,7 +339,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: deliveryKey(taskID),
 		TaskID: taskID,
 		Input: delivery.State{TaskID: taskID, ProjectID: projectID,
-			Policy: policy, Branch: delivery.BranchFor(taskID, attempt)},
+			Policy: policy, Branch: delivery.BranchFor(taskID, attempt), Overridden: override != nil},
 	})
 	if err != nil {
 		return err
@@ -870,7 +902,7 @@ func write(w http.ResponseWriter, status int, v any) {
 // errBody matches the backend's error shape, so it can pass an orchestrator
 // refusal straight through to the user.
 func errBody(code, message string) map[string]any {
-	return map[string]any{"error": map[string]string{"code": code, "message": message}}
+	return map[string]any{"error": map[string]any{"code": code, "message": message}}
 }
 
 // artifactContent streams an artifact's bytes from lux, as the agent wrote
