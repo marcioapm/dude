@@ -312,9 +312,12 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 	}
 
 	// Peers whose status changed: its latest change since, one line each.
-	rows, err = tx.Query(ctx, `WITH tp AS MATERIALIZED (SELECT * FROM task_peers($1))
-		SELECT DISTINCT ON (e.task_id) p.key_prefix || '-' || t.number, e.payload->>'status', e.occurred_at
-		FROM tp JOIN events e ON e.task_id = tp.peer_id JOIN tasks t ON t.id = tp.peer_id JOIN projects p ON p.id = t.project_id
+	// The peers (with their keys) are materialized first, so the planner
+	// starts from tasks_epic_idx rather than joining every task in the org.
+	rows, err = tx.Query(ctx, `WITH tp AS MATERIALIZED (SELECT tp.peer_id, p.key_prefix || '-' || t.number AS key
+			FROM task_peers($1) tp JOIN tasks t ON t.id = tp.peer_id JOIN projects p ON p.id = t.project_id)
+		SELECT DISTINCT ON (e.task_id) tp.key, e.payload->>'status', e.occurred_at
+		FROM tp JOIN events e ON e.task_id = tp.peer_id
 		WHERE e.event_type = $2 AND e.occurred_at > $3 AND e.occurred_at <= $4
 		ORDER BY e.task_id, e.occurred_at DESC LIMIT $5`, taskID, EvTaskStatusChanged, since, now, digestPeers)
 	if err != nil {
