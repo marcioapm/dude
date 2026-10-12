@@ -392,6 +392,8 @@ export const READ_WHEN_STARTED = "Will be read when the agent starts.";
 export const READ_WHEN_BACK = "Will be read when the agent is back.";
 /** A message whose agent never started: why it was not delivered, and what Try again does with it. */
 export const NOT_STARTED = "the agent did not start. Try again starts it with this message.";
+/** The same message once a later agent took over without Try again: nothing left to try. */
+export const NOT_STARTED_TAKEN = "the agent did not start; a later agent took over.";
 
 export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null,
   start: StartState | null = null): SteerWait {
@@ -642,6 +644,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         } else if (state.failedStart) {
           // Any other next agent: what the failed one left is that agent's now.
           state.failedStart.turn.taken = true;
+          for (const m of state.failedStart.messages) m.failed = NOT_STARTED_TAKEN;
           state.failedStart = null;
         }
         // What the failed Run was sent and never read: Try again sends it to the fresh agent, the same turn again.

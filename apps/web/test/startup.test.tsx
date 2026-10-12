@@ -10,7 +10,7 @@ import type { PersistedEvent, RunStatus } from "@dude/domain";
 import { act, mount, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
 import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
-import { NOT_STARTED, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
+import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
@@ -113,6 +113,18 @@ describe("the projection", () => {
     // A next Run with no run.completed before it (a swap while starting): the same.
     const swapped = project([...events.slice(0, 3), ...events.slice(4)], "running");
     expect(swapped.turns.find((t) => t.kind === "human")).toMatchObject({ text: "plan the epic", deliveredAt: null });
+  });
+
+  test("a failed start a later agent took over without Try again: its message no longer says Try again starts it", () => {
+    const failedStart = [created(), message("plan", 1), stage("waiting", 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "terminated" }, 5_000)];
+    // The person wrote again instead: a new agent, no retries.
+    const c = project([...failedStart, created(6_000), message("plan the epic, then", 6_001)], "pending");
+    const ended = c.turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && ended.taken).toBe(true);
+    expect(c.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && [t.text, t.failed])).toEqual([
+      ["plan", NOT_STARTED_TAKEN], ["plan the epic, then", null]]);
+    expect(NOT_STARTED_TAKEN).toBe("the agent did not start; a later agent took over.");
   });
 
   test("the message its briefing carries is queued until the agent is up, then read", () => {
