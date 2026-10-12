@@ -1,8 +1,9 @@
 /*
  * A Run of the task as RunScreen heads it (the fixer later on, the
- * implementer refused, attempt 2's first implementer after Start over), and
- * a brainstorm session as SessionScreen lays it out, moving across pools by
- * a fresh agent that takes the conversation over.
+ * implementer refused for uncommitted files and then moved, refused at the
+ * largest size or past 3 moves, attempt 2's first implementer after Start
+ * over), and a brainstorm session as SessionScreen lays it out, moving
+ * across pools by a fresh agent that takes the conversation over.
  */
 
 import { useRef, type ReactNode } from "react";
@@ -12,7 +13,7 @@ import {
 } from "@dude/design-system/components";
 import { Button } from "@dude/design-system/primitives";
 import { MachineRequestCall, RaisedMachineChip } from "./components.tsx";
-import { P, REASON_XL, REFUSED_LARGEST, REFUSED_UNPUSHED, SESSION, TASK, size, specOf, type Size } from "./data.ts";
+import { ANSWER_XL, P, REASON_LARGE, REASON_XL, REFUSED_LARGEST, REFUSED_MOVES, REFUSED_UNCOMMITTED, SESSION, TASK, size, specOf, type Size } from "./data.ts";
 import s from "./bigmachine.module.css";
 
 const MIN = 60_000;
@@ -21,7 +22,8 @@ const large = size("Large");
 const xl = size("XL");
 const small = size("Small");
 
-export type RunView = "fixer" | "refused" | "refused-largest" | "start-over";
+export type RunView = "fixer" | "refused" | "refused-largest" | "refused-moves" | "start-over";
+type RefusedView = "refused" | "refused-largest" | "refused-moves";
 
 function raisedTip(on: Size, extra: ReactNode) {
   return (
@@ -32,7 +34,7 @@ function raisedTip(on: Size, extra: ReactNode) {
   );
 }
 
-const HEADS: Record<RunView, { id: string; title: string; status: "running" | "failed"; machine: ReactNode; started: number; cost: number }> = {
+const HEADS: Record<RunView, { id: string; title: string; status: "running" | "aborted"; machine: ReactNode; started: number; cost: number }> = {
   fixer: {
     id: "run_9b2m", title: "Fix · 2 findings", status: "running", started: 6, cost: 0.41,
     machine: <RaisedMachineChip size={large} spec={specOf(large)} raised="for this task"
@@ -44,8 +46,12 @@ const HEADS: Record<RunView, { id: string; title: string; status: "running" | "f
       tooltip={raisedTip(large, "Start over keeps the task, so attempt 2 runs on Large too.")} />,
   },
   refused: {
-    id: TASK.run, title: "Implement", status: "running", started: 38, cost: 1.72,
+    id: TASK.run, title: "Implement", status: "aborted", started: 38, cost: 1.72,
     machine: <MachineChip name="Standard" spec={specOf(standard)} tooltip={<MachineTip name="Standard">billing's size for the implementer.</MachineTip>} data-testid="run-machine" />,
+  },
+  "refused-moves": {
+    id: "run_m3d8", title: "Implement", status: "running", started: 71, cost: 2.64,
+    machine: <MachineChip name="Standard" spec={specOf(standard)} tooltip={<MachineTip name="Standard">billing's size for the implementer; Márcio reset it from Large 12m ago.</MachineTip>} data-testid="run-machine" />,
   },
   "refused-largest": {
     id: TASK.fresh, title: "Implement", status: "running", started: 20, cost: 0.96,
@@ -73,7 +79,7 @@ export function RunPage({ view }: { view: RunView }) {
             </>
           ),
         }}
-        actions={<><Button size="sm" variant="quiet" leadingIcon="pause">Pause</Button><Button size="sm" variant="danger">Abort</Button></>}
+        actions={h.status === "running" ? <><Button size="sm" variant="quiet" leadingIcon="pause">Pause</Button><Button size="sm" variant="danger">Abort</Button></> : undefined}
       />
       <div className="runScreen" data-view="chat">
         <div className="runView">
@@ -95,7 +101,7 @@ function Later({ view, t0 }: { view: "fixer" | "start-over"; t0: number }) {
     <>
       <ChatMessage role="system" intent="prompt" name="His Dudeness" startedAt={t0 - 6 * MIN}
         content={(fixer ? "Fix the review's 2 open findings on `dude/BILL-42/attempt-1`." : "Start over on `dude/BILL-42/attempt-2`: Márcio wants the export streamed from a server-side cursor, not paged.")
-          + "\n\nYou run on Large (4 CPUs · 16 GiB · 40 GiB), raised for this task after the implementer's jest run ran out of memory. You may ask for XL (8 · 32, another pool: a fresh implementer would start from what you pushed) with `dude machine request XL --reason \"…\"`, saying what ran out."} />
+          + "\n\nYou run on Large (4 CPUs · 16 GiB · 40 GiB), raised for this task after the implementer's jest run ran out of memory. You may ask for XL (8 · 32, another pool: what you commit is pushed for you, and a fresh implementer starts from it) with `dude machine request XL --reason \"…\"`, saying what ran out."} />
       <ChatMessage role="implementer" startedAt={t0 - 5 * MIN} costUsd={0.18}
         content={fixer ? "Both findings are in `stream.ts`: the cursor is not closed on a client abort, and the header row is written twice on retry. Fixing both, then the full suite."
           : "Replacing the paged query with a `DECLARE … CURSOR` in a read-only transaction. The full suite runs with 4 workers: this machine has room for them."} />
@@ -106,29 +112,45 @@ function Later({ view, t0 }: { view: "fixer" | "start-over"; t0: number }) {
   );
 }
 
-function Refused({ view, t0 }: { view: "refused" | "refused-largest"; t0: number }) {
-  const largest = view === "refused-largest";
+function Refused({ view, t0 }: { view: RefusedView; t0: number }) {
+  if (view === "refused-largest" || view === "refused-moves") {
+    const largest = view === "refused-largest";
+    return (
+      <>
+        <ChatMessage role="implementer" startedAt={t0 - 4 * MIN} costUsd={0.21}
+          content={largest ? "The chunked sort still holds the whole index: 2.1M rows × the sort key. Loading the full fixture again to measure it."
+            : "Back on Standard after the Reset. The PDF suite with 4 workers is killed again; asking for Large once more."} />
+        <ChatAside>
+          <ToolCallCard name="bash" status="failed" summary={<code>{largest ? "npx jest --maxWorkers 1 export/full-fixture" : "npx jest --maxWorkers 4 packages/backend"}</code>}
+            exitCode={137} error="Killed" defaultExpanded={false} durationMs={largest ? 212_000 : 131_000} />
+          <MachineRequestCall from={largest ? xl : standard} to={largest ? "a larger one" : large} refused
+            reason={largest ? "The full fixture's sort was OOM-killed at 32 GiB." : REASON_LARGE}
+            answer={largest ? REFUSED_LARGEST : REFUSED_MOVES} startedAt={t0 - 50_000} durationMs={300} defaultExpanded />
+        </ChatAside>
+        <ChatMessage role="implementer" startedAt={t0 - 40_000} costUsd={0.06}
+          content={largest ? "No larger size. Sorting in 8 chunks of 270k rows and merging the runs on disk; that keeps the peak under 12 GiB."
+            : "No more moves for this Run. Running the suite with --maxWorkers 2 (9 minutes) and noting in my summary that 4 workers do not fit Standard."} />
+      </>
+    );
+  }
   return (
     <>
       <ChatMessage role="implementer" startedAt={t0 - 4 * MIN} costUsd={0.21}
-        content={largest ? "The chunked sort still holds the whole index: 2.1M rows × the sort key. Loading the full fixture again to measure it."
-          : "The sort passes on the 100k fixture. The full 2.1M-row fixture needs about 20 GiB; Large would not fit it, so XL."} />
+        content="The sort passes on the 100k fixture. The full 2.1M-row fixture needs about 20 GiB; Large would not fit it, so XL." />
       <ChatAside>
         <ToolCallCard name="bash" status="failed" summary={<code>npx jest --maxWorkers 1 export/full-fixture</code>} exitCode={137}
-          error="Killed" defaultExpanded={false} durationMs={largest ? 212_000 : 96_000} />
-        <MachineRequestCall from={largest ? xl : standard} to={largest ? "a larger one" : xl} refused fresh={false}
-          reason={largest ? "The full fixture's sort was OOM-killed at 32 GiB." : REASON_XL}
-          answer={largest ? REFUSED_LARGEST : REFUSED_UNPUSHED} startedAt={t0 - 50_000} durationMs={1_400} defaultExpanded />
+          error="Killed" defaultExpanded={false} durationMs={96_000} />
+        <MachineRequestCall from={standard} to={xl} refused reason={REASON_XL}
+          answer={REFUSED_UNCOMMITTED} startedAt={t0 - 80_000} durationMs={1_400} defaultExpanded />
       </ChatAside>
-      <ChatMessage role="implementer" startedAt={t0 - 40_000} costUsd={0.06}
-        content={largest ? "No larger size. Sorting in 8 chunks of 270k rows and merging the runs on disk; that keeps the peak under 12 GiB."
-          : "Committing the test and pushing both commits first, then asking again."} />
-      {largest ? null : (
-        <ChatAside>
-          <ToolCallCard name="bash" status="completed" summary={<code>git add -A && git commit -m "Test the sort on the full fixture"</code>} durationMs={600} />
-          <ToolCallCard name="push" icon="git-branch" status="running" summary={<>2 commits to <code>{TASK.runBranch}</code></>} startedAt={t0 - 6_000} />
-        </ChatAside>
-      )}
+      <ChatMessage role="implementer" startedAt={t0 - 70_000} costUsd={0.06}
+        content="Committing the stream and its test, then asking again." />
+      <ChatAside>
+        <ToolCallCard name="bash" status="completed" summary={<code>git add src/export && git commit -m "Sort the export in chunks, tested on the full fixture"</code>} durationMs={600} />
+        <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={t0 - 50_000} durationMs={9_800} defaultExpanded />
+      </ChatAside>
+      <ChatNotice kind="restart" at={t0 - 40_000}
+        text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, which the move pushed, with the reason ${TASK.run} gave as its note. This Run is Replaced.`} />
     </>
   );
 }
@@ -143,7 +165,7 @@ const BEFORE = (t0: number) => (
       <ToolCallCard name="bash" status="failed" summary={<code>duckdb archive.db -c "CREATE TABLE inv AS SELECT * FROM 'invoices-2025.parquet' JOIN 'lines-2025.parquet' USING (id)"</code>}
         error="Out of Memory Error: could not allocate block of 262144 bytes (3.7 GiB/3.7 GiB used)" exitCode={1} durationMs={48_000} />
       <MachineRequestCall from={small} to={xl} reason={SESSION.reason} startedAt={t0 - 3 * MIN} durationMs={800}
-        answer="XL is in another pool: you will be replaced by a fresh brainstorm on XL with this conversation; files you wrote here (archive.db) are not kept. End your turn now." />
+        answer="XL is in another pool: you will be replaced by a fresh brainstorm on XL with this conversation. A session has no branch to push to, so files you wrote here (archive.db) are not kept. End your turn now." />
     </ChatAside>
   </>
 );

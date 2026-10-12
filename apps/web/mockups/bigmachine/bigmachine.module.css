@@ -183,14 +183,3 @@
   gap: var(--ds-space-4) var(--ds-space-12);
   min-width: 0;
 }
-.switchStack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-4);
-  min-width: 0;
-}
-.switchHint {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  max-width: 320px;
-}

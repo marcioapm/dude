@@ -9,7 +9,8 @@
  * - RaisedMachineChip: MachineChip with `raised` ("raised for this task").
  * - MachineRaises: the task's raised machines, in ServersSummary's grammar,
  *   each with Reset.
- * - ResetMachineConfirm: Reset's confirmation, a `Dialog size="sm"`.
+ * - ResetMachineConfirm: Reset's confirmation, a `Dialog size="sm"` with an
+ *   optional note in a `Textarea`.
  * - StartProgress: a stand-in for the design system's, given the verb
  *   "Moving to Large" and the move's stage list.
  */
@@ -17,13 +18,13 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { formatDuration, Icon } from "@dude/design-system";
 import { AgentAvatar, StatusMark, TextButton, ToolCallCard } from "@dude/design-system/components";
-import { Button, Dialog, DialogClose, Tooltip } from "@dude/design-system/primitives";
+import { Button, Dialog, DialogClose, Textarea, Tooltip } from "@dude/design-system/primitives";
 import mc from "../../../../packages/design-system/src/components/Machines.module.css";
 import ss from "../../../../packages/design-system/src/components/ServersSummary.module.css";
-import { STAGE_WORDS, type Size, type StageId } from "./data.ts";
+import { STAGE_WORDS, resetLead, type Size, type StageId } from "./data.ts";
 import s from "./bigmachine.module.css";
 
-type Role = "implementer" | "brainstorm" | "qa_browser" | "simplifier";
+type Role = "implementer" | "brainstorm" | "qa_browser" | "simplifier" | "conductor";
 
 const cx = (...names: Array<string | false | null | undefined>) => names.filter(Boolean).join(" ");
 
@@ -35,14 +36,13 @@ const cx = (...names: Array<string | false | null | undefined>) => names.filter(
  * the arguments and the tool's answer when open. A refusal is a failed call,
  * open, its first line in the row.
  */
-export function MachineRequestCall({ from, to, reason, answer, refused, fresh, startedAt, durationMs, defaultExpanded }: {
+export function MachineRequestCall({ from, to, reason, answer, refused, startedAt, durationMs, defaultExpanded }: {
   readonly from: Size;
   /** The size asked for; a name alone when it is not one of the organisation's. */
   readonly to: Size | string;
   readonly reason: string;
   readonly answer: string;
   readonly refused?: boolean | undefined;
-  readonly fresh?: boolean | undefined;
   readonly startedAt?: number | undefined;
   readonly durationMs?: number | undefined;
   readonly defaultExpanded?: boolean | undefined;
@@ -53,7 +53,7 @@ export function MachineRequestCall({ from, to, reason, answer, refused, fresh, s
     <ToolCallCard name="request_machine" icon="chip" status={refused ? "failed" : "completed"} data-testid="machine-call"
       summary={<>Asked for a larger machine: {from.name} → <b>{name}</b>
         {pool ? <span className={s.callPool}> · {pool} pool</span> : null}</>}
-      args={{ size: name, reason, ...(fresh ? { fresh: true } : {}) }}
+      args={{ size: name, reason }}
       {...(refused ? { error: answer } : { result: answer })}
       startedAt={startedAt} endedAt={startedAt !== undefined && durationMs !== undefined ? startedAt + durationMs : undefined}
       defaultExpanded={defaultExpanded} />
@@ -138,20 +138,23 @@ export function MachineRaises({ raises, where }: { readonly raises: readonly Mac
 
 /**
  * Reset's confirmation: a `Dialog size="sm"` whose description is the one
- * consequence. In the same pool nothing is lost, so the confirm is primary;
- * across pools the running agent is replaced, so the dialog takes the danger
- * tone and the confirm is `danger solid`, as the README asks of a loss.
+ * consequence, and an optional note to the agent in a `Textarea`, whose hint
+ * shows the line the agent is told. In the same pool nothing is lost, so the
+ * confirm is primary; across pools the running agent is replaced, so the
+ * dialog takes the danger tone and the confirm is `danger solid`.
  */
-export function ResetMachineConfirm({ open, onOpenChange, label, from, to, onConfirm }: {
+export function ResetMachineConfirm({ open, onOpenChange, label, from, to, defaultNote, onConfirm }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** "implementer". */
   readonly label: string;
   readonly from: Size;
   readonly to: Size;
-  readonly onConfirm: () => void;
+  readonly defaultNote?: string | undefined;
+  readonly onConfirm: (note: string) => void;
 }) {
   const otherPool = from.poolId !== to.poolId;
+  const [note, setNote] = useState(defaultNote ?? "");
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="sm" tone={otherPool ? "danger" : undefined}
       title={`Move the ${label} back to ${to.name} now?`}
@@ -162,11 +165,15 @@ export function ResetMachineConfirm({ open, onOpenChange, label, from, to, onCon
         <>
           <DialogClose asChild><Button variant="quiet">Keep {from.name}</Button></DialogClose>
           <Button data-testid="confirm-reset" {...(otherPool ? { variant: "danger", solid: true } : { variant: "primary" })}
-            onClick={() => { onConfirm(); onOpenChange(false); }}>
+            onClick={() => { onConfirm(note); onOpenChange(false); }}>
             {otherPool ? `Replace it on ${to.name}` : `Move it to ${to.name}`}
           </Button>
         </>
-      } />
+      }>
+      <Textarea label={`Note to the ${label} (optional)`} rows={2} maxRows={6} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)}
+        hint={note.trim() ? `It is told “${resetLead(to.name)}:” and then your note.` : `It is told “${resetLead(to.name)}.”`}
+        data-testid="reset-note" />
+    </Dialog>
   );
 }
 

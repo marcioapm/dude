@@ -9,11 +9,13 @@
 import { useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar, Breadcrumb, ChatAside, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, Markdown, PersonLine, StatusMark,
-  StepList, StepRow, TaskHistory, ToolCallCard,
+  StepList, StepRow, TaskHistory,
 } from "@dude/design-system/components";
 import { Button, Callout, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { MachineRaises, MachineRequestCall, ResetMachineConfirm, StartProgress, startSteps } from "./components.tsx";
-import { ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_LARGE, REASON_XL, START_STAGES, TASK, size } from "./data.ts";
+import {
+  ANSWER_CONDUCTOR, ANSWER_LARGE, ANSWER_XL, MOVE_STAGES, P, PROJECT, REASON_CONDUCTOR, REASON_LARGE, REASON_XL, RESET_NOTE, START_STAGES, TASK, size,
+} from "./data.ts";
 
 const MIN = 60_000;
 const DUDE = "El Duderino";
@@ -87,15 +89,12 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
                 <ChatRunLine data-testid="chat-run" role="implementer" status="aborted" statusLabel="Replaced" what={WHAT}
                   facts={["Standard", "38m", "$1.72"]} onOpen={() => undefined} />
                 <ChatAside>
-                  <ToolCallCard name="push" icon="git-branch" status="completed" startedAt={asked - 30_000} endedAt={asked - 21_000}
-                    summary={<>1 commit to <code>{TASK.runBranch}</code></>}
-                    result={`Pushed ${TASK.commit} “Stream the CSV through pg-cursor” to ${TASK.runBranch}. Nothing uncommitted.`} />
-                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={900} defaultExpanded />
+                  <MachineRequestCall from={standard} to={xl} reason={REASON_XL} answer={ANSWER_XL} startedAt={asked} durationMs={9_800} defaultExpanded />
                 </ChatAside>
-                <ChatNotice kind="restart" by={DUDE} at={asked + 2_000} data-testid="move-notice"
-                  text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
+                <ChatNotice kind="restart" by={DUDE} at={asked + 10_000} data-testid="move-notice"
+                  text={`XL is in another pool, so a fresh implementer starts on XL from ${TASK.commit}, which the move pushed, with the reason ${TASK.run} gave as its note. Later implementer Runs in this task run on XL too.`} />
                 <ChatRunLine role="implementer" status="starting" statusLabel="Starting" what={WHAT} facts={["XL", TASK.fresh]} onOpen={() => undefined} />
-                <StartProgress verb="Starting" steps={startSteps(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 2_000} defaultOpen
+                <StartProgress verb="Starting" steps={startSteps(START_STAGES, 1, Date.now(), [21_400])} startedAt={asked + 10_000} defaultOpen
                   avatar={<AgentAvatar role="implementer" size="chat" />} />
               </>
             ) : (
@@ -111,6 +110,41 @@ export function TaskChat({ otherPool }: { otherPool: boolean }) {
                   avatar={<AgentAvatar role="implementer" size="chat" />} />
               </>
             )}
+          </ChatTranscript>
+        </div>
+      </div>
+    </TaskChrome>
+  );
+}
+
+/** Task Chat: the conductor itself moves, in its pool, resized in place with the Chat's conversation. */
+export function ConductorChat() {
+  const t0 = useRef(Date.now()).current;
+  const asked = t0 - 40_000;
+  return (
+    <TaskChrome tab="chat">
+      <div className="taskChat" data-testid="task-chat">
+        <div className="runScreen" data-view="chat">
+          <ChatTranscript fill live revision={4} turns={6}
+            pinned={<TaskHistory lead="The conductor decides" steps={["implementer"]} facts={["no findings yet", "$2.31"]} icon="conductor" />}
+            footer={
+              <>
+                <DeciderLine decider="conductor" action={<Button variant="quiet" size="sm">Let Deliver finish it</Button>} />
+                <ChatComposer mode="chat" onSubmit={() => true} sentAs="Márcio" to={<>To <b>Conductor</b></>} />
+              </>
+            }>
+            <ChatRunLine role="implementer" status="completed" what={WHAT} facts={["Standard", "44m", "$1.96"]} onOpen={() => undefined} />
+            <ChatMessage role="human" person={P["marcio"]} name="Márcio Martins" intent="message" startedAt={t0 - 3 * MIN}
+              content="Before it goes to review, run the whole backend suite yourself with the workers CI uses (4). I want to see it green on this branch." />
+            <ChatMessage role="conductor" startedAt={t0 - 2 * MIN} costUsd={0.08}
+              content="With 4 workers the suite renders PDFs in each of them; on Standard (8 GiB) that is what OOM-killed the implementer. Asking for Large first, then I run it." />
+            <ChatAside>
+              <MachineRequestCall from={standard} to={large} reason={REASON_CONDUCTOR} answer={ANSWER_CONDUCTOR} startedAt={asked} durationMs={600} defaultExpanded />
+            </ChatAside>
+            <ChatNotice kind="notice" by={DUDE} at={asked + 1_000} data-testid="move-notice"
+              text="Moving the conductor to Large: it keeps this conversation and its checkout. Later conductors in this task run on Large too." />
+            <StartProgress verb="Moving to Large" steps={startSteps(MOVE_STAGES, 3, Date.now(), [5_900, 10_300, 7_800])} startedAt={asked + 1_000} defaultOpen
+              avatar={<AgentAvatar role="conductor" size="chat" />} />
           </ChatTranscript>
         </div>
       </div>
@@ -152,13 +186,13 @@ export function TaskOverview({ confirm, onXL }: { confirm?: boolean; onXL?: bool
             ]} />
           {reset ? (
             <Callout tone="neutral" data-testid="reset-done">
-              {onXL ? "A fresh implementer is starting on Standard from what the last one pushed; it was told why."
-                : "The implementer is moving back to Standard, keeping its work; it was told why."} Later implementer and fixer Runs in this task run on billing's Standard.
+              {onXL ? "A fresh implementer is starting on Standard from what the last one pushed, with your note."
+                : "The implementer is moving back to Standard, keeping its work, with your note."} Later implementer and fixer Runs in this task run on billing's Standard.
             </Callout>
           ) : null}
         </aside>
       </div>
-      <ResetMachineConfirm open={open} onOpenChange={setOpen} label="implementer" from={raised} to={standard} onConfirm={() => setReset(true)} />
+      <ResetMachineConfirm open={open} onOpenChange={setOpen} label="implementer" from={raised} to={standard} defaultNote={RESET_NOTE} onConfirm={() => setReset(true)} />
     </TaskChrome>
   );
 }

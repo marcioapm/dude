@@ -1,9 +1,9 @@
 /*
  * The bigmachine mockup: an agent moves itself to a larger machine.
  * The app's shell (the design system's Sidebar and main pane) with BILL-42's
- * Chat and Overview, its Runs' headers, a brainstorm session and a role's
- * settings. A bar above switches scenario, theme and density; it is not
- * part of the proposal. URL parameters set the same
+ * Chat and Overview, its Runs' headers and a brainstorm session. A bar
+ * above switches scenario, theme and density; it is not part of the
+ * proposal. URL parameters set the same
  * (?s=move-pool&theme=light&density=compact).
  */
 
@@ -16,9 +16,8 @@ import { ThemeProvider, useTheme, type ThemePreference } from "@dude/design-syst
 import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarSessions, SidebarToggle } from "@dude/design-system/components";
 import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { navProjects } from "../../../../packages/design-system/src/gallery/navFixtures.ts";
-import { TaskChat, TaskOverview } from "./TaskScreens.tsx";
+import { ConductorChat, TaskChat, TaskOverview } from "./TaskScreens.tsx";
 import { RunPage, SessionPage } from "./RunAndSession.tsx";
-import { RoleSettings } from "./SettingsPage.tsx";
 import { P, SCENARIOS, SESSION, type Scenario } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
@@ -30,13 +29,13 @@ function Screen({ scenario }: { scenario: Scenario }) {
     case "move-pool": return <TaskChat otherPool />;
     case "refused": return <RunPage view="refused" />;
     case "refused-largest": return <RunPage view="refused-largest" />;
+    case "refused-moves": return <RunPage view="refused-moves" />;
+    case "conductor": return <ConductorChat />;
     case "run": return <RunPage view="fixer" />;
     case "start-over": return <RunPage view="start-over" />;
     case "task": return <TaskOverview />;
     case "reset": return <TaskOverview confirm />;
     case "reset-pool": return <TaskOverview confirm onXL />;
-    case "role-org": return <RoleSettings where="org" />;
-    case "role-project": return <RoleSettings where="project" />;
     case "session": return <SessionPage />;
   }
 }
@@ -46,7 +45,6 @@ function Mock() {
   const [scenario, setScenario] = useState<Scenario>(() => (isScenario(params.get("s")) ? (params.get("s") as Scenario) : "move"));
   const [navOpen, setNavOpen] = useState(false);
   const note = SCENARIOS.find((x) => x.value === scenario)!.note;
-  const settings = scenario === "role-org" || scenario === "role-project";
   // ?bar=0 leaves the switcher out, for a phone's screenshot.
   const bar = params.get("bar") !== "0";
 
@@ -76,12 +74,12 @@ function Mock() {
           }
           footer={
             <>
-              <SidebarLink icon="building" current={settings}>Organisation settings</SidebarLink>
+              <SidebarLink icon="building">Organisation settings</SidebarLink>
               <SidebarProfile person={P["marcio"]!} detail="marcio@acme.dev" onOpen={() => undefined} />
             </>
           }
         />
-        <main className={settings ? "main" : "main flush"}>
+        <main className="main flush">
           <SidebarToggle open={navOpen} onOpenChange={setNavOpen} size="sm" />
           <Screen key={scenario} scenario={scenario} />
         </main>
