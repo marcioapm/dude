@@ -784,15 +784,17 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	}
 }
 
-func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
-	w := newWorld(t)
+// approvedWeb is a task's running agent that asked for the repository web
+// at url, on branch, and a person approved it.
+func (w *world) approvedWeb(url, branch string) (wi, requestID string) {
+	w.t.Helper()
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
-	t.Cleanup(tools.Close)
+	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
-	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'missing-ref')`, "repo_web_"+w.org, w.org, w.project)
+	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', $4, $5)`, "repo_web_"+w.org, w.org, w.project, url, branch)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
+	wi = w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("agent running", func() bool {
@@ -800,17 +802,23 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	})
 	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"read client"}`)
 	if status != 200 {
-		t.Fatalf("request: %d %s", status, body)
+		w.t.Fatalf("request: %d %s", status, body)
 	}
 	var req struct{ RequestID string }
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
 	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
-		t.Fatalf("approve: %d %v", status, body)
+		w.t.Fatalf("approve: %d %v", status, body)
 	}
+	return wi, req.RequestID
+}
+
+func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
+	w := newWorld(t)
+	wi, requestID := w.approvedWeb("git://127.0.0.1/acme/web.git", "missing-ref")
 	w.until("approval failed with lux error", func() bool {
-		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'failed' AND error = 'ref not found'`, req.RequestID) == 1
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'failed' AND error = 'ref not found'`, requestID) == 1
 	})
 	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND repository_id = $2`, wi, "repo_web_"+w.org); n != 0 {
 		t.Fatalf("failed repository still attached: %d", n)
@@ -848,35 +856,8 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 // in for is told to the members as a GitHub sign-in failure.
 func TestAResumedCloneSignInFailureNamesGitHub(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
-	t.Cleanup(tools.Close)
-	w.syncer.Agent.ToolsURL = tools.URL
-	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
-	w.lux.CloneError = func(url string) string {
-		if strings.Contains(url, "/web.git") {
-			return authFailure
-		}
-		return ""
-	}
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
-	w.names(wi, w.repoID)
-	w.deliver(wi)
-	w.until("agent running", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
-	})
-	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"read client"}`)
-	if status != 200 {
-		t.Fatalf("request: %d %s", status, body)
-	}
-	var req struct{ RequestID string }
-	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		t.Fatal(err)
-	}
-	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
-		t.Fatalf("approve: %d %v", status, body)
-	}
+	w.lux.CloneError = failWebClone
+	wi, _ := w.approvedWeb("https://github.com/acme/web.git", "main")
 	w.until("the clone failure in the ledger", func() bool {
 		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi) == 1
 	})

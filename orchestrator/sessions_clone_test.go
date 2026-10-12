@@ -15,26 +15,48 @@ import (
 const authFailure = "git clone: exit status 128: error: unable to read askpass response from '/bin/false'\n" +
 	"fatal: could not read Username for 'https://github.com': terminal prompts disabled"
 
+// failWebClone is a fake lux's CloneError failing every clone of the web
+// repository with authFailure.
+func failWebClone(url string) string {
+	if strings.Contains(url, "/web.git") {
+		return authFailure
+	}
+	return ""
+}
+
 // cloneFailingSession is a session linked to BL with no repository, its
 // agent started and done with its first turn, and a fake lux that fails
-// every clone of the web repository with git's authentication error.
+// every clone of the web repository (failWebClone).
 func cloneFailingSession(t *testing.T) (s *sessionWorld, id, run string) {
 	s = newSessionWorld(t)
 	s.withTools()
-	s.lux.CloneError = func(url string) string {
-		if strings.Contains(url, "/web.git") {
-			return authFailure
-		}
-		return ""
-	}
+	s.lux.CloneError = failWebClone
 	id = s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Billing",
 		"projects": []map[string]any{{"projectId": s.project, "repositoryIds": []string{}}}})["id"].(string)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "where does metering go?"})
 	return s, id, s.started(id)
 }
 
-// resumeSecrets are the secret names each resume of the dude Run carried.
-func (s *sessionWorld) resumeSecrets(runID string) [][]string {
+// linkWebAndFail links the web repository to session id and waits for its
+// clone on run to fail.
+func (s *sessionWorld) linkWebAndFail(id, run string) {
+	s.t.Helper()
+	s.linkWeb(id)
+	s.until("the clone failed", func() bool {
+		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 1
+	})
+}
+
+// linkWeb links the web repository to session id, beside BL.
+func (s *sessionWorld) linkWeb(id string) {
+	s.t.Helper()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+}
+
+// resumedSecretNames are the secret names each resume of the dude Run carried.
+func (s *sessionWorld) resumedSecretNames(runID string) [][]string {
 	for _, r := range s.lux.Runs() {
 		var spec lux.Spec
 		_ = json.Unmarshal(r.Spec, &spec)
@@ -77,22 +99,17 @@ func (s *sessionWorld) parkSession(run string) {
 // with the credential still declared, the repository is checked out.
 func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	s, id, run := cloneFailingSession(t)
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{}},
-		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
-	s.until("the clone failed", func() bool {
-		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 1
-	})
-	if got := s.resumeSecrets(run); len(got) != 1 || !slices.Contains(got[0], "GIT_TOKEN") {
+	s.linkWebAndFail(id, run)
+	if got := s.resumedSecretNames(run); len(got) != 1 || !slices.Contains(got[0], "GIT_TOKEN") {
 		t.Fatalf("the resume adding the repository carried %v, want GIT_TOKEN", got)
 	}
 
 	s.parkSession(run)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
 	s.until("the agent resumed", func() bool {
-		return len(s.resumeSecrets(run)) == 2 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run) == 1
+		return len(s.resumedSecretNames(run)) == 2 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run) == 1
 	})
-	if got := s.resumeSecrets(run)[1]; !slices.Contains(got, "GIT_TOKEN") {
+	if got := s.resumedSecretNames(run)[1]; !slices.Contains(got, "GIT_TOKEN") {
 		t.Errorf("the resume after the failed clone carried %v, want GIT_TOKEN", got)
 	}
 	s.until("its turn answered", func() bool {
@@ -105,9 +122,7 @@ func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	// The member links it again once the clone can succeed: lux accepts the
 	// credential it kept declared, and web is checked out.
 	s.lux.CloneError = nil
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{}},
-		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	s.linkWeb(id)
 	s.until("web checked out", func() bool {
 		return s.count(`SELECT count(*) FROM events c JOIN events k ON k.run_id = c.run_id AND k.event_type = 'git.checkout'
 				AND k.payload->>'repo' = c.payload->>'repo'
@@ -125,9 +140,9 @@ func TestAResumeWithNoRepositorySendsNoGitToken(t *testing.T) {
 	s.parkSession(run)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
 	s.until("the agent resumed", func() bool {
-		return len(s.resumeSecrets(run)) == 1 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run) == 1
+		return len(s.resumedSecretNames(run)) == 1 && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run) == 1
 	})
-	if got := s.resumeSecrets(run)[0]; slices.Contains(got, "GIT_TOKEN") {
+	if got := s.resumedSecretNames(run)[0]; slices.Contains(got, "GIT_TOKEN") {
 		t.Errorf("the resume carried %v, want no GIT_TOKEN", got)
 	}
 }
@@ -141,12 +156,7 @@ func TestAResumeWithNoRepositorySendsNoGitToken(t *testing.T) {
 func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	s, id, run := cloneFailingSession(t)
 	mustExec(t, s.owner, `UPDATE repositories SET url = 'https://github.com/acme/web.git' WHERE id = $1`, s.webRepo)
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{}},
-		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
-	s.until("the clone failed", func() bool {
-		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 1
-	})
+	s.linkWebAndFail(id, run)
 
 	note := "WC/web could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). " +
 		"It is not in /workspace; a member can check the repository's URL and access and link it again."
