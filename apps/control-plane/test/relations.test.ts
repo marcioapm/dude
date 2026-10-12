@@ -265,3 +265,43 @@ test("deliver and talk pass a person's override and note to the orchestrator", a
   expect(forwarded.map((f) => f.body)).toEqual([{ override: true, note: "enough" }, { override: true }]);
   expect((await call(ana, "POST", `/v1/tasks/${t}/deliver`, { override: "yes" })).status).toBe(400);
 });
+
+type NavTaskOut = {
+  key: string; merged: boolean; startable: boolean; canStart: boolean;
+  blockedBy: Array<{ key: string; status: string; unmerged?: boolean; project?: string }>;
+  blocks: Array<{ key: string }>;
+  edges: { blockedBy: string[]; blocks: string[]; related: string[] };
+  autoStart: { how: string; by: { name: string } } | null;
+};
+
+test("the navigation tree says what each task waits on, holds up and whether it can start", async () => {
+  const meter = await task(ana, "review");
+  const sync = await task(ana, "done");
+  await merged(sync);
+  const spike = await task(ana, "done");
+  const page = await task(ana);
+  const web = await task(ana, "received", "prj_web");
+  await blocks(meter, page);
+  await blocks(sync, page);
+  await blocks(spike, web);
+  await owner`INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person) VALUES (${page}, ${ORG}, 'deliver', ${ana.personId})`;
+  const res = await call(bo, "GET", "/v1/navigation");
+  const tree = (await res.json()) as { projects: Array<{ tasks: NavTaskOut[] }> };
+  const all = tree.projects.flatMap((p) => p.tasks);
+  const byKey = (k: string) => all.find((t) => t.key === k)!;
+  const p = byKey(key(page));
+  // The merged blocker no longer shows; the edge stays for the hover.
+  expect(p.blockedBy.map((b) => b.key)).toEqual([key(meter)]);
+  expect(p.edges.blockedBy).toEqual([key(meter), key(sync)]);
+  expect(p.startable).toBe(false);
+  expect(p.canStart).toBe(true);
+  expect(p.autoStart).toMatchObject({ how: "deliver", by: { name: "Ana" } });
+  expect(byKey(key(meter)).blocks.map((b) => b.key)).toEqual([key(page)]);
+  expect(byKey(key(sync)).merged).toBe(true);
+  expect(byKey(key(sync)).blocks).toEqual([]);
+  // Done with nothing merged still blocks, across projects, said so.
+  const w = byKey(`WEB-${web.replace("wi_rel_", "")}`);
+  expect(w.blockedBy).toEqual([{ key: key(spike), title: expect.any(String), status: "done", project: "Control plane", unmerged: true }]);
+  expect(byKey(key(spike)).merged).toBe(false);
+  expect(byKey(key(spike)).blocks.length).toBe(1);
+});
