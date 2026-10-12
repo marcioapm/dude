@@ -236,9 +236,12 @@ Its menu has two groups, **Model tier** and **Harness**, each led by
   `session.model.applied`, "Started a fresh agent on … ; it has the
   conversation so far."). While the agent's question is open, only its
   answer swaps it: an aside, or a message held for another member's
-  answer, is queued on the agent that asked. An agent still holding a
-  message it was not sent is not swapped either, so a fresh agent never
-  reads a newer message before an older one; a later message swaps it.
+  answer, is queued on the agent that asked; an aside that has not reached
+  the agent yet defers the swap to the message after the answer. An agent
+  still holding a message it has not read (unsent, or sent within
+  `delivery.UnreadGraceSecs`) is not swapped either, so a fresh agent
+  never reads a newer message before an older one; a later message swaps
+  it.
   Any other wake (a repository linked, dude telling it something)
   resumes it on what it was submitted with. The comparison is what a
   fresh start would resolve to, so an admin editing the model or effort

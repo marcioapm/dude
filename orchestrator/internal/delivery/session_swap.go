@@ -29,7 +29,9 @@ const UnreadGraceSecs = `120`
 // on a person); and holding no unread message that is not held for an
 // answer: unsent, or sent within UnreadGraceSecs and not delivered. Such a
 // message was written before the one at hand, and a fresh agent would read
-// it after (SessionHandOver), so the swap waits for a later message.
+// it after (SessionHandOver), so the swap waits for a later message. An
+// aside that has not reached an agent parked for its question's answer
+// thus defers the swap to the message after the answer.
 const betweenTurns = `(r.lux_run_id IS NOT NULL AND (r.status = 'paused'
 	OR (r.status IN ('scheduled', 'starting', 'running') AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)))
 	AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.failed_at IS NULL
