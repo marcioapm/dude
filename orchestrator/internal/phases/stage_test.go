@@ -66,6 +66,28 @@ func TestADrainedManualRunNamesNoStage(t *testing.T) {
 	}
 }
 
+// lux's stage running that trails its state running (the two streams are
+// not ordered) is not recorded: the Run is already up, and a late running
+// would read as a new start.
+func TestARunningStageAfterLuxSaidRunningIsNotRecorded(t *testing.T) {
+	w := newHarnessWorld(t)
+	if _, err := w.owner.Exec(context.Background(), `UPDATE runs SET lux_state = 'starting' WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.stages(1, "waiting", "container")
+	w.luxFrame(1, "state", map[string]any{"state": "running"})
+	w.stages(1, "running")
+	stages := ofType(w.events(), EvRunStage)
+	if len(stages) != 2 {
+		t.Errorf("%d run.stage recorded, want waiting and container", len(stages))
+	}
+	for _, e := range stages {
+		if e.Payload["stage"] == "running" {
+			t.Errorf("run.stage running recorded after lux said running: %v", e.Payload)
+		}
+	}
+}
+
 // A resume's waiting carries the epoch it left (lux moves the epoch at
 // assignment): a resume that fails while waiting, reported under the new
 // epoch, still names waiting.
