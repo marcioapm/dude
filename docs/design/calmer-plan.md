@@ -101,7 +101,9 @@ The assessment's blockers for a team, in the order they unblock each other:
 3. Several people per task (`task_people`, owner first); agents record who
    they work for.
 4. Presence: `last_seen_at` per person, touched at most once a minute by
-   any request, pushed over the existing SSE stream. No Redis at this size.
+   a request from a tab the person is using (`x-dude-active: 1`; not the
+   CLI, scripts or the stream), pushed over the existing SSE stream. No
+   Redis at this size.
 5. Profile photos and project images, in an S3 bucket (`DUDE_S3_*`), served
    by the backend under a token.
 
