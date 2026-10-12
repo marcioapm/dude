@@ -73,6 +73,13 @@ func (a *App) ExchangesFor(installation int64) int {
 	return a.Exchanges[installation]
 }
 
+// AppPath says whether a request path is one of the App's endpoints here,
+// for a test serving them beside a repository's.
+func AppPath(path string) bool {
+	return path == "/app" || strings.HasPrefix(path, "/app/") || strings.HasPrefix(path, "/users/") ||
+		strings.HasPrefix(path, "/repos/") && strings.HasSuffix(path, "/installation")
+}
+
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", a.withJWT(func(w http.ResponseWriter, r *http.Request) {

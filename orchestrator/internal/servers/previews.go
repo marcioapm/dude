@@ -479,6 +479,26 @@ func (p *Previews) resumeCredentials(ctx context.Context, r previewRun, stored l
 	return phases.ResumeCredentials(ctx, gh, stored, credentialRepos(refs))
 }
 
+// operationCredentials are fresh tokens for a sync of a running preview,
+// by lux's name for each repository it holds.
+func (p *Previews) operationCredentials(ctx context.Context, r wakeRun) (map[string]string, error) {
+	gh, err := p.forge(ctx, r.Org)
+	if err != nil || gh == nil {
+		return nil, err
+	}
+	refs, err := p.refs(ctx, r.previewRun)
+	if err != nil {
+		return nil, err
+	}
+	have := r.Repos
+	if len(have) == 0 {
+		for _, rf := range refs {
+			have = append(have, lux.SpecName(rf.Name))
+		}
+	}
+	return phases.OperationCredentials(ctx, gh, have, credentialRepos(refs))
+}
+
 // Egress is a preview's network: the hosts (or addresses, or ranges) its
 // settings allow; "*" turns filtering off. None allows nothing — lux clones
 // the repository itself, so a preview that fetches nothing needs none. An

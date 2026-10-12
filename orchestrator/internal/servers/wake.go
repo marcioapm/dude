@@ -1115,7 +1115,11 @@ func (p *Previews) syncRunning(ctx context.Context, r wakeRun) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		err = p.Lux.SyncRun(ctx, r.LuxRunID, fmt.Sprintf("sync-%s-%d", r.ID, r.SyncWanted.UnixMilli()), refs)
+		creds, err := p.operationCredentials(ctx, r)
+		if err != nil {
+			return true, err
+		}
+		err = phases.SyncRun(ctx, p.Lux, p.Log, r.LuxRunID, fmt.Sprintf("sync-%s-%d", r.ID, r.SyncWanted.UnixMilli()), refs, creds)
 		if le, ok := lux.AsError(err); ok && (le.Code == "not_running" || !le.Retryable()) {
 			p.Log.Info("a preview's sync was not taken; its next wake syncs", "run", r.ID, "error", le.Message)
 			err = nil

@@ -1497,7 +1497,14 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return false, nil
 		}
 		reqID := pushRequest(r)
-		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
+		creds, err := s.runCredentials(ctx, r.Org, r.ID)
+		if forge.Refused(err) {
+			return true, s.failKept(ctx, r, "GitHub would not give dude a token to push the agent's work: "+err.Error())
+		}
+		if err != nil {
+			return true, s.retryLater(ctx, r, err)
+		}
+		if err := Push(ctx, s.Lux, s.Log, r.LuxRunID, reqID, creds); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
 				return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
 			}

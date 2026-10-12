@@ -2,8 +2,13 @@ package phases
 
 import (
 	"context"
+	"log/slog"
 	"slices"
+	"sync/atomic"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -62,6 +67,101 @@ func RepoCredentials(ctx context.Context, gh *forge.GitHub, repos []CredentialRe
 	}
 	s := credentialSecrets(in)
 	return s.name, s.list, nil
+}
+
+// OperationCredentials are fresh tokens for a push or sync lux makes in a
+// running Run, by lux's name for each repository the Run holds (have, as
+// runs.lux_repositories): its own owner's for a GitHub App, the PAT
+// otherwise, so both go the same way. repos give each one's clone URL; a
+// repository lux holds that repos do not name gets none. gh nil: none.
+func OperationCredentials(ctx context.Context, gh *forge.GitHub, have []string, repos []CredentialRepo) (map[string]string, error) {
+	if gh == nil || len(have) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, r := range repos {
+		name := lux.SpecName(r.Name)
+		if !slices.Contains(have, name) {
+			continue
+		}
+		if _, done := out[name]; done {
+			continue
+		}
+		token, err := gh.Token(ctx, forge.SlugFromURL(r.URL))
+		if err != nil {
+			return nil, err
+		}
+		out[name] = token
+	}
+	return out, nil
+}
+
+// warnedNoCredentials makes the warning about a lux that takes no
+// credentials on a push or sync once per process.
+var warnedNoCredentials atomic.Bool
+
+// withCredentials does op with credentials, and again without them when
+// lux is a runner from before credentials on push and sync (409
+// push_credentials_unsupported): that one goes on with the token its Run
+// was started or resumed with, which a PAT's is and an App's may no
+// longer be.
+func withCredentials(log *slog.Logger, credentials map[string]string, op func(map[string]string) error) error {
+	err := op(credentials)
+	if len(credentials) == 0 || !lux.CredentialsUnsupported(err) {
+		return err
+	}
+	if log != nil && warnedNoCredentials.CompareAndSwap(false, true) {
+		log.Warn("lux takes no fresh credentials on a push or sync (409 push_credentials_unsupported): pushing with the token each Run was started or resumed with; a GitHub App's expires within the hour, so upgrade lux")
+	}
+	return op(nil)
+}
+
+// Push asks lux to push a Run's checkouts with fresh credentials, falling
+// back to none on a lux that takes none.
+func Push(ctx context.Context, c lux.Client, log *slog.Logger, runID, requestID string, credentials map[string]string) error {
+	return withCredentials(log, credentials, func(creds map[string]string) error {
+		return c.Push(ctx, runID, requestID, creds)
+	})
+}
+
+// SyncRun asks lux to move a running Run's checkouts, as Push.
+func SyncRun(ctx context.Context, c lux.Client, log *slog.Logger, runID, requestID string, refs []lux.SyncRef, credentials map[string]string) error {
+	return withCredentials(log, credentials, func(creds map[string]string) error {
+		return c.SyncRun(ctx, runID, requestID, refs, creds)
+	})
+}
+
+// runCredentials are OperationCredentials for one of this syncer's Runs: a
+// task's repositories, or a session's.
+func (s *Syncer) runCredentials(ctx context.Context, org, runID string) (map[string]string, error) {
+	gh, err := s.Forges.For(ctx, org)
+	if err != nil || gh == nil {
+		return nil, err
+	}
+	var have []string
+	var repos []CredentialRepo
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var taskID, sessionID string
+		if err := tx.QueryRow(ctx, `SELECT lux_repositories, COALESCE(task_id, ''), COALESCE(session_id, '') FROM runs WHERE id = $1`, runID).
+			Scan(&have, &taskID, &sessionID); err != nil {
+			return err
+		}
+		if sessionID != "" {
+			list, err := delivery.SessionRepositories(ctx, tx, sessionID)
+			for _, r := range list {
+				repos = append(repos, CredentialRepo{Name: r.SpecName(), URL: r.URL})
+			}
+			return err
+		}
+		list, err := delivery.TaskRepositories(ctx, tx, taskID)
+		for _, r := range list {
+			repos = append(repos, CredentialRepo{Name: r.Name, URL: r.URL})
+		}
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return OperationCredentials(ctx, gh, have, repos)
 }
 
 // declaredTokens drops from a resume's secrets an owner's token

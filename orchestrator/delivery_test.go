@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,6 +77,10 @@ type world struct {
 	api string
 	// pump leaves conductors' publishes to a worker of the test's own.
 	noPublishes bool
+	// The fake GitHub's App, once a test connects one (asApp), and where
+	// the fake GitHub is.
+	ghApp atomic.Pointer[fakegithub.App]
+	ghURL string
 }
 
 func newWorld(t *testing.T) *world {
@@ -96,8 +101,16 @@ func newWorld(t *testing.T) *world {
 	mux.Handle("/acme/target.git/", w.gh.Handler())
 	mux.Handle("/acme/web.git/", w.web.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web))
-	ghSrv := httptest.NewServer(mux)
+	// A GitHub App's endpoints, once a test connects one (asApp).
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if app := w.ghApp.Load(); app != nil && fakegithub.AppPath(r.URL.Path) {
+			app.Handler().ServeHTTP(rw, r)
+			return
+		}
+		mux.ServeHTTP(rw, r)
+	}))
 	t.Cleanup(ghSrv.Close)
+	w.ghURL = ghSrv.URL
 
 	// dude's scripted agent (internal/fakeagent), played by the fake lux.
 	w.lux = fakelux.New(bare, "lux-key", nil)
