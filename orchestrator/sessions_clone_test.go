@@ -73,7 +73,8 @@ func (s *sessionWorld) parkSession(run string) {
 // A repository linked to a session whose clone fails is dropped by lux,
 // which keeps its credential (GIT_TOKEN) as a secret of the Run. The next
 // resume's spec names no repository, yet it supplies GIT_TOKEN, as lux
-// requires: the session's agent resumes, it does not fail.
+// requires: the session's agent resumes, it does not fail. Linked again,
+// with the credential still declared, the repository is checked out.
 func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	s, id, run := cloneFailingSession(t)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
@@ -99,6 +100,21 @@ func TestAResumeAfterAFailedCloneSuppliesTheCredentialLuxKept(t *testing.T) {
 	})
 	if now, status := s.brainstorm(id); now != run || status == "failed" {
 		t.Errorf("the session's agent is %s %s, want %s running", now, status, run)
+	}
+
+	// The member links it again once the clone can succeed: lux accepts the
+	// credential it kept declared, and web is checked out.
+	s.lux.CloneError = nil
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM events c JOIN events k ON k.run_id = c.run_id AND k.event_type = 'git.checkout'
+				AND k.payload->>'repo' = c.payload->>'repo'
+			WHERE c.run_id = $1 AND c.event_type = 'git.clone' AND c.payload->>'status' = 'cloned'`, run) == 1
+	})
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 1 {
+		t.Errorf("web is not linked after the re-link")
 	}
 }
 
