@@ -349,6 +349,27 @@ def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Pa
     assert console_errors == []
 
 
+def test_child_examples_mount_after_hash_navigation(gallery_page: Page, console_errors: list):
+    block = gallery_page.locator("#ch-children")
+    expect(block.get_by_role("heading", name="ChatThread — a tool call's child session", exact=True)).to_have_count(1)
+    expect(block.get_by_test_id("child-examples-pending")).to_have_count(1)
+    expect(block.locator("section[data-session-id]")).to_have_count(0)
+    gallery_page.evaluate("location.hash = 'ch-children'")
+    expect(block.get_by_test_id("child-examples-pending")).to_have_count(0)
+    for theme in ("dark", "light"):
+        pane = block.locator(f"[data-theme='{theme}']")
+        threads = pane.locator("section[data-session-id]")
+        expect(threads).to_have_count(5)
+        assert threads.evaluate_all("els => els.map(e => e.dataset.status + (e.dataset.waiting ? ' waiting' : ''))") == [
+            "running", "running waiting", "completed", "running", "completed",
+        ]
+        pane.get_by_text("live child", exact=True).scroll_into_view_if_needed()
+        expect(threads.first).to_be_in_viewport()
+        expect(pane).to_contain_text("Nothing in this Run can answer it.")
+    assert gallery_page.evaluate("location.hash") == "#ch-children"
+    assert console_errors == []
+
+
 # The space between the children of the nearest common ancestor of two elements that hold `a` and `b`.
 _GAP_BETWEEN = """([a, b]) => {
   let child = a;

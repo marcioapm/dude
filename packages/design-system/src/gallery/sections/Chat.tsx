@@ -558,6 +558,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
         title="ChatThread — a tool call's child session"
         note="A child session (a subagent the agent started from a task or spawn call) nests under the call's ToolCallCard, as role subagent: the investigator's colour, a square face with a fork. Its title is the description the parent gave and the subagent type; inside are its tool calls and messages, never its thinking. A live child stays open; a done one folds to one line (its summary), turns, cost and duration. Several children of one turn are threads side by side, each its own rail. Waiting: a live child blocked on something nothing in the Run can answer (a permission its harness asked for and never forwarded) turns its rail and wash to attention and says in its header what it waits on and for how long; the stuck call carries a note naming the permission, and a notice says nothing in this Run can answer it. It is not an activity: the thread is still live."
       >
+        <ChildExamplesWhenNear>
         <Panes mode={mode} surface>
           <Col>
             <Label>live child</Label>
@@ -570,6 +571,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChildrenSideBySide />
           </Col>
         </Panes>
+        </ChildExamplesWhenNear>
       </Block>
 
       <Block
@@ -1084,6 +1086,21 @@ function activityPropsFor(t: ScenarioTurn) {
     slowAfterMs: SLOW_DEMO_MS,
     detail: t.activity === "retrying" ? "429 from upstream" : undefined,
   };
+}
+
+// Offscreen live child examples add animation load to unrelated gallery tooltips.
+function ChildExamplesWhenNear({ children }: { readonly children: ReactNode }) {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  const placeholder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (near || !placeholder.current) return undefined;
+    const seen = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setNear(true);
+    }, { rootMargin: "1500px 0px" });
+    seen.observe(placeholder.current);
+    return () => seen.disconnect();
+  }, [near]);
+  return near ? <>{children}</> : <div ref={placeholder} data-testid="child-examples-pending" style={{ minHeight: 1200 }} />;
 }
 
 /** The child sessions block's world: a fix Run that delegated to an explore subagent. */
