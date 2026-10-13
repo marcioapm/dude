@@ -152,6 +152,26 @@ async function menuItem(label: string): Promise<HTMLElement> {
 }
 
 describe("a brainstorm session's page", () => {
+  test("its Tools used rail renders the harness calls and dude's completed actions as separate sources", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), [
+      ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
+      ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
+      ev("agent.tool.called", { tool: "mcp__dude__name_session", callId: "c_name" }),
+      ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }),
+    ]));
+    const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
+      .toEqual([["dude name session (completed)", "2"], ["dude name session (called)", "1"], ["dude update task (completed)", "1"]]);
+    expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat dude's completed actions.");
+  });
+
+  test("its Tools used rail has no overlap note when dude completed nothing", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), [ev("agent.tool.called", { tool: "read", callId: "c_read" })]));
+    const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    expect(usage.textContent).toContain("Read");
+    expect(usage.parentElement!.textContent).not.toContain("Harness calls");
+  });
+
   test("a stopped turn is visible to readers with its tool and error kind", async () => {
     const client = new SessionClient(detail("read"), [
       ev("session.turn_stopped", { runId: RUN, tool: "bash", openSecs: 660, directiveId: "dir_stopped" }),

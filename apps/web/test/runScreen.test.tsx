@@ -393,6 +393,46 @@ describe("the terminal", () => {
   });
 });
 
+describe("the session's Tools used", () => {
+  /** The fixture Run's ledger with `extra` events appended to it, as a backend would have recorded them. */
+  class Tooled extends RunClient {
+    constructor(private readonly extra: Array<[string, Record<string, unknown>]>) {
+      super({});
+    }
+    protected override ledgerFor(params: Parameters<FixtureClient["events"]>[0]) {
+      const events = super.ledgerFor({ ...params, after: 0 });
+      const base = events.find((e) => e.runId === RUN_ID)!;
+      const added = this.extra.map(([eventType, payload], i) =>
+        ({ ...base, cursor: 50_000 + i, eventId: `evt_tooled_${i}`, eventType, payload }));
+      return [...events, ...added].filter((e) => e.cursor > (params.after ?? 0));
+    }
+  }
+  const usage = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]");
+  const NOTE = "Harness calls include failures and may repeat dude's completed actions.";
+
+  test("names dude's completed actions beside the harness's call of them, with the note on how they overlap", async () => {
+    const page = await session({ client: new Tooled([
+      ["agent.tool.called", { tool: "update_task", callId: "c_dude", input: {} }],
+      ["agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }],
+    ]) });
+    const rows = await until(() => {
+      const u = usage(page);
+      return u?.textContent?.includes("(completed)") ? u : null;
+    }, "the rail's tools with dude's action");
+    const names = [...rows.children].map((row) => row.querySelector("span")?.textContent);
+    expect(names).toContain("dude update task (completed)");
+    expect(names).toContain("dude update task (called)");
+    expect(rows.parentElement!.textContent).toContain(NOTE);
+  });
+
+  test("with no dude actions completed, has no note", async () => {
+    const page = await session({ client: new Tooled([]) });
+    const rows = await until(() => usage(page), "the rail's tools");
+    expect(rows.textContent).toContain("Bash");
+    expect(rows.parentElement!.textContent).not.toContain("Harness calls");
+  });
+});
+
 describe("a Run preparing its image", () => {
   const callout = async (preparing: NonNullable<RunDetail["preparingImage"]>) => {
     const { container, unmount } = await mount(<PreparingImage preparing={preparing} />);

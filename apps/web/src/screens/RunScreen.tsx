@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, TOOL_USAGE_NOTE, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
@@ -416,8 +416,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
-  // Which tools it called, and how often: for the rail. The projection counts them.
-  const tools = [...conversation.toolCounts].map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count }));
+  // Which tools it called, and how often, dude's own among them: for the rail.
+  const tools = toolUsage(conversation);
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -623,6 +623,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
     ? (chat ? "The conductor" : runLabel(run)) : undefined;
+  // The question you are to answer is what the conversation opens on, whatever was said after it.
+  const keepInView = waitingForYou && asked ? questionTurnSelector(asked.questionId) : undefined;
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -637,6 +639,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -702,6 +705,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
             </SessionRail>}
@@ -794,6 +798,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -890,6 +895,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
               {changed.length > 0 ? (
@@ -1371,6 +1377,9 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
     }
   }
 }
+
+/** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
+export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
 
 /** Whom a session's question waits on: none when it is put to you, else their first name. */
 function questionFor(to: { id: string; name: string | null }, people: People): string | undefined {

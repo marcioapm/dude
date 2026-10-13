@@ -411,6 +411,16 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the question stays open. It lasts for that question: `waitingKey` (the
   question's id) says which, and the next question steps the composer back
   again, even when it is asked in the same breath as the answer.
+- **The question waiting on the reader is in view.** `ChatTranscript
+  keepInView` names its turn (a selector): following the tail stops at
+  its top, so a transcript opens on the question rather than on the
+  replies and notices after it, and what arrives later does not push it
+  out. The reader's own scroll, or Jump to latest, lets it go; the next
+  question named is scrolled to again. Editable fields and control activation
+  keys do not release it; unconsumed scrolling keys from descendants do.
+  In the live gallery, Show held question opens an ask with later notices;
+  Add later turn demonstrates the hold, manual scrolling releases it, and
+  Next question selects a new ask.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. In grayscale it is still the only barred, tinted turn.
@@ -1093,7 +1103,18 @@ here.
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
 - Beside the conversation, a `SessionRail` on the chrome shade: what the
-  header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
+  header does not say (agent, attempt), the tools it used (`ToolUsage`:
+  the harness's by its own name, a harness call of one of dude's tools as
+  "dude update task (called)" when prefixed or paired with a completed dude
+  record (Claude Code and Codex record bare `update_task`), successful
+  recorded dude actions as "dude update task (completed)". These are separate,
+  overlapping sources, not an additive total. The note is "Harness calls
+  include failures and may repeat dude's completed actions." It appears when
+  the conversation has any completed dude action, even if that row falls
+  outside the six most-used tools shown. The names share
+  one column, as wide as the longest up to 60% of the rail, so the bars
+  start together; a longer name wraps, never truncated, so "(called)" and
+  "(completed)" stay readable), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
   the diff's own list does. When the agent session is narrower than about
