@@ -233,7 +233,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
-	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + moveUnsettled
+	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -362,11 +362,8 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
-	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + moveUnsettled + `)
+	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + delivery.MoveUnsettled + `)
 	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
-
-// moveUnsettled (SQL, over runs r): a machine move of the Run is not settled.
-const moveUnsettled = `EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)`
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
 // that lux does not have yet, and is not held for an answer (HeldBack).

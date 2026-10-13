@@ -596,8 +596,12 @@ const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + `)`
 // a machine move of the Run is under way — it is resumed with it, or on it.
 const HoldsTurn = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved'))
-	OR EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)
+	OR ` + MoveUnsettled + `
 	OR ` + openPeerWait + `)`
+
+// MoveUnsettled is true (SQL, over a Run aliased r) while a machine move of
+// the Run is not settled.
+const MoveUnsettled = `EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)`
 
 // Directive is a message queued for a Run's agent: delivered by the phase
 // syncer, acknowledged by lux when the agent takes it. Scope "run" holds for
