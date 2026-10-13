@@ -360,6 +360,9 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // machine move to make (its wait stays open, so its next idle waits
 // again). An idle
 // park, like a person's own pause, waits for a person's Resume.
+// Known limit: a Run resumed only for its move whose orchestrator dies
+// between settleMachine's commit and whilePaused's UPDATE stays
+// paused/person in dude until the peer replies or a person resumes it.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
 	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + delivery.MoveUnsettled + `)
