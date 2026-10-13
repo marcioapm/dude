@@ -225,6 +225,7 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		var raise *delivery.Raise
 		var projectID string
 		var project, organization json.RawMessage
+		fixerRaised := false
 		if body.SessionID != "" {
 			if _, err := member(ctx, tx, body.SessionID, p.Person); err != nil {
 				return err
@@ -234,7 +235,8 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 				return err
 			}
 		} else {
-			if err := tx.QueryRow(ctx, `SELECT t.agent_machines->$2, t.project_id, p.agent_models FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, body.TaskID, body.Role).Scan(&raise, &projectID, &project); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT t.agent_machines->$2, t.agent_machines ? 'fixer', t.project_id, p.agent_models FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`,
+				body.TaskID, body.Role).Scan(&raise, &fixerRaised, &projectID, &project); err != nil {
 				if db.IsNotFound(err) {
 					return fail(404, "not_found", "task not found")
 				}
@@ -251,26 +253,39 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if err != nil {
 			return err
 		}
-		target, ok := sizes.ForRole(body.Role, nil, project, organization)
-		if !ok {
-			return fail(409, "no_size", "no settings machine size is available")
-		}
-		var runID, live, status string
+		var runID, live, status, runPhase, runRole string
 		var current *delivery.Machine
 		// A settings role's Runs: a phase's (fixer is phase fix, not every
 		// role='implementer' Run), else the conductor's or brainstorm's,
-		// which have no phase.
+		// which have no phase. A fixer with no raise of its own runs on the
+		// implementer's, so the implementer's Reset covers the fix Run too.
 		// Only the newest live Run of the role is moved; any other (a second
 		// reviewer) takes the settings' size at its next resume.
-		phase := delivery.PhaseForPromptRole(body.Role)
-		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, machine FROM runs
+		wantPhases := []string{}
+		if phase := delivery.PhaseForPromptRole(body.Role); phase != "" {
+			wantPhases = append(wantPhases, phase)
+		}
+		if body.Role == delivery.PromptRoleForPhase[delivery.PhaseImplement] && !fixerRaised {
+			wantPhases = append(wantPhases, delivery.PhaseFix)
+		}
+		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, machine, COALESCE(phase::text,''), COALESCE(role::text,'') FROM runs
 			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','scheduled','starting')
-				AND CASE WHEN $4 = '' THEN phase IS NULL AND role::text=$3 ELSE phase::text=$4 END
-			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, phase).Scan(&runID, &live, &status, &current)
+				AND CASE WHEN cardinality($4::text[]) = 0 THEN phase IS NULL AND role::text=$3 ELSE phase::text = ANY($4) END
+			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, wantPhases).Scan(&runID, &live, &status, &current, &runPhase, &runRole)
 		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
 		found := err == nil
+		// The size the Run's own settings role names, so a fix Run takes a
+		// fixer size its project or organization names over the implementer's.
+		settingsRole := body.Role
+		if found {
+			settingsRole = delivery.PromptRoleFor(runPhase, runRole)
+		}
+		target, ok := sizes.ForRole(settingsRole, nil, project, organization)
+		if !ok {
+			return fail(409, "no_size", "no settings machine size is available")
+		}
 		if found && status != "running" && status != "paused" {
 			return fail(409, "pending", "the Run is %s; reset once it runs or pauses", status)
 		}

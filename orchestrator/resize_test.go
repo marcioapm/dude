@@ -332,6 +332,57 @@ func TestAFixersRaiseIsTheFixersAndOnlyItsResetMovesIt(t *testing.T) {
 	}
 }
 
+// A fixer with no raise of its own runs on the implementer's: the
+// implementer's Reset moves the live fix Run, to the size the fixer's own
+// settings name when they name one.
+func TestTheImplementersResetMovesAFixerOnItsRaise(t *testing.T) {
+	for _, tc := range []struct{ name, fixerSize, want string }{
+		{"no fixer setting", "", "Standard"},
+		{"the fixer's setting", "msz_fixer", "Fixer size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+					return fakelux.Behaviour{Hang: true}
+				}
+				return scripted(spec)
+			}
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+			if tc.fixerSize != "" {
+				mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ($2, $1, $3, 3, 12288, 30)`, w.org, tc.fixerSize, tc.want)
+				mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || jsonb_build_object('fixer', jsonb_build_object('machineSize', $2::text)) WHERE id = $1`, w.org, tc.fixerSize)
+			}
+			task := w.task()
+			w.deliver(task)
+			fix := ""
+			w.until("a live fix Run", func() bool {
+				fix = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='fix' AND status='running' AND control='none' AND lux_state='running'), '')`, task)
+				return fix != ""
+			})
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_impl","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+			mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, fix)
+			status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+			if status != 200 || out["moved"] != true {
+				t.Fatalf("implementer reset: %d %v", status, out)
+			}
+			w.until("the Reset settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, fix) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, fix); n != 1 {
+				t.Fatalf("moves on the fix Run: %d", n)
+			}
+			if got := w.machineOf(fix); got["name"] != tc.want {
+				t.Fatalf("fix Run's machine=%v, want %s", got, tc.want)
+			}
+			if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.reset' AND payload->'to'->>'name'=$2`, fix, tc.want) != 1 {
+				t.Fatalf("the Reset's notice does not name %s", tc.want)
+			}
+		})
+	}
+}
+
 // raisedImplementer is a live implementer recorded on Bigger, raised for
 // its task under moveId mmv_old.
 func (w *world) raisedImplementer() (task, runID, live string) {
