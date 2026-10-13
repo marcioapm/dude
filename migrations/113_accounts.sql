@@ -25,7 +25,13 @@ FROM (
   ORDER BY lower(btrim(email::text)), (removed_at IS NULL) DESC,
     CASE WHEN removed_at IS NULL THEN last_seen_at END DESC NULLS LAST, created_at DESC, id
 ) chosen;
-UPDATE people p SET account_id = a.id FROM accounts a
+UPDATE people p SET account_id = a.id,
+  name = CASE WHEN p.removed_at IS NULL THEN a.name ELSE p.name END,
+  email = CASE WHEN p.removed_at IS NULL THEN a.email ELSE p.email END,
+  photo_url = CASE WHEN p.removed_at IS NULL THEN a.photo_url ELSE p.photo_url END,
+  photo_key = CASE WHEN p.removed_at IS NULL THEN a.photo_key ELSE p.photo_key END,
+  photo_token = CASE WHEN p.removed_at IS NULL THEN a.photo_token ELSE p.photo_token END
+FROM accounts a
 WHERE lower(btrim(p.email::text))::citext = a.email;
 
 CREATE FUNCTION copy_account_profile() RETURNS trigger
