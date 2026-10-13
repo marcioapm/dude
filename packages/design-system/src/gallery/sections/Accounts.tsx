@@ -6,6 +6,9 @@ import { EmailChipsInput } from "../../components/EmailChipsInput.tsx";
 import { InvitationLinkList, type InvitationLink } from "../../components/InvitationLinkList.tsx";
 import { KeyShownOnce } from "../../components/KeyShownOnce.tsx";
 import { Button } from "../../primitives/Button.tsx";
+import { Card, CardBody, CardFooter } from "../../primitives/Card.tsx";
+import { KeyValueList } from "../../primitives/Layout.tsx";
+import { FrontDoor, FrontDoorLink, FrontDoorMessage, HowList } from "../../components/FrontDoor.tsx";
 import { emailChipViews, parseEmailEntries, type EmailEntry } from "../../util/emails.ts";
 import { people } from "../navFixtures.ts";
 
@@ -122,6 +125,28 @@ export function AccountsSection({ mode }: { readonly mode: PaneMode }) {
         note="A secret, shown this once: the key in a read-only mono field that selects itself, Copy (Copied), and a usage slot for the CLI lines in a sunken well. Done closes it for good.">
         <Panes mode={mode}>
           <KeyDemo />
+        </Panes>
+      </Block>
+      <Block id="ac-door" title="FrontDoor / FrontDoorMessage / HowList"
+        note="A page that is one centred column: the app's face, a heading and its line, cards, and fine print with an inline FrontDoorLink at the foot. outside (No organisation, You're invited, an invitation's page) sits on the canvas with no sidebar; inside (Welcome to Northwind) on the surface. FrontDoorMessage is one message in a card: a face or a glyph on a sunken disc, an h1, a line, and its facts. HowList is how something works in a few lines.">
+        <Panes mode={mode}>
+          <div style={{ display: "flex", height: 520 }}>
+            <FrontDoor mark={<OrgFace org={NORTHWIND} size={48} />} footer={<p>Signed in as <b>chloe@hey.com</b> with Cloudflare Access. <FrontDoorLink>Sign out</FrontDoorLink></p>}>
+              <Card>
+                <CardBody>
+                  <FrontDoorMessage lead={<OrgFace org={NORTHWIND} size={48} />} title="Join Northwind as member" line="Invited by Gus Lindqvist on 11 October."
+                    facts={<KeyValueList items={[{ label: "For", value: "chloe@hey.com" }, { label: "Expires", value: "in 12 days" }]} />} />
+                </CardBody>
+                <CardFooter><Button variant="quiet">Not now</Button><Button variant="primary">Join Northwind</Button></CardFooter>
+              </Card>
+            </FrontDoor>
+          </div>
+          <Label>a message with a glyph; HowList</Label>
+          <Card><CardBody><FrontDoorMessage icon="link" title="This invitation can't be used" line="Ask whoever sent it for a new link." /></CardBody></Card>
+          <HowList label="How dude works" items={[
+            { icon: "conductor", title: "Talk it through", body: "On a task: you and the conductor work it out in Chat." },
+            { icon: "git-pr", title: "Deliver", body: "dude implements, reviews and opens a pull request, and stops there." },
+          ]} />
         </Panes>
       </Block>
     </Section>

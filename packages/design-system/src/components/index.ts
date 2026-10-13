@@ -170,3 +170,5 @@ export { InvitationLinkList, invitationLinesText } from "./InvitationLinkList.ts
 export type { InvitationLink, InvitationLinkListProps } from "./InvitationLinkList.tsx";
 export { KeyShownOnce } from "./KeyShownOnce.tsx";
 export type { KeyShownOnceProps } from "./KeyShownOnce.tsx";
+export { FrontDoor, FrontDoorLink, FrontDoorMessage, HowList } from "./FrontDoor.tsx";
+export type { FrontDoorMessageProps, FrontDoorProps, HowItem } from "./FrontDoor.tsx";

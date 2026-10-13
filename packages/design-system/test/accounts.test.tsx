@@ -14,6 +14,7 @@ import { OrgSwitcher, type OrgInvitation, type OrgMembership } from "../src/comp
 import { EmailChipsInput } from "../src/components/EmailChipsInput.tsx";
 import { InvitationLinkList, invitationLinesText, type InvitationLink } from "../src/components/InvitationLinkList.tsx";
 import { KeyShownOnce } from "../src/components/KeyShownOnce.tsx";
+import { FrontDoor, FrontDoorLink, FrontDoorMessage, HowList } from "../src/components/FrontDoor.tsx";
 import { emailChipSummary, emailChipViews, parseEmailEntries, type EmailChipView, type EmailEntry } from "../src/util/emails.ts";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import { accessibleName, allByRole, byRole } from "./queries.ts";
@@ -303,5 +304,28 @@ describe("KeyShownOnce", () => {
     await act(async () => byRole(dialog, "button", "Copy").click());
     expect(written).toEqual(["dude_sk_x"]);
     expect(byRole(dialog, "button", "Copied")).toBeTruthy();
+  });
+});
+
+describe("FrontDoor", () => {
+  test("the heading is the page's h1, the line under it, then the cards, then the fine print with its link", async () => {
+    const out: string[] = [];
+    const el = await mount(<FrontDoor title="Your email isn't in any organisation on this dude" line="dude lets people in by invitation."
+      footer={<FrontDoorLink onClick={() => out.push("signout")}>Sign out</FrontDoorLink>}><p>card</p></FrontDoor>);
+    expect(byRole(el, "heading", "Your email isn't in any organisation on this dude").tagName).toBe("H1");
+    expect(el.textContent).toBe("Your email isn't in any organisation on this dudedude lets people in by invitation.cardSign out");
+    await act(async () => byRole(el, "button", "Sign out").click());
+    expect(out).toEqual(["signout"]);
+  });
+
+  test("a message: a glyph on a disc, or a face; its heading and its facts", async () => {
+    const el = await mount(<FrontDoorMessage icon="link" title="This invitation can't be used" line="Ask whoever sent it for a new link." facts={<dl><dt>For</dt><dd>you</dd></dl>} />);
+    expect(byRole(el, "heading", "This invitation can't be used")).toBeTruthy();
+    expect(el.textContent).toBe("This invitation can't be usedAsk whoever sent it for a new link.Foryou");
+  });
+
+  test("HowList: a named list, each a glyph, a bold lead-in and a sentence", async () => {
+    const el = await mount(<HowList label="How dude works" items={[{ icon: "git-pr", title: "Deliver", body: "It opens a pull request." }]} />);
+    expect(byRole(el, "list", "How dude works").textContent).toBe("Deliver. It opens a pull request.");
   });
 });

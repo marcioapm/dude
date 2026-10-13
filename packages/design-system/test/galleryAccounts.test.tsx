@@ -28,7 +28,7 @@ test("every Accounts block renders in each theme and density, with the switcher'
   ));
   await act(async () => new Promise((r) => setTimeout(r, 20)));
   const blocks = [...host.querySelectorAll("section#accounts [id^='ac-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["ac-face", "ac-switcher", "ac-chips", "ac-links", "ac-key"]);
+  expect(blocks.map((b) => b.id)).toEqual(["ac-face", "ac-switcher", "ac-chips", "ac-links", "ac-key", "ac-door"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll("[data-theme][data-density]")].map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`);
     expect(panes, block.id).toEqual(["comfortable dark", "comfortable light", "compact dark", "compact light"]);

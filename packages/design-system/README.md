@@ -2145,6 +2145,17 @@ are in `docs/design/accounts.md`):
   (Copied) at its end, and a `usage` slot for the CLI lines (a string is
   set in a square sunken well) with a muted `usageNote`. Done closes it;
   nothing shows it again. `copy` replaces the clipboard write in tests.
+- **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
+  is one centred column: the app's `mark`, a heading (the page's `h1`) and
+  its `line`, cards, and fine print (`footer`) with an inline
+  `FrontDoorLink` ("Sign out"). `variant="outside"` (no organisation's:
+  No organisation, You're invited, an invitation's page) is 640px on the
+  canvas with no sidebar; `inside` (an organisation's first page) is 720px
+  on the surface beside the sidebar. One column on a phone, the heading a
+  step smaller. `FrontDoorMessage` is one message in a card: a face or a
+  glyph on a sunken disc, an `h1`, a line and its `facts`; the card's
+  footer holds its actions. `HowList` is how something works in a few
+  named lines: a glyph, a bold lead-in, a muted sentence.
 
 ## What is deliberately not here
 

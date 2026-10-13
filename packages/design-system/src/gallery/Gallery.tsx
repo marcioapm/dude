@@ -235,6 +235,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ac-chips", "EmailChipsInput"],
       ["ac-links", "InvitationLinkList"],
       ["ac-key", "KeyShownOnce"],
+      ["ac-door", "FrontDoor"],
     ],
   ],
 ];
