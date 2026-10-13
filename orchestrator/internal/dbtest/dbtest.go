@@ -44,6 +44,109 @@ func adminConn(ctx context.Context) (*pgx.Conn, error) {
 	return pgx.Connect(ctx, fmt.Sprintf("postgres://dude:dude@%s/postgres", host()))
 }
 
+// ahead is Main's state: while it is set, the next test's database is
+// cloned while the current test runs, and a finished test's is dropped
+// without the next test waiting for it. Each is still a fresh clone of the
+// template, used by one test.
+var ahead struct {
+	sync.Mutex
+	on bool
+	// next is the clone being made for the next Open; nil when none is.
+	next chan cloned
+	// drops are the drops still running.
+	drops sync.WaitGroup
+}
+
+type cloned struct {
+	name string
+	err  error
+}
+
+// Main runs a package's tests as m.Run does, cloning each test's database
+// ahead of it and dropping it behind, and returns m.Run's code once every
+// database it made is dropped. For a package whose tests run one at a
+// time and open a database each: a clone and a drop take about a tenth of
+// a second between them, which otherwise every test waits for.
+func Main(m *testing.M) int {
+	ahead.Lock()
+	ahead.on = true
+	ahead.Unlock()
+	code := m.Run()
+	ahead.Lock()
+	ahead.on = false
+	next := ahead.next
+	ahead.next = nil
+	ahead.Unlock()
+	if next != nil {
+		if c := <-next; c.err == nil {
+			dropLater(c.name)
+		}
+	}
+	ahead.drops.Wait()
+	return code
+}
+
+// clone makes a new database from the template.
+func clone() cloned {
+	ctx := context.Background()
+	name := fmt.Sprintf("%s_%d", template, counter.Add(1))
+	admin, err := adminConn(ctx)
+	if err != nil {
+		return cloned{err: err}
+	}
+	defer admin.Close(ctx)
+	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s OWNER dude", name, template)); err != nil {
+		return cloned{err: err}
+	}
+	return cloned{name: name}
+}
+
+// cloneForTest is the clone made ahead for this test, if Main made one,
+// and starts the next test's.
+func cloneForTest() cloned {
+	ahead.Lock()
+	defer ahead.Unlock()
+	if !ahead.on {
+		return clone()
+	}
+	var c cloned
+	if ahead.next != nil {
+		c = <-ahead.next
+	} else {
+		c = clone()
+	}
+	next := make(chan cloned, 1)
+	ahead.next = next
+	go func() { next <- clone() }()
+	return c
+}
+
+func drop(name string) {
+	if a, err := adminConn(context.Background()); err == nil {
+		_, _ = a.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+		a.Close(context.Background())
+	}
+}
+
+// dropLater drops name on a goroutine of its own under Main, which waits
+// for it; otherwise before returning.
+func dropLater(name string) {
+	ahead.Lock()
+	on := ahead.on
+	if on {
+		ahead.drops.Add(1)
+	}
+	ahead.Unlock()
+	if !on {
+		drop(name)
+		return
+	}
+	go func() {
+		defer ahead.drops.Done()
+		drop(name)
+	}()
+}
+
 // Open returns an app-role connection to a new, migrated database, and an
 // owner-role connection for seeding and assertions. Both are dropped when
 // the test ends. Skips the test when Postgres is not reachable.
@@ -57,32 +160,23 @@ func Open(t *testing.T) (app *db.DB, owner *pgx.Conn) {
 		t.Fatalf("setting up the test database: %v", setupErr)
 	}
 	ctx := context.Background()
-	name := fmt.Sprintf("%s_%d", template, counter.Add(1))
-	admin, err := adminConn(ctx)
-	if err != nil {
-		t.Fatal(err)
+	c := cloneForTest()
+	if c.err != nil {
+		t.Fatal(c.err)
 	}
-	defer admin.Close(ctx)
-	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s OWNER dude", name, template)); err != nil {
-		t.Fatal(err)
-	}
+	name := c.name
+	t.Cleanup(func() { dropLater(name) })
 
-	app, err = db.Open(ctx, fmt.Sprintf("postgres://dude_app:dude_app@%s/%s", host(), name))
+	app, err := db.Open(ctx, fmt.Sprintf("postgres://dude_app:dude_app@%s/%s", host(), name))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(app.Close)
 	owner, err = pgx.Connect(ctx, fmt.Sprintf("postgres://dude:dude@%s/%s", host(), name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		app.Close()
-		owner.Close(context.Background())
-		if a, err := adminConn(context.Background()); err == nil {
-			_, _ = a.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
-			a.Close(context.Background())
-		}
-	})
+	t.Cleanup(func() { owner.Close(context.Background()) })
 	return app, owner
 }
 

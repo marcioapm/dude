@@ -2974,7 +2974,7 @@ func TestMain(m *testing.M) {
 		fmt.Println("git is required")
 		os.Exit(1)
 	}
-	code := m.Run()
+	code := dbtest.Main(m)
 	if seedRepo.dir != "" {
 		_ = os.RemoveAll(seedRepo.dir)
 	}
