@@ -77,6 +77,74 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// A session agent's raise lux refused for good puts back the session's
+// raise it replaced, kept before the fallback resume; a raise written over
+// it since is left alone.
+func TestASessionsRefusedRaiseRestoresItsLayer(t *testing.T) {
+	for _, newer := range []bool{false, true} {
+		t.Run(fmt.Sprint(newer), func(t *testing.T) {
+			w := newResumeWorld(t)
+			org := w.run.Org
+			prior := `{"sizeId":"prior","moveId":"mmv_prior","askedBy":"run_old","reason":"earlier","at":"2026-10-13T00:00:00Z"}`
+			layer := `{"sizeId":"target","moveId":"mmv_s","askedBy":"run_s","reason":"oom","at":"2026-10-13T01:00:00Z"}`
+			if newer {
+				layer = `{"sizeId":"target","moveId":"mmv_newer","askedBy":"run_t","reason":"again","at":"2026-10-13T02:00:00Z"}`
+			}
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO sessions (id, organization_id, title, agent_machine) VALUES ('ssn_'||$1, $1, 'S', $2::jsonb)`, []any{org, layer}},
+				{`INSERT INTO runs (id, organization_id, session_id, attempt, role, status, lux_run_id, lux_state, dude_pause)
+					VALUES ('run_s'||$1, $1, 'ssn_'||$1, 1, 'brainstorm', 'paused', 'lrun_s', 'stopped', 'machine')`, []any{org}},
+				{`INSERT INTO machine_moves (id, organization_id, session_id, run_id, role, kind, from_size, to_size_id, apply)
+					VALUES ('mmv_s', $1, 'ssn_'||$1, 'run_s'||$1, 'brainstorm', 'raise', jsonb_build_object('sizeId', 'old', 'previousRaise', $2::jsonb),
+						(SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1), 'resize')`, []any{org, prior}},
+			} {
+				if _, err := w.owner.Exec(w.ctx, q.sql, q.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run := phaseRun{ID: "run_s" + org, Org: org, SessionID: "ssn_" + org, Role: "brainstorm", Status: statusPaused, LuxRunID: "lrun_s", LuxState: "stopped"}
+			w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+			old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+			target := &delivery.Machine{SizeID: "target", Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+			plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+			if err := w.s.movePlan(w.ctx, run, plan); err != nil {
+				t.Fatal(err)
+			}
+			refusal := &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+			if err := plan.onRefused(refusal); err != nil {
+				t.Fatal(err)
+			}
+			plan.refused = refusal
+			kept := lux.Resources{CPUs: 2, Memory: 2048 << 20, Disk: 20 << 30}
+			if err := w.s.settleMachine(w.ctx, run, plan, lux.Run{Spec: lux.StoredSpec{Resources: &kept}}); err != nil {
+				t.Fatal(err)
+			}
+			want := prior
+			if newer {
+				want = layer
+			}
+			var got string
+			var settled int
+			if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE((SELECT agent_machine::text FROM sessions WHERE id = 'ssn_'||$1), 'null'),
+				(SELECT count(*) FROM machine_moves WHERE id = 'mmv_s' AND settled_at IS NOT NULL AND refused = 'pool_unfit')`, org).Scan(&got, &settled); err != nil {
+				t.Fatal(err)
+			}
+			var gotJSON, wantJSON any
+			_ = json.Unmarshal([]byte(got), &gotJSON)
+			_ = json.Unmarshal([]byte(want), &wantJSON)
+			if !reflect.DeepEqual(gotJSON, wantJSON) {
+				t.Fatalf("session layer %s, want %s", got, want)
+			}
+			if settled != 1 {
+				t.Fatal("the session's move was not settled as refused")
+			}
+		})
+	}
+}
+
 // A move's target removed while it was under way (to_size_id cleared, the
 // layer dropped with it): the resume settles it on what lux applied, with
 // no refusal and no layer brought back; a settled move's history stays.
