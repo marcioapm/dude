@@ -366,6 +366,43 @@
   box-shadow: inset 2px 0 0 var(--ds-color-accent);
 }
 
+/* A card's relations lit (hover or focus): the card's own bar as selected's,
+   theirs on the active wash, the rest faded. Nothing moves. */
+.lit {
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+.litRelated {
+  background: var(--ds-color-active-wash);
+}
+.dimmed {
+  opacity: 0.35;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.cardItem {
+  position: relative;
+}
+/* A Backlog card's start: a sibling of the card over its foot's right end. */
+.hasStart .foot {
+  padding-right: calc(var(--ds-size-control-sm) * 2.5);
+}
+.cardStart {
+  position: absolute;
+  right: var(--ds-space-8);
+  bottom: var(--ds-space-8);
+}
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.marksLine {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
 .top {
   display: flex;
   align-items: center;

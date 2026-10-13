@@ -845,8 +845,35 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **Nothing drags.** Every transition between lanes is the workflow's — the
   scheduler starts work, the agent opens the PR, the checks make it ready,
   the merge closes it — and the two a person performs (confirm a plan, abort
-  a run) are decisions with context, taken in the transcript. A card is a way
-  in, not a handle; clicking a needs-you card lands on the asking agent session.
+  a run) are decisions with context, taken in the transcript. Clicking a
+  needs-you card lands on the asking agent session.
+- A card is a way in, not a handle: it opens the task, and nothing on it
+  moves the task between lanes. **The one exception is a Backlog card's
+  start** (`cardStart`): a sibling of the card, never inside it, that
+  offers the same ways to start as the task's header, as a menu (never a
+  split button: neither way is the default). It is shown only to people
+  who may start the task, only in Backlog, and only for a task not
+  started. Blocked, its ways are disabled with the reason and its menu
+  offers Start when unblocked and Start anyway. Nothing else on a card
+  acts: confirming a plan, aborting, merging stay decisions taken on the
+  task. The start is tabbable only beside the card holding the board's
+  focus (the board owns that rule): Tab from a card reaches its start,
+  Shift+Tab returns, ↑↓←→ never land on one.
+- **Relations on a card** (`cardMarks`, defaulting to `RelationChip`s and
+  `AutoStartMark` from the `NavTask`): a lock and "Blocked by CP-41" under
+  the title, the quieter "Blocks 2" on a card that holds others up. Blocked
+  waits on work, not a person: neutral ink, never the attention wash.
+  Hover or focus on a card lights its relations: its own accent bar, theirs
+  on the active wash, the rest at 35% opacity, and a polite live region
+  saying it in words. Nothing is added to the board's layout, so the cards
+  don't move under the pointer. "Can start" and "Blocked" are a `Segmented`
+  filter in the header (counts in the labels), not a triage bucket: blocked
+  needs nobody.
+- **Cards are memoised.** A card re-renders only when its own props change,
+  so a hover redraws the cards whose lit state changes and no others. Each
+  card calls `cardMarks` and `cardStart` itself, so pass **stable
+  references** (`useCallback`, or a function defined once): a new closure on
+  every render of the board's parent redraws every card.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -860,6 +887,49 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   epic keeps its row so its position stays visible. Cards drop their epic
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
+
+### Task relations (blocked by, blocks, related)
+
+- One verb pair everywhere: **Blocked by** / **Blocks**, and **Related**
+  for a link that gates nothing. A task is blocked until each blocker is
+  done *and* merged; a blocker marked done with nothing merged still blocks,
+  and says "done, nothing merged".
+- Icons: `lock` (blocked), `blocks` (holds others up), `link` (related).
+  They take their words' ink; blocked is never attention-toned.
+- **Every start refuses for the same reason.** `StartGate` replaces the
+  header's ways while a task is blocked: the reason in words, naming each
+  open blocker, then Start when unblocked (owner only) and Start anyway.
+  `StartMenu` is the card's form of the same choice.
+- **A disabled control the reader can still reach.** A disabled `<button>`
+  takes no focus or pointer, so its tooltip would never open. Each refused
+  way in `StartGate` (and a refused Start when unblocked…) is wrapped in a
+  focusable span that is the control assistive tech meets: `role="button"`,
+  `aria-disabled="true"`, `aria-label` the way's label ("Deliver", "Start
+  when unblocked…"), and `aria-describedby` naming one description, the
+  reason. The inner button carries no description of its own, so the reason
+  is read once.
+- **Start anyway** (`StartAnywayDialog`) names each blocker and what starting
+  now means; Keep waiting holds the focus, the confirm is primary. Only a
+  person overrides.
+- **Start when unblocked** (`AutoStartDialog`) preselects no way: Set stays
+  disabled until one is picked. Once set, `AutoStartMark` says who set it and
+  when; the owner can cancel it. Refused, with the reason, when a blocker
+  will never merge.
+- `RelationList` groups a task's relations as Blocked by, Blocks, Related;
+  a settled blocker stays listed, struck through as merged. A row its reader
+  may not remove says whose it is (`removeHint`) instead of a disabled ✕.
+  `RelationPicker` refuses a loop and names it ("That would make a loop:
+  CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
+  takes the focus when it opens; the gallery passes `autoFocus={false}`, so a
+  static picture never takes the focus. The gallery mounts the Task relations
+  section's blocks only once it nears the screen (`WhenNear`): drawn from the
+  start, its 8,000 elements and 190 running animations held other sections'
+  animations back, enough that a tooltip elsewhere took seconds to fade in.
+- `DependencyStrip` is an epic's order, in steps, with what can start now;
+  a single step draws nothing.
+- `ProposalCard` numbers items in dependency order and lists each item's
+  relations under its goal; ticking an item ticks what it waits on, saying
+  why.
 
 ### Agent sessions (live work on a task)
 
@@ -1592,6 +1662,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ProportionBar segments={[{ kind: "reserved", … }, …]} legend={…} />` | a chart library, or an app-local bar in its own CSS |
 | `<ChoiceList options={[{ value, label, description, icon }, { …, disabledReason: "No longer kept" }]} />` for one of a few ways to act | radio buttons hand-rolled in the app, or an option silently left out |
 | a stopped task's `Callout` with Resume… / Try again… / Start over…, each opening the one dialog | a "Retry" button that guesses which of the three was meant |
+| `<RelationChip kind="blocked-by" tasks={…} />` under a card's title; `<StartGate>` in the task header while blocked | `<Badge tone="attention">Blocked</Badge>`, or a disabled Deliver with no reason |
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
@@ -1755,7 +1826,13 @@ MarkdownCheatsheet.
   spend; five lifecycle lanes; three-line cards; needs-you first; keyboard
   grid; "N more" past the cap; quiet, empty and loading states. No drag.
 - Its view model is `src/util/boardModel.ts`: `boardColumns`, `boardCards`,
-  `boardSwimlanes`, `boardScope`, `liveActivity`, `BOARD_COLUMN_FOR_STATUS`.
+  `boardSwimlanes`, `boardScope`, `liveActivity`, `BOARD_COLUMN_FOR_STATUS`,
+  and for relations `boardFilter`, `boardFilterCounts`, `isBlocked`,
+  `isStartable`, `neighbourKeys`, `dependencySteps`.
+- **RelationChip / StartMenu / StartGate / AutoStartMark / RelationList /
+  RelationRow / DependencyStrip** (`Relations.tsx`) and **StartAnywayDialog /
+  AutoStartDialog / RelationPicker** (`RelationDialogs.tsx`) — task
+  relations; see *Task relations*.
 
 `src/components/` — management:
 

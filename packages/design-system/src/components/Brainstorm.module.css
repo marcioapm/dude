@@ -45,6 +45,55 @@
 .item:hover {
   background: var(--ds-color-hover-wash);
 }
+/* Numbered (the card has relations): the number between the tick and the body. */
+.numbered .item {
+  grid-template-columns: 20px 16px minmax(0, 1fr) auto;
+}
+.order {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.orderStep {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.orderNo,
+.itemNo {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.itemNo {
+  margin-top: 3px;
+}
+.itemRels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.itemRel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.itemRel b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
 .child {
   padding-left: var(--ds-space-32);
 }

@@ -104,6 +104,9 @@ export type IconName =
   | "braces"
   | "italic"
   | "link"
+  // task relations
+  | "lock"
+  | "blocks"
   | "quote"
   | "list-bullet"
   | "markdown"
@@ -222,6 +225,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   "list-check": { d: "M2.75 4.5l1 1 2-2M2.75 8.5l1 1 2-2M2.75 12.5l1 1 2-2M8 4.5h5.25M8 8.5h5.25M8 12.5h5.25" },
   italic: { d: "M9.5 3h-3M9.5 13h-3M9 3L7 13" },
   link: { d: "M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 0 1 4 4l-1 1M9 11.5l-1 1a2.8 2.8 0 0 1-4-4l1-1" },
+  /* A padlock: a task that can't start until another is merged. */
+  lock: { d: "M4.75 7.25h6.5a1 1 0 0 1 1 1v4.25a1 1 0 0 1-1 1h-6.5a1 1 0 0 1-1-1V8.25a1 1 0 0 1 1-1ZM5.75 7.25V5.5a2.25 2.25 0 0 1 4.5 0v1.75" },
+  /* An arrow into a bar: a task that holds another up. */
+  blocks: { d: "M2.5 8h7M6.75 5.25 9.5 8l-2.75 2.75M12.75 3.5v9" },
   /* A bar down the side of lines: a quotation. */
   quote: { d: "M3 3.5v9M6.5 5h7M6.5 8h7M6.5 11h5" },
   "list-bullet": { d: "M6 4h7.5M6 8h7.5M6 12h7.5M3 4h.01M3 8h.01M3 12h.01" },

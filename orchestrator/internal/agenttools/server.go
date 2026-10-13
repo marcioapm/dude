@@ -418,6 +418,14 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	var r refusal
+	if errors.As(err, &r) && r.blocked != nil {
+		// Path 4's refusal rolled the call back: kept in a transaction of
+		// its own, so refusals stay auditable. Best effort, as the API's.
+		_ = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, r.blocked.Blockers)
+		})
+	}
 	if err != nil || t.outside == nil {
 		return out, err
 	}
@@ -468,11 +476,15 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 }
 
 // refusal is a tool declining a request, with the reason for the caller.
-type refusal struct{ msg string }
+type refusal struct {
+	msg string
+	// A start refused as blocked: recorded after the call rolls back.
+	blocked *delivery.BlockedError
+}
 
 func (r refusal) Error() string { return r.msg }
 
-func refuse(format string, a ...any) error { return refusal{fmt.Sprintf(format, a...)} }
+func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
 
 // structured is a tool's result as MCP structured content, which must be a
 // JSON object: a list is given as {"items": [...]}. (The text content, and

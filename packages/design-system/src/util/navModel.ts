@@ -71,6 +71,47 @@ export interface NavTask {
   readonly waitingFor?: string | undefined;
   /** Its pull requests, one per repository it changed, in the order they were opened. */
   readonly pullRequests?: ReadonlyArray<PrChipPullRequest> | undefined;
+  /**
+   * Done with a merged pull request: what releases the tasks it blocks.
+   * A task done with nothing merged is `done` without it.
+   */
+  readonly merged?: boolean | undefined;
+  /** Its open blockers: every task it waits on that has not merged (task relations). */
+  readonly blockedBy?: ReadonlyArray<NavRelated> | undefined;
+  /** The not-started tasks it holds up. */
+  readonly blocks?: ReadonlyArray<NavRelated> | undefined;
+  /** Every relation's other task, by key, merged or not: what hovering it lights. */
+  readonly edges?: NavEdges | undefined;
+  /** Not started and nothing unmerged in front of it. */
+  readonly startable?: boolean | undefined;
+  /** Its owner's start when unblocked, if set. */
+  readonly autoStart?: NavAutoStart | null | undefined;
+  /** The reader may start it: draws a Backlog card's start. */
+  readonly canStart?: boolean | undefined;
+}
+
+/** A related task, as a chip, a menu and the strip name it. */
+export interface NavRelated {
+  readonly key: string;
+  readonly title: string;
+  readonly status: TaskStatus;
+  /** Its project, when it is not the reader's board's: said in the tooltip. */
+  readonly project?: string | undefined;
+  /** Done with nothing merged: settled for its owner, still blocking. */
+  readonly unmerged?: boolean | undefined;
+}
+
+export interface NavEdges {
+  readonly blockedBy: ReadonlyArray<string>;
+  readonly blocks: ReadonlyArray<string>;
+  readonly related: ReadonlyArray<string>;
+}
+
+/** A start when unblocked, set: how, by whom, since when. */
+export interface NavAutoStart {
+  readonly how: "deliver" | "talk";
+  readonly by: Person;
+  readonly at: string | number | Date;
 }
 
 /** What a task that needs you, with no agent asking, says it waits for. */
