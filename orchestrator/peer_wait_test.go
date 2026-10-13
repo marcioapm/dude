@@ -269,6 +269,59 @@ func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
 	}
 }
 
+// A conductor parked only on a peer's reply is resumed for a person's
+// Reset of its role as an implementer is: the move applies, the conductor
+// is told of it alone, and it parks on the peer again with its wait open.
+func TestAResetResumesAConductorParkedOnlyOnAPeersReply(t *testing.T) {
+	w := conducting(t)
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	task, peer := w.task(), w.task()
+	w.onAnEpic(task, peer)
+	conductor := w.talk(task)
+	live := w.luxRunOf(conductor)
+	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
+	if status, out := w.chat(task, "Ask the peer.\ntool: message "+ask+"\ntool: wait_for_reply {\"message\":\"{{last.id}}\"}"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the conductor to be parked on its peer", func() bool {
+		return w.count(`SELECT count(*) FROM runs r WHERE r.id = $1 AND r.status = 'paused' AND r.dude_pause = 'person'
+			AND EXISTS (SELECT 1 FROM peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL AND pw.how = 'wait')`, conductor) == 1
+	})
+	resumesBefore := len(w.lux.ResumeInputs(live))
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('conductor', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, conductor)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, conductor)
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "conductor", "note": "smaller"}); status != 200 || out["moved"] != true {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.until("the Reset to move the parked conductor", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND kind = 'reset' AND settled_at IS NOT NULL AND refused IS NULL`, conductor) == 1
+	})
+	if got := w.machineOf(conductor); got["name"] != "Small" {
+		t.Errorf("machine=%v", got)
+	}
+	if in := w.lux.ResumeInputs(live)[resumesBefore:]; len(in) != 1 || in[0] != "Moved back to Small by Resetter: smaller" {
+		t.Errorf("resume inputs %q, want the Reset's words alone", in)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN machine_moves m ON m.run_id = rr.run_id
+		WHERE rr.run_id = $1 AND rr.cause = 'machine' AND rr.woken_at = m.created_at`, conductor); n != 1 {
+		t.Errorf("%d resumes caused and timed by the move", n)
+	}
+	w.until("the conductor to park on its peer again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, conductor) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, conductor); n != 1 {
+		t.Errorf("%d open waits after the move, want 1", n)
+	}
+	resumed := w.luxCalls(live, "resume")
+	for range 5 {
+		w.pump()
+	}
+	if n := w.luxCalls(live, "resume"); n != resumed {
+		t.Fatalf("resumed %d more times before the reply", n-resumed)
+	}
+}
+
 // A Run parked on a person's question is not resumed for a Reset: the move
 // waits for the answer, and applies at the resume the answer starts.
 func TestAResetWaitsForAPersonsAnswer(t *testing.T) {
