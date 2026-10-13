@@ -212,6 +212,23 @@ describe("a task's Run page", () => {
     expect(failed.textContent).toBe("Did not start: failed while getting the image ready: pull failed: manifest unknown. Nothing was spent on the model.");
   });
 
+  test("a tier with no model fails before lux: its useful error is projected and shown, and Try again still opens restart", async () => {
+    const error = "The Implementer runs on Coder, which names no model yet. An admin sets it in Models.";
+    for (const reason of [undefined, "", "   "]) {
+      let picked: string | null = null;
+      const ledger = [created(), ev("run.failed", { status: "failed", error, ...(reason === undefined ? {} : { reason }) }, 1_000)];
+      const ended = project(ledger, "failed").turns.find((t) => t.kind === "ended")!;
+      expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error } });
+      const page = await runPage("failed", ledger, false, { onPickUp: (a) => { picked = a; }, keptUntil: null });
+      const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure before lux");
+      expect(failed.textContent).toContain(error);
+      expect(failed.textContent).toContain("Nothing was spent on the model.");
+      const retry = page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!;
+      await act(async () => retry.click());
+      expect(picked).toBe("retry");
+    }
+  });
+
   test("Try again on a phase that did not start opens the task's restart dialog", async () => {
     let picked: string | null = null;
     const ledger = [created(), stage("waiting", 0), stage("image", 5_000),
