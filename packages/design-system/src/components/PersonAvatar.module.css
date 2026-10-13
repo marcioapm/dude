@@ -10,6 +10,8 @@
   /* What the face sits on, so rings and tiles cut a clean gap. The app
      sets it where faces sit on chrome or raised. */
   --av-bed: var(--ds-avatar-bed, var(--ds-color-surface));
+  /* Outer edge of the online ring, from the face's edge. */
+  --av-online-ring: 3.5px;
 
   position: relative;
   display: inline-grid;
@@ -39,9 +41,6 @@
 }
 
 /* Online: a green ring outside the face, with a gap of the bed colour. */
-.root {
-  --av-online-ring: 3.5px;
-}
 .root[data-size="16"],
 .root[data-size="20"] {
   --av-online-ring: 2.5px;
@@ -124,10 +123,20 @@
 .stack > * + * {
   margin-left: calc(var(--av-size) * -0.2);
 }
+/* At 16 and 20 the part that shows behind an online face (10.3px, 13.5px)
+   is narrower than two wide capitals at 0.38×size: every face in the stack
+   takes the largest size at which "WW" fits there. */
+.stack > [data-size="16"] {
+  font-size: 4.6px;
+}
+.stack > [data-size="20"] {
+  font-size: 6.1px;
+}
 .stack > * + * > .initials {
   justify-self: safe center;
   margin-left: calc(var(--av-size) * 0.2 + 1.5px);
 }
+/* Reads the covered face's own --av-online-ring: faces in a stack share a size. */
 .stack > .online + * > .initials {
   margin-left: calc(var(--av-size) * 0.2 + var(--av-online-ring));
 }

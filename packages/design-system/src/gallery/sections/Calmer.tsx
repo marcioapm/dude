@@ -27,6 +27,10 @@ const BO = { id: "per_bo", name: "Bo Lindqvist", online: true };
 const CY = { id: "per_cy", name: "Cy Okafor", online: false };
 const DEE = { id: "per_dee", name: "Dee Marsh" };
 const ELI = { id: "per_eli", name: "Eli Park", online: true };
+// Two of the widest capitals: the stacks put them behind an online face.
+const WALT = { id: "per_walt", name: "Walter White" };
+// Enough people that a stack's "+N" takes two digits.
+const GUESTS = Array.from({ length: 10 }, (_, i) => ({ id: `per_guest_${i}`, name: `Guest ${i + 1}` }));
 
 const SIZES: PersonAvatarSize[] = [16, 20, 24, 28, 32, 40, 56];
 
@@ -126,7 +130,9 @@ export function CalmerSection({ mode }: { readonly mode: PaneMode }) {
               ["an agent", <><AgentAvatar role="implementer" size="lg" live /><AgentAvatar role="reviewer" size="md" /></>],
               ["stack, owner first", <PersonAvatarStack people={[ANA, CY]} size={28} agents={new Map([["per_ana", { role: "implementer", live: true }]])} />],
               ["stack past max", <PersonAvatarStack people={[ANA, BO, CY, DEE, ELI]} size={24} max={4} />],
-              ["initials at 20, as the sidebar's", <PersonAvatarStack people={[BO, DEE, ELI]} size={20} data-testid="stack-initials-20" />],
+              ["initials at 20, as the sidebar's", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={20} data-testid="stack-initials-20" />],
+              ["at 20, past max", <PersonAvatarStack people={[BO, DEE, ELI, ...GUESTS]} size={20} max={2} data-testid="stack-initials-20" />],
+              ["initials at 16", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={16} data-testid="stack-initials-16" />],
               ["projects", <>
                 {[16, 20, 32, 56].map((s) => <ProjectAvatar key={s} project={{ id: "prj_dash", name: "Dashboard" }} size={s} />)}
                 <ProjectAvatar project={{ name: "Billing API", imageUrl: PROJECT_IMAGE }} size={56} />

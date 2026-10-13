@@ -493,32 +493,42 @@ def test_a_needs_you_card_at_1440_keeps_its_epic_readable_beside_the_mark(galler
     assert console_errors == []
 
 
-def test_a_stack_of_initials_at_20px_never_covers_a_letter(gallery_page: Page, console_errors: list):
-    """The sidebar's 20px stacks: each covered face's first letter's ink sits right of the face on top
-    of it and that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the
-    online ring around it). The ink edge is the text box's left less the font's own left bearing."""
+def test_a_stack_of_initials_at_16_and_20px_keeps_every_letter_on_its_face(gallery_page: Page, console_errors: list):
+    """The sidebar's small stacks: each covered face's initials' ink sits right of the face on top of it
+    and that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the online
+    ring around it), and left of its own right edge. Ink bounds come from canvas metrics taken at 40x
+    the font size and scaled down, since at 6px they round to whole pixels."""
     gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
-    rings = []
-    for stack in gallery_page.get_by_test_id("stack-initials-20").all():
-        faces = stack.evaluate("""s => {
-            const ring = (el) => Math.max(0, ...getComputedStyle(el).boxShadow.replace(/[a-z]+\\([^)]*\\)/gi, '')
-                .split(',').map(sh => Number((sh.match(/-?[\\d.]+px/g) ?? [])[3]?.slice(0, -2) ?? 0)));
-            const ctx = document.createElement('canvas').getContext('2d');
-            const faces = [...s.children];
-            return faces.slice(1).map((f, i) => {
-                const span = f.querySelector('span'), t = span.getBoundingClientRect();
-                const cs = getComputedStyle(span);
-                ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-                const ink = t.left - ctx.measureText(span.textContent).actualBoundingBoxLeft;
-                const on = faces[i], r = ring(on);
-                return {text: f.textContent, ring: r, covered: on.getBoundingClientRect().right + r - ink};
-            });
-        }""")
-        rings += [f["ring"] for f in faces]
-        cut = [f for f in faces if f["covered"] > 0]
-        assert cut == [], faces
-    # The fixture puts an online face on top of another, so the wider ring is the one measured.
-    assert max(rings) > 1.5, rings
+    measured = []
+    for test_id in ("stack-initials-16", "stack-initials-20"):
+        stacks = gallery_page.get_by_test_id(test_id).all()
+        assert stacks, test_id
+        for stack in stacks:
+            faces = stack.evaluate("""s => {
+                const ring = (el) => Math.max(0, ...getComputedStyle(el).boxShadow.replace(/[a-z]+\\([^)]*\\)/gi, '')
+                    .split(',').map(sh => Number((sh.match(/-?[\\d.]+px/g) ?? [])[3]?.slice(0, -2) ?? 0)));
+                const ctx = document.createElement('canvas').getContext('2d');
+                const faces = [...s.children];
+                return faces.slice(1).map((f, i) => {
+                    const span = f.querySelector('span'), t = span.getBoundingClientRect();
+                    const cs = getComputedStyle(span);
+                    ctx.font = `${cs.fontWeight} ${parseFloat(cs.fontSize) * 40}px ${cs.fontFamily}`;
+                    ctx.letterSpacing = `${(parseFloat(cs.letterSpacing) || 0) * 40}px`;
+                    const m = ctx.measureText(span.textContent);
+                    const inkLeft = t.left - m.actualBoundingBoxLeft / 40, inkRight = t.left + m.actualBoundingBoxRight / 40;
+                    const on = faces[i], r = ring(on);
+                    return {text: f.textContent, ring: r, covered: on.getBoundingClientRect().right + r - inkLeft,
+                            spill: inkRight - f.getBoundingClientRect().right};
+                });
+            }""")
+            measured += [(f["text"], f["ring"]) for f in faces]
+            # 0.2x16 = 3.2px is not a whole number of 1/64px layout units, so allow that rounding.
+            cut = [f for f in faces if f["covered"] > 0.02 or f["spill"] > 0.02]
+            assert cut == [], (test_id, faces)
+    # The fixtures put an online face on top of "WW" and of a "+N" chip, so the wider ring is measured
+    # against the widest initials and against the chip.
+    behind_online = [t for t, r in measured if r > 1.5]
+    assert "WW" in behind_online and any(t.startswith("+") for t in behind_online), measured
     assert console_errors == []
 
 

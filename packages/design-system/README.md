@@ -1369,9 +1369,13 @@ here.
   `photoUrl` replaces the initials and nothing else changes.
 - `PersonAvatarStack` overlaps by a fifth and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
-  requester). A covered face's initials centre in the part of it that
-  shows, past the face on top and its ring (the online ring too), so none
-  loses a letter. Past `max`, a "+N" chip in the same shape stands for the rest
+  requester). A covered face's initials clear the face on top and its ring
+  (the online ring too) and centre in the part of the face that shows. At
+  16 and 20 every face in the stack sets its initials smaller, so two wide
+  capitals ("WW") fit in that part behind an online face; from 24 up, wider
+  initials start at its edge and can run past the face's right. An agent
+  tile on the face on top can still cover the next face's initials. Past
+  `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
 
 ### Markdown
