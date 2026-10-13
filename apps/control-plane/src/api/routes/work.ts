@@ -9,14 +9,14 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, newId,
+  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
   resolveAgentModel, resolveTier,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy,
 } from "@dude/domain";
-import type { AgentModels } from "@dude/domain";
+import type { AgentModels, BlockerRef } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
+import { HttpError, badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { requireOrgAdmin } from "../access.ts";
 import { listTiers } from "./models.ts";
@@ -186,7 +186,12 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
+  /** Start a blocked task anyway: a person only (the orchestrator checks), recorded with the note. */
+  override: z.literal(true).optional(),
+  note: z.string().max(2000).optional(),
 }).strict();
+
+const talkInput = deliverInput.omit({ policy: true });
 
 /**
  * Start the delivery workflow for a task.
@@ -240,7 +245,12 @@ async function retryConductor(ctx: RequestContext): Promise<Response> {
  * conductor says so.
  */
 async function talkTask(ctx: RequestContext): Promise<Response> {
-  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`, "{}", ctx.principal);
+  // Images are the task text's to name: anything else in the body is dropped, as before.
+  const raw = (await ctx.request.json().catch(() => ({}))) as Record<string, unknown>;
+  const input = talkInput.safeParse({ override: raw.override, note: raw.note });
+  if (!input.success) throw badRequest("request body failed validation", input.error.flatten());
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/talk`,
+    JSON.stringify(input.data), ctx.principal);
 }
 
 const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
@@ -324,6 +334,13 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     const task = tasks[0];
     if (!task) return { missing: true as const };
 
+    // Path 8: a bare Run is a start, refused while the task waits on unmerged
+    // work. The rule is task_blocked_by's (migration 111), the one the
+    // orchestrator's RefuseBlockedTx reads; the row is locked as it does.
+    await scope.sql`SELECT 1 FROM tasks WHERE id = ${taskId} FOR NO KEY UPDATE`;
+    const blockers = (await scope.sql`SELECT key, status FROM task_blocked_by(${taskId})`) as BlockerRef[];
+    if (blockers.length > 0) return { blocked: blockers };
+
     const attemptRows = (await scope.sql`
       SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM runs WHERE task_id = ${taskId}`) as Array<{
       attempt: number;
@@ -361,7 +378,30 @@ async function createRun(ctx: RequestContext): Promise<Response> {
 
   if ("missing" in result) throw notFound(`task ${taskId} not found`);
   if ("raced" in result) throw conflict("a run for this attempt was created concurrently; retry");
+  if ("blocked" in result) throw await refusedStart(ctx, taskId, "create_run", result.blocked);
   return json(result.run, 201);
+}
+
+/**
+ * A start refused because the task waits on unmerged work: recorded
+ * (task.start_refused, never shown as a line), and answered as the
+ * orchestrator answers it — 409 `blocked`, the same words, the blockers.
+ */
+export async function refusedStart(ctx: RequestContext, taskId: string, path: string, blockers: BlockerRef[]): Promise<HttpError> {
+  const { organizationId } = ctx.principal;
+  const key = await withOrg(organizationId, async (scope) => {
+    const rows = (await scope.sql`
+      SELECT t.project_id AS "projectId", p.key_prefix || '-' || t.number AS key
+      FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ${taskId}`) as Array<{ projectId: string; key: string }>;
+    const actor = auditActor(ctx.principal);
+    await appendInScope(scope, {
+      eventType: EventTypes.TaskStartRefused, organizationId, projectId: rows[0]!.projectId, taskId,
+      actor: { type: actor.kind, id: actor.id }, source: "control-plane", correlationId: taskId,
+      payload: { path, blockers },
+    });
+    return rows[0]!.key;
+  });
+  return new HttpError(409, blockedRefusal(key, blockers), "blocked", { blockers });
 }
 
 async function getRun(ctx: RequestContext): Promise<Response> {

@@ -212,6 +212,9 @@ func run(log *slog.Logger) error {
 			})
 		}},
 		{"previews", time.Second, previews.Sweep},
+		// Start when unblocked: the requests a merge marked due, each fired
+		// in its own transaction after every blocker is read again.
+		{"auto-starts", time.Second, (&delivery.AutoStarts{DB: database, Starter: runtime}).Sweep},
 		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient, Log: log}).Sweep},
 		// Each Run carries its own next read (every set.LuxCostEvery); the
 		// loop only looks for the ones due.

@@ -15,10 +15,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { firstName, type NavProject } from "@dude/design-system";
 import {
   Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView } from "@dude/domain";
+import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
@@ -113,6 +113,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
 
   const { events } = useEventStream({ client, sessionId });
   const status = (detail?.session.run?.status ?? undefined) as RunStatus | undefined;
+  // An existing task's status by key, as the tree has it: what a proposed relation to it shows.
+  const statusOf = useMemo(() => {
+    const m = new Map<string, TaskStatus>();
+    for (const p of projects) for (const t of [...(p.epics ?? []).flatMap((e) => e.tasks), ...(p.tasks ?? [])]) if (t.key) m.set(t.key, t.status);
+    return m;
+  }, [projects]);
 
   // What its agent published: read on opening, and again as each new one is recorded.
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -257,7 +263,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     const out: Array<{ id: string; at: string; node: ReactNode }> = [];
     for (const proposal of detail.proposals ?? []) {
       out.push({ id: proposal.id, at: proposal.createdAt, node: (
-        <ProposalBlock key={proposal.id} client={client} sessionId={sessionId} proposal={proposal} linked={linkedKeys}
+        <ProposalBlock key={proposal.id} client={client} sessionId={sessionId} proposal={proposal} linked={linkedKeys} statusOf={statusOf}
           readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} you={detail.you.id}
           onFiled={() => void load()} />
       ) });
@@ -537,11 +543,12 @@ function tierName(tier: unknown): string | null {
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
-function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs, you, onFiled }: {
+function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly, filingAs, you, onFiled }: {
   client: ApiClient;
   sessionId: string;
   proposal: Proposal;
   linked: ReadonlyMap<string, { key: string; name: string }>;
+  statusOf: ReadonlyMap<string, TaskStatus>;
   readOnly: boolean;
   filingAs: string;
   you: string;
@@ -552,7 +559,12 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const epics = new Set(proposal.items.filter((i) => i.kind === "epic").map((i) => i.title));
-  const items = proposal.items.map((item, i) => cardItem(item, proposal.status[i] ?? {}, linked, epics, you));
+  const numbered = proposal.items.some((i) => i.blockedBy?.length || i.blocks?.length || i.related?.length);
+  const items = proposal.items.map((item, i) => ({
+    ...cardItem(item, proposal.status[i] ?? {}, linked, epics, you),
+    ...(numbered ? { n: i + 1, relations: itemRelations(item, statusOf), tickedWith: tickedWith(proposal, selected, i) } : {}),
+  }));
+  const order = numbered ? proposalOrder(proposal) : undefined;
   const file = async () => {
     setBusy(true);
     setProblem(null);
@@ -571,11 +583,15 @@ function ProposalBlock({ client, sessionId, proposal, linked, readOnly, filingAs
   };
   return (
     <div data-testid="proposal" data-proposal={proposal.id}>
-      <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()}
+      <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()} order={order}
         onToggle={(i) => setSelected((s) => {
           const n = new Set(s);
           if (n.has(i)) n.delete(i);
-          else n.add(i);
+          else {
+            // What it waits on is filed with it: ticked too.
+            n.add(i);
+            for (const b of proposal.status[i]?.filesWith ?? []) n.add(b);
+          }
           return n;
         })} />
       {problem ? <Callout tone="danger" data-testid="proposal-problem">{problem}</Callout> : null}
@@ -605,7 +621,58 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
         before: textOf(item.before), after: textOf(item.after), ...common };
     case "comment":
       return { kind: "comment", title: `Comment on ${item.task ?? ""}`, taskKey: item.task, detail: item.text ? `“${item.text}”` : undefined, ...common };
+    case "relation":
+      return { kind: "relation", title: `${item.from ?? ""} ${item.relationKind === "related" ? "related to" : "blocks"} ${item.to ?? ""}`,
+        taskKey: item.to, detail: item.why ? `“${item.why}”` : undefined, ...common };
   }
+}
+
+/** A task item's relations as its card lists them: another item by number, an existing task by key with its status. */
+function itemRelations(item: ProposalItem, statusOf: ReadonlyMap<string, TaskStatus>): ProposalRelation[] {
+  const out: ProposalRelation[] = [];
+  const add = (kind: ProposalRelation["kind"], refs: ProposalItem["blockedBy"]) => {
+    for (const r of refs ?? []) {
+      if (r.item) out.push({ kind, item: r.item });
+      else if (r.key) out.push({ kind, task: { key: r.key, status: statusOf.get(r.key) ?? "received" } });
+    }
+  };
+  add("blocked-by", item.blockedBy);
+  add("blocks", item.blocks);
+  add("related", item.related);
+  return out;
+}
+
+/** The ticked items (by number) that wait on item `n` and so tick it with them; only while it is ticked. */
+function tickedWith(proposal: Proposal, selected: ReadonlySet<number>, n: number): number[] {
+  if (!selected.has(n)) return [];
+  return [...selected].filter((i) => i !== n && proposal.status[i]?.filesWith?.includes(n)).sort((a, b) => a - b).map((i) => i + 1);
+}
+
+/** The items in steps (numbers, 1-based): each one step after the last item of the card it waits on. */
+export function proposalOrder(proposal: Pick<Proposal, "items">): number[][] {
+  const items = proposal.items;
+  const waitsOn = items.map(() => new Set<number>());
+  items.forEach((it, i) => {
+    for (const r of it.blockedBy ?? []) if (r.item && r.item - 1 !== i && items[r.item - 1]) waitsOn[i]!.add(r.item - 1);
+    for (const r of it.blocks ?? []) if (r.item && r.item - 1 !== i && items[r.item - 1]) waitsOn[r.item - 1]!.add(i);
+  });
+  const step = new Map<number, number>();
+  const at = (i: number, seen: Set<number>): number => {
+    const known = step.get(i);
+    if (known !== undefined) return known;
+    // A loop is refused when proposed; were one here, it ends the walk rather than recursing forever.
+    if (seen.has(i)) return 0;
+    seen.add(i);
+    const s = Math.max(-1, ...[...waitsOn[i]!].map((b) => at(b, seen))) + 1;
+    step.set(i, s);
+    return s;
+  };
+  const steps: number[][] = [];
+  items.forEach((_, i) => {
+    const s = at(i, new Set());
+    (steps[s] ??= []).push(i + 1);
+  });
+  return steps.filter(Boolean);
 }
 
 function textOf(t: { goal?: string; acceptanceCriteria?: string[] } | undefined): ReactNode {

@@ -34,6 +34,8 @@ interface Notice {
   seen?: PersonRef & { where: string | null };
   /** Someone has a session open (routes/sessions.ts): live only, its members only. */
   sessionOpen?: { sessionId: string; personId: string; open: boolean };
+  /** Tasks whose relations changed (routes/relations.ts): live only. */
+  relationsChanged?: { taskIds: string[] };
 }
 
 /** How long notifications are gathered before the events are read. */
@@ -104,6 +106,10 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
       eventBus.publish(sessionOpenEvent(notice.organizationId, notice.sessionOpen));
       return;
     }
+    if (notice.relationsChanged) {
+      for (const taskId of notice.relationsChanged.taskIds) eventBus.publish(relationsChangedEvent(notice.organizationId, taskId));
+      return;
+    }
     const pending = waiting.get(notice.organizationId);
     if (pending === undefined || notice.cursor < pending) waiting.set(notice.organizationId, notice.cursor);
     schedule(SETTLE_MS);
@@ -138,6 +144,27 @@ export function seenEvent(organizationId: string, person: PersonRef & { where: s
     correlationId: null,
     causationId: null,
     payload: { person },
+  };
+}
+
+/** A task's relations changed: cursor 0, as seenEvent; a board or task page reads again. */
+export function relationsChangedEvent(organizationId: string, taskId: string): PersistedEvent {
+  return {
+    cursor: 0,
+    eventId: `rel_${taskId}_${Date.now()}`,
+    eventType: EventTypes.RelationsChanged,
+    occurredAt: new Date().toISOString(),
+    organizationId,
+    projectId: null,
+    taskId,
+    runId: null,
+    sessionId: null,
+    workflowRunId: null,
+    actor: { type: "system", id: "dude" },
+    source: "control-plane",
+    correlationId: taskId,
+    causationId: null,
+    payload: { taskId },
   };
 }
 

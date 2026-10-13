@@ -1,4 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { firstName, neverMergesRefusal, notStarted } from "../src/relations.ts";
+
+test("relation wording joins all never-merging blockers and names people consistently", () => {
+  expect(neverMergesRefusal(["CP-1", "CP-2", "CP-3"])).toBe("CP-1, CP-2 and CP-3 were marked done with nothing merged and will never merge, so this would never start it.");
+  expect(firstName("  Ana   Ribeiro ")).toBe("Ana");
+  expect(firstName(null, "its owner")).toBe("its owner");
+  expect(["received", "intake", "awaiting_confirmation", "queued"].map((s) => notStarted(s as Parameters<typeof notStarted>[0]))).toEqual([true, true, true, true]);
+  expect(notStarted("running")).toBe(false);
+});
 import {
   ALL_AGENT_ROLES,
   agentModelConfigSchema,

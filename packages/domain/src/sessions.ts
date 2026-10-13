@@ -86,8 +86,14 @@ export interface SessionMemberView {
   open: boolean;
 }
 
+/** A task a proposed item relates to: an existing one by key, or an item of the same card by number (1-based). */
+export interface ProposalRef {
+  key?: string;
+  item?: number;
+}
+
 export interface ProposalItem {
-  kind: "epic" | "task" | "edit" | "comment";
+  kind: "epic" | "task" | "edit" | "comment" | "relation";
   project?: string;
   epic?: string;
   title?: string;
@@ -98,6 +104,15 @@ export interface ProposalItem {
   before?: { goal?: string; acceptanceCriteria?: string[] };
   after?: { goal?: string; acceptanceCriteria?: string[] };
   text?: string;
+  /** A task item's relations. */
+  blockedBy?: ProposalRef[];
+  blocks?: ProposalRef[];
+  related?: ProposalRef[];
+  /** A relation item (a brainstorm's relate): `from` blocks or is related to `to`, existing tasks by key. */
+  from?: string;
+  to?: string;
+  relationKind?: "blocks" | "related";
+  why?: string;
 }
 
 /** An item's state for the person looking. */
@@ -107,12 +122,16 @@ export interface ProposalItemStatus {
   key?: string;
   canFile?: boolean;
   why?: string;
+  /** The card's unfiled items (0-based) filing this one files with it: what it waits on. */
+  filesWith?: number[];
   /**
    * What blocks an item the person can't file: `owner` (its task's owner
    * may, named in `owner`) and `reader` (a member who can chat may) leave it
-   * to someone else; `started`, `unlinked` and `not_a_task` block everyone.
+   * to someone else; `started`, `unlinked` and `not_a_task` block everyone, and
+   * `blocker_unfiled` is an item that waits on another of the card's items
+   * nobody can file.
    */
-  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "unknown";
+  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "unknown";
   owner?: PersonRef;
 }
 

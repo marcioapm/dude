@@ -264,7 +264,7 @@ func excerpt(s string, n int) string {
 func conducted[T any](out T, err error) (T, error) {
 	var r delivery.Refusal
 	if errors.As(err, &r) {
-		return out, refuse("%s", r.Msg)
+		return out, refusal{msg: r.Msg, blocked: r.Blocked}
 	}
 	return out, err
 }
@@ -437,11 +437,65 @@ func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string
 }
 
 type updateTaskIn struct {
-	Goal               *string   `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
-	AcceptanceCriteria *[]string `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
+	Goal               *string      `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
+	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
+	AddRelations       []relationIn `json:"addRelations,omitempty" jsonschema:"relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related"`
+	RemoveRelations    []relationIn `json:"removeRelations,omitempty" jsonschema:"relations to remove: only ones this task's agents added"`
+}
+
+type relationIn struct {
+	Kind string `json:"kind" jsonschema:"blocked_by, blocks or related, read from this task"`
+	Task string `json:"task" jsonschema:"the other task's key (CP-41)"`
+	Why  string `json:"why,omitempty" jsonschema:"why, shown quoted in the task's history"`
+}
+
+// edgesOf resolves update_task's relations to edges of the caller's task.
+func edgesOf(ctx context.Context, tx pgx.Tx, c Caller, in []relationIn) ([]delivery.Edge, error) {
+	var out []delivery.Edge
+	for _, r := range in {
+		kind := strings.TrimSpace(r.Kind)
+		if kind != delivery.SideBlockedBy && kind != delivery.SideBlocks && kind != delivery.SideRelated {
+			return nil, refuse("a relation's kind is blocked_by, blocks or related, not %q", r.Kind)
+		}
+		other, ok, err := delivery.TaskByOrgKey(ctx, tx, r.Task)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, refuse("no task %s in this organisation", r.Task)
+		}
+		here, err := hereOf(ctx, tx, c)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, delivery.Edge{Here: here, Other: other, Side: kind, Why: r.Why})
+	}
+	return out, nil
+}
+
+func hereOf(ctx context.Context, tx pgx.Tx, c Caller) (delivery.RelatedTask, error) {
+	key, err := delivery.TaskKeyOf(ctx, tx, c.TaskID)
+	return delivery.RelatedTask{ID: c.TaskID, Key: key, ProjectID: c.ProjectID}, err
 }
 
 func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[string]any, error) {
+	relations := len(in.AddRelations)+len(in.RemoveRelations) > 0
+	if relations {
+		add, err := edgesOf(ctx, tx, c, in.AddRelations)
+		if err != nil {
+			return nil, err
+		}
+		remove, err := edgesOf(ctx, tx, c, in.RemoveRelations)
+		if err != nil {
+			return nil, err
+		}
+		if err := delivery.ConductRelationsTx(ctx, tx, c.run(), add, remove); err != nil {
+			return conducted[map[string]any](nil, err)
+		}
+		if in.Goal == nil && in.AcceptanceCriteria == nil {
+			return map[string]any{"updated": true, "next": "The relations are written. A task blocked by another starts only once that one is merged."}, nil
+		}
+	}
 	spec := delivery.TaskSpec{Goal: in.Goal}
 	if in.AcceptanceCriteria != nil {
 		spec.Criteria, spec.HasCriteria = *in.AcceptanceCriteria, true

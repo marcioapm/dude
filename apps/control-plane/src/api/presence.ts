@@ -1,7 +1,7 @@
 /**
- * Presence: who is here. Any authenticated request says its person is
- * around; `people.last_seen_at` is touched at most once a minute per
- * person (this process remembers when it last did), and each touch is
+ * Presence: who is using dude. What counts is in docs/CONTRIBUTING.md,
+ * "Online and last seen"; router.ts applies it. `people.last_seen_at` is
+ * touched at most once a minute per person (this process remembers when it last did), and each touch is
  * announced as a live `person.seen` event so open pages update their
  * Online row. No Redis: at this size a row per person is enough, and the
  * announcement rides the NOTIFY channel the ledger already uses.

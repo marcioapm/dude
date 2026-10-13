@@ -482,6 +482,13 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 			return nil, rerr
 		}
 	}
+	if errors.As(err, &refused) && refused.blocked != nil {
+		// Path 4's refusal rolled the call back: kept in a transaction of
+		// its own, so refusals stay auditable. Best effort, as the API's.
+		_ = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+		})
+	}
 	if err != nil || t.outside == nil {
 		return out, err
 	}
@@ -538,6 +545,8 @@ type refusal struct {
 	msg    string
 	code   string
 	record *ledger.Event
+	// A start refused as blocked: recorded after the call rolls back.
+	blocked *delivery.BlockedError
 }
 
 func (r refusal) Error() string { return r.msg }

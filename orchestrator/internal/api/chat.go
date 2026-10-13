@@ -12,7 +12,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
-	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // chat is a person writing in a task's Chat. With no conductor, the
@@ -43,7 +42,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 	case len(body.Text) > delivery.ChatMessageMax:
 		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", delivery.ChatMessageMax)
 	}
-	return s.converse(w, r, org, body, false)
+	return s.converse(w, r, org, body, false, nil)
 }
 
 // chatMessage is what a person sends in a task's Chat: words, or the
@@ -59,20 +58,28 @@ type chatMessage struct {
 }
 
 // TalkItThrough is what a person who pressed Talk it through says to the
-// conductor first: the task is the subject, and nothing is built yet.
-const TalkItThrough = "Let's talk this task through before anything is built. Read it and the code, then ask me " +
-	"what you need to know, or propose a plan."
+// conductor first (delivery.TalkItThrough).
+const TalkItThrough = delivery.TalkItThrough
 
 // talk is Talk it through: a task not started gets its delivery, decided
 // by the conductor and waiting on its first decision, and its conductor,
 // asked to plan it with the person.
 func (s *Server) talk(w http.ResponseWriter, r *http.Request, org string) error {
-	return s.converse(w, r, org, chatMessage{Text: TalkItThrough}, true)
+	var body startOverride
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	override, err := overrideFor(r, body, "talk")
+	if err != nil {
+		return err
+	}
+	return s.converse(w, r, org, chatMessage{Text: TalkItThrough}, true, override)
 }
 
 // converse takes a person's message in a task's Chat (see chat); with
-// talk, only on a task not started.
-func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, msg chatMessage, talk bool) error {
+// talk, only on a task not started. On a task not started it is a start
+// (paths 2 and 3), refused while the task is blocked unless overridden.
+func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, msg chatMessage, talk bool, override *delivery.Override) error {
 	text := msg.Text
 	taskID := r.PathValue("id")
 	p := principalOf(r)
@@ -96,7 +103,7 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 			}
 			return err
 		}
-		decider, err := s.decideFor(r.Context(), tx, org, taskID, writer, talk)
+		decider, err := s.decideFor(r.Context(), tx, org, taskID, writer, talk, override)
 		if err != nil {
 			return err
 		}
@@ -191,7 +198,11 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 		return fail(http.StatusConflict, "conflict", "task %s's conductor was just started; send again", taskID)
 	}
 	if err != nil {
-		return err
+		path := "chat"
+		if talk {
+			path = "talk"
+		}
+		return s.refusedStart(r.Context(), org, taskID, path, p, err)
 	}
 	s.kick()
 	status := http.StatusOK
@@ -243,7 +254,7 @@ func (s *Server) retryConductor(w http.ResponseWriter, r *http.Request, org stri
 // not started gets a delivery the conductor decides, parked on its first
 // decision; anything else is unchanged. talk is Talk it through, refused
 // on a task already started.
-func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, wr delivery.Writer, talk bool) (string, error) {
+func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, wr delivery.Writer, talk bool, override *delivery.Override) (string, error) {
 	d, err := delivery.LoadDelivery(ctx, tx, taskID)
 	if err != nil {
 		return "", err
@@ -255,13 +266,15 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 			FROM tasks t WHERE t.id = $1`, taskID).Scan(&status, &started); err != nil {
 			return "", err
 		}
-		if !notStarted(status) || started {
+		// A task with no delivery in any other status (marked done, or
+		// moved by hand) is not talked through.
+		if !delivery.NotStarted(status) || started {
 			if talk {
 				return "", fail(http.StatusConflict, "conflict", "task %s is %s: it can no longer be talked through", taskID, status)
 			}
 			return delivery.DeciderPolicy, nil
 		}
-		return delivery.DeciderConductor, s.talkThrough(ctx, tx, org, taskID, wr)
+		return delivery.DeciderConductor, s.talkThrough(ctx, tx, org, taskID, wr, override)
 	}
 	if talk {
 		return "", fail(http.StatusConflict, "conflict", "task %s has started: write in its Chat instead", taskID)
@@ -280,42 +293,14 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 	return delivery.DeciderConductor, nil
 }
 
-// notStarted is a task status from before any delivery: where Deliver and
-// Talk it through are offered. A task with no delivery in any other status
-// (marked done, or moved by hand) is not talked through.
-func notStarted(status string) bool {
-	switch status {
-	case "received", "intake", "awaiting_confirmation", "queued":
-		return true
-	}
-	return false
-}
-
 // talkThrough starts a task's delivery for its conductor to decide: as
 // Deliver starts one, with decider conductor, so its first step parks on
-// the conductor's decision to start the implementer.
-func (s *Server) talkThrough(ctx context.Context, tx pgx.Tx, org, taskID string, wr delivery.Writer) error {
-	projectID, policy, err := policyFor(ctx, tx, taskID)
-	if err != nil {
-		return err
-	}
-	if err := delivery.NameOnlyRepository(ctx, tx, taskID); err != nil {
-		return err
-	}
-	var attempt int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, taskID).Scan(&attempt); err != nil {
-		return err
-	}
-	st := delivery.State{TaskID: taskID, ProjectID: projectID, Policy: policy, Branch: delivery.BranchFor(taskID, attempt),
-		Decider: delivery.DeciderConductor}
-	if _, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{Type: delivery.WorkflowType, OrganizationID: org,
-		IdempotencyKey: deliveryKey(taskID), TaskID: taskID, Input: st}); err != nil {
-		return err
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvDeciderChanged, OrganizationID: org, ProjectID: projectID,
-		TaskID: taskID, ActorType: wr.ActorType, ActorID: wr.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: taskID,
-		Payload: map[string]any{"from": nil, "to": delivery.DeciderConductor, "why": "talk it through"}})
-	return err
+// the conductor's decision to start the implementer. The conductor itself
+// is the caller's to make, with the person's message.
+func (s *Server) talkThrough(ctx context.Context, tx pgx.Tx, org, taskID string, wr delivery.Writer, override *delivery.Override) error {
+	_, err := delivery.StartTx(ctx, tx, s.Workflow, delivery.StartInput{Org: org, TaskID: taskID, How: delivery.HowTalk,
+		Writer: wr, Override: override})
+	return startFailure(err)
 }
 
 // handBack is "Let Deliver finish it" (decider policy), or taking the

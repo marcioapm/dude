@@ -67,6 +67,54 @@ export const EventTypes = {
   /** A person's comment on a task, shown in its Activity. Payload: `{ text }`. */
   TaskComment: "task.comment",
 
+  // Task relations (docs/design/task-relations.md). An edge's events are on
+  // both its tasks, in one correlation.
+  /**
+   * An edge was added. Payload: `{ kind: "blocks" | "related", from, to, why?, proposedByRun?, by? }`
+   * (`from`/`to` task keys; `by` the agent's role for an agent's).
+   */
+  TaskRelationAdded: "task.relation_added",
+  /** An edge was removed. Payload: `{ kind, from, to }`. */
+  TaskRelationRemoved: "task.relation_removed",
+  /**
+   * The merge of `by` released the task's last open blocker. Payload:
+   * `{ by, pr, blockers: [] }`. Only on a merge: never on a move to done
+   * with nothing merged.
+   */
+  TaskUnblocked: "task.unblocked",
+  /**
+   * A blocker of the task was marked done with nothing merged: it still
+   * blocks, for good. Payload: `{ by, actor? }` (`actor` who marked it done).
+   */
+  TaskBlockerUnmerged: "task.blocker_unmerged",
+  /** The owner set start when unblocked. Payload: `{ how }`. */
+  TaskAutoStartSet: "task.auto_start_set",
+  /**
+   * Start when unblocked ended without firing. Payload: `{ how, why, error? }`,
+   * why `owner` | `started` | `owner_changed` | `unblocked_by_removal` |
+   * `failed` (its start failed for a reason other than a blocker: `error`).
+   */
+  TaskAutoStartCancelled: "task.auto_start_cancelled",
+  /**
+   * Start when unblocked fired. Payload: `{ how, by, pr?, setBy, setByName, setAt }`; the
+   * start's own events follow.
+   */
+  TaskAutoStarted: "task.auto_started",
+  /** Start when unblocked found a blocker still open at fire time. Payload: `{ by?, blockers }`. */
+  TaskAutoStartRefused: "task.auto_start_refused",
+  /**
+   * A start refused as blocked. Payload: `{ path, blockers }`. Makes
+   * refusals auditable; never shown as a line.
+   */
+  TaskStartRefused: "task.start_refused",
+  /** A person started a blocked task anyway. Payload: `{ blockers: [{ key, status }], how, note? }`. */
+  TaskStartOverridden: "task.start_overridden",
+  /**
+   * Browser only, on the live stream: a task's relations or its start
+   * when unblocked changed; a board or task page reads again.
+   */
+  RelationsChanged: "relations.changed",
+
   // Brainstorm sessions: on the session (events.session_id), its members' alone.
   /** Payload: `{ title }`. */
   BrainstormCreated: "session.created",
@@ -132,7 +180,7 @@ export const EventTypes = {
   /** Their keys were revoked with them. Payload: `{ personId }`. */
   PersonRemoved: "person.removed",
   /**
-   * Someone was seen (any request of theirs, at most once a minute). Live
+   * An active-tab person-session request was seen, at most once a minute. Live
    * only, never in the ledger: no cursor. Payload: `{ person: PersonRef }`.
    */
   PersonSeen: "person.seen",
@@ -460,7 +508,7 @@ export const EventTypes = {
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,
    * pr_closed, published, publish_refused, publish_stalled, checkout,
-   * stalled; safety in older notes); `started` when no conductor was live
+   * stalled, unblocked; safety in older notes); `started` when no conductor was live
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",

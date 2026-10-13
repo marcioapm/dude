@@ -18,7 +18,7 @@ import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, Preview
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
+import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -346,6 +346,10 @@ export class FixtureClient extends ApiClient {
   }
   override navigation() {
     return Promise.resolve({ projects: this.#nav });
+  }
+  // The mockups' world has no relations; a test's client adds its own.
+  override relations(): Promise<TaskRelations> {
+    return Promise.resolve({ blockedBy: [], blocks: [], related: [], autoStart: null, owner: null });
   }
   override recentPullRequests() {
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });

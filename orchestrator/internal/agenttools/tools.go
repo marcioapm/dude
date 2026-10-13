@@ -33,8 +33,9 @@ var tools = []tool{
 		describe(machineOffer(false)),
 	define("request_machine", "Move to a larger machine.", machineRoles, requestMachine).describe(machineOffer(true)),
 	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
-		"asked for them — optionally only those mentioning some text. Use it before creating work, to find what "+
-		"already exists.", nil, listTasks),
+		"asked for them, and each one's relations: what it is blocked by (and whether that merged), what it blocks, "+
+		"what it is related to, and whether it can start — optionally only those mentioning some text, or only "+
+		"those that can start (startable). Use it before creating work, to find what already exists.", nil, listTasks),
 	define("list_epics", "The project's epics, in priority order, with how many tasks each has and how many "+
 		"are still open.", nil, listEpics),
 	define("ask_person", askDescription+" After calling it, end your turn: the answers are your next message.",
@@ -52,8 +53,9 @@ var tools = []tool{
 		nil, requestRepository).limit(requestsPerRun),
 	define("create_task", fmt.Sprintf("Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. The goal is required (at least %d characters): say why it matters and what should change.",
-		GoalMin), creators, createTask).limit(createsPerRun),
+		"and decides. The goal is required (at least %d characters): say why it matters and what should change. "+
+		"A conductor or investigator may relate it (blockedBy, blocks, related: task keys); a refused relation "+
+		"refuses the whole create.", GoalMin), creators, createTask).limit(createsPerRun),
 	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
 		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
 		"Search before you investigate something that may already be known, and before you remember something.",
@@ -104,7 +106,9 @@ var tools = []tool{
 	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
 		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
 		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
-		"started on this attempt.", conductors, updateTask),
+		"started on this attempt. Its relations (addRelations, removeRelations: blocked_by, blocks, related, by task key) "+
+		"may change at any status, when you learn this needs other work merged first; you remove only relations this "+
+		"task's agents added.", conductors, updateTask),
 	around(define("reply_on_pull_request", "Answer on one of your task's pull requests, as dude's GitHub login: for a "+
 		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
 		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
@@ -123,10 +127,12 @@ var tools = []tool{
 // ---- list_tasks --------------------------------------------------------------
 
 type listTasksIn struct {
-	Text string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
+	Text      string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
+	Startable bool   `json:"startable,omitempty" jsonschema:"only tasks not started with nothing unmerged in front of them"`
 }
 
 type taskOut struct {
+	ID     string `json:"-"`
 	Key    string `json:"key"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
@@ -135,6 +141,10 @@ type taskOut struct {
 	CreatedBy string `json:"createdBy"`
 	// This task is the caller's own.
 	Yours bool `json:"yours,omitempty"`
+	// Its relations: blockedBy [{key, status, merged}], blocks, related,
+	// startable, startsWhenUnblocked; and the same on one line.
+	*delivery.TaskRelationsOut
+	Line string `json:"line"`
 }
 
 type listTasksOut struct {
@@ -152,7 +162,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 		return out, err
 	}
 	rows, err = tx.Query(ctx, `
-		SELECT p.key_prefix || '-' || w.number, w.title, w.status::text, COALESCE(e.title, ''),
+		SELECT w.id, p.key_prefix || '-' || w.number, w.title, w.status::text, COALESCE(e.title, ''),
 		       COALESCE((SELECT p.key_prefix || '-' || src.number FROM runs r JOIN tasks src ON src.id = r.task_id
 		                 WHERE r.id = w.created_by_run_id), 'person'),
 		       w.id = $2
@@ -163,17 +173,48 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 	if err != nil {
 		return out, err
 	}
-	out.Tasks, err = pgx.CollectRows(rows, pgx.RowToStructByPos[taskOut])
-	return out, err
+	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (taskOut, error) {
+		var t taskOut
+		err := r.Scan(&t.ID, &t.Key, &t.Title, &t.Status, &t.Epic, &t.CreatedBy, &t.Yours)
+		return t, err
+	})
+	if err != nil {
+		return out, err
+	}
+	ids := make([]string, len(all))
+	for i, t := range all {
+		ids[i] = t.ID
+	}
+	rels, err := delivery.RelationsOf(ctx, tx, ids)
+	if err != nil {
+		return out, err
+	}
+	for _, t := range all {
+		t.TaskRelationsOut = rels[t.ID]
+		if in.Startable && (t.TaskRelationsOut == nil || !t.Startable) {
+			continue
+		}
+		t.Line = strings.TrimSuffix(t.Key+" · "+t.Status+" · "+delivery.RelationLine(t.TaskRelationsOut), " · ")
+		out.Tasks = append(out.Tasks, t)
+	}
+	return out, nil
 }
 
 // ---- create_task -----------------------------------------------------
+
+// relationWriters may write relations: the conductor (create_task,
+// update_task) and the investigator (create_task). An implementer that
+// finds it needs other work says so; it never blocks its own task.
+var relationWriters = []string{delivery.RoleConductor, "investigator"}
 
 type createTaskIn struct {
 	Title              string   `json:"title" jsonschema:"what should change, in one line"`
 	Goal               string   `json:"goal" jsonschema:"required: why it matters, what should change, and any detail another agent or a person needs; see the tool's description for the minimum"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
 	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
+	BlockedBy          []string `json:"blockedBy,omitempty" jsonschema:"conductor, investigator: task keys (CP-41) the new task can't start before they are merged"`
+	Blocks             []string `json:"blocks,omitempty" jsonschema:"conductor, investigator: task keys that can't start before the new task is merged"`
+	Related            []string `json:"related,omitempty" jsonschema:"conductor, investigator: task keys related to it, gating nothing"`
 }
 
 type createTaskOut struct {
@@ -231,6 +272,8 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
 	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:
 		return createTaskOut{}, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+	case len(in.BlockedBy)+len(in.Blocks)+len(in.Related) > 0 && !slices.Contains(relationWriters, c.Role):
+		return createTaskOut{}, refuse("a %s can't relate tasks: say what this waits on in the goal, and a person or the conductor relates them", c.Role)
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {
@@ -274,7 +317,30 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	if _, err := ledger.Append(ctx, tx, created); err != nil {
 		return createTaskOut{}, err
 	}
-	return createTaskOut{Key: fmt.Sprintf("%s-%d", prefix, number)}, nil
+	key := fmt.Sprintf("%s-%d", prefix, number)
+	// Its relations, with it: one refused refuses the whole create.
+	here := delivery.RelatedTask{ID: id, Key: key, ProjectID: c.ProjectID}
+	for _, side := range []struct {
+		name string
+		keys []string
+	}{{delivery.SideBlockedBy, in.BlockedBy}, {delivery.SideBlocks, in.Blocks}, {delivery.SideRelated, in.Related}} {
+		for _, k := range side.keys {
+			other, ok, err := delivery.TaskByOrgKey(ctx, tx, k)
+			if err != nil {
+				return createTaskOut{}, err
+			}
+			if !ok {
+				return createTaskOut{}, refuse("%s: no task %s in this organisation; nothing was created", side.name, k)
+			}
+			if err := delivery.AddRelationTx(ctx, tx, c.Org, delivery.Edge{Here: here, Other: other, Side: side.name, RunID: c.RunID}); err != nil {
+				if r, ok := err.(delivery.RelationRefusal); ok {
+					return createTaskOut{}, refuse("%s %s: %s; nothing was created", strings.ReplaceAll(side.name, "_", " "), k, r.Msg)
+				}
+				return createTaskOut{}, err
+			}
+		}
+	}
+	return createTaskOut{Key: key}, nil
 }
 
 // epicByTitle finds an epic as an agent names it: by its title, in its

@@ -493,14 +493,18 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 }
 
 // RecordStatusTx records that a task's status changed, and why: what time
-// and cost count from.
+// and cost count from. A move to done releases what the task blocked, if
+// it merged (releaseDependantsTx).
 func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: map[string]any{"status": status, "reason": reason},
 	})
-	return err
+	if err != nil || status != "done" {
+		return err
+	}
+	return releaseDependantsTx(ctx, tx, org, taskID)
 }
 
 // Emit records a workflow event about the task.
