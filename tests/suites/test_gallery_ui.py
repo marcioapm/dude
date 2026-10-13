@@ -356,6 +356,9 @@ def test_child_examples_mount_after_hash_navigation(gallery_page: Page, console_
     expect(block.locator("section[data-session-id]")).to_have_count(0)
     gallery_page.evaluate("location.hash = 'ch-children'")
     expect(block.get_by_test_id("child-examples-pending")).to_have_count(0)
+    # Where the navigation itself lands, before any scroll of our own: the
+    # placeholder gave way to the examples, and the first is in view.
+    expect(block.locator("section[data-session-id]").first).to_be_in_viewport()
     for theme in ("dark", "light"):
         pane = block.locator(f"[data-theme='{theme}']")
         threads = pane.locator("section[data-session-id]")
@@ -363,8 +366,6 @@ def test_child_examples_mount_after_hash_navigation(gallery_page: Page, console_
         assert threads.evaluate_all("els => els.map(e => e.dataset.status + (e.dataset.waiting ? ' waiting' : ''))") == [
             "running", "running waiting", "completed", "running", "completed",
         ]
-        pane.get_by_text("live child", exact=True).scroll_into_view_if_needed()
-        expect(threads.first).to_be_in_viewport()
         expect(pane).to_contain_text("Nothing in this Run can answer it.")
     assert gallery_page.evaluate("location.hash") == "#ch-children"
     assert console_errors == []
