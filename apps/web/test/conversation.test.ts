@@ -123,6 +123,13 @@ describe("machine moves", () => {
     expect(notices(c).at(-1)).toBe("The implementer asked for XL; lux kept it on Standard: XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only.");
   });
 
+  test("lux refusing a Reset's resume says the implementer was to move back, and where lux kept it", () => {
+    const refused: MachineRefusedPayload = { moveId: "mmv_r", role: "implementer", from: LARGE, to: STANDARD, kind: "reset",
+      kept: LARGE, code: "unknown_pool", message: "Standard's pool has no host it fits" };
+    const c = project([ev(EventTypes.RunResized, { machine: LARGE }), ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
+    expect(notices(c).at(-1)).toBe("The implementer was to move back to Standard; lux kept it on Large: Standard's pool has no host it fits.");
+  });
+
   // The orchestrator's words for each lux refusal (delivery.MoveRefusal): what the agent's card says
   // (ForAgent) before any park, and what machine.refused records (ForPerson) after one.
   const LUX_REFUSALS = [
