@@ -54,7 +54,8 @@ func TestWakeTimeoutChoiceAndOpenWakeProtection(t *testing.T) {
 			t.Fatalf("wakeTimeout(%+v, %v) = %v", tc.settings, tc.ready, got)
 		}
 	}
-	now := time.Now()
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) *time.Time { t := now.Add(-ago); return &t }
 	for _, tc := range []struct {
 		state     string
 		requested *time.Time
@@ -63,13 +64,17 @@ func TestWakeTimeoutChoiceAndOpenWakeProtection(t *testing.T) {
 	}{
 		{lux.SrvAsleep, nil, 5 * time.Minute, true},
 		{lux.SrvReady, nil, 5 * time.Minute, true},
-		{lux.SrvWaking, &now, 5 * time.Minute, false},
-		{lux.SrvWaking, &now, 25 * time.Minute, true},
-		{lux.SrvNoAnswer, &now, 5 * time.Minute, false},
+		{lux.SrvWaking, at(time.Minute), 5 * time.Minute, false},
+		{lux.SrvWaking, nil, 5 * time.Minute, false},
+		{lux.SrvWaking, at(time.Minute), 25 * time.Minute, true},
+		// The timestamp outlives the wake: open until it plus the current 15m.
+		{lux.SrvAsleep, at(14*time.Minute + 59*time.Second), 5 * time.Minute, false},
+		{lux.SrvNoAnswer, at(15 * time.Minute), 5 * time.Minute, true},
+		{lux.SrvNoAnswer, at(2 * time.Hour), 5 * time.Minute, true},
 		{lux.SrvAsleep, nil, 15 * time.Minute, false},
 	} {
 		cur := lux.TenantServer{State: tc.state, WakeTimeout: json.RawMessage(`"15m"`), WakeRequestedAt: tc.requested}
-		got := wakeTimeoutPatch(cur, tc.want)
+		got := wakeTimeoutPatch(cur, tc.want, now)
 		if (got != nil) != tc.patch {
 			t.Fatalf("patch state %s requested %v want %v = %v", tc.state, tc.requested, tc.want, got)
 		}

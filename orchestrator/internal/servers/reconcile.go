@@ -167,7 +167,7 @@ type recordedServer struct {
 func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantServer, in lux.ServerInput, timeout time.Duration) error {
 	var patch lux.PatchServer
 	var changed []string
-	if t := wakeTimeoutPatch(cur, timeout); t != nil {
+	if t := wakeTimeoutPatch(cur, timeout, p.now()); t != nil {
 		patch.WakeTimeout = t
 		changed = append(changed, "wakeTimeout")
 	}
@@ -218,18 +218,28 @@ func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantSe
 
 // wakeTimeoutPatch is the wakeTimeout to PATCH onto a preview server so
 // that it has want: nil when it has it already, or when want is shorter
-// and the server is waking. lux measures an open wake from when it was
+// and a wake is open at now. lux measures an open wake from when it was
 // asked for with the timeout the server has now (serverRow.wakeOpen), so
 // shortening it then could turn a wake under way into "no answer"; it is
-// shortened at a later sweep, once the wake is over. Lengthening is always
-// safe.
-func wakeTimeoutPatch(cur lux.TenantServer, want time.Duration) *string {
+// shortened at a later sweep, once the wake is over. lux keeps
+// wakeRequestedAt after the wake expired ("no answer") until the server is
+// ready or detached, so only a request younger than the current timeout
+// counts as open. Lengthening is always safe.
+func wakeTimeoutPatch(cur lux.TenantServer, want time.Duration, now time.Time) *string {
 	have := cur.WakeTimeoutDuration()
-	if have == want || (want < have && (cur.State == lux.SrvWaking || cur.WakeRequestedAt != nil)) {
+	open := cur.State == lux.SrvWaking || (cur.WakeRequestedAt != nil && now.Before(cur.WakeRequestedAt.Add(have)))
+	if have == want || (want < have && open) {
 		return nil
 	}
 	s := want.String()
 	return &s
+}
+
+func (p *Previews) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
 }
 
 // recordWakeTimeout keeps the wake timeout lux reports for a preview
@@ -264,7 +274,7 @@ func (p *Previews) applyWakeTimeouts(ctx context.Context, r wakeRun) error {
 		return err
 	}
 	for _, cur := range list {
-		if timeout := wakeTimeoutPatch(cur, wakeTimeout(settings, servedOnce)); timeout != nil {
+		if timeout := wakeTimeoutPatch(cur, wakeTimeout(settings, servedOnce), p.now()); timeout != nil {
 			got, err := p.Lux.PatchServer(ctx, cur.ID, lux.PatchServer{WakeTimeout: timeout})
 			if lux.IsNotFound(err) {
 				continue

@@ -126,7 +126,7 @@ export function egressAllows(list: readonly string[], name: string): boolean {
   });
 }
 
-// A preview's wake timeouts; migration 112's preview_settings() fills the same defaults.
+// A preview's wake timeouts; migration 114's preview_settings() fills the same defaults.
 export const PREVIEW_FIRST_WAKE_TIMEOUT_DEFAULT_MINUTES = 15;
 export const PREVIEW_WAKE_TIMEOUT_DEFAULT_MINUTES = 5;
 export const PREVIEW_WAKE_TIMEOUT_MAX_MINUTES = 120;
