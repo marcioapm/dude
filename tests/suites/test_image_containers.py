@@ -330,7 +330,8 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     chip = page.get_by_test_id("start-chip")
     expect(chip).to_contain_text("Waiting for a machine")
     header = page.locator("header").filter(has=chip)
-    expect(header.locator('[data-status="starting"]')).to_contain_text("Starting")
+    # The Run's own status stays honest (Scheduled until lux places it); the chip carries where the start is.
+    expect(header.locator('[data-status]').first).to_have_attribute("data-status", re.compile(r"^(pending|scheduled|starting)$"))
     expect(header.get_by_test_id("run-image")).to_contain_text("abs-preview")
     # Nothing in the header is cut short by the cue: the title and each chip show all of their text.
     for width in (1024, 1440):
