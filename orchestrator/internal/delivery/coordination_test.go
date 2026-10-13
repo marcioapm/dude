@@ -297,6 +297,74 @@ func TestPeerEndingSerializesWithOpeningAWait(t *testing.T) {
 	}
 }
 
+// A waiter's end holds its Run, then its trigger closes its waits; a peer
+// ending must take the waiter's Run before the same waits, or each holds
+// what the other needs (40P01).
+func TestAPeerEndingWaitsForTheWaitingRunsEnd(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	q := w.send(t, one, "ABS-2", "Which path?", "")
+	w.in(t, func(tx pgx.Tx) error { _, err := delivery.OpenWaitTx(ctx, tx, one, q.ID, "wait"); return err })
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, one.RunID); err != nil {
+		t.Fatal(err)
+	}
+	pid := make(chan int, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+			var id int
+			if err := other.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&id); err != nil {
+				return err
+			}
+			pid <- id
+			_, err := delivery.SetTaskStatusTx(ctx, other, w.org, w.project, w.tasks["ABS-2"], "", "done", "test")
+			return err
+		})
+	}()
+	var otherPID int
+	select {
+	case otherPID = <-pid:
+	case err := <-done:
+		t.Fatalf("ending failed before it started: %v", err)
+	}
+	for {
+		var blocked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype IN ('tuple','transactionid'))`, otherPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("ending finished before the Run's end: %v", err)
+		default:
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed' WHERE id = $1`, one.RunID); err != nil {
+		t.Fatalf("run end: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("run end commit: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("peer ending: %v", err)
+	}
+	if got := w.count(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_one' AND closed_by = 'run_ended'`); got != 1 {
+		t.Errorf("%d waits closed by run_ended, want the one", got)
+	}
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
+		t.Errorf("%d stranded waits", n)
+	}
+}
+
 func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
 	for _, scenario := range []string{"unread", "submit failed", "started then failed"} {
 		briefed := scenario != "unread"

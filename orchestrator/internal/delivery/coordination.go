@@ -27,6 +27,8 @@ import (
 // lock the epic or note. Briefings lock held messages then KEY SHARE their
 // new Run, whose follower cannot start until submit. Directive receipts
 // update only the recipient's message, not the question a reply locks.
+// Peer ending: task -> waiter Runs KEY SHARE -> waits, the order a waiter's
+// own end takes (Run, then its waits through runs_close_peer_waits).
 
 // Ledger events of agents coordinating.
 const (
@@ -320,6 +322,14 @@ func closeWaitsTx(ctx context.Context, tx pgx.Tx, org, message, by string) ([]st
 // the waiting Run is told, at its next step or as the input that resumes
 // it from a park, that no reply is coming. Returns the Runs released.
 func PeerEndedTx(ctx context.Context, tx pgx.Tx, org, taskID, status string) ([]string, error) {
+	// The waiters' Runs before their waits: a waiter ending holds its Run
+	// and then closes the same waits. KEY SHARE is what the directive's FK
+	// takes below anyway; id order keeps two endings from crossing.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id IN (SELECT w.run_id FROM peer_waits w
+		JOIN peer_messages m ON m.id = w.message_id WHERE m.to_task_id = $1 AND w.closed_at IS NULL)
+		ORDER BY id FOR KEY SHARE`, taskID); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Query(ctx, `UPDATE peer_waits w SET closed_at = now(), closed_by = 'peer_ended'
 		FROM peer_messages m, runs r
 		WHERE m.id = w.message_id AND m.to_task_id = $1 AND w.closed_at IS NULL AND r.id = w.run_id
