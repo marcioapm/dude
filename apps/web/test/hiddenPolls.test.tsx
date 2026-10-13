@@ -181,7 +181,8 @@ function Images({ client, sub }: { client: ApiClient; sub: string | undefined })
 describe("the image library while a build runs", () => {
   for (const [what, sub, read] of [
     ["the list", undefined, "list"],
-    ["an image", "img_1", "image"],
+    // History, not the Containerfile: loading the editor chunk here would change what later files in the process render.
+    ["an image", "img_1/history", "image"],
     ["a build's log", "builds/imb_1", "build"],
   ] as const) {
     test(`${what} is read again while shown, and not while hidden`, async () => {

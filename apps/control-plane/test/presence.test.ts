@@ -13,6 +13,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { EventTypes, type PersistedEvent } from "@dude/domain";
 import { closePool, setPool } from "../src/db/client.ts";
+import { useConfig } from "../src/config.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { authenticate, createApiKey, personPrincipal } from "../src/api/auth.ts";
@@ -59,6 +60,8 @@ afterAll(async () => {
   await closePool(app);
   await owner`DELETE FROM organizations WHERE id = ${ORG}`;
   await owner.end();
+  // Resolved settings are cached for the process; later suites set their own env.
+  useConfig(null);
 });
 
 /** A person no request has touched yet in this process, so the minute limit hides nothing. */
