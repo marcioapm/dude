@@ -48,8 +48,12 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
         FROM forge_credentials WHERE forge = 'github' AND auth = 'github_app' FOR UPDATE`;
       if (!credential?.oauth_client_id || !credential.configured) throw badRequest("An administrator must configure GitHub App OAuth first");
       await sql`DELETE FROM github_oauth_transactions WHERE expires_at <= now()`;
-      await sql`INSERT INTO github_oauth_transactions (state_hash, organization_id, person_id, credential_id, credential_version, verifier)
-        VALUES (${hash(state)}, ${organizationId}, ${personId}, ${credential.id}, ${credential.oauth_version}, ${verifier})`;
+      const [connection] = await sql`INSERT INTO github_oauth_connections (organization_id, person_id, credential_id)
+        VALUES (${organizationId}, ${personId}, ${credential.id})
+        ON CONFLICT (organization_id, person_id, credential_id) DO UPDATE
+          SET generation = github_oauth_connections.generation + 1 RETURNING generation`;
+      await sql`INSERT INTO github_oauth_transactions (state_hash, organization_id, person_id, credential_id, credential_version, verifier, generation)
+        VALUES (${hash(state)}, ${organizationId}, ${personId}, ${credential.id}, ${credential.oauth_version}, ${verifier}, ${connection!.generation})`;
       return credential.oauth_client_id as string;
     });
     const url = new URL("https://github.com/login/oauth/authorize");
@@ -58,28 +62,22 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
     return json({ url: url.toString() });
   });
   router.get(callbackPath, async (ctx) => {
-    let principal: RequestContext["principal"];
     try {
-      principal = session(ctx);
-    } catch {
-      return landing("authorization_failed");
-    }
-    const { organizationId, personId } = principal;
-    const state = ctx.url.searchParams.get("state") ?? "";
-    const transaction = await withOrg(organizationId, async ({ sql }) => {
-      const [row] = await sql`DELETE FROM github_oauth_transactions WHERE state_hash = ${hash(state)}
-        AND person_id = ${personId} AND organization_id = ${organizationId}
-        RETURNING credential_id, credential_version, verifier, expires_at`;
-      if (!row || new Date(row.expires_at).getTime() <= Date.now()) return null;
-      const [credential] = await sql`SELECT oauth_client_id, oauth_client_secret, api_base_url FROM forge_credentials
-        WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
-      return credential ? { ...row, ...credential } : null;
-    });
-    if (!transaction) return landing("invalid_or_expired");
-    if (ctx.url.searchParams.has("error")) return landing("authorization_denied");
-    const code = ctx.url.searchParams.get("code");
-    if (!code) return landing("authorization_failed");
-    try {
+      const { organizationId, personId } = session(ctx);
+      const state = ctx.url.searchParams.get("state") ?? "";
+      const transaction = await withOrg(organizationId, async ({ sql }) => {
+        const [row] = await sql`DELETE FROM github_oauth_transactions WHERE state_hash = ${hash(state)}
+          AND person_id = ${personId} AND organization_id = ${organizationId}
+          RETURNING credential_id, credential_version, generation, verifier, expires_at`;
+        if (!row || new Date(row.expires_at).getTime() <= Date.now()) return null;
+        const [credential] = await sql`SELECT oauth_client_id, oauth_client_secret, api_base_url FROM forge_credentials
+          WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
+        return credential ? { ...row, ...credential } : null;
+      });
+      if (!transaction) return landing("invalid_or_expired");
+      if (ctx.url.searchParams.has("error")) return landing("authorization_denied");
+      const code = ctx.url.searchParams.get("code");
+      if (!code) return landing("authorization_failed");
       const response = await fetchImpl("https://github.com/login/oauth/access_token", {
         method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({ client_id: transaction.oauth_client_id, client_secret: transaction.oauth_client_secret,
@@ -99,7 +97,11 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
       const stored = await withOrg(organizationId, async ({ sql }) => {
         const [credential] = await sql`SELECT id FROM forge_credentials WHERE id = ${transaction.credential_id}
           AND oauth_version = ${transaction.credential_version} FOR UPDATE`;
-        if (!credential) return false;
+        if (!credential) return "app_changed";
+        // A later Connect or a Disconnect since this transaction started supersedes it.
+        const [connection] = await sql`SELECT generation FROM github_oauth_connections
+          WHERE person_id = ${personId} AND credential_id = ${credential.id} FOR UPDATE`;
+        if (!connection || String(connection.generation) !== String(transaction.generation)) return "superseded";
         await sql`INSERT INTO github_user_authorizations (organization_id, person_id, credential_id, credential_version,
           github_user_id, github_login, access_token, refresh_token, expires_at, refresh_expires_at)
           VALUES (${organizationId}, ${personId}, ${credential.id}, ${transaction.credential_version}, ${user.id!}, ${user.login!},
@@ -111,7 +113,7 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
             reconnect_required = false, refresh_claim = NULL, refresh_claim_until = NULL`;
         await sql`UPDATE people SET github_login = ${user.login!}, github_user_id = ${user.id!} WHERE id = ${personId}`;
         // The workflow signal mirrors workflow.SignalTx: only deliveries frozen to this person are woken.
-        const parked = await sql`SELECT DISTINCT r.id FROM workflow_runs r JOIN pr_publications p ON p.task_id = r.task_id
+        const parked = await sql`SELECT DISTINCT r.id FROM workflow_runs r JOIN pr_publications p ON p.task_id = r.task_id AND p.branch = r.state->>'branch'
           WHERE p.owner_person_id = ${personId} AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'`;
         for (const { id } of parked) {
           await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
@@ -119,9 +121,9 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
           await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${id}
             AND status = 'waiting' AND awaiting_signals ? 'github.authorized'`;
         }
-        return true;
+        return "connected";
       });
-      return landing(stored ? "connected" : "app_changed");
+      return landing(stored);
     } catch {
       return landing("authorization_failed");
     }
@@ -129,6 +131,13 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
   router.delete("/v1/me/github", async (ctx) => {
     const { organizationId, personId } = session(ctx);
     const revoked = await withOrg(organizationId, async ({ sql }) => {
+      const credentials = await sql`SELECT id FROM forge_credentials WHERE forge = 'github' FOR UPDATE`;
+      for (const { id } of credentials) {
+        await sql`INSERT INTO github_oauth_connections (organization_id, person_id, credential_id)
+          VALUES (${organizationId}, ${personId}, ${id})
+          ON CONFLICT (organization_id, person_id, credential_id) DO UPDATE
+            SET generation = github_oauth_connections.generation + 1`;
+      }
       const [connection] = await sql`SELECT a.access_token, c.oauth_client_id, c.oauth_client_secret, c.api_base_url
         FROM github_user_authorizations a JOIN forge_credentials c ON c.id = a.credential_id
         WHERE a.person_id = ${personId} AND a.credential_version = c.oauth_version`;

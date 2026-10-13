@@ -67,7 +67,8 @@ export function MySettingsScreen({ client, me, onChanged }: {
               invalid_or_expired: "This GitHub connection request expired or was already used. Connect again.",
               enable_expiring_tokens: "Ask an administrator to enable expiring user authorization tokens in the GitHub App.",
               identity_failed: "GitHub could not verify your account. Connect again.",
-              app_changed: "The GitHub App changed. Connect again." } as Record<string, string>)[new URLSearchParams(window.location.search).get("github")!]
+              app_changed: "The GitHub App changed. Connect again.",
+              superseded: "This connection request was replaced by a newer one or by Disconnect." } as Record<string, string>)[new URLSearchParams(window.location.search).get("github")!]
               ?? "GitHub authorization failed. Connect again."
           }</Callout> : null}
           <p data-testid="github-authorization-status">{authorization.connection ? `Connected as ${authorization.connection.login}` : "Not connected"}</p>

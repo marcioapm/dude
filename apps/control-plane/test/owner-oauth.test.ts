@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test, spyOn } from "bun:test";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
 import { closePool, setPool } from "../src/db/client.ts";
@@ -12,6 +12,7 @@ const name = `dude_owner_oauth_${Bun.randomUUIDv7("hex").slice(-12)}`;
 let admin: SQL, owner: SQL, app: SQL, router: Router;
 let person = "per_owner", org = "org_owner";
 let denied = false, exchanged = 0;
+let exchangeHook: ((body: Record<string, string>) => Promise<Response>) | null = null;
 function database(appRole = false) {
   const u = new URL(url); u.pathname = `/${name}`;
   if (appRole) { u.username = "dude_app"; u.password = "dude_app"; }
@@ -24,6 +25,7 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => 
     const body = JSON.parse(String(init?.body));
     expect(body.client_id).toBe("client"); expect(body.client_secret).toBe("hidden-secret");
     expect(body.code_verifier).toHaveLength(43); expect(body.redirect_uri).toBe("https://dude.example/v1/me/github/callback");
+    if (exchangeHook) return exchangeHook(body);
     return Response.json({ access_token: "hidden-access", refresh_token: "hidden-refresh", expires_in: 28800, refresh_token_expires_in: 15552000 });
   }
   if (init?.method === "DELETE") {
@@ -73,6 +75,9 @@ test("state is person/org-bound, single-use, and verifies identity without expos
   const [profile] = await owner`SELECT github_login,github_user_id::int AS id,commit_email::text FROM people WHERE id='per_owner'`;
   expect(profile).toEqual({github_login:"CanonicalOwner",id:123,commit_email:"explicit@example.com"});
   const status = await request("/v1/me/github"); const text = await status.text();
+  const shown = JSON.parse(text) as { available: boolean; connection: Record<string, unknown> };
+  expect(Object.keys(shown).sort()).toEqual(["available", "connection"]);
+  expect(Object.keys(shown.connection).sort()).toEqual(["expiresAt", "login", "reconnectRequired", "refreshExpiresAt"]);
   expect(text).toContain("CanonicalOwner"); for (const secret of ["hidden-secret","hidden-access","hidden-refresh"]) expect(text).not.toContain(secret);
   const before = exchanged; expect((await callback(state)).headers.get("location")).toContain("invalid_or_expired"); expect(exchanged).toBe(before);
 });
@@ -91,5 +96,53 @@ test("disconnect removes connections and outstanding transactions immediately",a
   const state=await start(); expect((await callback(state)).headers.get("location")).toContain("connected");
   const pending=await start(); expect((await request("/v1/me/github","DELETE")).status).toBe(204);
   expect((await callback(pending)).headers.get("location")).toContain("invalid_or_expired");
-  const status=await (await request("/v1/me/github")).json() as {connection:unknown}; expect(status.connection).toBeNull();
+});
+
+test("disconnect fences an already consumed callback even without a stored authorization", async () => {
+  await request("/v1/me/github", "DELETE");
+  const state = await start();
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  exchangeHook = async () => { entered(); await gate; return Response.json({ access_token: "hidden-access", refresh_token: "hidden-refresh", expires_in: 28800, refresh_token_expires_in: 15552000 }); };
+  try {
+    const pending = callback(state); await held;
+    expect((await request("/v1/me/github", "DELETE")).status).toBe(204);
+    release(); expect((await pending).headers.get("location")).toContain("superseded");
+    expect(await (await request("/v1/me/github")).json()).toEqual({ available: true, connection: null });
+  } finally { release(); exchangeHook = null; }
+});
+
+test("latest initiated Connect wins when the older exchange finishes last", async () => {
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  exchangeHook = async (body) => {
+    if (body.code === "older") { entered(); await gate; }
+    return Response.json({ access_token: "hidden-access", refresh_token: body.code, expires_in: 28800, refresh_token_expires_in: 15552000 });
+  };
+  try {
+    const a = await start(); const pending = callback(a, "code=older"); await held;
+    const b = await start(); expect((await callback(b, "code=newer")).headers.get("location")).toContain("connected");
+    release(); expect((await pending).headers.get("location")).toContain("superseded");
+    const [stored] = await owner`SELECT refresh_token FROM github_user_authorizations WHERE person_id='per_owner'`;
+    expect(stored.refresh_token).toBe("newer");
+  } finally { release(); exchangeHook = null; }
+});
+
+test("callback consume DB errors and invalid grants return fixed outcomes without sensitive logging", async () => {
+  const state = await start();
+  const logs = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await owner`REVOKE DELETE ON github_oauth_transactions FROM dude_app`;
+    const failed = await callback(state, "code=sensitive-code");
+    expect(failed.status).toBe(303); expect(failed.headers.get("location")).toBe("/?github=authorization_failed#/me/settings");
+    await owner`GRANT DELETE ON github_oauth_transactions TO dude_app`;
+    exchangeHook = async () => Response.json({ error: "invalid_grant", error_description: "sensitive-code hidden-secret hidden-refresh" }, { status: 400 });
+    expect((await callback(state, "code=sensitive-code")).headers.get("location")).toBe("/?github=authorization_failed#/me/settings");
+    expect(logs.mock.calls).toEqual([]);
+  } finally {
+    await owner`GRANT DELETE ON github_oauth_transactions TO dude_app`;
+    exchangeHook = null; logs.mockRestore();
+  }
 });
