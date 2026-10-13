@@ -145,7 +145,8 @@ func TestTheMachineToolsDescribeTheSizesThisRunMayMoveTo(t *testing.T) {
 	}
 }
 
-// MCP gives lux's refusal code beside its words, as the CLI's JSON does.
+// MCP gives lux's refusal code beside dude's words for it, as the CLI's
+// JSON does.
 func TestMCPGivesLuxsRefusalCode(t *testing.T) {
 	f, token := machineRun(t, func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error {
 		return &lux.Error{Status: 422, Code: "platform_mismatch", Message: "pool highmem runs linux/arm64; this Run's image offers only linux/amd64"}
@@ -160,7 +161,7 @@ func TestMCPGivesLuxsRefusalCode(t *testing.T) {
 		t.Fatalf("call: %v %+v", err, res)
 	}
 	got, _ := res.StructuredContent.(map[string]any)
-	if got["code"] != "platform_mismatch" || !strings.HasPrefix(got["error"].(string), "pool highmem runs linux/arm64") {
+	if got["code"] != "platform_mismatch" || got["error"] != "XL is in highmem, whose machines cannot run this agent's image. Ask for another size, or ask a person to add an image for them." {
 		t.Errorf("structured: %#v", res.StructuredContent)
 	}
 	if text := res.Content[0].(*mcp.TextContent).Text; text != got["error"] {
@@ -180,6 +181,69 @@ func TestMCPGivesLuxsRefusalCode(t *testing.T) {
 	if status, out := f.post(t, token, "request_machine", `{"size":"XXL","reason":"oom"}`); status != 422 ||
 		out["error"] != "no size named XXL; you may move to: Large (4 · 16), XL (8 · 32, highmem pool)" {
 		t.Errorf("unknown: %d %v", status, out)
+	}
+}
+
+// factsLux is lux with what a refusal's sentence names: highmem runs
+// linux/arm64 and has no nested containers; the Run's image is amd64 only
+// and needs nested containers.
+type factsLux struct{ lux.Client }
+
+func (factsLux) Get(context.Context, string) (lux.Run, error) {
+	run := lux.Run{ID: "live", State: "running", PoolID: "pool_default", Placements: []lux.Placement{{ImagePlatforms: []string{"linux/amd64"}}}}
+	run.Spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+	return run, nil
+}
+
+func (factsLux) Pools(context.Context) ([]lux.Pool, error) {
+	no := false
+	return []lux.Pool{{ID: "pool_default", Name: "general", IsDefault: true},
+		{ID: "pool_high", Name: "highmem", Platforms: []string{"linux/arm64"}, Capabilities: &lux.PoolCapabilities{NestedContainers: &no}}}, nil
+}
+
+// Every lux refusal of a move reaches the agent in the design's sentences,
+// sizes and pools by name; lux's own words (pool ids) are never shown, and
+// the refusal is recorded with the same words.
+func TestEachLuxRefusalIsToldInTheDesignsWords(t *testing.T) {
+	for _, tc := range []struct {
+		status        int
+		code, size    string
+		luxSaid, want string
+	}{
+		{422, "platform_mismatch", "XL", "pool pool_high runs linux/arm64; this Run's image offers only linux/amd64",
+			"XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only. Ask for another size, or ask a person to add an arm64 image."},
+		{422, "pool_unfit", "XL", "pool pool_high cannot take this Run: none of its hosts offers nested containers (lux-runner --nested)",
+			"XL is in highmem, which can't run nested containers, and this agent's image needs them. Ask for another size."},
+		{422, "pool_unfit", "Large", "pool pool_default cannot take this Run: it needs 4 cpus; its largest host has 2",
+			"Large (4 CPUs · 16 GiB) is larger than any machine in general. Ask for another size."},
+		{422, "unknown_pool", "XL", "no pool with id pool_high", "XL's pool has no host it fits; ask for another size"},
+		{422, "invalid_spec", "Large", "resources.disk must not be negative",
+			"lux cannot give this agent Large as the size is set up. Ask for another size, or ask a person to check Large in Machines."},
+		{409, "not_resumable", "Large", "run is resuming already with other resources",
+			"lux was already resuming this Run, so it could not move it to Large. Ask again once you are running."},
+	} {
+		t.Run(tc.code+" "+tc.size, func(t *testing.T) {
+			f := setup(t)
+			token := f.run(t, "run_mach", "reviewer", "running")
+			mustExec(t, f.owner, `DELETE FROM machine_sizes WHERE organization_id = $1`, f.org)
+			mustExec(t, f.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id, is_default) VALUES
+				('ms_std', $1, 'Standard', 2, 8192, 20, NULL, true), ('ms_large', $1, 'Large', 4, 16384, 40, NULL, false),
+				('ms_xl', $1, 'XL', 8, 32768, 80, 'pool_high', false)`, f.org)
+			mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_std","name":"Standard","cpus":2,"memoryMiB":8192,"diskGiB":20,"from":"default"}', lux_run_id = 'live' WHERE id = 'run_mach'`)
+			srv := httptest.NewServer((&agenttools.Server{DB: f.app, Log: slog.New(slog.DiscardHandler), Lux: factsLux{},
+				ValidateMachine: func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error {
+					return &lux.Error{Status: tc.status, Code: tc.code, Message: tc.luxSaid}
+				}}).Handler())
+			t.Cleanup(srv.Close)
+			f.url = srv.URL
+			status, out := f.post(t, token, "request_machine", `{"size":"`+tc.size+`","reason":"oom"}`)
+			if status != 422 || out["code"] != tc.code || out["error"] != tc.want {
+				t.Fatalf("%d %v\nwant %q", status, out, tc.want)
+			}
+			if n := f.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_mach' AND event_type = 'machine.requested' AND payload->>'message' = $1 AND payload->>'refused' = $2`, tc.want, tc.code); n != 1 {
+				t.Errorf("%d machine.requested with the words", n)
+			}
+		})
 	}
 }
 

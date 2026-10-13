@@ -23,8 +23,9 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 	for _, refused := range []bool{false, true} {
 		t.Run(fmt.Sprint(refused), func(t *testing.T) {
 			w := newResumeWorld(t)
-			var size string
-			if err := w.owner.QueryRow(w.ctx, `SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size); err != nil {
+			var size, said string
+			if err := w.owner.QueryRow(w.ctx, `SELECT id, name || ' (' || (cpus::float8)::text || ' CPUs · ' || (memory_mib / 1024)::text || ' GiB) is larger than any machine in general'
+				FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size, &said); err != nil {
 				t.Fatal(err)
 			}
 			for _, q := range []string{
@@ -63,7 +64,7 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 			var settled bool
 			var code *string
 			var events int
-			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type = 'machine.refused' AND payload->>'message' = 'exact refusal' AND payload->'kept'->>'name' = 'Old') FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID).Scan(&raises, &settled, &code, &events); err != nil {
+			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type = 'machine.refused' AND payload->>'message' = $3 AND payload->'kept'->>'name' = 'Old') FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID, said).Scan(&raises, &settled, &code, &events); err != nil {
 				t.Fatal(err)
 			}
 			wantEvents := 0

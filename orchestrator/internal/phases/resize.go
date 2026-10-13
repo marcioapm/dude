@@ -52,6 +52,11 @@ type ResizePlan struct {
 	// name of the size it asked for (a refused raise's layer is restored
 	// before a restart's resume, so Target may no longer be it).
 	moveTold, moveKind, moveTo string
+	// The pending move's refusal in dude's words (delivery.RefusalOf); nil
+	// without a move.
+	refusalOf func(*lux.Error) delivery.MoveRefusal
+	// lux's record of the Run before the resume: its pool and placements.
+	before lux.Run
 }
 
 // movedInput puts what the agent is told of its move before input.
@@ -63,25 +68,31 @@ func (p *ResizePlan) movedInput(input string) string {
 }
 
 // keptInput is what the agent is told when lux refused the move for good:
-// the size asked for, the one it kept, and why, in place of input's claim
-// that it moved. A plan with no move, or a 409, keeps input as it was.
+// the size asked for, the one it kept, and why in dude's words, in place of
+// input's claim that it moved. A plan with no move, or a 409, keeps input
+// as it was.
 func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
 	if p.moveKind == "" || le.Status == http.StatusConflict {
 		return input
 	}
-	why := le.Message
-	if le.Status == http.StatusBadRequest {
-		// An older lux's unknown field: its own words name a JSON field.
-		why = "this lux cannot change a stopped Run's CPUs or memory"
-		if p.Pool != "" {
-			why = "this lux cannot move a Run between pools yet"
-		}
-	}
-	told := fmt.Sprintf("You asked for %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, why)
+	refusal := p.refusalWords(le)
+	told := fmt.Sprintf("You asked for %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, refusal.ForAgent())
 	if p.moveKind == "reset" {
-		told = fmt.Sprintf("You were to move back to %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, why)
+		// A person's Reset: the agent has nothing to ask instead.
+		told = fmt.Sprintf("You were to move back to %s; lux kept you on %s: %s.", p.moveTo, p.Recorded.Name, refusal.ForPerson())
 	}
 	return joinInput(told, input)
+}
+
+// refusalWords is le about the move's size, in dude's words. An older
+// lux's 400 is to placement when this resume changes pools.
+func (p *ResizePlan) refusalWords(le *lux.Error) delivery.MoveRefusal {
+	r := delivery.RefusalOf(le, delivery.Machine{Name: p.moveTo}, nil, p.before)
+	if p.refusalOf != nil {
+		r = p.refusalOf(le)
+	}
+	r.OtherPool = p.Pool != ""
+	return r
 }
 
 func joinInput(first, rest string) string {
@@ -97,7 +108,7 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 	if recorded == nil || target == nil {
 		return nil
 	}
-	p := &ResizePlan{Recorded: recorded, Target: target, SinceEpoch: nextEpoch(before)}
+	p := &ResizePlan{Recorded: recorded, Target: target, SinceEpoch: nextEpoch(before), before: before}
 	if target.Missing != "" {
 		p.Note = fmt.Sprintf("Its settings name a machine size that no longer exists, so it keeps %s.", recorded.Name)
 		return p
@@ -352,13 +363,17 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	}
 	var move *pendingMove
 	var person string
+	var asked delivery.Machine
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if move, err = loadPendingMove(ctx, tx, r.ID); err != nil || move == nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT name FROM machine_sizes WHERE id = $1), '')`, move.To).Scan(&plan.moveTo); err != nil {
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
 			return err
 		}
+		asked = sizes.ByID[move.To]
+		plan.moveTo = asked.Name
 		if move.Kind != "reset" {
 			return nil
 		}
@@ -374,8 +389,13 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	}
 	if plan.moveTo == "" && plan.Target != nil {
 		plan.moveTo = plan.Target.Name
+		asked = *plan.Target
 	}
 	plan.moveKind = move.Kind
+	plan.refusalOf = func(le *lux.Error) delivery.MoveRefusal {
+		pools, _ := s.Lux.Pools(ctx)
+		return delivery.RefusalOf(le, asked, pools, plan.before)
+	}
 	// Told only of a move this resume asks lux for.
 	if plan.Target != nil && !plan.unknown && plan.Note == "" {
 		if move.Kind == "reset" {
@@ -406,9 +426,12 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 		plan.refused = &lux.Error{Status: status, Code: move.Code, Message: move.Message}
 	}
 	plan.onRefused = func(le *lux.Error) error {
+		// Kept in dude's words: the agent's resume and the person's notice
+		// both read them, never lux's message with its pool ids.
+		said := plan.refusalWords(le).ForPerson()
 		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			tag, err := tx.Exec(ctx, `UPDATE machine_moves SET refused = $2, refused_message = $3 WHERE id = $1 AND settled_at IS NULL`,
-				move.ID, le.Code, le.Message)
+				move.ID, le.Code, said)
 			if err != nil || tag.RowsAffected() == 0 {
 				return err
 			}

@@ -767,8 +767,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const p = payload as unknown as MachineRefusedPayload;
         if (state.start?.machine?.moveId === p.moveId) state.start = null;
         const verb = p.kind === "reset" ? "was to move back to" : "asked for";
+        // The backend's words for lux's refusal (sizes and pools by name), made a sentence.
+        const why = /[.!?]$/.test(p.message) ? p.message : `${p.message}.`;
         turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
-          text: `The ${roleLabel(p.role).toLowerCase()} ${verb} ${p.to.name}; lux kept it on ${p.kept.name}: ${p.message}` });
+          text: `The ${roleLabel(p.role).toLowerCase()} ${verb} ${p.to.name}; lux kept it on ${p.kept.name}: ${why}` });
         break;
       }
       case EventTypes.MachineReset: {

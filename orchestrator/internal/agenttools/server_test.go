@@ -73,7 +73,7 @@ func TestMachineRequestValidatesBeforeParkingAndPersistsOnce(t *testing.T) {
 			var requested, refusedRecorded, raised int
 			if err := f.owner.QueryRow(context.Background(), `SELECT
 				count(*) FILTER (WHERE event_type = 'machine.requested' AND payload ? 'moveId' AND payload->'to'->>'name' = 'Large' AND payload->'from'->>'pool' = 'general'),
-				count(*) FILTER (WHERE event_type = 'machine.requested' AND NOT payload ? 'moveId' AND payload->>'refused' = 'pool_unfit' AND payload->>'message' = 'exact lux refusal'),
+				count(*) FILTER (WHERE event_type = 'machine.requested' AND NOT payload ? 'moveId' AND payload->>'refused' = 'pool_unfit' AND payload->>'message' = 'Large (4 CPUs · 4 GiB) is larger than any machine in general. Ask for another size.'),
 				count(*) FILTER (WHERE event_type = 'machine.raised' AND payload->'to'->>'sizeId' = 'ms_large' AND payload->'from'->>'name' = 'Small')
 				FROM events WHERE run_id = 'run_machine'`).Scan(&requested, &refusedRecorded, &raised); err != nil {
 				t.Fatal(err)

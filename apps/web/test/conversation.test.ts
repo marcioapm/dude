@@ -111,17 +111,53 @@ describe("machine moves", () => {
     expect(notices(done).at(-1)).toBe("The implementer moved to XL in 6.0s, with its conversation and work.");
   });
 
-  test("lux refusing the real resume ends the move with whom it was kept on and lux's exact words", () => {
+  test("lux refusing the real resume ends the move with whom it was kept on and the backend's words", () => {
     const refused: MachineRefusedPayload = { moveId: "mmv_1", role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, kind: "raise",
-      kept: STANDARD, code: "platform_mismatch", message: "XL requires arm64; this image only supports amd64." };
+      kept: STANDARD, code: "platform_mismatch", message: "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only" };
     const c = project([...acceptedMove("implementer", XL, TO_HIGHMEM),
       // The backend records the size lux kept before it settles the move as refused.
       ev(EventTypes.RunResized, { machine: STANDARD }),
       ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
     expect(c.start).toBeNull();
     expect(notices(c).some((n) => n.includes("moved to"))).toBe(false);
-    expect(notices(c).at(-1)).toBe("The implementer asked for XL; lux kept it on Standard: XL requires arm64; this image only supports amd64.");
+    expect(notices(c).at(-1)).toBe("The implementer asked for XL; lux kept it on Standard: XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only.");
   });
+
+  // The orchestrator's words for each lux refusal (delivery.MoveRefusal): what the agent's card says
+  // (ForAgent) before any park, and what machine.refused records (ForPerson) after one.
+  const LUX_REFUSALS = [
+    ["platform_mismatch", "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only. Ask for another size, or ask a person to add an arm64 image.",
+      "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only"],
+    ["pool_unfit", "XL is in highmem, which can't run nested containers, and this agent's image needs them. Ask for another size.",
+      "XL is in highmem, which can't run nested containers, and this agent's image needs them"],
+    ["pool_unfit", "XL (8 CPUs · 32 GiB) is larger than any machine in highmem. Ask for another size.",
+      "XL (8 CPUs · 32 GiB) is larger than any machine in highmem"],
+    ["unknown_pool", "XL's pool has no host it fits; ask for another size", "XL's pool has no host it fits"],
+    ["invalid_spec", "lux cannot give this agent XL as the size is set up. Ask for another size, or ask a person to check XL in Machines.",
+      "lux cannot give this agent XL as the size is set up"],
+    ["not_resumable", "lux was already resuming this Run, so it could not move it to XL. Ask again once you are running.", null],
+    // An older lux's 400 is never a dry run's refusal: only the real resume's, after the park.
+    ["bad_request", null, "this lux cannot move a Run between pools yet"],
+  ] as const;
+  for (const [code, told, recorded] of LUX_REFUSALS) {
+    test(`lux's ${code} reads in dude's words${told ? " on the card" : ""}${recorded ? " in the notice" : ""}, never naming a pool id`, () => {
+      if (told) {
+        const card = project([ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "r", input: { size: "XL", reason: "OOM" } }),
+          ev(EventTypes.MachineRequested, { role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, reason: "OOM", refused: code, message: told } satisfies MachineRequestedPayload as unknown as Record<string, unknown>),
+          ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "r", status: "error", output: { head: JSON.stringify({ error: told, code }) } })], "running");
+        expect(machineCall(card).machine).toEqual({ from: "Standard", to: "XL", pool: "highmem", error: told, code });
+        // Asked through the CLI: no card, a notice says it.
+        const cli = project([ev(EventTypes.MachineRequested, { role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, reason: "OOM", refused: code, message: told } satisfies MachineRequestedPayload as unknown as Record<string, unknown>)], "running");
+        expect(notices(cli)).toEqual([told]);
+      }
+      if (!recorded) return;
+      const refused: MachineRefusedPayload = { moveId: "mmv_1", role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, kind: "raise", kept: STANDARD, code, message: recorded };
+      const after = project([...acceptedMove("implementer", XL, TO_HIGHMEM), ev(EventTypes.RunResized, { machine: STANDARD }),
+        ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
+      expect(notices(after).at(-1)).toBe(`The implementer asked for XL; lux kept it on Standard: ${recorded}.`);
+      expect(notices(after).join("\n")).not.toContain("pool_");
+    });
+  }
 
   for (const [code, words] of [
     ["not_larger", "you run on Standard (2 CPUs · 8 GiB · 20 GiB); ask for one larger: Large, XL"],

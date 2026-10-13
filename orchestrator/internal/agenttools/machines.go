@@ -170,7 +170,9 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 			return out, refuse("lux's pools could not be read; ask again shortly")
 		}
 		if le, ok := lux.AsError(err); ok {
-			return out, refusedAs(le.Message, le.Code, le.Code)
+			// lux's code in dude's words; its own message names pools by id.
+			pools, _ := c.env.lux.Pools(ctx)
+			return out, refusedAs(delivery.RefusalOf(le, target, pools, before).ForAgent(), le.Code, le.Code)
 		}
 		return out, err
 	}

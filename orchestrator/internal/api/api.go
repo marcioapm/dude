@@ -293,7 +293,9 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
 				}
 				if le, ok := lux.AsError(err); ok {
-					return fail(le.Status, le.Code, "%s", le.Message)
+					// lux's code in dude's words; its own message names pools by id.
+					pools, _ := s.Lux.Pools(ctx)
+					return fail(le.Status, le.Code, "%s", delivery.RefusalOf(le, target, pools, before).ForPerson())
 				}
 				return err
 			}

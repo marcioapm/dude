@@ -38,7 +38,8 @@ test("a task role's and a session's Reset are DELETEs on their routes, with the 
 for (const [status, code, message] of [
   [409, "pending", "a machine move is under way"],
   [404, "not_found", "nothing is raised"],
-  [422, "unknown_pool", "no pool with id pool_gone"],
+  [422, "unknown_pool", "Standard's pool has no host it fits"],
+  [503, "pools_unavailable", "lux's pools could not be read; try again shortly"],
 ] as const) {
   test(`a ${status} ${code} refusal reaches the caller in the server's words`, async () => {
     answering(status, { error: { code, message } }, []);

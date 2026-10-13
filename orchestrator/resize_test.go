@@ -77,7 +77,7 @@ func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
 			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": tc.note})
 			if tc.refuse {
 				e, _ := out["error"].(map[string]any)
-				if status != 422 || e["code"] != "unknown_pool" || e["message"] == "" {
+				if status != 422 || e["code"] != "unknown_pool" || e["message"] != "Standard's pool has no host it fits" {
 					t.Fatalf("refusal: %d %v", status, out)
 				}
 				if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 ||
@@ -486,12 +486,12 @@ func TestMachineMoveRefusalSurvivesRestartBeforeFallback(t *testing.T) {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
 	})
 	var message string
-	if err := w.owner.QueryRow(context.Background(), `SELECT refused_message FROM machine_moves WHERE run_id=$1`, runID).Scan(&message); err != nil || message == "" {
+	if err := w.owner.QueryRow(context.Background(), `SELECT refused_message FROM machine_moves WHERE run_id=$1`, runID).Scan(&message); err != nil || message != "Bigger's pool has no host it fits" {
 		t.Fatalf("message %q %v", message, err)
 	}
 	told := 0
 	for _, in := range w.lux.ResumeInputs(live) {
-		if strings.HasPrefix(in, "You asked for Bigger; lux kept you on Standard: "+message+"\n\n") {
+		if strings.HasPrefix(in, "You asked for Bigger; lux kept you on Standard: Bigger's pool has no host it fits; ask for another size\n\n") {
 			told++
 		}
 	}
@@ -782,7 +782,7 @@ func TestADryRunRefusalStopsNothing(t *testing.T) {
 	status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`)
 	var out struct{ Error, Code string }
 	_ = json.Unmarshal([]byte(body), &out)
-	if status != 422 || out.Code != "unknown_pool" || out.Error != "no pool with id pool_missing" {
+	if status != 422 || out.Code != "unknown_pool" || out.Error != "Bigger's pool has no host it fits; ask for another size" {
 		t.Fatalf("request: %d %s", status, body)
 	}
 	for range 3 {
@@ -831,7 +831,7 @@ func TestAnOlderLuxWithoutDryRunsOrPools(t *testing.T) {
 			}
 			// Refused for good: resumed where it was, without resources or
 			// placement, and told the truth.
-			want := "You asked for Huge; lux kept you on Standard: this lux cannot move a Run between pools yet\n\n"
+			want := "You asked for Huge; lux kept you on Standard: this lux cannot move a Run between pools yet. Ask for a size in your own pool.\n\n"
 			if len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) || strings.Contains(inputs[0], "You now run on") {
 				t.Fatalf("inputs %q", inputs)
 			}
