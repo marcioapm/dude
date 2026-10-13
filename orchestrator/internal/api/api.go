@@ -282,6 +282,9 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 				return err
 			}
 			if err := phases.ValidateResize(ctx, s.Lux, live, phases.PlanResize(ctx, s.Lux, current, &target, before)); err != nil {
+				if errors.Is(err, delivery.ErrPoolsUnread) {
+					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
+				}
 				if le, ok := lux.AsError(err); ok {
 					return fail(le.Status, le.Code, "%s", le.Message)
 				}

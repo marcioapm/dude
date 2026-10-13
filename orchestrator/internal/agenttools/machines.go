@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -161,6 +162,9 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if err := c.env.validateMachine(ctx, live, current, &target, before); err != nil {
+		if errors.Is(err, delivery.ErrPoolsUnread) {
+			return out, refuse("lux's pools could not be read; ask again shortly")
+		}
 		if le, ok := lux.AsError(err); ok {
 			return out, refusedAs(le.Message, le.Code, le.Code)
 		}

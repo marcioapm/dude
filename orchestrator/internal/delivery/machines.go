@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -103,6 +104,10 @@ const (
 	EvMachineRefused   = "machine.refused"
 	EvMachineReset     = "machine.reset"
 )
+
+// ErrPoolsUnread: lux's pool list could not be read, so a move's pool, and
+// whether lux would take it, are unknown; nothing is moved.
+var ErrPoolsUnread = errors.New("lux's pools could not be read")
 
 // PoolNames are lux's pool names by id, and its default pool's name for a
 // size naming no pool.
