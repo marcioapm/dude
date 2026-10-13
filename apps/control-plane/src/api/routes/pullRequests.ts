@@ -78,7 +78,8 @@ const credentialInput = z.object({
   appId: z.string().nullable().default(null),
   installationId: z.string().nullable().default(null),
   oauthClientId: z.string().nullable().optional(),
-  oauthClientSecret: z.string().optional(),
+  // One line: a pasted line break would reach GitHub as part of client_secret.
+  oauthClientSecret: z.string().trim().optional(),
   clearOauthClientSecret: z.boolean().default(false),
   apiBaseUrl: z.string().min(1).default("https://api.github.com"),
   /**

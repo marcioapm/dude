@@ -300,7 +300,7 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           () => app
             ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim(),
                 ...(oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}),
-                ...(oauthClientSecret ? { oauthClientSecret } : {}), ...(clearOauthClientSecret ? { clearOauthClientSecret } : {}) },
+                ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}), ...(clearOauthClientSecret ? { clearOauthClientSecret } : {}) },
               apiBase.trim() || undefined)
             : props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {

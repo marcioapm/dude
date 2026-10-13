@@ -127,6 +127,13 @@ test("OAuth client secret is write-only, blank preserves it, and explicit clear 
   expect(kept.oauth_client_secret).toBe("never-return-this-secret");
   const shown = await router.handle(new Request("http://dude.test/v1/forge/credential", { headers: { authorization: `Bearer ${key.key}` } }));
   expect(await shown.text()).not.toContain("never-return-this-secret");
+  // A pasted secret's surrounding whitespace is not part of it, and whitespace alone is blank.
+  expect((await post({ oauthClientSecret: "  pasted-secret\r\n" })).status).toBe(200);
+  const [trimmed] = await owner`SELECT oauth_client_secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(trimmed.oauth_client_secret).toBe("pasted-secret");
+  expect((await post({ oauthClientSecret: " \n\t " })).status).toBe(200);
+  const [stillKept] = await owner`SELECT oauth_client_secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(stillKept.oauth_client_secret).toBe("pasted-secret");
   expect((await post({ clearOauthClientSecret: true })).status).toBe(200);
   const [cleared] = await owner`SELECT oauth_client_secret FROM forge_credentials WHERE organization_id = ${ORG}`;
   expect(cleared.oauth_client_secret).toBeNull();
