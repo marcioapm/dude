@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // message answers, decoded.
@@ -245,6 +246,54 @@ func TestWaitForReplyWaitsOrReturnsTheReplyAtOnce(t *testing.T) {
 	}
 	if n := f.n(t, `SELECT count(*) FROM peer_waits WHERE run_id = 'run_me' AND closed_at IS NULL`); n != 0 {
 		t.Errorf("a wait opened on a message already answered")
+	}
+}
+
+// wait_for_reply takes its own Run before the message, the order a turn's
+// end takes them: held at the Run, it has not yet locked the message.
+func TestWaitForReplyTakesTheRunBeforeTheMessage(t *testing.T) {
+	f := setup(t)
+	f.onEpic(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	me := f.runOn(t, "run_me", f.item, "implement", "implementer", "running")
+	_, q := f.send(t, me, `{"to":"TEXT-2","text":"Which path?"}`)
+	tx, err := f.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = 'run_me' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		status, _ := f.post(t, me, "wait_for_reply", `{"message":"`+q.ID+`"}`)
+		done <- status
+	}()
+	for {
+		var blocked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE NOT l.granted AND l.locktype IN ('tuple','transactionid') AND a.datname = current_database())`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case status := <-done:
+			t.Fatalf("wait_for_reply finished past a locked Run: %d", status)
+		default:
+		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE NOWAIT`, q.ID); err != nil {
+		t.Fatalf("the message was locked before the Run: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != 200 {
+		t.Fatalf("wait_for_reply after the Run was released: %d", status)
 	}
 }
 
