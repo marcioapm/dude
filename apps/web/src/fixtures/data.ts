@@ -8,8 +8,8 @@
 import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
-import { SETTINGS_ROLES } from "@dude/domain";
-import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, RefusedName, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import { EventTypes, SETTINGS_ROLES } from "@dude/domain";
+import type { AgentMachine, Finding, Machine, MachineMove, MachineRaisedPayload, MachineRequestedPayload, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Raise, RefusedName, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -109,7 +109,8 @@ const TASK_BASE = {
 export function taskFor(scenario: ServerScenario): TaskDetail {
   const inReview = scenario === "d";
   const status: Task["status"] = inReview ? "review" : "running";
-  return { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null } as TaskDetail;
+  const task = { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null } as Omit<TaskDetail, "agentMachines">;
+  return { ...task, agentMachines: [] };
 }
 
 export const PULL_REQUEST: PullRequest = {
@@ -445,6 +446,50 @@ export function eventsFor(scenario: ServerScenario): PersistedEvent[] {
     ];
   }
   return out;
+}
+
+// -- A machine raise: the implementer asks for XL, in the highmem pool --------
+
+const STANDARD_MACHINE: Machine = { sizeId: "msz_standard", name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, pool: "default", from: "organization" };
+const XL_MACHINE: Machine = { sizeId: "msz_xl", name: "XL", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: "pool_highmem", pool: "highmem", from: "task" };
+const RAISE_REASON = "jest OOM-killed with --maxWorkers 4 on 8 GiB";
+const XL_ANSWER = "Moved: you run on XL (8 CPUs · 32 GiB · 80 GiB) in the highmem pool from your next step. Your conversation and your checkout are kept, " +
+  "committed or not, with everything else on /workspace and your home. Running processes and /tmp are not: start your servers and watchers again. " +
+  "Later implementer and fixer Runs in this task run on XL too. End your turn now; you are resumed on XL.";
+
+/**
+ * The implementer's raise as the API and the orchestrator record it: the
+ * Run's `machine` with its raise, the task's `agentMachines` (the fixer
+ * following), and the ledger from the call to the Run waiting for a host in
+ * highmem — the payloads typed by the domain, so they cannot drift from
+ * what the backend writes.
+ */
+export function raisedMove(after: PersistedEvent): { machine: NonNullable<Run["machine"]>; agentMachines: AgentMachine[]; events: PersistedEvent[] } {
+  const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
+  const raise: Raise = { sizeId: XL_MACHINE.sizeId, moveId: "mmv_fixture", askedBy: RUN_ID, role: "implementer", reason: RAISE_REASON, at: ago(50) };
+  const move: MachineMove = { moveId: raise.moveId, role: "implementer", from: STANDARD_MACHINE, to: XL_MACHINE,
+    pool: { from: { id: null, name: "default" }, to: { id: "pool_highmem", name: "highmem" } } };
+  const requested: MachineRequestedPayload = { ...move, reason: RAISE_REASON };
+  const raised: MachineRaisedPayload = { ...move, moveId: raise.moveId };
+  const agentMachines: AgentMachine[] = [{ role: "implementer", size: { ...XL_MACHINE, raised: raise }, settings: STANDARD_MACHINE, raise,
+    askedBy: { runId: RUN_ID, role: "implementer" }, followedBy: ["fixer"] }];
+  let i = 0;
+  const at = (eventType: string, payload: object, s: number, actor: PersistedEvent["actor"] = { type: "agent", id: "implementer" }): PersistedEvent =>
+    ({ ...after, cursor: 20_000 + i, eventId: `evt_raise_${i++}`, eventType, occurredAt: ago(s), runId: RUN_ID, actor, payload: payload as Record<string, unknown> });
+  return {
+    machine: { ...XL_MACHINE, raised: raise },
+    agentMachines,
+    events: [
+      at(EventTypes.ToolCalled, { tool: "request_machine", callId: "call_move", input: { size: "XL", reason: RAISE_REASON } }, 51),
+      at(EventTypes.MachineRequested, requested, 50),
+      at(EventTypes.MachineRaised, raised, 50),
+      at(EventTypes.ToolCompleted, { tool: "request_machine", callId: "call_move", status: "completed",
+        output: { head: JSON.stringify({ size: "XL", pool: "highmem", answer: XL_ANSWER }) } }, 50),
+      at(EventTypes.AgentMessage, { text: "Moving to XL; I will run the suite again with 4 workers once I am back." }, 49),
+      at(EventTypes.RunPaused, { confirmed: true }, 44, dude),
+      at(EventTypes.RunStage, { stage: "waiting", since: ago(42), epoch: 2 }, 42, dude),
+    ],
+  };
 }
 
 // -- Servers: the scenarios, copied so the fixture client can change them ------

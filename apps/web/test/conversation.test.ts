@@ -15,9 +15,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { EventRow } from "@dude/design-system/components";
 import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
-import type { PersistedEvent } from "@dude/domain";
-import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn } from "../src/api/conversation.ts";
+import type { Machine, MachineMove, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent } from "@dude/domain";
+import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { stepsOf, startVerbOf } from "../src/startCue.tsx";
+import { roleLabel } from "../src/machines.ts";
 import { modelCostShown } from "../src/api/client.ts";
 
 let cursor = 0;
@@ -44,27 +45,117 @@ function ev(eventType: string, payload: Record<string, unknown> = {}): Persisted
   } as unknown as PersistedEvent;
 }
 
+const STANDARD: Machine = { sizeId: "msz_std", name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, pool: "default", from: "organization" };
+const LARGE: Machine = { ...STANDARD, sizeId: "msz_large", name: "Large", cpus: 4, memoryMiB: 16384, diskGiB: 40, from: "task" };
+const XL: Machine = { sizeId: "msz_xl", name: "XL", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: "pool_hm", pool: "highmem", from: "task" };
+const TO_HIGHMEM = { from: { id: null, name: "default" }, to: { id: "pool_hm", name: "highmem" } };
+
+/** The events of an accepted request, as agenttools.requestMachine and the park write them. */
+function acceptedMove(role: string, to: Machine, pool?: MachineMove["pool"]): PersistedEvent[] {
+  const move: MachineMove = { moveId: "mmv_1", role, from: STANDARD, to, ...(pool ? { pool } : {}) };
+  const requested: MachineRequestedPayload = { ...move, reason: "OOM" };
+  const raised: MachineRaisedPayload = { ...move, moveId: "mmv_1" };
+  return [
+    ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "move", input: { size: to.name, reason: "OOM" } }),
+    ev(EventTypes.MachineRequested, requested as unknown as Record<string, unknown>),
+    ev(EventTypes.MachineRaised, raised as unknown as Record<string, unknown>),
+    ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "move", status: "completed",
+      output: { head: JSON.stringify({ size: to.name, ...(pool ? { pool: pool.to.name } : {}), answer: `Moved: you run on ${to.name}. End your turn now; you are resumed on ${to.name}.` }) } }),
+    ev(EventTypes.AgentMessage, { text: "Moving; carrying on once I am back." }),
+    ev(EventTypes.RunPaused, { confirmed: true }),
+    ev(EventTypes.RunStage, { stage: "waiting", since: new Date(Date.UTC(2026, 0, 1, 0, 0, cursor + 1)).toISOString(), epoch: 2 }),
+  // A session's agent moves in its session; every other role in its task.
+  ].map((e) => ({ ...e, taskId: role === "brainstorm" ? null : "task_1" }) as PersistedEvent);
+}
+
+const notices = (c: ReturnType<typeof project>) => c.turns.flatMap((t) => (t.kind === "notice" ? [t.text] : []));
+const machineCall = (c: ReturnType<typeof project>) => c.turns.find((t): t is ToolTurn => t.kind === "tool" && t.tool === "request_machine")!;
+
 describe("machine moves", () => {
   for (const role of ["implementer", "fixer", "reviewer", "simplifier", "qa_browser", "conductor", "brainstorm", "investigator"]) {
-    test(`${role} preserves the named move through tool completion and park, using shared stages`, () => {
-      const events = [ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "move", input: { size: "XL", reason: "OOM" } }),
-        ev("machine.requested", { moveId: "m1", role, from: { name: "Standard" }, to: { name: "XL" }, reason: "OOM", pool: "highmem" }),
-        ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "move", output: { head: JSON.stringify({ answer: "End your turn now; your work is kept." }) } }),
-        ev("run.parked", { reason: "machine" }), ev(EventTypes.RunStage, { stage: "waiting" })];
-      const c = project(events, "running");
+    test(`${role}: a move to another pool reads by size name, its pool in the waiting stage, the tool's answer on the card`, () => {
+      const c = project(acceptedMove(role, XL, TO_HIGHMEM), "paused");
+      expect(c.start).not.toBeNull();
       expect(startVerbOf(c.start!)).toBe("Moving to XL");
       const steps = stepsOf(c.start!);
       expect(steps.map((s) => s.id)).toEqual(["park", "waiting", "image", "volumes", "repositories", "container", "running"]);
+      expect(steps[0]!.state).toBe("done");
       expect(steps[1]!.label).toBe("Waiting for a machine in highmem");
       expect(steps[1]!.doneLabel).toBe("Machine found");
-      const tool = c.turns.find((t) => t.kind === "tool");
-      expect(tool?.kind === "tool" && tool.machine?.answer).toBe("End your turn now; your work is kept.");
-      expect(c.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.notice)).toEqual(["notice"]);
-      const refused = project([...events, ev("machine.refused", { moveId: "m1", role, message: "XL requires arm64; this image only supports amd64." })], "running");
-      expect(refused.start).toBeNull();
-      expect(refused.turns.at(-1)?.kind === "notice" && refused.turns.at(-1)?.text).toBe("XL requires arm64; this image only supports amd64.");
+      const call = machineCall(c);
+      expect(call.status).toBe("completed");
+      expect(call.machine).toEqual({ from: "Standard", to: "XL", pool: "highmem", answer: "Moved: you run on XL. End your turn now; you are resumed on XL." });
+      // One notice, from machine.raised, naming sizes, never ids.
+      expect(notices(c)).toHaveLength(1);
+      expect(notices(c)[0]).toStartWith(`Moving the ${roleLabel(role).toLowerCase()} to XL, in the highmem pool: it keeps`);
+      expect(notices(c)[0]).not.toContain("msz_");
     });
   }
+
+  test("a move within the pool names no pool: the waiting stage reads as it always does", () => {
+    const c = project(acceptedMove("implementer", LARGE), "paused");
+    expect(c.start!.machine!.pool).toBeNull();
+    expect(stepsOf(c.start!)[1]!.label).toBe("Waiting for a machine");
+    expect(machineCall(c).machine!.pool).toBeNull();
+    expect(notices(c)[0]).toBe("Moving the implementer to Large: it keeps its conversation and checkout; running processes stop. " +
+      "Later implementer and fixer Runs in this task run on Large too.");
+  });
+
+  test("the turn the request ended does not end the move; lux's resize and the agent's next words do", () => {
+    const events = acceptedMove("implementer", XL, TO_HIGHMEM);
+    // Before the park: the agent's own last words of the turn leave the move showing.
+    expect(project(events.slice(0, 5), "running").start?.machine?.to).toBe("XL");
+    const done = project([...events, ev(EventTypes.RunResized, { machine: { ...XL, from: "task" } }),
+      ev(EventTypes.AgentMessage, { text: "Back on XL." })], "running");
+    expect(done.start).toBeNull();
+    expect(notices(done).at(-1)).toBe("The implementer moved to XL in 6.0s, with its conversation and work.");
+  });
+
+  test("lux refusing the real resume ends the move with whom it was kept on and lux's exact words", () => {
+    const refused: MachineRefusedPayload = { moveId: "mmv_1", role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, kind: "raise",
+      kept: STANDARD, code: "platform_mismatch", message: "XL requires arm64; this image only supports amd64." };
+    const c = project([...acceptedMove("implementer", XL, TO_HIGHMEM), ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
+    expect(c.start).toBeNull();
+    expect(notices(c).at(-1)).toBe("The implementer asked for XL; lux kept it on Standard: XL requires arm64; this image only supports amd64.");
+  });
+
+  for (const [code, words] of [
+    ["not_larger", "you run on Standard (2 CPUs · 8 GiB · 20 GiB); ask for one larger: Large, XL"],
+    ["not_live", "this Run is not live and available for a machine move"],
+    ["platform_mismatch", "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only."],
+  ] as const) {
+    test(`a refusal (${code}) fails the card with the exact words and code, and moves nothing`, () => {
+      const events = [ev(EventTypes.ToolCalled, { tool: "mcp__dude__request_machine", callId: "r", input: { size: "XL", reason: "OOM" } }),
+        // dude records a refusal it could size (not_larger, lux's dry run); not_live it does not.
+        ...(code === "not_live" ? [] : [ev(EventTypes.MachineRequested, { role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, reason: "OOM",
+          refused: code, message: words } satisfies MachineRequestedPayload as unknown as Record<string, unknown>)]),
+        ev(EventTypes.ToolCompleted, { tool: "mcp__dude__request_machine", callId: "r", status: "error", output: { head: JSON.stringify({ error: words, code }) } })];
+      const c = project(events, "running");
+      expect(c.start).toBeNull();
+      const call = c.turns.find((t): t is ToolTurn => t.kind === "tool")!;
+      expect(call.status).toBe("failed");
+      expect(call.machine).toEqual({ from: code === "not_live" ? null : "Standard", to: "XL", pool: code === "not_live" ? null : "highmem", error: words, code });
+      expect(notices(c)).toEqual([]);
+    });
+  }
+
+  test("a refusal whose harness kept only the text still shows those words", () => {
+    const c = project([ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "r", input: { size: "Huge", reason: "OOM" } }),
+      ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "r", status: "error", output: { head: "no size named Huge; you may move to: Large, XL" } })], "running");
+    expect(machineCall(c).machine).toEqual({ from: null, to: "Huge", pool: null, error: "no size named Huge; you may move to: Large, XL" });
+  });
+
+  test("a Reset says who, the size by name and the note; one that moved a live Run shows its move", () => {
+    const reset = (moveId: string, note: string): MachineResetPayload =>
+      ({ moveId, role: "implementer", from: XL, to: STANDARD, pool: { from: TO_HIGHMEM.to, to: TO_HIGHMEM.from }, by: { id: "u_m", name: "Márcio" }, note });
+    const moved = project([ev(EventTypes.MachineReset, reset("mmv_2", "fits now") as unknown as Record<string, unknown>)], "running");
+    expect(notices(moved)).toEqual(["Márcio moved the implementer back to Standard: “fits now”"]);
+    expect(startVerbOf(moved.start!)).toBe("Moving to Standard");
+    expect(stepsOf(moved.start!)[1]!.label).toBe("Waiting for a machine in default");
+    const cleared = project([ev(EventTypes.MachineReset, reset("", "") as unknown as Record<string, unknown>)], "running");
+    expect(notices(cleared)).toEqual(["Márcio moved the implementer back to Standard."]);
+    expect(cleared.start).toBeNull();
+  });
 });
 
 describe("git event labels", () => {

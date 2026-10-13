@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
+import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
@@ -58,6 +59,49 @@ describe("machine reset confirmation", () => {
     expect(notes).toEqual(["Keep two workers.", "Keep two workers."]);
     await act(async () => resolve!());
     expect(closed).toBe(1);
+  });
+});
+
+describe("machines raised in the task, on its Overview", () => {
+  afterEach(() => localStorage.removeItem(RUN_KEY));
+
+  test("the implementer's raise with its provenance and Reset, the fixer following it without one", async () => {
+    localStorage.setItem(RUN_KEY, "raised");
+    const page = await taskPage(new FixtureClient("a"));
+    const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=machine-raises]"), "the Machines panel");
+    const rows = [...panel.querySelectorAll("li")].map((li) => li.textContent ?? "");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("Implementer runs on XL");
+    expect(rows[0]).toContain("Asked for by run_01j9x5m2q7k8e4t1 (the implementer)");
+    expect(rows[0]).toContain("jest OOM-killed with --maxWorkers 4 on 8 GiB");
+    expect(rows[1]).toContain("Fixer runs on XL");
+    expect(rows[1]).toContain("Follows the implementer: it names no size of its own");
+    const resets = [...panel.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"));
+    expect(resets).toEqual(["Reset the implementer to Standard"]);
+  });
+
+  test("Reset posts the role and note, and the panel goes once the detail has no raise; a refusal keeps the dialog", async () => {
+    localStorage.setItem(RUN_KEY, "raised");
+    const client = new FixtureClient("a");
+    const page = await taskPage(client);
+    const reset = async () => click(await until(() => page.querySelector<HTMLElement>("[aria-label='Reset the implementer to Standard']"), "Reset"));
+    const note = async (text: string) => {
+      const field = await until(() => document.querySelector<HTMLTextAreaElement>("[data-testid=reset-note]"), "the note");
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    await reset();
+    expect(document.body.textContent).toContain("Move the implementer back to Standard now?");
+    // The fixture refuses a note of "fail" as the API refuses a Reset during a move.
+    await note("fail");
+    await click(document.querySelector<HTMLElement>("[data-testid=confirm-reset]")!);
+    await until(() => document.querySelector("[data-testid=reset-error]"), "the refusal");
+    expect(document.querySelector("[data-testid=reset-error]")!.textContent).toBe("a machine move is under way");
+    await note("keep two workers");
+    await click(document.querySelector<HTMLElement>("[data-testid=confirm-reset]")!);
+    await until(() => (page.querySelector("[data-testid=machine-raises]") ? null : true), "the panel gone");
   });
 });
 

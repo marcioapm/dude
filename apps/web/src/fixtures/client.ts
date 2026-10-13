@@ -19,7 +19,7 @@ import { egressAllows, egressProblem, secretHint, secretNameProblem } from "@dud
 import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, raisedMove, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -188,37 +188,24 @@ export class FixtureClient extends ApiClient {
 
   /**
    * `dude.fixtures.run` = raised: the implementer asked for XL in the
-   * highmem pool and is moving there; the fixer follows it. The task detail
-   * carries `agentMachines` in the shape the web adapter expects until the
-   * backend projection lands.
+   * highmem pool and is moving there; the fixer follows it. The task
+   * detail, the Run's machine and the ledger are in the shapes the API
+   * and the orchestrator write (data.ts's raisedMove).
    */
   #raise() {
-    const at = (s: number) => new Date(Date.now() - s * 1000).toISOString();
-    const raised = { sizeId: "msz_xl", moveId: "mmv_fixture", askedBy: "run_7f3k", role: "implementer",
-      reason: "jest OOM-killed with --maxWorkers 4 on 8 GiB", at: at(3600) };
-    const machine = { sizeId: "msz_xl", name: "XL", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: "pool_highmem", pool: "highmem", from: "task", raised };
-    this.#runPatch = { machine } as Partial<RunDetail>;
-    this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, machine } : r)),
-      agentMachines: { implementer: machine, fixer: { ...machine, from: "implementer" } } } as TaskDetail;
-    const base = this.#events.at(-1)!;
-    const push = (eventType: string, payload: Record<string, unknown>, s: number, i: number): PersistedEvent =>
-      ({ ...base, cursor: 20_000 + i, eventId: `evt_raise_${i}`, eventType, occurredAt: at(s), runId: RUN_ID, actor: { type: "agent", id: RUN_ID }, payload });
-    this.#events = [...this.#events,
-      push("agent.tool.called", { tool: "request_machine", callId: "call_move", input: { size: "XL", reason: raised.reason } }, 50, 0),
-      push("machine.requested", { moveId: "mmv_fixture", role: "implementer", from: { name: "Standard" }, to: { name: "XL" }, pool: "highmem", reason: raised.reason }, 49, 1),
-      push("agent.tool.completed", { tool: "request_machine", callId: "call_move", status: "completed",
-        output: { head: JSON.stringify({ size: "XL", answer: "Moved: you run on XL (8 CPUs · 32 GiB · 80 GiB) in the highmem pool from your next step. Your conversation and checkout are kept; running processes and /tmp are not. End your turn now; you are resumed on XL." }) } }, 48, 2),
-      push("run.parked", { reason: "machine" }, 47, 3),
-      push("run.stage", { stage: "park", since: at(47) }, 47, 4),
-      push("run.stage", { stage: "waiting", since: at(41) }, 41, 5),
-    ];
+    const move = raisedMove(this.#events.at(-1)!);
+    this.#runPatch = { machine: move.machine };
+    this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, machine: move.machine } : r)),
+      agentMachines: move.agentMachines };
+    this.#events = [...this.#events, ...move.events];
   }
 
-  override async resetTaskMachine(_id: string, role: string, note = ""): Promise<unknown> {
+  override async resetTaskMachine(_id: string, role: string, note = ""): Promise<{ ok: true; moved: boolean }> {
     await wait(300);
-    if (note.trim() === "fail") throw new ApiError(409, "move_in_progress", `The ${role} is being moved to XL now; Reset once it is there.`);
-    this.#task = { ...this.#task, agentMachines: {} } as TaskDetail;
-    return {};
+    if (note.trim() === "fail") throw new ApiError(409, "pending", "a machine move is under way");
+    if (!this.#task.agentMachines.some((m) => m.role === role)) throw new ApiError(404, "not_found", "nothing is raised");
+    this.#task = { ...this.#task, agentMachines: this.#task.agentMachines.filter((m) => m.role !== role) };
+    return { ok: true, moved: true };
   }
 
   /**
