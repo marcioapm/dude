@@ -171,6 +171,10 @@ type Run struct {
 	pendingResize *lux.Resize
 	// Each accepted resume's resources, as received; nil for none.
 	ResumeResources []json.RawMessage
+	// Each accepted resume's placement.poolId; "" for none.
+	ResumePlacements []string
+	// Where the resume it is resuming from rebound it; nil for none.
+	pendingPlacement *lux.ResumePlacement
 
 	// Its servers (servers.go).
 	servers []*server
@@ -655,6 +659,15 @@ type Server struct {
 	// resume's resources may carry only disk, applied as asked, and
 	// anything else in them is an unknown field (400).
 	NoResize bool
+	// NoPlacement is a lux from before lux#93: placement and validateOnly
+	// on a resume are unknown fields (400).
+	NoPlacement bool
+	// ImagePlatforms is what each placement reports its image offered
+	// (lux#91), by the spec's image ref; absent reports none.
+	ImagePlatforms map[string][]string
+	// OnResume, when set, runs as each resume request arrives (validateOnly
+	// or not), before the fake acts on it, without its lock.
+	OnResume func(runID string, validateOnly bool)
 	// Starts still to fail, by spec label "key=value" (FailStarts), and
 	// the state each ends in.
 	failStarts map[string]int
@@ -1858,6 +1871,9 @@ func (s *Server) view(run *Run) map[string]any {
 		if p.peakDisk != nil {
 			view["peakDiskBytes"] = *p.peakDisk
 		}
+		if ps := s.imagePlatforms(run); ps != nil && p.ImageReadyAt != nil {
+			view["imagePlatforms"] = ps
+		}
 		placements = append(placements, view)
 		if p.Epoch == run.Epoch && p.ExitedAt == nil {
 			host = p.HostName
@@ -2406,16 +2422,31 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		} `json:"git"`
 		Sync      []lux.SyncRef  `json:"sync"`
 		Resources *resizeRequest `json:"resources"`
+		Placement *struct {
+			PoolID string `json:"poolId"`
+		} `json:"placement"`
+		ValidateOnly bool `json:"validateOnly"`
 	}
 	body, _ := io.ReadAll(r.Body)
 	var raw struct {
-		Secrets   json.RawMessage `json:"secrets"`
-		Resources json.RawMessage `json:"resources"`
+		Secrets      json.RawMessage `json:"secrets"`
+		Resources    json.RawMessage `json:"resources"`
+		Placement    json.RawMessage `json:"placement"`
+		ValidateOnly json.RawMessage `json:"validateOnly"`
 	}
 	_ = json.Unmarshal(body, &raw)
 	if err := json.Unmarshal(body, &in); err != nil {
 		// lux decodes the body strictly: a size it cannot read is a 400.
 		writeErr(w, 400, "bad_request", "invalid JSON body: "+err.Error())
+		return
+	}
+	if s.NoPlacement && (raw.Placement != nil || raw.ValidateOnly != nil) {
+		// A lux from before lux#93: its decoder refuses an unknown field.
+		field := "placement"
+		if raw.Placement == nil {
+			field = "validateOnly"
+		}
+		writeErr(w, 400, "bad_request", fmt.Sprintf("invalid JSON body: json: unknown field %q", field))
 		return
 	}
 	if s.NoResize && in.Resources != nil && (in.Resources.CPUs != nil || in.Resources.Memory != nil) {
@@ -2433,6 +2464,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if in.Resources != nil && !s.NoResize {
 		requested, problem = in.Resources.requested()
 	}
+	targetPool := ""
+	if in.Placement != nil {
+		targetPool = in.Placement.PoolID
+	}
+	if s.OnResume != nil {
+		s.OnResume(run.ID, in.ValidateOnly)
+	}
 	s.mu.Lock()
 	// As lux's resumeRun: a Run resuming already answers as the first
 	// resume did; every other 409 means it was not resumed. Its resources
@@ -2441,12 +2479,22 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	// refused.
 	resumable := run.State == "stopped" || run.State == "failed" || run.State == "lost" ||
 		run.State == "succeeded" && !s.CancelledState
+	// validateOnly judges a live Run as if it were stopped.
+	live := run.State == "scheduled" || run.State == "starting" || run.State == "running" || run.State == "stopping"
 	switch {
 	case resumable:
+	case in.ValidateOnly && live:
 	case run.State == "resuming":
 		if problem != "" {
 			s.mu.Unlock()
 			writeErr(w, 422, "invalid_spec", problem)
+			return
+		}
+		// Its own pool (the one its resume moved it to) is a retry; any
+		// other is refused.
+		if targetPool != "" && targetPool != s.poolOf(run) {
+			s.mu.Unlock()
+			writeErr(w, 409, "not_resumable", "run is resuming already into another pool")
 			return
 		}
 		view := s.view(run)
@@ -2462,6 +2510,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			}
 			view["resize"] = run.pendingResize
 		}
+		if targetPool != "" {
+			view["placement"] = run.pendingPlacement
+		}
 		s.mu.Unlock()
 		writeJSON(w, 202, view)
 		return
@@ -2475,8 +2526,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
-	// secret the Run has must come again, non-empty.
-	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 {
+	// secret the Run has must come again, non-empty. A dry run checks
+	// only the names sent.
+	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 && !in.ValidateOnly {
 		s.mu.Unlock()
 		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
 		return
@@ -2489,6 +2541,36 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if problem != "" {
 		s.mu.Unlock()
 		writeErr(w, 422, "invalid_spec", problem)
+		return
+	}
+	var moved *lux.ResumePlacement
+	if targetPool != "" {
+		var code, msg string
+		moved, code, msg = s.checkPool(run, targetPool, in.Resources, requested)
+		if code != "" {
+			s.mu.Unlock()
+			writeErr(w, 422, code, msg)
+			return
+		}
+	}
+	if in.ValidateOnly {
+		// Every check passed; nothing changes. The resize it would apply is
+		// worked out on the stored spec, which is then put back.
+		answer := map[string]any{"valid": true}
+		if live {
+			answer["stateUnchecked"] = run.State
+		}
+		if in.Resources != nil && !s.NoResize {
+			kept := run.Spec
+			answer["resize"] = s.resize(run, *in.Resources, requested)
+			run.Spec = kept
+		}
+		if moved != nil {
+			answer["placement"] = moved
+		}
+		run.Calls = append(run.Calls, "validate")
+		s.mu.Unlock()
+		writeJSON(w, 200, answer)
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
@@ -2560,7 +2642,12 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		rz = s.resize(run, *in.Resources, requested)
 	}
 	run.pendingResize = rz
+	run.pendingPlacement = moved
+	if moved != nil {
+		s.setPool(run, moved.PoolID)
+	}
 	run.ResumeResources = append(run.ResumeResources, raw.Resources)
+	run.ResumePlacements = append(run.ResumePlacements, targetPool)
 	run.Resumed++
 	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
@@ -2592,6 +2679,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	view := s.view(run)
 	if rz != nil {
 		view["resize"] = rz
+	}
+	if moved != nil {
+		view["placement"] = moved
 	}
 	s.mu.Unlock()
 	go s.play(run, epoch, start, spec, true)

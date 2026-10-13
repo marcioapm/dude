@@ -146,6 +146,113 @@ func (s *Server) placementProblem(rawSpec json.RawMessage) string {
 	return "no pool with id " + spec.Placement.PoolID
 }
 
+// imagePlatforms is what run's placements report its image offered:
+// ImagePlatforms by the stored spec's image ref. Called with s.mu held.
+func (s *Server) imagePlatforms(run *Run) []string {
+	if s.ImagePlatforms == nil {
+		return nil
+	}
+	var spec struct {
+		Image struct {
+			Ref string `json:"ref"`
+		} `json:"image"`
+	}
+	_ = json.Unmarshal(run.Spec, &spec)
+	return s.ImagePlatforms[spec.Image.Ref]
+}
+
+// checkPool is lux's rebindPool check of a resume naming poolID, with
+// the resources it sets: the pool is the tenant's (unknown_pool), its
+// platforms share one with the image's (platform_mismatch), and a host of
+// it could take the Run (pool_unfit: nested containers, or a size beyond
+// its hostSize). Unknown on either side refuses nothing. Called with s.mu
+// held.
+func (s *Server) checkPool(run *Run, poolID string, req *resizeRequest, requested lux.Resources) (*lux.ResumePlacement, string, string) {
+	pools := s.pools()
+	i := slices.IndexFunc(pools, func(p lux.Pool) bool { return p.ID == poolID })
+	if i < 0 {
+		return nil, lux.CodeUnknownPool, "no pool with id " + poolID
+	}
+	to := pools[i]
+	moved := &lux.ResumePlacement{Pool: to.Name, PoolID: to.ID}
+	if cur := s.poolOf(run); cur != poolID {
+		from := lux.BoundPool{ID: cur}
+		for _, p := range pools {
+			if p.ID == cur {
+				from.Name = p.Name
+			}
+		}
+		moved.From = &from
+	}
+	image := s.imagePlatforms(run)
+	switch {
+	case len(image) == 0 || len(to.Platforms) == 0:
+		moved.PlatformUnchecked = true
+	case !slices.ContainsFunc(image, func(p string) bool { return slices.Contains(to.Platforms, p) }):
+		return nil, lux.CodePlatformMismatch, fmt.Sprintf("pool %s runs %s; this Run's image offers only %s",
+			to.Name, strings.Join(to.Platforms, ", "), strings.Join(image, ", "))
+	}
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	nested := spec.Sandbox != nil && spec.Sandbox.NestedContainers
+	if nested && to.Capabilities != nil && to.Capabilities.NestedContainers != nil && !*to.Capabilities.NestedContainers {
+		return nil, lux.CodePoolUnfit, fmt.Sprintf("pool %s cannot take this Run: none of its hosts offers nested containers (lux-runner --nested)", to.Name)
+	}
+	want := specResources(run.Spec)
+	if req != nil {
+		if req.CPUs != nil {
+			want.CPUs = requested.CPUs
+		}
+		if req.Memory != nil {
+			want.Memory = requested.Memory
+		}
+	}
+	if h := to.HostSize; h != nil {
+		switch {
+		case want.CPUs > h.CPUs:
+			return nil, lux.CodePoolUnfit, fmt.Sprintf("pool %s cannot take this Run: it needs %g cpus; its largest host has %g", to.Name, want.CPUs, h.CPUs)
+		case want.Memory > h.Memory:
+			return nil, lux.CodePoolUnfit, fmt.Sprintf("pool %s cannot take this Run: it needs %s of memory; its largest host has %s",
+				to.Name, bytesText(want.Memory), bytesText(h.Memory))
+		}
+	}
+	return moved, "", ""
+}
+
+// setPool rebinds run to poolID, as lux writes the new pool into its
+// stored spec's placement. Callers hold s.mu.
+func (s *Server) setPool(run *Run, poolID string) {
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	placement, _ := spec["placement"].(map[string]any)
+	if placement == nil {
+		placement = map[string]any{}
+	}
+	placement["poolId"] = poolID
+	spec["placement"] = placement
+	run.Spec, _ = json.Marshal(spec)
+}
+
+// ResumePlacementsOf is each accepted resume's placement.poolId, "" for none.
+func (s *Server) ResumePlacementsOf(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.ResumePlacements)
+	}
+	return nil
+}
+
+// PoolOf is the id of the pool a Run is bound to now.
+func (s *Server) PoolOf(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return s.poolOf(run)
+	}
+	return ""
+}
+
 // memoryLimit is what a newer lux gives a placement's container: the
 // memory its spec asked for when it was placed, less the host's share
 // (MemoryShare), rounded down to a MiB. nil when the spec named none, or
