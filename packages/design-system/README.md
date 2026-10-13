@@ -749,6 +749,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and messages (never its thinking). In dude it is always a folded row:
   the rail's Subagents block opens its transcript in a side panel; its own
   children are folded rows there, navigating that same panel.
+  The gallery's child-session examples mount only once they near the screen,
+  so offscreen examples add no animation load to unrelated examples.
 - **Waiting.** A live child blocked on something nothing in the Run can
   answer (a permission its harness never forwarded) is the thread's one
   attention area: `waiting` turns the rail and wash to the attention mark
@@ -921,9 +923,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   may not remove says whose it is (`removeHint`) instead of a disabled ✕.
   `RelationPicker` refuses a loop and names it ("That would make a loop:
   CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
-  takes the focus when it opens; the gallery passes `autoFocus={false}`, so a
-  static picture never takes the focus. The gallery mounts the Task relations
-  section's blocks only once it nears the screen (`WhenNear`): drawn from the
+  takes the focus when it opens; the gallery passes `autoFocus={false}`, so its
+  static picker does not take focus. This does not suppress the static forced-open
+  menu previews' autofocus. The gallery mounts the Task relations section's blocks
+  when nearing the viewport (`WhenNear`) or when a deferred valid-hash request
+  names one of its 13 `#rel-*` blocks. A requested block scrolls into view after
+  mounting; unrelated fragments alone leave the blocks deferred.
+  Without IntersectionObserver they render immediately. Drawn from the
   start, its 8,000 elements and 190 running animations held other sections'
   animations back, enough that a tooltip elsewhere took seconds to fade in.
 - `DependencyStrip` is an epic's order, in steps, with what can start now;

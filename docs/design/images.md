@@ -145,7 +145,17 @@ scratch` image whose `/rootfs/` holds:
 
 - the dude CLI, OpenCode and ripgrep;
 - OpenCode's config;
-- `setup.sh`, which adds the `agent` user and the git identity.
+- `setup.sh`, which adds the `agent` user and the git identity;
+- dude's commit hook in `/usr/local/share/dude/git-hooks`
+  (`images/runtime/git-hooks/dude-hook` under every client hook's name),
+  and `/usr/local/share/dude/git-config` (`images/runtime/git-config`),
+  which sets `core.hooksPath` there. Every Run includes that file in
+  command scope (`include.path`). git skips a missing include, so an image
+  without it runs a repository's own hooks as git would, and its commits
+  carry no co-authors. The image's git must be 2.31 or later: Runs set the
+  include through `GIT_CONFIG_COUNT` (2.31), and the hook reads
+  `git config --show-scope` (2.26) with `--type=path` (2.18). The runtime
+  image's Debian bookworm git is 2.39.
 
 `HOME` is set because `agent` may be a second name for uid 1000 (`node` on
 the node images), and podman takes `HOME` from the first passwd entry with

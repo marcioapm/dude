@@ -835,19 +835,24 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		RequestID string        `json:"requestId"`
-		Sync      []lux.SyncRef `json:"sync"`
+		RequestID   string            `json:"requestId"`
+		Sync        []lux.SyncRef     `json:"sync"`
+		Credentials map[string]string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
+		return
+	}
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	if msg, status, code := s.credentialsProblem(spec, in.Credentials); msg != "" {
+		writeErr(w, status, code, msg)
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run.Calls = append(run.Calls, "sync")
 	// As lux's checkSync, before the Run's state: every repo the spec's.
-	var spec map[string]any
-	_ = json.Unmarshal(run.Spec, &spec)
 	for _, sr := range in.Sync {
 		if !slices.ContainsFunc(specRepos(spec), func(x specRepo) bool { return x.Name == sr.Repo }) {
 			writeErr(w, 422, "invalid_request", fmt.Sprintf("sync: the run has no repository %q", sr.Repo))
@@ -863,6 +868,7 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.Syncs = append(run.Syncs, in.Sync)
+	run.SyncCredentials = append(run.SyncCredentials, in.Credentials)
 	if s.HoldSyncs {
 		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 		return

@@ -174,7 +174,10 @@ func (s *Syncer) keepCurrent(ctx context.Context, r phaseRun) (hold, issued bool
 	if err := s.syncAsked(ctx, r, id, refs); err != nil || len(refs) == 0 {
 		return false, false, nil, err
 	}
-	err = s.Lux.SyncRun(ctx, r.LuxRunID, id, refs)
+	creds, err := s.runCredentials(ctx, r.Org, r.ID)
+	if err == nil {
+		err = SyncRun(ctx, s.Lux, s.Log, r.LuxRunID, id, refs, creds)
+	}
 	switch {
 	case lux.SyncModesRefused(err):
 		return true, true, nil, s.checkoutReadOnly(ctx, r, err)

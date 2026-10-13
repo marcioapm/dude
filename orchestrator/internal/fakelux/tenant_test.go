@@ -169,14 +169,14 @@ func TestSyncOnResumeAndWhileRunning(t *testing.T) {
 	fake := fakelux.New(repo, "k", nil)
 	_, c, runID := startedWith(t, fake, lux.Spec{Image: lux.Image{Ref: "x"}, Workload: lux.Workload{Adapter: "generic"},
 		Git: &lux.Git{Repositories: []lux.Repository{{Name: "app", URL: "file://" + repo, Ref: "main"}}}})
-	if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "main"}}); err != nil {
+	if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "main"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Stop(ctx, runID); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "stopped", func() bool { r, _ := c.Get(ctx, runID); return r.State == "stopped" })
-	if err := c.SyncRun(ctx, runID, "s2", []lux.SyncRef{{Repo: "app", Ref: "main"}}); !isLux(err, 409, "not_running") {
+	if err := c.SyncRun(ctx, runID, "s2", []lux.SyncRef{{Repo: "app", Ref: "main"}}, nil); !isLux(err, 409, "not_running") {
 		t.Errorf("sync of a stopped run: %v", err)
 	}
 	if _, err := c.Resume(ctx, runID, lux.ResumeInput{Sync: []lux.SyncRef{{Repo: "app", Ref: "main"}}}); err != nil {

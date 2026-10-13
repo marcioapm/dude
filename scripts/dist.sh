@@ -26,7 +26,7 @@ GO_LDFLAGS="-s -w -X github.com/marciomartins/dude/orchestrator/internal/version
 # Read by apps/control-plane/src/build.ts.
 BUN_DEFINES=(--define "DUDE_BUILD_VERSION=\"$VERSION\"")
 # The archive's FEATURES file, one per line; see below.
-FEATURES=(validate image-builder)
+FEATURES=(validate image-builder git-credentials)
 # Reproducible tarballs: root-owned regardless of the builder's uid, sorted,
 # and a fixed mtime (the commit's own date, so a rebuild of the same tag has
 # the same timestamps) rather than each build's wall clock. GNU tar only:
@@ -90,6 +90,8 @@ for arch in arm64 amd64; do
   # image-builder: bin/dude-image-builder, migration 068's dude_builder role
   # and the [images]/[builder] settings (docs/design/images.md); aiverse
   # runs the builder only for a release that declares it.
+  # git-credentials: every push and sync carries fresh git credentials, which
+  # a luxd from before them refuses (422): upgrade lux first.
   printf '%s\n' "${FEATURES[@]}" > "$work/FEATURES"
   chmod 0644 "$work/FEATURES"
   # gzip -n: no name or timestamp in the gzip header, which tar -z leaves

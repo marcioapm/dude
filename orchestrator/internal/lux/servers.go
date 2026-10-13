@@ -224,8 +224,9 @@ type Servers interface {
 	PatchServer(ctx context.Context, id string, in PatchServer) (TenantServer, error)
 	AttachServer(ctx context.Context, id, runID string) (TenantServer, error)
 	DetachServer(ctx context.Context, id string) error
-	// SyncRun moves a running Run's checkouts.
-	SyncRun(ctx context.Context, runID, requestID string, sync []SyncRef) error
+	// SyncRun moves a running Run's checkouts, fetching with credentials
+	// (as Push takes them).
+	SyncRun(ctx context.Context, runID, requestID string, sync []SyncRef, credentials map[string]string) error
 	// Feed follows GET /v1/events after an event id (-1: from the latest
 	// event lux has), calling fn for each, until ctx ends, the stream does,
 	// or fn fails.
@@ -280,9 +281,12 @@ func (c *HTTPClient) DetachServer(ctx context.Context, id string) error {
 	return c.do(ctx, "POST", "/v1/servers/"+url.PathEscape(id)+"/detach", map[string]any{}, nil, nil)
 }
 
-func (c *HTTPClient) SyncRun(ctx context.Context, runID, requestID string, sync []SyncRef) error {
-	return c.do(ctx, "POST", "/v1/runs/"+url.PathEscape(runID)+"/sync",
-		map[string]any{"requestId": requestID, "sync": sync}, nil, nil)
+func (c *HTTPClient) SyncRun(ctx context.Context, runID, requestID string, sync []SyncRef, credentials map[string]string) error {
+	body := map[string]any{"requestId": requestID, "sync": sync}
+	if len(credentials) > 0 {
+		body["credentials"] = credentials
+	}
+	return c.do(ctx, "POST", "/v1/runs/"+url.PathEscape(runID)+"/sync", body, nil, nil)
 }
 
 type PreviewConfig struct {

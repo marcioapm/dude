@@ -1,4 +1,4 @@
--- 112_run_children.sql — the child sessions (subagents) a Run's agent has
+-- 113_run_children.sql — the child sessions (subagents) a Run's agent has
 -- open, for the stall detector.
 --
 -- children: the parent's tool call id → {childId, kind, title, lastEventAt,

@@ -81,9 +81,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -239,9 +241,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -395,9 +399,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -550,9 +556,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -708,9 +716,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -864,9 +874,11 @@
     "env": {
       "CLICOLOR_FORCE": "1",
       "FORCE_COLOR": "1",
-      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_COUNT": "2",
       "GIT_CONFIG_KEY_0": "color.ui",
+      "GIT_CONFIG_KEY_1": "include.path",
       "GIT_CONFIG_VALUE_0": "always",
+      "GIT_CONFIG_VALUE_1": "/usr/local/share/dude/git-config",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
