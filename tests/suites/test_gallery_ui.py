@@ -81,6 +81,26 @@ def test_unrelated_fragment_keeps_relations_deferred(gallery_page: Page, console
     assert console_errors == []
 
 
+def test_relation_intersection_preserves_scroll_with_old_fragment(
+    gallery_page: Page, console_errors: list,
+) -> None:
+    url = gallery_page.url.split("#")[0]
+    gallery_page.goto("about:blank")
+    gallery_page.goto(f"{url}#p-markdown-editor", wait_until="networkidle")
+    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
+    intended_y = gallery_page.evaluate("""() => {
+        const y = document.getElementById('relations').getBoundingClientRect().top
+            + window.scrollY - 1000;
+        window.scrollTo(0, y);
+        return y;
+    }""")
+    expect(gallery_page.locator("#rel-picker")).to_have_count(1)
+    gallery_page.wait_for_function(
+        "y => Math.abs(window.scrollY - y) <= 2", arg=intended_y, timeout=5000,
+    )
+    assert console_errors == []
+
+
 def test_gallery_renders_without_console_errors(gallery_page: Page, console_errors: list):
     """A component that throws on render fails here and nowhere else."""
     expect(gallery_page.get_by_role("heading", name="Tokens", exact=True)).to_be_visible()

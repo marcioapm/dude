@@ -45,12 +45,12 @@ function blockIds() {
   return [...host!.querySelectorAll("section#relations [id^='rel-']")].map((block) => block.id);
 }
 
-test("false waits, true mounts all blocks once without taking focus, in both themes and densities", async () => {
+test("false waits, true mounts once in all themes and densities; pickers preserve focus with menu autofocus isolated", async () => {
   globalThis.IntersectionObserver = DrivenObserver as unknown as typeof IntersectionObserver;
   const sentinel = document.createElement("button");
   document.body.append(sentinel);
   sentinel.focus();
-  // The forced-open menu previews have their own autofocus, unrelated to the pickers.
+  // Cancel static menu autofocus to isolate the pickers; this is not a gallery-wide focus guarantee.
   const suppressMenuFocus = (event: Event) => {
     if ((event.target as HTMLElement).getAttribute("role") === "menu") event.preventDefault();
   };
