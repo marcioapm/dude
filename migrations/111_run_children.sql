@@ -1,0 +1,12 @@
+-- 111_run_children.sql — the child sessions (subagents) a Run's agent has
+-- open, for the stall detector.
+--
+-- children: the parent's tool call id → {childId, kind, title, lastEventAt,
+-- lastEvent, waitingOn?: {permission, patterns}}. The translator writes an
+-- entry on every agent.child.* event and drops it when the parent's call
+-- completes. An open call whose child moves is not stalled: stalledCall
+-- measures it from the later of when it opened and the child's last event.
+--
+-- Adding a column with a constant default rewrites nothing (Postgres 11+);
+-- it takes ACCESS EXCLUSIVE on runs only for the catalogue change.
+ALTER TABLE runs ADD COLUMN children jsonb NOT NULL DEFAULT '{}';

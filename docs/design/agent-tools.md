@@ -108,6 +108,71 @@ approved.
 - Every call is a ledger event (`agent.tool.dude`) with its arguments and
   result, so the chat shows it like any other tool call.
 
+## Child sessions
+
+A Run's agent may start a **child**: a subagent with a conversation of its
+own (OpenCode's and Claude Code's task tool, Codex's `spawn_agent`). A
+child is not a Run: it shares the Run's container, checkout, proxy key and
+time limit, and dude neither starts nor steers it. dude records what it
+does, nested under the parent's tool call that started it, so the
+transcript shows it and the stall detector can tell a working child from a
+hung call.
+
+### Events
+
+Every payload carries `childId` (the harness's id: OpenCode's session,
+Codex's thread, Claude Code's task) and `callId` (the parent's
+`agent.tool.called` that started it). A child of a child carries
+`parentChildId`.
+
+| event | payload | when |
+|---|---|---|
+| `agent.child.started` | `{childId, callId, parentChildId?, kind, title, agentType?, model?}` — `kind` `task` (OpenCode, Claude Code) or `spawn` (Codex); `title` the description the parent gave | the child exists |
+| `agent.child.tool.called` | as `agent.tool.called` (`tool`, `callId` — the child's own call —, `input`, `title`) plus `childId`, `parentCallId` | a child's tool call starts |
+| `agent.child.tool.completed` | as `agent.tool.completed` (`tool`, `callId`, `status`, the result) plus `childId`, `parentCallId` | it ends |
+| `agent.child.message` | `{childId, callId, text, costUsd?, tokens?}` | a child's assistant message completes |
+| `agent.child.waiting` | `{childId, callId, on: "permission", permission, patterns, answered}` | the harness asked a permission for the child; the child's next event ends the wait |
+| `agent.child.ended` | `{childId, callId, status, summary, costUsd?, tokens?, durationSecs}` — status `completed`, `failed` or `interrupted` | the child is done |
+
+Only completed things are recorded: no deltas, no reasoning, one
+`agent.child.message` per completed message. Inputs, outputs, texts and
+summaries are cut as the parent's are (a message and a summary at 2 KB). A
+child's `costUsd` is what its harness said; the Run's cost
+(`run.cost.reported`, from the proxy) already includes it, and nothing adds
+it again.
+
+### Where each harness says it
+
+- **Claude Code** (`claude.*`): the parent's `Agent` (or `Task`) tool_use
+  is the call. `system task_started` names the child (`task_id`) and the
+  call (`tool_use_id`); every child line carries `parent_tool_use_id`,
+  the call's id, and is translated as the child's, never the parent's.
+  `system task_notification` ends it with its status, summary and usage.
+- **Codex** (`codex.*`): any notification on a thread other than the
+  Run's (its session) is a child's. The parent's `collabAgentToolCall`
+  item (`spawnAgent`) is the call; the `subAgentActivity` item that
+  follows it (`kind: started`) ties the child's `agentThreadId` to it. The
+  child's `turn/completed` ends it; its `thread/tokenUsage/updated` are its
+  tokens, not the Run's.
+- **OpenCode** (`acp.*` is the parent alone; lux relays the child's bus
+  events as `opencode.*`): `opencode.session` with a `parentID` is a
+  child; `opencode.task` ties its session to the parent's call
+  (`callID`); `opencode.part` is a child's tool call, `opencode.message` a
+  completed message, `opencode.permission` an ask on its session. ACP
+  reports the task tool with kind `think` and the description as title:
+  a `think` call whose input names a `subagent_type` is recorded as tool
+  `task`.
+
+### The stall detector
+
+`runs.children` (migration 111) keeps, per open parent call, its child's
+id, kind, title, last event time and a one-line last event, and what it
+waits on. An open call is measured from the later of its opening and its
+child's last event, so a call whose child works is not stalled; a child's
+activity counts as the agent's (`agent_active_at`). A report names each
+call's child, how long ago it last did something and what, and a
+permission it waits on that nothing can answer.
+
 ## Where it runs
 
 In the orchestrator process, on its own listener (`DUDE_MCP_LISTEN`), since

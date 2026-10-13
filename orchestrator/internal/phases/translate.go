@@ -37,6 +37,14 @@ const (
 	evDirectiveAccepted  = "run.directive.accepted"
 	evDirectiveFailed    = "run.directive.failed"
 	evNetworkRefused     = "agent.network.refused"
+	// A child session's (subagent's) life, nested under the parent's call
+	// that started it (translate_children.go).
+	evChildStarted       = "agent.child.started"
+	evChildToolCalled    = "agent.child.tool.called"
+	evChildToolCompleted = "agent.child.tool.completed"
+	evChildMessage       = "agent.child.message"
+	evChildWaiting       = "agent.child.waiting"
+	evChildEnded         = "agent.child.ended"
 	// inputConsumed: directiveReceipt's name for a lux.input.consumed.
 	inputConsumed = "consumed"
 )
