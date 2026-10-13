@@ -395,7 +395,7 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 		return delivery.RefusalOf(le, asked, pools, plan.before)
 	}
 	// Told only of a move this resume asks lux for.
-	if plan.Target != nil && !plan.unknown && plan.Note == "" {
+	if plan.Target != nil && plan.Note == "" {
 		if move.Kind == "reset" {
 			plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + "."
 			if move.Note != "" {

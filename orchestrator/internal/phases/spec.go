@@ -206,11 +206,8 @@ func (s *Syncer) machineLine(ctx context.Context, m *delivery.Machine, sizes del
 	if m == nil || s.Agent.ToolsURL == "" {
 		return ""
 	}
-	pools, err := s.Lux.Pools(ctx)
-	if err != nil {
-		// Unread, the pools filter nothing and are not named.
-		pools = nil
-	}
+	// Unread, the pools filter nothing and are not named.
+	pools, _ := delivery.LoadPools(ctx, s.Lux)
 	return sizes.Choices(*m, org, pools, lux.Run{}).Line(cli)
 }
 
