@@ -28,6 +28,8 @@ type Pull struct {
 	State    string
 	Draft    bool
 	MergedAt *string
+	// Who opened it: the token's poster when it was opened.
+	Author string
 	// Logins asked for a review.
 	Requested []string
 	Comments  []Comment
@@ -114,6 +116,8 @@ type Server struct {
 	ReviewRequests []ReviewRequest
 	// When set, review requests are refused with this status.
 	ReviewRequestStatus int
+	// A user's GitHub type ("User", "Bot") when its login does not say.
+	UserTypes map[string]string
 }
 
 // ReviewRequest is one POST to a pull request's requested_reviewers.
@@ -484,7 +488,7 @@ func (s *Server) Handler() http.Handler {
 			// As GitHub: one login it will not ask refuses the whole request.
 			for _, l := range in.Reviewers {
 				switch {
-				case strings.EqualFold(l, s.poster()):
+				case strings.EqualFold(l, p.Author):
 					fail(w, 422, "Review cannot be requested from pull request author.")
 					return
 				case s.Permissions[l] == "none" || strings.HasSuffix(l, "[bot]"):
@@ -577,7 +581,8 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft}
+	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft,
+		Author: s.poster()}
 	s.pulls[p.Number] = p
 	out := s.pullJSON(p)
 	lost := s.LoseOpenResponses > 0
@@ -611,16 +616,19 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
 		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
-		"user": userJSON(s.poster()),
+		"user": s.userJSON(p.Author),
 	}
 }
 
-// userJSON is a GitHub user object: an App's account ("<slug>[bot]") is
-// of type Bot.
-func userJSON(login string) map[string]any {
+// userJSON is a GitHub user object: of type Bot for an App's account
+// ("<slug>[bot]") or a login UserTypes names so, else User.
+func (s *Server) userJSON(login string) map[string]any {
 	kind := "User"
 	if strings.HasSuffix(login, "[bot]") {
 		kind = "Bot"
+	}
+	if t := s.UserTypes[login]; t != "" {
+		kind = t
 	}
 	return map[string]any{"login": login, "type": kind}
 }
@@ -832,11 +840,27 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
 		for _, rv := range p.Reviews {
-			out = append(out, map[string]any{"id": rv.ID, "user": userJSON(rv.Login), "state": rv.State,
+			out = append(out, map[string]any{"id": rv.ID, "user": s.userJSON(rv.Login), "state": rv.State,
 				"body": rv.Body, "submitted_at": rv.SubmittedAt, "commit_id": rv.CommitID})
 		}
 	}
-	write(w, 200, out)
+	write(w, 200, page(r, out))
+}
+
+// page is one page of a list, as GitHub pages it: `per_page` clamped to
+// 1..100, 30 when absent or invalid; `page` from 1.
+func page[T any](r *http.Request, all []T) []T {
+	size, err := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if err != nil || size < 1 {
+		size = 30
+	}
+	size = min(size, 100)
+	n, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || n < 1 {
+		n = 1
+	}
+	start := min((n-1)*size, len(all))
+	return all[start:min(start+size, len(all))]
 }
 
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {

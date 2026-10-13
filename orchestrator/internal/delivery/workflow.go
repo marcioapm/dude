@@ -1120,6 +1120,19 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
+	// Who reviewed an open pull request's older head is asked to look at
+	// the fix. Before opening any new pull request, so that nothing that
+	// opening parks on leaves the open ones unasked; a replay of this step
+	// asks nobody twice (RerequestReviews).
+	if len(out.Heads) > 0 {
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, out.Heads); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	// The fix may have changed a repository no pull request is open for yet:
 	// that one gets its own, alongside the others.
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
@@ -1133,16 +1146,6 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
-	}
-	// Who reviewed the head before the fix is asked to look at it.
-	if len(out.Heads) > 0 {
-		gh, err := w.forges.For(ctx, sc.OrganizationID)
-		if err != nil {
-			return workflow.Result{}, err
-		}
-		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, out.Heads); err != nil {
-			return workflow.Result{}, err
-		}
 	}
 	// What happened to them while the fix ran was signalled to a step not
 	// listening for it: one may have been merged or closed, or be approved

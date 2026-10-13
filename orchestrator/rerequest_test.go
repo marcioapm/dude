@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // reviewRequests is every review request the fake GitHub received.
@@ -34,8 +35,13 @@ func (w *world) rerequests(wi string) []map[string]any {
 		if err := rows.Scan(&raw); err != nil {
 			w.t.Fatal(err)
 		}
-		_ = json.Unmarshal(raw, &p)
+		if err := json.Unmarshal(raw, &p); err != nil {
+			w.t.Fatal(err)
+		}
 		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		w.t.Fatal(err)
 	}
 	return out
 }
@@ -221,4 +227,63 @@ func TestAReviewRequestGitHubRefusesLeavesTheFixPushed(t *testing.T) {
 			t.Errorf("task %s, want review", s)
 		}
 	})
+}
+
+// A fix that also changes a repository with no pull request yet opens one
+// there after asking the existing pull request's reviewers again: opening
+// it failing (or, later, waiting on someone) leaves them asked, once,
+// however often the step runs again.
+func TestReviewersAreAskedBeforeASiblingPullRequestOpens(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
+		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
+			// The pull request's fix: web changes for the first time.
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	w.askingFor("jerv")
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("target's pull request in review", func() bool {
+		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
+	})
+	if n := len(w.web.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests on web before the fix", n)
+	}
+	w.gh.Review(1, "jerv", "COMMENTED")
+	var opens atomic.Int32
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls") {
+				opens.Add(1)
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	before := w.gh.SHA(w.gh.Pull(1).Head)
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request tried twice", func() bool {
+		w.sync()
+		return opens.Load() >= 2
+	})
+	head := w.gh.SHA(w.gh.Pull(1).Head)
+	if head == before {
+		t.Fatal("the fix did not move target's head")
+	}
+	reqs := w.reviewRequests()
+	if len(reqs) != 2 || !slices.Equal(reqs[1].Logins, []string{"jerv"}) {
+		t.Fatalf("review requests %v, want the opening's then jerv's once", reqs)
+	}
+	if e := w.rerequests(wi); len(e) != 1 || e[0]["head"] != head || e[0]["repo"] != "target" {
+		t.Errorf("recorded %v", e)
+	}
 }

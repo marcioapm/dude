@@ -203,8 +203,13 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   an older head and who is not asked already (`forge.StaleReviewers`,
   `delivery.RerequestReviews`): never the author, never an App's account
   (`[bot]`, which reviews every push unasked), never after a head someone
-  else pushed on top. Best effort, once per pull request and head, recorded
-  as `pull_request.review_rerequested` with whom GitHub took and refused.
+  else pushed on top. Best effort, recorded as
+  `pull_request.review_rerequested` with whom GitHub took and refused. It
+  runs before the fix opens a pull request for a newly changed repository,
+  so nothing that opening waits on leaves the open ones unasked. Once per
+  pull request and head: a `pull_request_rerequests` row claimed before
+  GitHub is contacted, its outcome and event written under the claim's
+  token (see `RerequestReviews` for an interrupted claim).
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that
