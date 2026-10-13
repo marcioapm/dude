@@ -268,6 +268,69 @@ func (w *world) requestMachine(runID, body string) (int, string) {
 	return res.StatusCode, string(out)
 }
 
+// A fixer's raise is fixer@task: with the organization naming a fixer size,
+// the fix Run still resumes on the size it asked for, the implementer's
+// layer is untouched, and only the fixer's Reset moves the fix Run.
+func TestAFixersRaiseIsTheFixersAndOnlyItsResetMovesIt(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return scripted(spec)
+	}
+	standard := w.str(`SELECT id FROM machine_sizes WHERE organization_id=$1 AND name='Standard'`, w.org)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || jsonb_build_object('fixer', jsonb_build_object('machineSize', $2::text)) WHERE id = $1`, w.org, standard)
+	task := w.task()
+	w.deliver(task)
+	fix := ""
+	w.until("a live fix Run", func() bool {
+		fix = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='fix' AND status='running' AND control='none' AND lux_state='running'), '')`, task)
+		return fix != ""
+	})
+	if status, body := w.requestMachine(fix, `{"size":"Bigger","reason":"go test killed, exit 137"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("the move settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, fix) == 1
+	})
+	if got := w.machineOf(fix); got["name"] != "Bigger" || got["from"] != "task" {
+		t.Fatalf("fix Run's machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND role='fixer' AND refused IS NULL AND refused_message IS NULL`, fix) != 1 ||
+		w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused'`, fix) != 0 {
+		t.Fatal("the fixer's move was not settled as moved, under fixer")
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines ? 'fixer' AND NOT agent_machines ? 'implementer'`, task) != 1 {
+		t.Fatalf("layer %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
+	}
+	// An implementer raise of its own: its Reset must not reach the fix Run.
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines = agent_machines || '{"implementer":{"sizeId":"msz_big","moveId":"mmv_impl","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	person := w.person("Resetter")
+	status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if status != 200 || out["moved"] != false {
+		t.Fatalf("implementer reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, fix) != 1 || w.machineOf(fix)["name"] != "Bigger" {
+		t.Fatal("the implementer's Reset moved the fix Run")
+	}
+	w.until("the fix Run running on lux again", func() bool {
+		return w.lux.State(w.str(`SELECT lux_run_id FROM runs WHERE id=$1`, fix)) == "running"
+	})
+	status, out = w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "fixer"})
+	if status != 200 || out["moved"] != true {
+		t.Fatalf("fixer reset: %d %v", status, out)
+	}
+	w.until("the Reset settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, fix) == 1
+	})
+	if got := w.machineOf(fix); got["name"] != "Standard" {
+		t.Fatalf("after the fixer's Reset machine=%v", got)
+	}
+}
+
 // A process that dies after lux accepted the sized resume, before dude
 // recorded it: the next sweep's resume finds lux resuming already, and the
 // move is settled from what lux then reports the Run has.

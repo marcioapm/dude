@@ -255,9 +255,16 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if !ok {
 			return fail(409, "no_size", "no settings machine size is available")
 		}
-		var runID, live, status, pause, control string
+		var runID, live, status, control string
 		var current *delivery.Machine
-		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, COALESCE(dude_pause,''), control, machine FROM runs WHERE (task_id=$1 OR session_id=$2) AND role=$3 AND kind='agent' AND status IN ('running','paused','pending','starting') ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role).Scan(&runID, &live, &status, &pause, &control, &current)
+		// A settings role's Runs: a phase's (fixer is phase fix, not every
+		// role='implementer' Run), else the conductor's or brainstorm's,
+		// which have no phase.
+		phase := delivery.PhaseForPromptRole(body.Role)
+		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, control, machine FROM runs
+			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','starting')
+				AND CASE WHEN $4 = '' THEN phase IS NULL AND role::text=$3 ELSE phase::text=$4 END
+			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, phase).Scan(&runID, &live, &status, &control, &current)
 		if err != nil && !db.IsNotFound(err) {
 			return err
 		}

@@ -4,6 +4,7 @@ package agenttools
 // (docs/design/agent-machine-request.md, "The tool").
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -93,10 +94,13 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, refuse("say what ran out: the command, its error or exit code (at most 2000 characters)")
 	}
 	var current *delivery.Machine
-	var live, status, control string
-	if err := tx.QueryRow(ctx, `SELECT machine, COALESCE(lux_run_id, ''), status::text, control FROM runs WHERE id = $1`, c.RunID).Scan(&current, &live, &status, &control); err != nil {
+	var live, status, control, phase string
+	if err := tx.QueryRow(ctx, `SELECT machine, COALESCE(lux_run_id, ''), status::text, control, COALESCE(phase::text, '') FROM runs WHERE id = $1`, c.RunID).Scan(&current, &live, &status, &control, &phase); err != nil {
 		return out, err
 	}
+	// The layer and the move are keyed by settings role: a fix Run's
+	// runs.role is implementer, its settings role fixer.
+	role := cmp.Or(delivery.PromptRoleFor(phase, c.Role), c.Role)
 	var pending, used int
 	var pendingTo string
 	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE m.settled_at IS NULL), count(*) FILTER (WHERE m.kind = 'raise' AND m.refused IS NULL),
@@ -137,7 +141,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	// A refusal once both sizes are known is recorded as machine.requested
 	// with refused and no moveId, so who asked for what has one source.
 	refusedAs := func(msg, code, recorded string) error {
-		payload := delivery.MovePayload("", c.Role, *current, target, names)
+		payload := delivery.MovePayload("", role, *current, target, names)
 		payload["reason"], payload["refused"], payload["message"] = reason, recorded, msg
 		ev := c.event(delivery.EvMachineRequested, payload)
 		return refusal{msg: msg, code: code, record: &ev}
@@ -163,14 +167,14 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
-	raise := delivery.Raise{SizeID: target.SizeID, MoveID: id, AskedBy: c.RunID, Role: c.Role, Reason: reason, At: time.Now().UTC()}
+	raise := delivery.Raise{SizeID: target.SizeID, MoveID: id, AskedBy: c.RunID, Role: role, Reason: reason, At: time.Now().UTC()}
 	var previous *delivery.Raise
 	if c.SessionID != "" {
 		if err := tx.QueryRow(ctx, `SELECT agent_machine FROM sessions WHERE id = $1`, c.SessionID).Scan(&previous); err != nil {
 			return out, err
 		}
 	} else {
-		if err := tx.QueryRow(ctx, `SELECT agent_machines->$2 FROM tasks WHERE id = $1`, c.TaskID, c.Role).Scan(&previous); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT agent_machines->$2 FROM tasks WHERE id = $1`, c.TaskID, role).Scan(&previous); err != nil {
 			return out, err
 		}
 	}
@@ -187,48 +191,49 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	if tag.RowsAffected() == 0 {
 		return out, refuse("this Run is no longer available for a machine move")
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO machine_moves (id, organization_id, task_id, session_id, run_id, role, kind, from_size, to_size_id, apply, reason) VALUES ($1, $2, $3, $4, $5, $6, 'raise', $7, $8, 'resize', $9)`, id, c.Org, db.Nullable(c.TaskID), db.Nullable(c.SessionID), c.RunID, c.Role, from, target.SizeID, reason)
+	_, err = tx.Exec(ctx, `INSERT INTO machine_moves (id, organization_id, task_id, session_id, run_id, role, kind, from_size, to_size_id, apply, reason) VALUES ($1, $2, $3, $4, $5, $6, 'raise', $7, $8, 'resize', $9)`, id, c.Org, db.Nullable(c.TaskID), db.Nullable(c.SessionID), c.RunID, role, from, target.SizeID, reason)
 	if err != nil {
 		return out, err
 	}
 	if c.SessionID != "" {
 		_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = $2 WHERE id = $1`, c.SessionID, layer)
 	} else {
-		_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) WHERE id = $1`, c.TaskID, c.Role, layer)
+		_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) WHERE id = $1`, c.TaskID, role, layer)
 	}
 	if err != nil {
 		return out, err
 	}
-	payload := delivery.MovePayload(id, c.Role, *current, target, names)
+	payload := delivery.MovePayload(id, role, *current, target, names)
 	payload["reason"] = reason
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRequested, payload)); err != nil {
 		return out, err
 	}
 	// The layer is written and the move starts: the notice and the
 	// stepper's pool come from this, whole Machines and pool names.
-	raised := delivery.MovePayload(id, c.Role, *current, target, names)
+	raised := delivery.MovePayload(id, role, *current, target, names)
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRaised, raised)); err != nil {
 		return out, err
 	}
-	return requestMachineOut{Size: target.Name, Pool: choices.OtherPool(target), Answer: movedAnswer(c, choices, target)}, nil
+	return requestMachineOut{Size: target.Name, Pool: choices.OtherPool(target), Answer: movedAnswer(c.SessionID != "", role, choices, target)}, nil
 }
 
-// movedAnswer is the design's answer to an accepted request.
-func movedAnswer(c Caller, choices delivery.MachineChoices, target delivery.Machine) string {
+// movedAnswer is the design's answer to an accepted request; role is the
+// caller's settings role.
+func movedAnswer(session bool, role string, choices delivery.MachineChoices, target delivery.Machine) string {
 	where := ""
 	if pool := choices.OtherPool(target); pool != "" {
 		where = " in the " + pool + " pool"
 	}
-	later := "Later " + strings.ToLower(delivery.RoleLabel[c.Role]) + " Runs in this task run on " + target.Name + " too."
+	later := "Later " + strings.ToLower(delivery.RoleLabel[role]) + " Runs in this task run on " + target.Name + " too."
 	switch {
-	case c.SessionID != "":
+	case session:
 		later = "This session's agent runs on " + target.Name + " from now on."
-	case c.Role == "implementer":
+	case role == "implementer":
 		later = "Later implementer and fixer Runs in this task run on " + target.Name + " too."
-	case c.Role == delivery.RoleConductor:
+	case role == delivery.RoleConductor:
 		later = "Later conductors in this task run on " + target.Name + " too."
-	case delivery.RoleLabel[c.Role] == "":
-		later = "Later " + c.Role + " Runs in this task run on " + target.Name + " too."
+	case delivery.RoleLabel[role] == "":
+		later = "Later " + role + " Runs in this task run on " + target.Name + " too."
 	}
 	return fmt.Sprintf("Moved: you run on %s (%s)%s from your next step. Your conversation and your checkout are kept, "+
 		"committed or not, with everything else on /workspace and your home. Running processes and /tmp are not: start "+

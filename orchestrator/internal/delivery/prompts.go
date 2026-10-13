@@ -432,6 +432,17 @@ func PromptRoleFor(phase, role string) string {
 	return PromptRoleForPhase[phase]
 }
 
+// PhaseForPromptRole is the phase whose Runs take a settings role; "" for
+// the conductor and brainstorm, which are Runs with no phase.
+func PhaseForPromptRole(role string) string {
+	for phase, r := range PromptRoleForPhase {
+		if r == role {
+			return phase
+		}
+	}
+	return ""
+}
+
 // instructions is what the role is told to do: the organization's
 // prompt if it has one, else dude's; then the project's, added after it or
 // in its place. dude's own fixer instructions come in two parts, either

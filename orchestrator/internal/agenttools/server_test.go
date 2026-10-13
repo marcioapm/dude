@@ -124,8 +124,13 @@ func setup(t *testing.T) *fixture {
 func (f *fixture) run(t *testing.T, id, role, status string) string {
 	t.Helper()
 	token, hash := agenttools.NewToken()
+	// The role's own phase: a reviewer reviews.
+	phase := "implement"
+	if role == "reviewer" {
+		phase = "review"
+	}
 	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, mcp_token_hash)
-		VALUES ($1, $2, $3, $4, 1, $5::run_status, 'implement', $6::agent_role, $7)`, id, f.org, f.project, f.item, status, role, hash)
+		VALUES ($1, $2, $3, $4, 1, $5::run_status, $8::run_phase, $6::agent_role, $7)`, id, f.org, f.project, f.item, status, role, hash, phase)
 	return token
 }
 
