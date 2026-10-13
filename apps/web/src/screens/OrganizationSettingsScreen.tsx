@@ -244,6 +244,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
         client={client}
         open={replacing}
         auth={connection.connected ? connection.auth : "pat"}
+        connection={connection}
         onOpenChange={setReplacing}
         publicUrl={(connection.connected ? connection.webhook.publicUrl : null) ?? window.location.origin}
         onSaved={() => {
@@ -265,17 +266,18 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
  * optionally, a default installation; its webhook is set in the App.
  * Neither secret is ever shown again.
  */
-function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; auth: "pat" | "github_app";
+function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; auth: "pat" | "github_app"; connection: ForgeConnection;
   onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [auth, setAuth] = useState<"pat" | "github_app">(props.auth);
   const [token, setToken] = useState("");
   const [privateKey, setPrivateKey] = useState("");
-  const [appId, setAppId] = useState("");
-  const [oauthClientId, setOauthClientId] = useState("");
+  const saved = props.connection.connected ? props.connection : null;
+  const [appId, setAppId] = useState(saved?.appId ?? "");
+  const [oauthClientId, setOauthClientId] = useState(saved?.oauthClientId ?? "");
   const [oauthClientSecret, setOauthClientSecret] = useState("");
   const [clearOauthClientSecret, setClearOauthClientSecret] = useState(false);
-  const [installationId, setInstallationId] = useState("");
-  const [apiBase, setApiBase] = useState("");
+  const [installationId, setInstallationId] = useState(saved?.installationId ?? "");
+  const [apiBase, setApiBase] = useState(saved?.apiBaseUrl ?? "");
   const { busy, problem, save } = useSave();
   const app = auth === "github_app";
   const ready = app ? Boolean(privateKey.trim()) && /^\d+$/.test(appId.trim()) && /^\d*$/.test(installationId.trim())
@@ -320,9 +322,9 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           <SecretField label="Private key" value={privateKey} onChange={setPrivateKey}
             placeholder="Paste the whole .pem file" hint="The whole .pem file GitHub generated for the App."
             data-testid="forge-private-key" />
-          <Input label="OAuth Client ID" value={oauthClientId} autoComplete="off"
+          <Input label="OAuth Client ID" data-testid="forge-oauth-client-id" value={oauthClientId} autoComplete="off"
             onChange={(e) => setOauthClientId(e.target.value)} />
-          <Input label="OAuth Client secret" type="password" value={oauthClientSecret} autoComplete="off"
+          <Input label="OAuth Client secret" data-testid="forge-oauth-client-secret" type="password" value={oauthClientSecret} autoComplete="off"
             hint="Blank keeps the saved secret. This is not the App's private key."
             onChange={(e) => setOauthClientSecret(e.target.value)} />
           <label><input type="checkbox" checked={clearOauthClientSecret}

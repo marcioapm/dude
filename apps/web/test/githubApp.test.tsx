@@ -125,6 +125,19 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
   expect(client.tokens).toEqual([]);
 });
 
+test("reopening App settings prefills canonical Client ID but no secrets", async () => {
+  const client = new AppClient({ ...APP, connected: true, auth: "github_app", oauthClientId: "saved-client", oauthClientSecretConfigured: true });
+  const container = await openGithub(client);
+  for (let n=0;n<2;n++) {
+    await click(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=forge-connect]"), "Replace credentials"));
+    const id = await until(() => document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-id]"), "Client ID");
+    expect(id.value).toBe("saved-client");
+    expect(document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-secret]")!.value).toBe("");
+    expect(document.querySelector<HTMLInputElement>("[data-testid=forge-private-key]")!.value).toBe("");
+    await click([...document.querySelectorAll("button")].find(b=>b.textContent==="Cancel")!);
+  }
+});
+
 test("a connected App shows its App ID, and Verify reports the token it minted", async () => {
   const client = new AppClient(APP);
   const container = await openGithub(client);

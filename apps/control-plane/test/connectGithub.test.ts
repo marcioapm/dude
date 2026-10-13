@@ -132,6 +132,61 @@ test("OAuth client secret is write-only, blank preserves it, and explicit clear 
   expect(cleared.oauth_client_secret).toBeNull();
 });
 
+test("OAuth identity switches need a fresh pair; API base invalidates but same-App PEM rotation does not", async () => {
+  const post = (extra: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/forge/credential", {
+    method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" },
+    body: JSON.stringify({ auth: "github_app", secret: "pem", appId: "9001", ...extra }),
+  }));
+  expect((await post({ oauthClientId: "client", oauthClientSecret: "fresh-secret" })).status).toBe(200);
+  const [before] = await owner`SELECT oauth_version FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect((await post({ secret: "rotated-pem", oauthClientSecret: "" })).status).toBe(200);
+  const [rotated] = await owner`SELECT oauth_version FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect(rotated.oauth_version).toBe(before.oauth_version);
+  for (const bad of [{ appId: "9002" }, { appId: "9002", oauthClientSecret: "fresh" }, { oauthClientId: "other" }, { oauthClientId: "other", oauthClientSecret: "" }]) {
+    expect((await post(bad)).status).toBe(400);
+  }
+  const [{ personId }] = await owner`SELECT id AS "personId" FROM people WHERE organization_id=${ORG} LIMIT 1`;
+  await owner`INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
+    access_token,refresh_token,expires_at,refresh_expires_at) SELECT ${ORG},${personId},id,oauth_version,123,'Owner','hidden-access','hidden-refresh',now()+interval '1 hour',now()+interval '1 day'
+    FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect((await post({ apiBaseUrl: "https://ghe.example/api/v3" })).status).toBe(200);
+  const [{ count }] = await owner`SELECT count(*)::int AS count FROM github_user_authorizations WHERE organization_id=${ORG}`;
+  expect(count).toBe(0);
+  const [changed] = await owner`SELECT oauth_version FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect(BigInt(changed.oauth_version)).toBe(BigInt(before.oauth_version) + 1n);
+  expect((await post({ appId: "9002", oauthClientId: "other", oauthClientSecret: "fresh-other" })).status).toBe(200);
+  expect((await post({ appId: "9003", clearOauthClientSecret: true })).status).toBe(200);
+  const [cleared] = await owner`SELECT oauth_client_id,oauth_client_secret FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect(cleared).toEqual({ oauth_client_id: null, oauth_client_secret: null });
+  expect((await post({ clearOauthClientSecret: true })).status).toBe(200);
+});
+
+test("signed authorization revocation matches numeric user and current App, isolated by organization and replay-safe", async () => {
+  const [credential] = await owner`SELECT id,oauth_version,webhook_secret FROM forge_credentials WHERE organization_id=${ORG}`;
+  const [{ id: personId }] = await owner`SELECT id FROM people WHERE organization_id=${ORG} LIMIT 1`;
+  await owner`INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
+    access_token,refresh_token,expires_at,refresh_expires_at) VALUES (${ORG},${personId},${credential.id},${credential.oauth_version},123,'Owner','hidden-access','hidden-refresh',now()+interval '1 hour',now()+interval '1 day')`;
+  const deliver = (organization: string, payload: unknown, secret = credential.webhook_secret) => {
+    const body = JSON.stringify(payload);
+    return router.handle(new Request(`http://dude.test/v1/webhooks/github/${organization}`, {
+      method: "POST", body, headers: { "x-github-event": "github_app_authorization", "x-github-delivery": "revocation",
+        "x-hub-signature-256": `sha256=${createHmac("sha256",secret).update(body).digest("hex")}` },
+    }));
+  };
+  const count = async () => (await owner`SELECT count(*)::int AS n FROM github_user_authorizations WHERE organization_id=${ORG}`)[0].n;
+  for (const payload of [{ action: "revoked", sender: { id: 124 } }, { action: "revoked", sender: { id: "123" } },
+    { action: "revoked", sender: { id: 123 }, installation: { app_id: 9002 } }]) {
+    expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(1);
+  }
+  await owner`INSERT INTO organizations (id,name,slug) VALUES ('org_revocation_other','Other','revocation-other')`;
+  await owner`INSERT INTO forge_credentials (id,organization_id,forge,auth,secret,app_id,webhook_secret)
+    VALUES ('fc_revocation_other','org_revocation_other','github','github_app','pem','9001','other-webhook-secret')`;
+  const payload = { action: "revoked", sender: { id: 123 }, installation: { app_id: 9001 } };
+  expect((await deliver('org_revocation_other',payload,'other-webhook-secret')).status).toBe(200); expect(await count()).toBe(1);
+  expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(0);
+  expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(0);
+});
+
 test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {
   const verify = async () => {
     const res = await router.handle(new Request("http://dude.test/v1/forge/credential/verify", {

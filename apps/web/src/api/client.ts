@@ -142,6 +142,8 @@ export type ForgeConnection =
       /** A GitHub App's id, and its default installation (none: found per repository owner). */
       appId?: string | null;
       installationId?: string | null;
+      oauthClientId?: string | null;
+      oauthClientSecretConfigured?: boolean;
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;

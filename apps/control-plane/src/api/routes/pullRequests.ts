@@ -299,9 +299,16 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   }
 
   const saved = await withOrg(organizationId, async (scope) => {
-    const [oauth] = await scope.sql`SELECT oauth_client_id, oauth_client_secret FROM forge_credentials WHERE forge = 'github' FOR UPDATE`;
-    const clientId = input.oauthClientId === undefined ? oauth?.oauth_client_id ?? null : input.oauthClientId;
-    const clientSecret = input.clearOauthClientSecret ? null : input.oauthClientSecret || oauth?.oauth_client_secret || null;
+    const [oauth] = await scope.sql`SELECT auth, app_id, oauth_client_id, oauth_client_secret FROM forge_credentials WHERE forge = 'github' FOR UPDATE`;
+    const switchingApp = oauth && (oauth.auth !== input.auth || oauth.app_id !== input.appId);
+    const clientId = input.auth !== 'github_app' || input.clearOauthClientSecret
+      ? null : input.oauthClientId === undefined ? oauth?.oauth_client_id ?? null : input.oauthClientId;
+    const changingIdentity = switchingApp || (oauth && clientId !== oauth.oauth_client_id);
+    if (input.auth === 'github_app' && changingIdentity && (clientId || oauth?.oauth_client_secret)
+      && !input.clearOauthClientSecret && (!input.oauthClientId || !input.oauthClientSecret?.trim())) {
+      throw badRequest("Changing the App or OAuth Client ID requires a freshly supplied Client ID and Client secret, or explicit clear");
+    }
+    const clientSecret = input.auth !== 'github_app' || input.clearOauthClientSecret ? null : input.oauthClientSecret || oauth?.oauth_client_secret || null;
     const rows = (await scope.sql`
       INSERT INTO forge_credentials (
         id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url, webhook_secret,
