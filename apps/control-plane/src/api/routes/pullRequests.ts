@@ -427,20 +427,11 @@ async function noteDelivery(organizationId: string, failure: string | null): Pro
 }
 
 /**
- * A person revoked their authorization of the App: drop their stored user
- * authorization for the organization's current App.
- *
- * The signature proves only the organization's webhook secret, which an App
- * replacement keeps, so it does not say which App sent the event. The App is
- * taken from installation.app_id when present and otherwise from GitHub's
- * X-GitHub-Hook-Installation-Target-ID with target type `integration`. These
- * headers are not covered by the signature; trusting them assumes the
- * delivery reached dude over GitHub's TLS transport unmodified. An event that
- * names no App, names two different ones, or names another App changes
- * nothing. The delivery id is claimed in the same transaction as the delete
- * and stored as already processed, so a redelivery after the person
- * reconnects does not remove the new authorization and the pull-request
- * worker never reads it.
+ * A person revoked their authorization of the App: drop it for the
+ * organization's current App (rules in docs/github.md, "Pull requests as the
+ * task owner"). The signature does not identify the App, because a
+ * replacement keeps the webhook secret. The delivery is claimed as already
+ * processed, so a redelivery after the person reconnects is a no-op.
  */
 async function revokeAuthorization(ctx: PublicContext, organizationId: string, deliveryId: string, body: string): Promise<Response> {
   const ignored = json({ ok: true, ignored: "github_app_authorization" });
@@ -448,7 +439,7 @@ async function revokeAuthorization(ctx: PublicContext, organizationId: string, d
   let revoked: { action?: unknown; sender?: { id?: unknown }; installation?: { app_id?: unknown } };
   try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
   const userId = revoked.sender?.id;
-  if (revoked.action !== "revoked" || !Number.isSafeInteger(userId)) return ignored;
+  if (revoked.action !== "revoked" || typeof userId !== "number" || !Number.isSafeInteger(userId)) return ignored;
   const payloadApp = revoked.installation?.app_id;
   if (payloadApp !== undefined && !Number.isSafeInteger(payloadApp)) return ignored;
   const targetType = ctx.request.headers.get("x-github-hook-installation-target-type");
@@ -456,8 +447,8 @@ async function revokeAuthorization(ctx: PublicContext, organizationId: string, d
   if (targetType !== null && targetType !== "integration") return ignored;
   if (targetId !== null && !/^[1-9][0-9]*$/.test(targetId)) return ignored;
   const named = new Set([payloadApp === undefined ? null : String(payloadApp), targetType ? targetId : null].filter((v) => v !== null));
-  if (named.size !== 1) return ignored;
-  const [appId] = named;
+  const [appId, ...others] = named;
+  if (appId === undefined || others.length > 0) return ignored;
   await withOrg(organizationId, async ({ sql }) => {
     const claimed = await sql`INSERT INTO webhook_deliveries (id, organization_id, event, payload, processed_at)
       VALUES (${deliveryId}, ${organizationId}, 'github_app_authorization',
@@ -466,7 +457,7 @@ async function revokeAuthorization(ctx: PublicContext, organizationId: string, d
     if (claimed.length === 0) return;
     await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
       WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
-        AND c.auth = 'github_app' AND c.app_id = ${appId!} AND a.github_user_id = ${userId as number}`;
+        AND c.auth = 'github_app' AND c.app_id = ${appId} AND a.github_user_id = ${userId}`;
   });
   return json({ ok: true });
 }
