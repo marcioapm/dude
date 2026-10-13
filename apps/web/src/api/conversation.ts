@@ -469,6 +469,8 @@ export interface Conversation {
   lands: SteerLands | null;
   /** Where its agent is while it starts, resumes or moves; null once it runs (or ended). */
   start: StartState | null;
+  /** The current Run's start that failed, until a next Run (Try again, a next message) is created: the header says so. */
+  startFailed: StartState | null;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -1250,6 +1252,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       toolCounts: state.toolCounts,
       lands: state.lands,
       start: shownStart(state.start, runStatus),
+      startFailed: state.failedStart?.turn.start ?? null,
     };
   }
 
@@ -1281,6 +1284,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     toolCounts: state.toolCounts,
     lands: state.lands,
     start: null,
+    startFailed: state.failedStart?.turn.start ?? null,
   };
 }
 

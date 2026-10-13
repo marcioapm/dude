@@ -92,6 +92,9 @@ describe("the projection", () => {
       done: [{ stage: "waiting", tookMs: 5_000 }] });
     const sent = c.turns.find((t) => t.kind === "human")!;
     expect(sent).toMatchObject({ deliveredAt: null, failed: NOT_STARTED });
+    // The header's failed state, until a next agent is created.
+    expect(c.startFailed).toMatchObject({ stage: "image", failed: { source: "lux" } });
+    expect(project([...events, created(60_000)], "pending").startFailed).toBeNull();
   });
 
   test("a drained Run whose resumePolicy (manual) fails it at the stop did not fail a start: no stopping-it failure", () => {
@@ -211,6 +214,17 @@ describe("a task's Run page", () => {
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toBe("Did not start: failed while getting the image ready: pull failed: manifest unknown. Nothing was spent on the model.");
     expect(failed.querySelector("code")!.textContent).toBe("pull failed: manifest unknown");
+    // The header's statusNote names where it failed, bare beside the Run's own Failed status.
+    const chip = page.querySelector("[data-testid=start-chip]")!;
+    expect(chip.textContent).toBe("Failed while getting the image ready");
+  });
+
+  test("failed before lux named a stage: the Run's header has no stage words to add, and no stale wait badge", async () => {
+    const ledger = [created(), ev("run.failed", { status: "failed", error: "No model yet." }, 1_000)];
+    expect(project(ledger, "failed").startFailed).toMatchObject({ stage: null, failed: { source: "dude" } });
+    const page = await runPage("failed", ledger);
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-chip]")?.textContent ?? null).toBeNull();
   });
 
   test("a tier with no model fails before lux: its useful error is projected and shown, and Try again still opens restart", async () => {

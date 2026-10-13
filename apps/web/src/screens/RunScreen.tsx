@@ -419,8 +419,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     role,
     status: run.status,
     statusLabel: runStatusLabel(run),
-    // Starting: where (the chip, bare beside the status that already says so); else lux's wait for a host.
+    // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's wait for a host.
     ...(conversation.start && !conversation.start.failed ? { statusNote: <StartHeaderChip start={conversation.start} bare /> }
+      : conversation.startFailed ? { statusNote: <StartHeaderChip start={conversation.startFailed} bare /> }
       : waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
     ...(owner ? { owner } : {}),
     subtitle: (

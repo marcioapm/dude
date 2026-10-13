@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
-import { AgentAvatar, StartChip, StartProgress, startSteps, type StartStep } from "@dude/design-system/components";
+import { AgentAvatar, StartChip, StartProgress, StatusMark, startSteps, type StartStep } from "@dude/design-system/components";
 import type { StartState } from "./api/conversation.ts";
 import { ApiError } from "./api/client.ts";
 import { instant } from "./instant.ts";
@@ -102,8 +102,14 @@ export function StartRow({ start, role, onRetry, taken, woken }: {
   );
 }
 
-/** The header's line: a session's meta, or bare as a Run's statusNote. */
+/** The header's line: a session's meta, or bare as a Run's statusNote. Failed: "✕ Did not start · Failed while …". */
 export function StartHeaderChip({ start, bare }: { start: StartState; bare?: boolean }): ReactNode {
   const step = stepsOf(start).find((s) => s.state === "current" || s.state === "failed");
+  if (start.failed && !step) {
+    // Failed before lux named a stage: StartChip's failed mark alone. A Run's status beside it already says Failed.
+    return bare ? null : (
+      <span data-testid="start-chip"><StatusMark status="failed" size="sm" label={start.kind === "start" ? "Did not start" : "Did not resume"} /></span>
+    );
+  }
   return <StartChip kind={start.kind} verb={startVerbOf(start)} step={step} startedAt={start.startedAt} bare={bare} data-testid="start-chip" />;
 }

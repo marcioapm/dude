@@ -1614,11 +1614,15 @@ describe("a session's agent starting", () => {
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toContain("Did not start: failed while checking out repositories: pull failed: manifest unknown.");
     expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Not delivered:");
-    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
+    // The header says it too: "✕ Did not start · Failed while …", until Try again starts the next agent.
+    const chip = page.querySelector("[data-testid=start-chip]")!;
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).toContain("Failed while checking out repositories");
     await click(page.querySelector("[data-testid=start-retry]")!);
     expect(client.retried).toBe(1);
     await act(async () => emit(client.ledger.at(-1)!));
     await until(() => (page.querySelector("[data-testid=start-retry]") === null ? true : null), "Try again gone once used");
+    expect(page.querySelector("[data-testid=start-chip] [data-status=starting]")).not.toBeNull();
     const sent = page.querySelector("[data-testid=human-turn]")!;
     expect(sent.textContent).not.toContain("Not delivered");
     expect(sent.textContent).toContain("Will be read when the agent starts.");
