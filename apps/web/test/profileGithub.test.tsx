@@ -44,12 +44,12 @@ class ProfileClient extends FixtureClient {
   }
 }
 
-async function open(client: ProfileClient) {
+async function open(client: ProfileClient, screen = <MySettingsScreen client={client} me={ME} onChanged={() => {}} />) {
   const { container, unmount } = await mount(
     <ThemeProvider>
       <TooltipProvider>
         <ToastProvider>
-          <MySettingsScreen client={client} me={ME} onChanged={() => {}} />
+          {screen}
         </ToastProvider>
       </TooltipProvider>
     </ThemeProvider>,
@@ -120,20 +120,10 @@ function Shell({ client }: { client: ProfileClient }) {
 
 test("a name saved with a GitHub username shows the new name once the shell has it, with nothing left to save", async () => {
   const client = new ProfileClient({ githubLogin: null, commitEmail: null });
-  const { container, unmount } = await mount(
-    <ThemeProvider>
-      <TooltipProvider>
-        <ToastProvider>
-          <Shell client={client} />
-        </ToastProvider>
-      </TooltipProvider>
-    </ThemeProvider>,
-  );
-  mounted.push(unmount);
-  const name = await until(() => container.querySelector<HTMLInputElement>("[data-testid=profile-name]"), "the name");
-  await type(name, "Renamed Person");
-  await type(container.querySelector<HTMLInputElement>("[data-testid=profile-github-login]")!, "octocat");
-  await click(container.querySelector<HTMLButtonElement>("[data-testid=profile-save]")!);
+  const { container, login, save } = await open(client, <Shell client={client} />);
+  await type(container.querySelector<HTMLInputElement>("[data-testid=profile-name]")!, "Renamed Person");
+  await type(login, "octocat");
+  await click(save);
   await until(() => client.saved.length === 1 ? true : null, "the save");
   await until(() => {
     const shown = container.querySelector<HTMLInputElement>("[data-testid=profile-name]");
