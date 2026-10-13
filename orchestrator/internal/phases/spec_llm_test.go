@@ -50,15 +50,8 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 	}
 }
 
-// permissions is the permission block every OpenCode config carries, as
-// JSON marshals it.
 const permissions = `"permission":{"*":"allow"}`
 
-// A Run's OpenCode config allows every permission before it is asked: a
-// subagent's ask is never answered (its session is not the ACP's), so one
-// would hang the parent's task call. One "*" rule suffices, as OpenCode
-// evaluates a user's rules after its own asks; a narrower rule, or none,
-// would let an ask through.
 func TestAnOpenCodeRunAllowsEveryPermissionBeforeItIsAsked(t *testing.T) {
 	var got struct {
 		Permission map[string]string `json:"permission"`

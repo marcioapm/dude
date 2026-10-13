@@ -766,12 +766,9 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	}
 }
 
-// openCodePermissions: a Run is unattended, and OpenCode v1.18.21's ACP
-// bridge drops a permission ask from a session it did not open over ACP,
-// which a task-tool subagent's is: its ask (a read outside the worktree, by
-// default) reaches no one and the parent's task call waits for good
-// (2026-10-13). A user "*" rule is evaluated after OpenCode's own asks, so
-// it alone allows everything before it is asked.
+// OpenCode v1.18.21's ACP bridge drops subagent permission asks, hanging the
+// parent's task call. Runs are unattended; the user "*" rule overrides
+// OpenCode's built-in asks so neither parent nor subagent waits for approval.
 var openCodePermissions = map[string]any{"*": "allow"}
 
 // openCodeConfig is a Run's model and its tier's settings as OpenCode
@@ -788,8 +785,7 @@ var openCodePermissions = map[string]any{"*": "allow"}
 // The tier's effort and options go in the model's options, which OpenCode
 // sends on every request (an agent's variant does not take effect, and the
 // AI SDK drops keys it does not know without a word); its headers in the
-// model's headers, likewise sent on every request. Every permission is
-// allowed (openCodePermissions).
+// model's headers, likewise sent on every request.
 func openCodeConfig(model, effort string, options map[string]any, headers map[string]string) string {
 	provider := llm.Provider(model)
 	entry := map[string]any{"options": llm.ModelOptions(model, effort, options)}
