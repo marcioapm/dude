@@ -568,17 +568,22 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
+    # Until the web app has invitation links, the old key dialog says why it cannot invite.
     page.get_by_test_id("invite").click()
-    page.get_by_test_id("invite-name").fill("Dee Marsh")
-    page.get_by_test_id("invite-email").fill("dee@acme.dev")
+    page.get_by_test_id("invite-name").fill("Nope")
+    page.get_by_test_id("invite-email").fill("nope@acme.dev")
     page.get_by_test_id("invite-submit").click()
-    secret = page.get_by_test_id("key-secret").input_value()
-    dee = ApiClient(env.control_plane_url, secret)
-    assert dee.get("/v1/me").json()["person"]["name"] == "Dee Marsh"
-    page.get_by_test_id("key-done").click()
+    expect(page.get_by_role("dialog")).to_contain_text("people now join by invitation link")
+    page.keyboard.press("Escape")
+    assert len(client.get("/v1/people").json()["people"]) == 1
+    # The browser's 410 is reported as a failed resource load; it is the expected refusal here.
+    console_errors[:] = [e for e in console_errors if "410" not in e]
 
-    row = members.locator('[data-member="Dee Marsh"]')
-    row.get_by_role("combobox", name="Role of Dee Marsh").click()
+    _, dee = _invite(client, env, "Dee")
+    page.reload()
+    page.get_by_test_id("org-settings-button").click()
+    row = members.locator('[data-member="Dee"]')
+    row.get_by_role("combobox", name="Role of Dee").click()
     page.get_by_role("option", name="Admin").click()
     wait_until(lambda: dee.get("/v1/me").json()["person"]["role"] == "admin", timeout=10, message="role not changed")
 

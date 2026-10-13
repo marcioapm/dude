@@ -666,7 +666,10 @@ export class ApiClient {
     return this.#request("DELETE", `/v1/me/keys/${id}`);
   }
 
-  /** Admins: add someone, with a key shown this once. */
+  /**
+   * Retired by the backend (410 route_retired): people join by invitation link.
+   * Kept until the Members screen moves to `POST /v1/organization/invitations`.
+   */
   invitePerson(input: { name: string; email: string; role: PersonRole }): Promise<{ person: Member; key: string }> {
     return this.#request("POST", "/v1/people", input);
   }

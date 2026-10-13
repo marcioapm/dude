@@ -14,7 +14,7 @@ import { EventTypes, personRoleSchema, type PersonRef } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { auditActor, insertApiKey, insertPerson } from "../auth.ts";
+import { auditActor, insertApiKey } from "../auth.ts";
 import { ACCESS_LOGOUT_PATH } from "../cloudflareAccess.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { replaceImage, serveImage } from "../faces.ts";
@@ -407,32 +407,6 @@ async function listPeople(ctx: RequestContext): Promise<Response> {
   return json({ people, you: ctx.principal.personId });
 }
 
-const inviteInput = z
-  .object({
-    name: z.string().trim().min(1).max(100),
-    email: z.string().trim().email().max(320),
-    role: personRoleSchema.default("member"),
-  })
-  .strict();
-
-/**
- * Invite someone: they become one of the organization's people, with a
- * key shown this once. There is no sign-in by email yet, so the key is
- * the invitation — the admin hands it over.
- */
-async function invite(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, inviteInput);
-  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
-    await requireAdmin(scope, ctx);
-    const made = await insertPerson(scope, input);
-    if (!made) return null;
-    await recordAs(scope, ctx, EventTypes.PersonInvited, { personId: made.personId, role: input.role });
-    return { person: await personDetail(scope, made.personId) };
-  });
-  if (!out) throw conflict(`${input.email} is already a member`);
-  return json(out, 201);
-}
-
 const updatePersonInput = z
   .object({ name: z.string().trim().min(1).max(100), role: personRoleSchema })
   .partial()
@@ -561,7 +535,9 @@ export function registerPeopleRoutes(router: Router): void {
   router.delete("/v1/me/keys/:id", revokeMyKey);
 
   router.get("/v1/people", listPeople);
-  router.post("/v1/people", () => { throw new HttpError(410, "people join by invitation", "route_retired"); });
+  router.post("/v1/people", () => {
+    throw new HttpError(410, "people now join by invitation link: POST /v1/organization/invitations", "route_retired");
+  });
   router.patch("/v1/people/:id", updatePerson);
   router.delete("/v1/people/:id", removePerson);
   router.publicRoute("GET", "/v1/people/:id/photo", getPhoto);

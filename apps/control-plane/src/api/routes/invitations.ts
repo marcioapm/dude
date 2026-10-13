@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import { EventTypes } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
+import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, json, noContent, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
@@ -88,6 +90,11 @@ export function registerInvitationRoutes(router: Router) {
           photo_url=${a.photo_url}, photo_key=${a.photo_key}, photo_token=${a.photo_token} WHERE id=${person.id} RETURNING *`;
         else [person] = await scope.sql`INSERT INTO people (id, organization_id, account_id, name, email, role, photo_url, photo_key, photo_token)
           VALUES (${`per_${crypto.randomUUID()}`}, ${scope.organizationId}, ${a.id}, ${a.name}, ${a.email}, ${i.role}, ${a.photo_url}, ${a.photo_key}, ${a.photo_token}) RETURNING *`;
+        // The ledger's "joined" entry, attributed to whoever invited them (the operator: system).
+        await appendInScope(scope, { eventType: EventTypes.PersonInvited, organizationId: scope.organizationId,
+          projectId: null, taskId: null, correlationId: null, source: "control-plane",
+          actor: i.invited_by ? { type: "person", id: i.invited_by } : { type: "system", id: "operator" },
+          payload: { personId: person.id, role: i.role, invitationId: i.id } });
       }
       await scope.sql`UPDATE invitations SET accepted_at=COALESCE(accepted_at,now()), accepted_person_id=${person.id} WHERE id=${i.id}`;
       return { person: { id: person.id, role: person.role, name: person.name }, organization: preview.organization };
