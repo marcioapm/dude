@@ -166,6 +166,26 @@ def web_url(env: TestEnvironment) -> str:
         env.web_proc.terminate()
 
 
+# The super-admin of Access mode: the operator who makes the organisations.
+ACCESS_OPERATOR = "operator@dude.test"
+
+
+@pytest.fixture(scope="session")
+def access(env: TestEnvironment):
+    """The app behind (a stand-in for) Cloudflare Access: a second backend
+    with `auth.provider = cloudflare_access`, verifying tokens a local team
+    signs for any email (`access.token(email)`, `access.sign_in(page, email)`),
+    on this run's database and orchestrator, serving the built web app.
+    `ACCESS_OPERATOR` is its super-admin."""
+    from build import WEB_DIST
+
+    if not (WEB_DIST / "index.html").exists():
+        pytest.fail("Access mode serves the built web app: run without --no-ui, or `bun run build` in apps/web")
+    mode = env.start_access([ACCESS_OPERATOR])
+    yield mode
+    env.stop_access()
+
+
 @pytest.fixture
 def console_errors(page: Page) -> list[str]:
     """Collect console errors and page exceptions for the current test.

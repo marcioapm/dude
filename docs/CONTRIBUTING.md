@@ -439,6 +439,7 @@ Each of these cost real time.
 | E2E | `tests/suites` | The deployed processes through the public API and the built UI, with the fake lux and a fake GitHub that delivers signed webhooks |
 | Contract | `tests/suites/test_lux_contract.py` (`--lux`) | The same flows against a real lux |
 | Browser | `tests/suites/test_web_ui.py`, `test_gallery_ui.py` | The web app and the design system, in system Chrome |
+| Browser, Access mode | `tests/suites/test_accounts_access.py` (conftest `access`) | The sign-in gate, invitations and organisations as Cloudflare Access fronts them: a second backend with `auth.provider = cloudflare_access` verifies tokens a local stand-in team (`tests/access-edge.ts`) signs for any email; no API key signs anyone in |
 | Browser, no backend | `apps/web/test/browser_*.py` (`python3 apps/web/test/browser_terminal.py`) | Layout and sign-in the web app decides alone, against the Vite dev server and the fixture client or routed API answers, in system Chrome |
 
 The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`,
