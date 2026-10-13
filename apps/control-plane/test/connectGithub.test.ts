@@ -161,30 +161,59 @@ test("OAuth identity switches need a fresh pair; API base invalidates but same-A
   expect((await post({ clearOauthClientSecret: true })).status).toBe(200);
 });
 
-test("signed authorization revocation matches numeric user and current App, isolated by organization and replay-safe", async () => {
-  const [credential] = await owner`SELECT id,oauth_version,webhook_secret FROM forge_credentials WHERE organization_id=${ORG}`;
+test("signed authorization revocation needs the current App's identity and is isolated by organization", async () => {
+  const [credential] = await owner`SELECT id,app_id,webhook_secret FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect(credential.app_id).toBe("9001");
   const [{ id: personId }] = await owner`SELECT id FROM people WHERE organization_id=${ORG} LIMIT 1`;
-  await owner`INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
-    access_token,refresh_token,expires_at,refresh_expires_at) VALUES (${ORG},${personId},${credential.id},${credential.oauth_version},123,'Owner','hidden-access','hidden-refresh',now()+interval '1 hour',now()+interval '1 day')`;
-  const deliver = (organization: string, payload: unknown, secret = credential.webhook_secret) => {
+  const connect = () => owner`INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
+    access_token,refresh_token,expires_at,refresh_expires_at) SELECT ${ORG},${personId},id,oauth_version,123,'Owner','hidden-access','hidden-refresh',
+    now()+interval '1 hour',now()+interval '1 day' FROM forge_credentials WHERE organization_id=${ORG}`;
+  const app = (id: string) => ({ "x-github-hook-installation-target-type": "integration", "x-github-hook-installation-target-id": id });
+  const deliver = (payload: unknown, delivery: string, headers: Record<string, string> = {},
+    organization = ORG, secret: string = credential.webhook_secret) => {
     const body = JSON.stringify(payload);
     return router.handle(new Request(`http://dude.test/v1/webhooks/github/${organization}`, {
-      method: "POST", body, headers: { "x-github-event": "github_app_authorization", "x-github-delivery": "revocation",
-        "x-hub-signature-256": `sha256=${createHmac("sha256",secret).update(body).digest("hex")}` },
+      method: "POST", body, headers: { "x-github-event": "github_app_authorization", ...(delivery ? { "x-github-delivery": delivery } : {}),
+        "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`, ...headers },
     }));
   };
   const count = async () => (await owner`SELECT count(*)::int AS n FROM github_user_authorizations WHERE organization_id=${ORG}`)[0].n;
-  for (const payload of [{ action: "revoked", sender: { id: 124 } }, { action: "revoked", sender: { id: "123" } },
-    { action: "revoked", sender: { id: 123 }, installation: { app_id: 9002 } }]) {
-    expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(1);
+  // GitHub's App-level event: no installation object.
+  const revoked = { action: "revoked", sender: { id: 123, login: "Owner" } };
+  await connect();
+  for (const [payload, headers, delivery] of [
+    [{ action: "revoked", sender: { id: 124 } }, app("9001"), "r-wrong-user"],
+    [{ action: "revoked", sender: { id: "123" } }, app("9001"), "r-string-user"],
+    [{ ...revoked, installation: { app_id: 9002 } }, {}, "r-wrong-app"],
+    [{ ...revoked, installation: { app_id: 9001 } }, app("9002"), "r-contradiction"],
+    [revoked, { "x-github-hook-installation-target-type": "repository", "x-github-hook-installation-target-id": "9001" }, "r-repository-hook"],
+    [revoked, {}, "r-no-app"],
+  ] as Array<[unknown, Record<string, string>, string]>) {
+    expect((await deliver(payload, delivery, headers)).status).toBe(200); expect(await count()).toBe(1);
   }
+  const unsigned = await deliver(revoked, "r-unsigned", app("9001"), ORG, "not-the-secret");
+  expect(unsigned.status).toBe(401); expect(await count()).toBe(1);
   await owner`INSERT INTO organizations (id,name,slug) VALUES ('org_revocation_other','Other','revocation-other')`;
   await owner`INSERT INTO forge_credentials (id,organization_id,forge,auth,secret,app_id,webhook_secret)
     VALUES ('fc_revocation_other','org_revocation_other','github','github_app','pem','9001','other-webhook-secret')`;
-  const payload = { action: "revoked", sender: { id: 123 }, installation: { app_id: 9001 } };
-  expect((await deliver('org_revocation_other',payload,'other-webhook-secret')).status).toBe(200); expect(await count()).toBe(1);
-  expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(0);
-  expect((await deliver(ORG,payload)).status).toBe(200); expect(await count()).toBe(0);
+  expect((await deliver(revoked, "r-other-org", app("9001"), "org_revocation_other", "other-webhook-secret")).status).toBe(200);
+  expect(await count()).toBe(1);
+
+  expect((await deliver(revoked, "r-1", app("9001"))).status).toBe(200); expect(await count()).toBe(0);
+  await connect();
+  expect((await deliver({ ...revoked, installation: { app_id: 9001 } }, "r-2")).status).toBe(200); expect(await count()).toBe(0);
+
+  // Replacing the App keeps the webhook secret; the old App's revocation does not reach the new App's connection.
+  const replaced = await router.handle(new Request("http://dude.test/v1/forge/credential", {
+    method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" },
+    body: JSON.stringify({ auth: "github_app", secret: "pem", appId: "9002", oauthClientId: "client-2", oauthClientSecret: "fresh-2" }),
+  }));
+  expect(replaced.status).toBe(200);
+  const [after] = await owner`SELECT webhook_secret FROM forge_credentials WHERE organization_id=${ORG}`;
+  expect(after.webhook_secret).toBe(credential.webhook_secret);
+  await connect();
+  expect((await deliver(revoked, "r-old-app", app("9001"))).status).toBe(200); expect(await count()).toBe(1);
+  expect((await deliver(revoked, "r-new-app", app("9002"))).status).toBe(200); expect(await count()).toBe(0);
 });
 
 test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {

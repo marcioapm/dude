@@ -401,20 +401,7 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
   await noteDelivery(organizationId, signed ? null : "signature did not match: the secret GitHub has is not dude's");
   if (!signed) throw unauthorized("webhook signature does not match");
   if (event === "ping") return json({ ok: true });
-  if (event === "github_app_authorization") {
-    let revoked: { action?: string; sender?: { id?: number }; installation?: { app_id?: number } };
-    try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
-    if (revoked.action === "revoked" && Number.isSafeInteger(revoked.sender?.id)) {
-      await withOrg(organizationId, async ({ sql }) => {
-        await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
-          WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
-            AND c.auth = 'github_app' AND a.github_user_id = ${revoked.sender!.id!}
-            AND (${revoked.installation?.app_id?.toString() ?? null}::text IS NULL
-              OR c.app_id = ${revoked.installation?.app_id?.toString() ?? null})`;
-      });
-    }
-    return json({ ok: true });
-  }
+  if (event === "github_app_authorization") return revokeAuthorization(ctx, organizationId, body);
   if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
 
   let payload: unknown;
@@ -437,6 +424,42 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
 /** When a delivery arrived, and whether it was signed: the webhook's health. */
 async function noteDelivery(organizationId: string, failure: string | null): Promise<void> {
   await withoutTenant(({ sql }) => sql`SELECT note_webhook_delivery(${organizationId}, ${failure})`);
+}
+
+/**
+ * A person revoked their authorization of the App: drop their stored user
+ * authorization for the organization's current App.
+ *
+ * The signature proves only the organization's webhook secret, which an App
+ * replacement keeps, so it does not say which App sent the event. The App is
+ * taken from installation.app_id when present and otherwise from GitHub's
+ * X-GitHub-Hook-Installation-Target-ID with target type `integration`. These
+ * headers are not covered by the signature; trusting them assumes the
+ * delivery reached dude over GitHub's TLS transport unmodified. An event that
+ * names no App, names two different ones, or names another App changes
+ * nothing.
+ */
+async function revokeAuthorization(ctx: PublicContext, organizationId: string, body: string): Promise<Response> {
+  const ignored = json({ ok: true, ignored: "github_app_authorization" });
+  let revoked: { action?: unknown; sender?: { id?: unknown }; installation?: { app_id?: unknown } };
+  try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
+  const userId = revoked.sender?.id;
+  if (revoked.action !== "revoked" || !Number.isSafeInteger(userId)) return ignored;
+  const payloadApp = revoked.installation?.app_id;
+  if (payloadApp !== undefined && !Number.isSafeInteger(payloadApp)) return ignored;
+  const targetType = ctx.request.headers.get("x-github-hook-installation-target-type");
+  const targetId = ctx.request.headers.get("x-github-hook-installation-target-id");
+  if (targetType !== null && targetType !== "integration") return ignored;
+  if (targetId !== null && !/^[1-9][0-9]*$/.test(targetId)) return ignored;
+  const named = new Set([payloadApp === undefined ? null : String(payloadApp), targetType ? targetId : null].filter((v) => v !== null));
+  if (named.size !== 1) return ignored;
+  const [appId] = named;
+  await withOrg(organizationId, async ({ sql }) => {
+    await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
+      WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
+        AND c.auth = 'github_app' AND c.app_id = ${appId!} AND a.github_user_id = ${userId as number}`;
+  });
+  return json({ ok: true });
 }
 
 /**
