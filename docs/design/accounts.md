@@ -559,7 +559,7 @@ email, in this order:
 |---|---|
 | unknown, revoked, or expired | *This invitation can't be used. Ask whoever sent it for a new link.* **Open dude** |
 | accepted, and you are not its active member | the same *can't be used* page |
-| pending, for another email | *This invitation is for a different email address.* **Sign in with the address it was sent to** (Access logout, `/cdn-cgi/access/logout`; reopen the link after signing in), "or ask whoever sent it for a new link." Their own signed-in email only; no organisation, inviter or invited address. Never Join |
+| pending, for another email | *This invitation is for a different email address.* **Accept invitation**, centred (for a mismatching email this starts Access logout, `/cdn-cgi/access/logout`; reopen the link after signing in with the invited address, then accept — it never accepts as the wrong person), "or ask whoever sent it for a new link." Their own signed-in email only; no organisation, inviter or invited address. Never Join |
 | pending or accepted, for your email, and you are its active member | *You're already in Northwind*: marked accepted if pending; **Open Northwind** |
 | pending, for you | *Join Northwind as member · invited by Gus*; for, role, expiry; **Join** and **Not now**. With no account yet, the note that Join makes it |
 

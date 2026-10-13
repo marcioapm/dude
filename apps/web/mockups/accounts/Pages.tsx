@@ -253,8 +253,8 @@ export function AcceptPage({ state, onJoin, onOpen }: { state: AcceptState; onJo
               <p className={s.acceptLine}>or ask whoever sent it for a new link.</p>
             </div>
           </CardBody>
-          <CardFooter>
-            <Button variant="primary" leadingIcon="arrow-right" data-testid="switch-account">Sign in with the address it was sent to</Button>
+          <CardFooter className={s.acceptActions}>
+            <Button variant="primary" data-testid="switch-account">Accept invitation</Button>
           </CardFooter>
         </Card>
         <SignedInAs email={CHLOE_OTHER} />

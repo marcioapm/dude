@@ -512,6 +512,9 @@
   max-width: 52ch;
   color: var(--ds-color-text-secondary);
 }
+.acceptActions {
+  justify-content: center;
+}
 .acceptFacts {
   margin-top: var(--ds-space-8);
   text-align: left;
