@@ -104,7 +104,10 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	role := cmp.Or(delivery.PromptRoleFor(phase, c.Role), c.Role)
 	var pending, used int
 	var pendingTo string
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE m.settled_at IS NULL), count(*) FILTER (WHERE m.kind = 'raise' AND m.refused IS NULL),
+	// A move counts unless lux did not apply it: refused for good (refused),
+	// or kept on another size without a refusal (refused_message alone).
+	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE m.settled_at IS NULL),
+			count(*) FILTER (WHERE m.kind = 'raise' AND (m.settled_at IS NULL OR (m.refused IS NULL AND m.refused_message IS NULL))),
 			COALESCE(max(s.name) FILTER (WHERE m.settled_at IS NULL), '')
 		FROM machine_moves m LEFT JOIN machine_sizes s ON s.id = m.to_size_id WHERE m.run_id = $1`, c.RunID).Scan(&pending, &used, &pendingTo); err != nil {
 		return out, err

@@ -183,29 +183,36 @@ func TestMCPGivesLuxsRefusalCode(t *testing.T) {
 	}
 }
 
-// A Run moves at most 3 times. A move lux refused does not count, so a
-// Run with three settled raises, one of them refused, may still move.
+// A Run moves at most 3 times. A move lux did not apply does not count,
+// refused for good or kept on another size, nor does a Reset: a Run with
+// three settled raises, one of them not applied, or two raises and a
+// Reset, may still move.
 func TestARunMovesAtMostThreeTimesAndRefusalsDoNotCount(t *testing.T) {
 	f, token := machineRun(t, func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error { return nil })
-	moves := func(refused ...bool) {
+	type move struct{ kind, refused, message string }
+	moves := func(ms ...move) {
 		mustExec(t, f.owner, `DELETE FROM machine_moves WHERE run_id = 'run_mach'`)
-		for i, r := range refused {
-			code := any(nil)
-			if r {
-				code = "pool_unfit"
-			}
-			mustExec(t, f.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, refused, settled_at)
-				VALUES ($1, $2, $3, 'run_mach', 'reviewer', 'raise', '{}', 'ms_large', 'resize', $4, now())`, fmt.Sprintf("mmv_%d", i), f.org, f.item, code)
+		mustExec(t, f.owner, `UPDATE runs SET control = 'none', dude_pause = NULL WHERE id = 'run_mach'`)
+		for i, m := range ms {
+			mustExec(t, f.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, refused, refused_message, settled_at)
+				VALUES ($1, $2, $3, 'run_mach', 'reviewer', $4, '{}', 'ms_large', 'resize', NULLIF($5, ''), NULLIF($6, ''), now())`, fmt.Sprintf("mmv_%d", i), f.org, f.item, m.kind, m.refused, m.message)
 		}
 	}
-	moves(false, false, false)
+	raise, reset := move{kind: "raise"}, move{kind: "reset"}
+	moves(raise, raise, raise)
 	if status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`); status != 422 ||
 		out["error"] != "This Run has moved 3 times, the limit for one Run; a Reset does not give a move back. Carry on on Standard, or say in your work what did not fit." {
 		t.Fatalf("fourth move: %d %v", status, out)
 	}
-	moves(false, true, false)
-	if status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`); status != 200 {
-		t.Fatalf("a refused move counted: %d %v", status, out)
+	for name, ms := range map[string][]move{
+		"refused":         {raise, {"raise", "pool_unfit", "no host"}, raise},
+		"kept":            {raise, {"raise", "", "Its settings now name Large, but this resume kept Standard (lux said: resuming)."}, raise},
+		"two and a Reset": {raise, raise, reset},
+	} {
+		moves(ms...)
+		if status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`); status != 200 {
+			t.Fatalf("%s counted: %d %v", name, status, out)
+		}
 	}
 }
 
