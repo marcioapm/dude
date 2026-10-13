@@ -88,11 +88,17 @@ beforeAll(async () => {
     ('epn_3', ${ORG}, 'epc_c', 3, 'Read the docs.', 'per_m', 'Márcio Martins', 'per_m', now())`;
   await owner`INSERT INTO epic_note_reads (note_id, run_id, change, organization_id, read_at) VALUES
     ('epn_2', 'run_2', 'briefing', ${ORG}, now()), ('epn_2', 'run_1', 'briefing', ${ORG}, now())`;
+  await owner`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_c', ${ORG}, 'prj_c', 'web', 'https://github.com/test/web')`;
+  await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_2', 'repo_c', ${ORG})`;
   await owner`UPDATE runs SET branch = 'dude/wi_2/attempt-1', heads = '{"web":{"sha":"abcdef123"}}'::jsonb WHERE id = 'run_2'`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, created_at) VALUES
+    ('run_2_old', ${ORG}, 'prj_c', 'wi_2', 1, 'completed', 'implement', 'implementer', 'agent', now() - interval '1 day')`;
+  await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_2_old', ${ORG}, 'main',
+    '[{"path":"old.ts","additions":999,"deletions":0}]'::jsonb, 'old')`;
   await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_2', ${ORG}, 'main',
-    '[{"path":"low.ts","additions":1,"deletions":0},{"path":"high.ts","additions":20,"deletions":5}]'::jsonb, 'test')`;
+    '[{"path":"a.ts","additions":1,"deletions":0},{"path":"z.ts","additions":20,"deletions":5}]'::jsonb, 'test')`;
   await owner`INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, correlation_id, payload)
-    VALUES ('evt_said', ${ORG}, 'run_2', 'agent.message', 'agent', 'run_2', 'lux', 'wi_2', '{"text":"Newest words.\\n\\nNot this paragraph."}'::jsonb)`;
+    VALUES ('evt_said', ${ORG}, 'run_2', 'agent.message', 'agent', 'run_2', 'lux', 'wi_2', jsonb_build_object('text', ${"x".repeat(700) + "\n\nNot this paragraph."}::text))`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = await createApiKey({ organizationId: ORG, name: "Ana" });
@@ -161,7 +167,9 @@ test("threads: a reply chain answered and its closed wait, and a question to a t
 });
 
 test("the waiting count is small and agrees with live open waits", async () => {
+  await owner`INSERT INTO peer_waits (id, organization_id, run_id, message_id, how) VALUES ('pw_stale', ${ORG}, 'run_1', 'pm_h', 'wait')`;
   const res = await call("GET", "/v1/epics/epc_c/waiting");
+  await owner`DELETE FROM peer_waits WHERE id = 'pw_stale'`;
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ epicId: "epc_c", waiting: 1 });
   expect((await call("GET", "/v1/epics/epc_o/waiting")).status).toBe(404);
@@ -176,10 +184,24 @@ test("peer state: each task's phase, live or parked or no Run, whom it waits on 
   expect(Object.keys(by)).toEqual(["ABS-1", "ABS-2", "ABS-4"]);
   expect(by["ABS-1"]).toMatchObject({ run: "none", runId: null, phase: "implement", inbox: 1, waitingOn: null });
   expect(by["ABS-2"]).toMatchObject({ run: "live", runId: "run_2", role: "implementer", inbox: 0, waitingOn: null });
-  expect(by["ABS-2"]).toMatchObject({ branch: "dude/wi_2/attempt-1", head: "abcdef123", lastSaid: "Newest words.",
-    files: [{ path: "high.ts", additions: 20, deletions: 5 }, { path: "low.ts", additions: 1, deletions: 0 }] });
+  expect(by["ABS-2"]).toMatchObject({ branch: "dude/wi_2/attempt-1", head: "abcdef123", lastSaid: "x".repeat(599) + "…",
+    files: [{ path: "z.ts", additions: 20, deletions: 5 }, { path: "a.ts", additions: 1, deletions: 0 }] });
   expect(by["ABS-4"]).toMatchObject({ run: "parked", runId: "run_4", inbox: 1,
     waitingOn: { task: { key: "ABS-1" }, messageId: "pm_h", how: "turn_ended" } });
+});
+
+test("peer heads prefer the PR over the phase and conductor heads", async () => {
+  await owner`INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, status, heads, settled_at)
+    VALUES ('cp_head', ${ORG}, 'wi_2', 'run_2', 'head', 'published', '{"web":{"sha":"conductor"}}'::jsonb, now())`;
+  await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+    VALUES ('pr_head', ${ORG}, 'prj_c', 'wi_2', 'repo_c', 1, 'https://github.com/test/web/pull/1', 'task', 'main', 'prhead123', 'head')`;
+  try {
+    const body = await (await call("GET", "/v1/epics/epc_c/peers")).json() as EpicPeers;
+    expect(body.tasks.find(t => t.taskId === 'wi_2')!.head).toBe('prhead123');
+  } finally {
+    await owner`DELETE FROM pull_requests WHERE id = 'pr_head'`;
+    await owner`DELETE FROM conductor_publishes WHERE id = 'cp_head'`;
+  }
 });
 
 test("another organisation's epic is not found, and nothing reads without a key", async () => {

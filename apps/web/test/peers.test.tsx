@@ -144,6 +144,14 @@ const draw = (events: PersistedEvent[], ctx: PeerContext = CTX) =>
   project(events, "running").turns.map((t) => html(renderTurn(t, "implementer", 0, false, PEOPLE, "Duder", undefined, undefined, undefined, undefined, undefined, undefined, ctx)));
 
 describe("the turns, drawn", () => {
+  test("a wait the peer's end released renders its payload line", () => {
+    const [wait] = draw([
+      ev(EventTypes.AgentPeerWaiting, { message: "pm_1", on: "ABS-2", how: "turn_ended", parks_at: null }),
+      ev(EventTypes.AgentPeerWaitEnded, { message: "pm_1", on: "ABS-2", by: "peer_ended", status: "aborted", line: "Go's line." }),
+    ]);
+    expect(wait).toContain("Go&#x27;s line.");
+  });
+
   test("a reply read here: its words from the thread, what it answers, and when it was read", () => {
     const [reply] = draw([ev(EventTypes.AgentMessageReceived, { message: "pm_4", from: "ABS-2", after: "bash" }, "2026-10-12T13:49:06Z")]);
     expect(reply).toContain("Body {draft}");
@@ -250,6 +258,11 @@ describe("an epic's Coordination view", () => {
     expect(text).toContain("only the two agents write in it");
     const peers = page.querySelector<HTMLElement>("[data-testid=epic-peers]")!;
     expect(peers.textContent).toContain("WC-212");
+    expect(peers.textContent).toContain("dude/tsk_01j9x4kqf8b2m7e3/attempt-1 @ 5c1e9a0");
+    expect(peers.textContent).toContain("AddressForm.tsx");
+    expect(peers.textContent).toContain("+142");
+    expect(peers.textContent).toContain("−38");
+    expect(peers.textContent).toContain("Moving the country field's write to onBlur.");
     const row = [...peers.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent?.includes("WC-215"))!;
     await click(row);
     expect(opened).toEqual(["t_215"]);

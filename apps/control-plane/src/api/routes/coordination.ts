@@ -165,7 +165,7 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
           FROM peer_waits w JOIN peer_messages m ON m.id = w.message_id JOIN tasks wt ON wt.id = m.to_task_id
           JOIN projects wp ON wp.id = wt.project_id
           WHERE w.run_id = r.id AND w.closed_at IS NULL AND r.status IN ${scope.sql.unsafe(LIVE)}) AS "waitingOn",
-         r.branch, (SELECT h.value->>'sha' FROM jsonb_each(r.heads) h ORDER BY h.key LIMIT 1) AS head,
+          r.branch, heads.sha AS head,
          COALESCE((SELECT jsonb_agg(f.file ORDER BY f.churn DESC, f.path) FROM (
            SELECT jsonb_build_object('path', f->>'path', 'additions', COALESCE((f->>'additions')::int, 0),
              'deletions', COALESCE((f->>'deletions')::int, 0)) AS file, f->>'path' AS path,
@@ -189,7 +189,19 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
           r.status FROM runs r
         WHERE r.task_id = t.id AND r.phase IS NOT NULL AND r.kind = 'agent'
         ORDER BY r.status IN ${scope.sql.unsafe(LIVE)} DESC, r.created_at DESC LIMIT 1) r ON true
-      WHERE t.epic_id = ${epicId} ORDER BY p.key_prefix, t.number`) as Array<Record<string, unknown>>;
+             LEFT JOIN LATERAL (
+         SELECT COALESCE(
+           (SELECT pr.head_sha FROM pull_requests pr WHERE pr.task_id = t.id AND pr.repository_id = repo.id
+             AND pr.head_sha IS NOT NULL ORDER BY pr.updated_at DESC LIMIT 1),
+           (SELECT h.sha FROM (
+             SELECT rr.heads->repo.name->>'sha' AS sha, rr.ended_at AS at FROM runs rr WHERE rr.task_id = t.id AND rr.heads ? repo.name
+             UNION ALL
+             SELECT cp.heads->repo.name->>'sha', cp.settled_at FROM conductor_publishes cp
+               WHERE cp.task_id = t.id AND cp.status = 'published' AND cp.heads ? repo.name) h
+             ORDER BY h.at DESC NULLS LAST LIMIT 1), '') AS sha
+         FROM task_repositories tr JOIN repositories repo ON repo.id = tr.repository_id
+         WHERE tr.task_id = t.id ORDER BY repo.name LIMIT 1) heads ON true
+       WHERE t.epic_id = ${epicId} ORDER BY p.key_prefix, t.number`) as Array<Record<string, unknown>>;
   });
   for (const task of tasks) {
     const text = String(task.lastSaid ?? "").trim().split("\n\n")[0]!.replace(/\s+/g, " ");
