@@ -677,6 +677,9 @@ lands on *No organisation*.
 
 ### A CLI key, and using it
 
+The CLI below is future work. Today a key is a bearer token for scripts and
+the HTTP API: the reveal shows `curl -H "authorization: Bearer <key>" <origin>/v1/me`.
+
 1. Your settings → Keys (screen 4): keys grouped by organisation, each
    group with **New key for Acme**.
 2. Name it ("Laptop"), Create: the key is shown once, with Copy and the line
