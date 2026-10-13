@@ -9,6 +9,10 @@
 # and its commits carry no co-authors. The image's system setting is the
 # fallback for a git started without the Run's environment.
 #
+# Needs git 2.31 or later: GIT_CONFIG_COUNT/KEY/VALUE are read from 2.31,
+# `git config --show-scope` from 2.26, `--type=path` from 2.18. The runtime
+# image (Debian bookworm) has 2.39.
+#
 # As prepare-commit-msg it adds a Co-authored-by trailer for each person on
 # the task, as dude has them now (`dude git coauthors`). prepare-commit-msg
 # runs for every commit, `git commit -m`, --amend and --no-verify included
