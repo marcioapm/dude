@@ -406,7 +406,7 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.status::text FROM peer_messages m JOIN tasks t ON t.id = m.to_task_id
-		JOIN projects p ON p.id = t.project_id WHERE m.id = $1`, message).Scan(&w.On, &status); err != nil {
+		JOIN projects p ON p.id = t.project_id WHERE m.id = $1 FOR SHARE OF t`, message).Scan(&w.On, &status); err != nil {
 		return w, err
 	}
 	if Ended(status) {

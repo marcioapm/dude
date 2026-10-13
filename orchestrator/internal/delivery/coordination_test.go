@@ -261,9 +261,46 @@ func TestRepliesAndWaitsSerializeOnTheAskedMessage(t *testing.T) {
 	}
 }
 
+func TestPeerEndingSerializesWithOpeningAWait(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	q := w.send(t, one, "ABS-2", "Which path?", "")
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := delivery.OpenWaitTx(ctx, tx, one, q.ID, "wait"); err != nil {
+		t.Fatal(err)
+	}
+	end := func(other pgx.Tx) error {
+		_, err := delivery.SetTaskStatusTx(ctx, other, w.org, w.project, w.tasks["ABS-2"], "", "done", "test")
+		return err
+	}
+	err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+		if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
+			return err
+		}
+		return end(other)
+	})
+	var blocked *pgconn.PgError
+	if !errors.As(err, &blocked) || blocked.Code != "55P03" {
+		t.Fatalf("ending did not wait: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.in(t, end)
+	if n := w.count(t, `SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
+		t.Fatalf("%d stranded waits", n)
+	}
+}
+
 func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
-	for _, briefed := range []bool{false, true} {
-		t.Run(fmt.Sprint("briefed=", briefed), func(t *testing.T) {
+	for _, scenario := range []string{"unread", "submit failed", "started then failed"} {
+		briefed := scenario != "unread"
+		t.Run(scenario, func(t *testing.T) {
 			w := newEpicWorld(t)
 			ctx := context.Background()
 			one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
@@ -286,8 +323,20 @@ func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
 					t.Fatal("not briefed")
 				}
 			}
+			if scenario == "started then failed" {
+				w.exec(t, `UPDATE runs SET agent_busy_at = now() WHERE id = 'run_old'`)
+			}
 			w.exec(t, `UPDATE runs SET status = 'failed' WHERE id = 'run_old'`)
 			w.run(t, "run_new", "ABS-2", "implement", "implementer", "pending")
+			if scenario == "started then failed" {
+				if strings.Contains(brief("run_new"), q.ID) {
+					t.Error("mail the agent already had was repeated")
+				}
+				if n := w.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_new' AND event_type = 'agent.message.received'`); n != 0 {
+					t.Errorf("%d repeated receipts", n)
+				}
+				return
+			}
 			for range 2 {
 				if !strings.Contains(brief("run_new"), q.ID) {
 					t.Error("new Run lost unread mail")
@@ -340,8 +389,13 @@ func TestTheNoteLimitSerializesOnTheEpic(t *testing.T) {
 	// instead and fails with 23505.
 	done := make(chan error, 1)
 	go func() { done <- w.app.InOrg(ctx, w.org, pin) }()
+	deadline := time.Now().Add(10 * time.Second)
 	for w.count(t, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-		WHERE NOT l.granted AND a.datname = current_database()`) == 0 {
+		WHERE NOT l.granted AND l.locktype IN ('tuple','transactionid') AND a.datname = current_database()`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("second pin did not block within 10 seconds")
+		}
+		time.Sleep(10 * time.Millisecond)
 		select {
 		case err := <-done:
 			t.Fatalf("second pin finished before tx1 committed: %v", err)
@@ -468,6 +522,10 @@ func TestAHeldMessageIsInTheTasksNextBriefing(t *testing.T) {
 	held := w.send(t, me, "ABS-2", "Which path does your estimate histogram use?", "")
 	if held.Lands != delivery.LandsNextRun {
 		t.Fatalf("lands %s", held.Lands)
+	}
+	if n := w.count(t, `SELECT count(*) FROM events WHERE event_type = 'agent.message.sent' AND payload->>'message' = $1
+		AND payload->>'notice' = 'ABS-2 has no Run going; it will see this when its next Run starts.'`, held.ID); n != 1 {
+		t.Errorf("%d held notices", n)
 	}
 	ctx := context.Background()
 	brief := func(runID, key, role string) string {
