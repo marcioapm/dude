@@ -1,6 +1,6 @@
 /** Folded child rows under their spawning calls, and the rail's quicklinks. */
 
-import { createContext, memo, useContext, type ReactNode } from "react";
+import { createContext, memo, useContext, type ReactElement, type ReactNode } from "react";
 import { AgentAvatar, Duration, EntityLine, SessionRailBlock, ToolCallCard } from "@dude/design-system/components";
 import { childSummary, ChildThreadView, type ChildThreadProps } from "./childThreadView.tsx";
 import type { ChildTurn, ToolTurn, Turn } from "./api/conversation.ts";
@@ -13,13 +13,21 @@ export function childEntries(turns: readonly (Turn | ChildTurn["turns"][number])
   ]) : []);
 }
 
-export function ChildStatus({ child }: { child: ChildTurn }) {
+export function ChildStatus({ child }: { child: ChildTurn }): ReactElement {
   const waiting = child.status === "running" ? child.waitingOn : null;
   const tool = child.turns.findLast((turn) => turn.kind === "tool");
+  let content: ReactNode;
+  if (waiting) {
+    content = <>waiting <Duration since={waiting.since} live /> on a permission</>;
+  } else if (child.status === "running") {
+    const activity = tool?.kind === "tool" ? tool.tool : "thinking";
+    content = `running · ${activity}`;
+  } else {
+    const status = child.status === "completed" ? "done" : child.status;
+    content = `${status} · ${childSummary(child) ?? ""}`;
+  }
   return <span style={{ color: waiting ? "var(--ds-tone-attention-fg)" : "var(--ds-color-text-muted)" }}>
-    {waiting ? <>waiting <Duration since={waiting.since} live /> on a permission</>
-      : child.status === "running" ? `running${tool?.kind === "tool" ? ` · ${tool.tool}` : " · thinking"}`
-      : `${child.status === "completed" ? "done" : child.status} · ${childSummary(child) ?? ""}`}
+    {content}
   </span>;
 }
 

@@ -305,9 +305,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     pendingChildFocus.current = null;
     if (!target || narrow) return;
     const scope = childScreen.current;
-    const selector = target.panel ? "[data-testid='child-panel'] button[aria-label='Close subagent']"
-      : target.rail ? `[data-testid='rail-subagents'] button[data-child="${CSS.escape(target.id)}"]`
-      : `[data-testid='child-thread'][data-child="${CSS.escape(target.id)}"] > [role='button']`;
+    let selector: string;
+    if (target.panel) {
+      selector = "[data-testid='child-panel'] button[aria-label='Close subagent']";
+    } else if (target.rail) {
+      selector = `[data-testid='rail-subagents'] button[data-child="${CSS.escape(target.id)}"]`;
+    } else {
+      selector = `[data-testid='child-thread'][data-child="${CSS.escape(target.id)}"] > [role='button']`;
+    }
     scope?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   }, [childPath, narrow]);
   useEffect(() => { setChildPath([]); }, [runId]);
