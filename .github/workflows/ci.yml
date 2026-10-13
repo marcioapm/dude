@@ -72,6 +72,11 @@ jobs:
             exit 1
           fi
 
+      # forge's concurrency tests assert only under the race detector.
+      - name: go test -race, forge
+        working-directory: orchestrator
+        run: go test -race -count=1 ./internal/forge
+
       - name: Upload the go test log
         if: failure()
         uses: actions/upload-artifact@v4

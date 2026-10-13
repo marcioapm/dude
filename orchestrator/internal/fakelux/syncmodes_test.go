@@ -71,7 +71,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 	ctx := context.Background()
 	t.Run("clean and behind: moved", func(t *testing.T) {
 		_, c, runID, repo, work := syncRepo(t, false)
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -90,7 +90,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		_, c, runID, _, work := syncRepo(t, false)
 		gitIn(t, work, "checkout", "-q", "main")
 		before := gitIn(t, work, "rev-parse", "HEAD")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -108,7 +108,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 			t.Fatal(err)
 		}
 		gitIn(t, work, "add", "f.txt")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -125,7 +125,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		gitIn(t, work, "merge", "-q", "--ff-only", gitIn(t, repo, "rev-parse", "work"))
 		gitIn(t, work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "mine")
 		mine := gitIn(t, work, "rev-parse", "HEAD")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -159,7 +159,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		_, c, runID, _, work := syncRepo(t, false)
 		gitIn(t, work, "checkout", "-q", "--detach")
 		before := gitIn(t, work, "rev-parse", "HEAD")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -171,7 +171,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		_, c, runID, repo, work := syncRepo(t, false)
 		gitIn(t, work, "checkout", "-q", "--detach")
 		want := gitIn(t, repo, "rev-parse", "work")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: want, Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: want, Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -183,7 +183,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 		_, c, runID, repo, work := syncRepo(t, false)
 		gitIn(t, work, "fetch", "-q", "origin", "work")
 		gitIn(t, work, "merge", "-q", "--ff-only", gitIn(t, repo, "rev-parse", "work"))
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -194,7 +194,7 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 	t.Run("a ref that does not exist: failed", func(t *testing.T) {
 		_, c, runID, _, work := syncRepo(t, false)
 		before := gitIn(t, work, "rev-parse", "HEAD")
-		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "nowhere", Mode: lux.SyncFastForward}}); err != nil {
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "nowhere", Mode: lux.SyncFastForward}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ev := lastSync(t, c, runID)
@@ -209,11 +209,11 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 func TestALuxWithoutSyncModesRefusesThem(t *testing.T) {
 	ctx := context.Background()
 	_, c, runID, _, _ := syncRepo(t, true)
-	err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}})
+	err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil)
 	if !lux.SyncModesRefused(err) {
 		t.Errorf("a fast-forward sync: %v", err)
 	}
-	if err := c.SyncRun(ctx, runID, "s2", []lux.SyncRef{{Repo: "app", Ref: "work"}}); err != nil {
+	if err := c.SyncRun(ctx, runID, "s2", []lux.SyncRef{{Repo: "app", Ref: "work"}}, nil); err != nil {
 		t.Errorf("a move: %v", err)
 	}
 	if err := c.Stop(ctx, runID); err != nil {

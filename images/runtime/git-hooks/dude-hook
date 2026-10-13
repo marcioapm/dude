@@ -1,0 +1,119 @@
+#!/bin/sh
+# dude's git hook, installed in the agent image under every client hook's
+# name in /usr/local/share/dude/git-hooks. Every Run includes
+# /usr/local/share/dude/git-config, which sets core.hooksPath to that
+# directory, in command scope (include.path through GIT_CONFIG_COUNT/KEY/
+# VALUE in the Run's environment, phases.workloadGitConfig), which outranks
+# the system, global, repository and worktree settings. git skips a missing
+# include, so an image without that file runs the repository's own hooks
+# and its commits carry no co-authors. The image's system setting is the
+# fallback for a git started without the Run's environment.
+#
+# Needs git 2.31 or later: GIT_CONFIG_COUNT/KEY/VALUE are read from 2.31,
+# `git config --show-scope` from 2.26, `--type=path` from 2.18. The runtime
+# image (Debian bookworm) has 2.39.
+#
+# As prepare-commit-msg it adds a Co-authored-by trailer for each person on
+# the task, as dude has them now (`dude git coauthors`). prepare-commit-msg
+# runs for every commit, `git commit -m`, --amend and --no-verify included
+# (--no-verify skips only pre-commit and commit-msg). A trailer the message
+# has already is not added again (--if-exists addIfDifferent), so an amend
+# keeps one of each. A commit git replays (rebase, cherry-pick, revert) gets
+# none added: it keeps the co-authors it was written with. Without dude's
+# tools the commit goes ahead without trailers, said in one line on stderr:
+# never a refusal.
+#
+# Under every name it then runs the hook git would have run without dude's
+# setting, with the same arguments and stdin, and exits as it does: the
+# directory the last core.hooksPath of any scope but command names (a
+# repository's husky or lefthook, a worktree's, the agent's global one),
+# passing over any that names dude's own directory (the image's system
+# one), else the repository's .git/hooks; none if that last value is
+# empty, as git runs none then. So a repository's hook managers keep
+# working and its commit-msg sees the trailers, and a hook that refuses
+# still refuses the commit. An explicit `git -c core.hooksPath=…` comes
+# after the Run's setting and wins: that one command bypasses dude.
+# reference-transaction and post-index-change are not linked (the
+# Dockerfile), so a repository's own of those do not run.
+
+name=$(basename "$0")
+
+# add_trailers MESSAGE_FILE TRAILERS: one --trailer per line of TRAILERS.
+add_trailers() {
+  msg=$1
+  lines=$2
+  set --
+  while IFS= read -r line; do
+    [ -n "$line" ] && set -- "$@" --trailer "$line"
+  done <<EOF
+$lines
+EOF
+  [ $# -gt 0 ] || return 0
+  git interpret-trailers --in-place --if-exists addIfDifferent "$@" "$msg"
+}
+
+# rewriting: git is replaying commits already made (a rebase, a cherry-pick,
+# a revert). Their co-authors are the people on the task when they were
+# written, which they carry already; today's are not added to them.
+rewriting() {
+  for p in rebase-merge rebase-apply; do
+    d=$(git rev-parse --git-path "$p" 2>/dev/null) && [ -d "$d" ] && return 0
+  done
+  for p in CHERRY_PICK_HEAD REVERT_HEAD; do
+    f=$(git rev-parse --git-path "$p" 2>/dev/null) && [ -f "$f" ] && return 0
+  done
+  return 1
+}
+
+# repo_hooks: the hooks directory git would use without dude's: the last
+# core.hooksPath of any scope but command that does not resolve to dude's
+# own directory (the image's system setting names it), else the
+# repository's .git/hooks. --type=path expands ~/ as git does; a relative
+# path is git's to read from the directory it runs hooks in, which is this
+# script's working directory too. If that last value is empty, git runs no
+# repository hook (it looks for /<name>), and repo_hooks fails. awk marks
+# each value with "=", so an empty one is told apart from no output.
+repo_hooks() {
+  set=
+  path=
+  while IFS= read -r line; do
+    case $line in =*) ;; *) continue ;; esac
+    v=${line#=}
+    [ -n "$v" ] && [ "$(cd "$v" 2>/dev/null && pwd -P)" = "$here" ] && continue
+    set=1
+    path=$v
+  done <<EOF
+$(git config --show-scope --type=path --get-all core.hooksPath 2>/dev/null |
+    awk -F '\t' '$1 != "command" { print "=" substr($0, length($1) + 2) }')
+EOF
+  if [ -n "$path" ]; then
+    printf '%s\n' "$path"
+  elif [ -n "$set" ]; then
+    return 1
+  else
+    d=$(git rev-parse --git-common-dir 2>/dev/null) && printf '%s/hooks\n' "$d"
+  fi
+}
+
+if [ "$name" = prepare-commit-msg ] && [ -n "$1" ] && ! rewriting; then
+  if ! command -v dude >/dev/null 2>&1; then
+    echo "dude: committing without co-authors: no dude CLI on PATH" >&2
+  elif trailers=$(dude git coauthors 2>&1); then
+    if ! add_trailers "$1" "$trailers" 2>/dev/null; then
+      echo "dude: could not add the co-authors to this commit; committing without them" >&2
+    fi
+  else
+    echo "dude: committing without co-authors: dude's tools did not answer ($(printf '%s\n' "$trailers" | head -n 1))" >&2
+  fi
+fi
+
+here=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
+hooks=$(repo_hooks) || exit 0
+there=$(cd "$hooks" 2>/dev/null && pwd -P)
+# Never dude's own directory again, however reached (a symlink included):
+# that would run this script in a loop.
+if [ -n "$there" ] && [ "$there" != "$here" ] && [ -f "$there/$name" ] && [ -x "$there/$name" ] &&
+  ! [ "$there/$name" -ef "$0" ]; then
+  exec "$there/$name" "$@"
+fi
+exit 0

@@ -52,7 +52,13 @@ var registering sync.Map // organization id → *sync.Mutex
 // nothing, and those after it are left for the next pass. Other failures
 // GitHub may not repeat, and refusals, are recorded on the repository and
 // the rest go on.
+//
+// With a GitHub App it registers nothing: an App has one webhook, set in
+// its own settings, delivering for every repository it is installed on.
 func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org string, reg Registration) ([]WebhookResult, bool, error) {
+	if gh.IsApp() {
+		return []WebhookResult{}, false, nil
+	}
 	mu, _ := registering.LoadOrStore(org, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
@@ -158,7 +164,7 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) error {
 			break
 		}
 		gh, err := s.Forges.For(ctx, o.Org)
-		if err != nil || gh == nil {
+		if err != nil || gh == nil || gh.IsApp() {
 			continue
 		}
 		results, limited, err := RegisterWebhooks(ctx, s.DB, gh, o.Org, Registration{URL: o.URL, OnlyMissing: true,

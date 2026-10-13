@@ -30,6 +30,86 @@ func (s *Server) githubRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /internal/reviewer-candidates", s.auth(s.organizationReviewerCandidates))
 	mux.Handle("GET /internal/github-settings", s.auth(s.githubSettings))
 	mux.Handle("PATCH /internal/github-settings", s.auth(s.updateGithubSettings))
+	mux.Handle("GET /internal/github/users/{login}", s.auth(s.githubUser))
+	mux.Handle("POST /internal/github/verify-app", s.auth(s.verifyGithubApp))
+}
+
+// verifyGithubApp mints an installation token for one of the
+// organisation's GitHub repositories, the first by project and name, and
+// reads the App's bot: whether the App's key, id and installation work, or
+// GitHub's reason they do not. Always 200, the outcome in the body.
+func (s *Server) verifyGithubApp(w http.ResponseWriter, r *http.Request, org string) error {
+	gh, err := s.forge(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	if !gh.IsApp() {
+		return fail(http.StatusConflict, "conflict", "GitHub is connected with a token, not an App")
+	}
+	var slug string
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(r.Context(), `SELECT r.url FROM repositories r JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.name`)
+		if err != nil {
+			return err
+		}
+		urls, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		for _, u := range urls {
+			if slug = forge.SlugFromURL(u); slug != "" {
+				break
+			}
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	out := map[string]any{"ok": false, "repository": nil}
+	if slug == "" {
+		out["reason"] = "no GitHub repository is linked to a project yet: add one, then verify"
+		write(w, http.StatusOK, out)
+		return nil
+	}
+	out["repository"] = slug
+	if _, err := gh.Token(r.Context(), slug); err != nil {
+		out["reason"] = "GitHub would not give the App a token for " + slug + ": " + err.Error()
+		write(w, http.StatusOK, out)
+		return nil
+	}
+	bot, err := gh.Bot(r.Context())
+	if err != nil {
+		out["reason"] = "the App has a token for " + slug + ", but GitHub would not say who its bot is: " + err.Error()
+		write(w, http.StatusOK, out)
+		return nil
+	}
+	out["ok"], out["bot"] = true, bot.Name
+	write(w, http.StatusOK, out)
+	return nil
+}
+
+// githubUser is a GitHub login's numeric id, read with the organisation's
+// credential: what a person's profile keeps beside their login. 404
+// github_user_unknown only for GitHub's 404 on the user itself; a forge
+// that cannot be asked (none connected, GitHub down, an App with no
+// installation to ask as) is 502 github_unavailable, which the caller
+// stores the login without an id for.
+func (s *Server) githubUser(w http.ResponseWriter, r *http.Request, org string) error {
+	gh, err := s.forge(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	if _, err := gh.Token(r.Context(), ""); err != nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub could not be asked: %s", err.Error())
+	}
+	login := r.PathValue("login")
+	id, err := gh.UserID(r.Context(), login)
+	var e *forge.Error
+	if errors.As(err, &e) && e.NotFound() {
+		return fail(http.StatusNotFound, "github_user_unknown", "GitHub has no user %q", login)
+	}
+	if err != nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub could not be asked: %s", err.Error())
+	}
+	write(w, http.StatusOK, map[string]any{"login": login, "id": id})
+	return nil
 }
 
 // githubSettings is how dude behaves on GitHub for the organization, every

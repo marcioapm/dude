@@ -1,0 +1,2 @@
+[core]
+	hooksPath = /usr/local/share/dude/git-hooks

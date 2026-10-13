@@ -27,6 +27,11 @@ type fixture struct {
 }
 
 func setup(t *testing.T) *fixture {
+	return setupWith(t, &agenttools.Server{})
+}
+
+// setupWith is setup serving srv, its DB set to the fixture's.
+func setupWith(t *testing.T, srv *agenttools.Server) *fixture {
 	t.Helper()
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
@@ -37,9 +42,13 @@ func setup(t *testing.T) *fixture {
 		"epc_"+org, org, f.project)
 	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
 		VALUES ($1, $2, $3, 1, 'Truncate long words', 'running')`, f.item, org, f.project)
-	srv := httptest.NewServer((&agenttools.Server{DB: app, Log: slog.New(slog.NewTextHandler(testWriter{t}, nil))}).Handler())
-	t.Cleanup(srv.Close)
-	f.url = srv.URL
+	srv.DB = app
+	if srv.Log == nil {
+		srv.Log = slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	}
+	hs := httptest.NewServer(srv.Handler())
+	t.Cleanup(hs.Close)
+	f.url = hs.URL
 	return f
 }
 

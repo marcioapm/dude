@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -149,7 +151,14 @@ type specInput struct {
 	// starts from.
 	Repos      []specRepo
 	PushBranch string
+	// The forge token lux clones and pushes with (gitTokenSecret), and, by
+	// spec name, a repository's own where it differs: a GitHub App's token
+	// is its installation's, one per repository owner.
 	ForgeToken string
+	RepoTokens map[string]string
+	// Who the agent's commits are by: a GitHub App's bot. nil keeps the
+	// image's own git identity (a PAT's Run).
+	Bot *forge.BotIdentity
 	// The Run's token for dude's tools; "" gives it none.
 	ToolsToken string
 	// The login for Image's registry; nil when it needs none.
@@ -326,17 +335,16 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	MachineSpec(in.Machine, &spec)
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
+		secrets := credentialSecrets(in)
 		for _, r := range in.Repos {
 			// lux takes only some names (lux.NameRe); everything lux reports
 			// back — checkouts, clones, pushes, syncs — carries this one.
 			repo := lux.Repository{Name: lux.SpecName(r.Name), URL: r.URL, Ref: r.Ref, Path: r.path()}
-			if in.ForgeToken != "" {
-				// Used by lux to clone and push; never placed in the container.
-				// Declared as a secret only with a repository that uses it:
-				// one declared with none would be the workload's, and lux
-				// would refuse it as the credential of one added later.
-				repo.Credential = gitTokenSecret
-			}
+			// Used by lux to clone and push; never placed in the container.
+			// Declared as a secret only with a repository that uses it:
+			// one declared with none would be the workload's, and lux
+			// would refuse it as the credential of one added later.
+			repo.Credential = secrets.name[repo.Name]
 			if r.ReadOnly {
 				repo.Push = new(bool)
 			}
@@ -345,8 +353,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == gitTokenSecret }) {
-			spec.Secrets = append(spec.Secrets, lux.Secret{Name: gitTokenSecret, Value: in.ForgeToken})
+		for _, sec := range secrets.list {
+			if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == sec.Name }) {
+				spec.Secrets = append(spec.Secrets, sec)
+			}
 		}
 	}
 
@@ -394,10 +404,14 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			// reach; it needs no model.
 			spec.Network = runNetwork(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in)
 		}
+		spec.Env = map[string]string{}
+		workloadGitConfig(spec.Env, false)
+		commitIdentity(&spec, in.Bot)
 		return spec
 	}
 
 	spec.Env = maps.Clone(colourEnv)
+	workloadGitConfig(spec.Env, true)
 	switch in.Harness {
 	case delivery.HarnessClaudeCode:
 		claudeCodeWorkload(c, in, &spec)
@@ -407,7 +421,73 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		openCodeWorkload(c, in, &spec)
 	}
 	spec.Network = runNetwork(c, in)
+	commitIdentity(&spec, in.Bot)
 	return spec
+}
+
+// commitIdentity makes a GitHub App's bot the author and committer of every
+// commit in the Run: git reads GIT_AUTHOR_* and GIT_COMMITTER_* over any
+// user.name and user.email, the image's system config included.
+func commitIdentity(spec *lux.Spec, bot *forge.BotIdentity) {
+	if bot == nil || bot.Name == "" {
+		return
+	}
+	if spec.Env == nil {
+		spec.Env = map[string]string{}
+	}
+	spec.Env["GIT_AUTHOR_NAME"], spec.Env["GIT_AUTHOR_EMAIL"] = bot.Name, bot.Email
+	spec.Env["GIT_COMMITTER_NAME"], spec.Env["GIT_COMMITTER_EMAIL"] = bot.Name, bot.Email
+}
+
+// repoSecrets are the forge-token secrets a spec declares, and which one
+// each repository (by spec name) clones and pushes with.
+type repoSecrets struct {
+	name map[string]string
+	list []lux.Secret
+}
+
+// credentialSecrets names each repository's token: gitTokenSecret for
+// ForgeToken (every repository, with a PAT), and for a repository whose
+// own token differs (a GitHub App installed on another owner)
+// gitTokenSecret_<OWNER>, a name a resume can supply again from the owner
+// alone (ownerOfSecret).
+func credentialSecrets(in specInput) repoSecrets {
+	out := repoSecrets{name: map[string]string{}}
+	add := func(name, value string) {
+		if !slices.ContainsFunc(out.list, func(s lux.Secret) bool { return s.Name == name }) {
+			out.list = append(out.list, lux.Secret{Name: name, Value: value})
+		}
+	}
+	for _, r := range in.Repos {
+		name := lux.SpecName(r.Name)
+		token, secret := in.ForgeToken, gitTokenSecret
+		if own := in.RepoTokens[name]; own != "" && own != in.ForgeToken {
+			owner, _, _ := strings.Cut(forge.SlugFromURL(r.URL), "/")
+			token, secret = own, ownerSecret(owner)
+		}
+		if token == "" {
+			continue
+		}
+		out.name[name] = secret
+		add(secret, token)
+	}
+	return out
+}
+
+// ownerSecret is the token secret for a repository owner's installation.
+// GitHub logins are letters, digits and hyphens: the hyphen becomes an
+// underscore, which ownerOfSecret reverses.
+func ownerSecret(owner string) string {
+	return gitTokenSecret + "_" + strings.ToUpper(strings.ReplaceAll(owner, "-", "_"))
+}
+
+// ownerOfSecret is the owner an ownerSecret names, or "".
+func ownerOfSecret(name string) string {
+	owner, ok := strings.CutPrefix(name, gitTokenSecret+"_")
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(owner, "_", "-"))
 }
 
 // runNetwork is a Run's network: unrestricted when it may reach any host,
@@ -803,16 +883,43 @@ func openCodeConfig(model, effort string, options map[string]any, headers map[st
 
 // colourEnv makes the tools an agent runs colour their output, though it
 // goes to a pipe rather than a terminal: pytest's failures in red, git's
-// diffs, ls. The chat renders the colour; the agent reads past it.
+// diffs (color.ui, in workloadGitConfig), ls. The chat renders the colour;
+// the agent reads past it.
 var colourEnv = map[string]string{
 	"TERM":           "xterm-256color",
 	"FORCE_COLOR":    "1", // node, many Python tools
 	"CLICOLOR_FORCE": "1", // BSD-style tools, ls on some systems
 	"PY_COLORS":      "1", // pytest
-	// git, through its environment rather than a config file in the image.
-	"GIT_CONFIG_COUNT":   "1",
-	"GIT_CONFIG_KEY_0":   "color.ui",
-	"GIT_CONFIG_VALUE_0": "always",
+}
+
+// DudeGitConfig is the image's git config file (images/runtime/git-config)
+// setting core.hooksPath to /usr/local/share/dude/git-hooks, where the
+// image keeps dude's commit hook under each hook's name.
+const DudeGitConfig = "/usr/local/share/dude/git-config"
+
+// GitConfig adds key=value to env as a git setting of command scope
+// (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>), after any
+// env holds already, so no setting replaces another's index.
+func GitConfig(env map[string]string, key, value string) {
+	n, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	env[fmt.Sprintf("GIT_CONFIG_KEY_%d", n)] = key
+	env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", n)] = value
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(n + 1)
+}
+
+// workloadGitConfig is every Run's git configuration, through its
+// environment rather than a file in the image. include.path names
+// DudeGitConfig in command scope, so its core.hooksPath outranks any a
+// repository (husky, lefthook), worktree or the agent's global config
+// sets: dude's hook adds the co-authors, then runs the hook that setting
+// names. git skips an include whose file is missing, so an image without
+// dude's layer runs the repository's hooks as git would, without
+// co-authors.
+func workloadGitConfig(env map[string]string, colour bool) {
+	if colour {
+		GitConfig(env, "color.ui", "always")
+	}
+	GitConfig(env, "include.path", DudeGitConfig)
 }
 
 // egress is a Run's network: the operator's floor (agent.egress), the

@@ -29,7 +29,8 @@ export function secretNameShapeProblem(name: string): string | null {
   // lux v0.1.11 refuses a secret name past 63 characters (internal/spec nameRe), and with it the whole preview.
   if (name.length > SECRET_NAME_MAX) return `At most ${SECRET_NAME_MAX} characters.`;
   if (/^lux_/i.test(name)) return "Names starting with LUX_ are lux’s own.";
-  if (name === "GIT_TOKEN") return "dude sets GIT_TOKEN itself, from the GitHub connection.";
+  // GIT_TOKEN_<OWNER> carries a GitHub App's token for each repository owner.
+  if (/^GIT_TOKEN(_|$)/.test(name)) return "dude sets GIT_TOKEN and every GIT_TOKEN_ name itself, from the GitHub connection.";
   if ((DUDE_SECRET_NAMES as readonly string[]).includes(name)) return `dude sets ${name} itself.`;
   return null;
 }

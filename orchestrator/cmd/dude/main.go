@@ -40,6 +40,7 @@
 //	                                      keep a file for people (lux-shim publish)
 //	dude publish [--message M]            a conductor's: publish its commits
 //	dude tools                            what this run may use
+//	dude git coauthors                    the task's Co-authored-by trailers, for the commit hook
 //
 // Output is indented JSON.
 //
@@ -102,13 +103,25 @@ func run(args []string, out io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
-		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation") {
+		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "git") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "print JSON")
 	switch cmd {
+	case "git coauthors":
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		// Plain text, one trailer a line, for the commit hook: no JSON.
+		requestTimeout = coauthorsTimeout
+		raw, err := request("GET", "/git/coauthors", nil)
+		if err != nil {
+			return err
+		}
+		_, err = out.Write(raw)
+		return err
 	case "tools":
 		if err := fs.Parse(rest); err != nil {
 			return err
@@ -648,6 +661,12 @@ func published(name string, bytes int64) (json.RawMessage, error) {
 
 // ---- talking to dude ------------------------------------------------------
 
+// requestTimeout bounds one call to dude's tools. A commit waits on
+// `dude git coauthors`, so that one gives up sooner (coauthorsTimeout).
+var requestTimeout = 60 * time.Second
+
+const coauthorsTimeout = 10 * time.Second
+
 // client reaches dude's tools: through lux's local socket, or (tests) a URL
 // with a token.
 func client() (*http.Client, string, string, error) {
@@ -655,16 +674,16 @@ func client() (*http.Client, string, string, error) {
 		sock, ok := strings.CutPrefix(svc, "unix:")
 		if !ok {
 			// A loopback address, if lux serves it that way.
-			return &http.Client{Timeout: 60 * time.Second}, strings.TrimRight(svc, "/"), "", nil
+			return &http.Client{Timeout: requestTimeout}, strings.TrimRight(svc, "/"), "", nil
 		}
 		tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", sock)
 		}}
-		return &http.Client{Transport: tr, Timeout: 60 * time.Second}, "http://dude", "", nil
+		return &http.Client{Transport: tr, Timeout: requestTimeout}, "http://dude", "", nil
 	}
 	if u := os.Getenv("DUDE_TOOLS_URL"); u != "" {
-		return &http.Client{Timeout: 60 * time.Second}, strings.TrimRight(u, "/"), os.Getenv("DUDE_TOOLS_TOKEN"), nil
+		return &http.Client{Timeout: requestTimeout}, strings.TrimRight(u, "/"), os.Getenv("DUDE_TOOLS_TOKEN"), nil
 	}
 	return nil, "", "", errors.New("dude's tools are not available in this run (no LUX_SERVICE_DUDE)")
 }
@@ -811,6 +830,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              to the task branch (small changes only; you are woken
                                              when it is published or refused)
   dude tools                                 the tools this run may use
+  dude git coauthors                         the Co-authored-by trailers for your next commit, one a line
+                                             (added by the commit hook already: never add them yourself)
   dude --version                             this CLI's version
 
 Output is JSON.

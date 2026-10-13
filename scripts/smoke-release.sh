@@ -6,7 +6,7 @@
 #
 # It unpacks the tarball into a temporary prefix and checks that
 #   - every bin/* --version prints the version, with DATABASE_URL unset;
-#   - FEATURES lists validate and image-builder, and dude-orchestrator,
+#   - FEATURES lists validate, image-builder and git-credentials, and dude-orchestrator,
 #     dude-backend and dude-image-builder validate accept a good file and
 #     refuse a bad one;
 #   - the tarball holds no .sql files;
@@ -74,6 +74,8 @@ grep -qx validate "$prefix/FEATURES" || fail "FEATURES does not list validate: $
 echo "ok  FEATURES lists validate"
 grep -qx image-builder "$prefix/FEATURES" || fail "FEATURES does not list image-builder: $(cat "$prefix/FEATURES")"
 echo "ok  FEATURES lists image-builder"
+grep -qx git-credentials "$prefix/FEATURES" || fail "FEATURES does not list git-credentials: $(cat "$prefix/FEATURES")"
+echo "ok  FEATURES lists git-credentials"
 
 # validate, on a good and a bad file, with none of this machine's settings.
 # Port 1 on loopback: were validate to connect, it would fail loudly.
