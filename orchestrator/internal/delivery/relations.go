@@ -92,16 +92,21 @@ type BlockedError struct {
 	Blockers []Blocker
 }
 
-func (e BlockedError) Error() string {
-	words := make([]string, len(e.Blockers))
-	for i, b := range e.Blockers {
+// blockerWords is each blocker's Words.
+func blockerWords(bs []Blocker) []string {
+	words := make([]string, len(bs))
+	for i, b := range bs {
 		words[i] = b.Words()
 	}
+	return words
+}
+
+func (e BlockedError) Error() string {
 	once := "they're"
 	if len(e.Blockers) == 1 {
 		once = "that's"
 	}
-	return fmt.Sprintf("%s is blocked by %s: it can start once %s merged.", e.TaskKey, KeyList(words), once)
+	return fmt.Sprintf("%s is blocked by %s: it can start once %s merged.", e.TaskKey, KeyList(blockerWords(e.Blockers)), once)
 }
 
 // AgentRefusal is what a conductor is told when a start of its task is

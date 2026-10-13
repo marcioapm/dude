@@ -87,9 +87,7 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 	}
 	for _, d := range deps {
 		event := func(typ string, payload map[string]any) error {
-			_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: org, ProjectID: d.ProjectID, TaskID: d.ID,
-				ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: d.ID, Payload: payload})
-			return err
+			return dudeEventTx(ctx, tx, org, d.ProjectID, d.ID, typ, payload)
 		}
 		if prNumber == nil {
 			payload := map[string]any{"by": key}
@@ -362,9 +360,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		return err
 	}
 	event := func(typ string, payload map[string]any) error {
-		_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
-			ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: taskID, Payload: payload})
-		return err
+		return dudeEventTx(ctx, tx, org, projectID, taskID, typ, payload)
 	}
 	if !NotStarted(status) {
 		// Started some other way since: the request was consumed.
@@ -399,10 +395,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		if err := event(EvAutoStartRefused, map[string]any{"by": by, "blockers": BlockersPayload(blocked.Blockers)}); err != nil {
 			return err
 		}
-		words := make([]string, len(blocked.Blockers))
-		for i, b := range blocked.Blockers {
-			words[i] = b.Words()
-		}
+		words := blockerWords(blocked.Blockers)
 		that := "that merges"
 		if len(words) > 1 {
 			that = "they merge"
@@ -466,22 +459,25 @@ func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID, generat
 	if err != nil || !ended {
 		return err
 	}
-	var projectID, taskKey string
-	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number FROM tasks t
-		JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey); err != nil {
+	t, err := relatedTask(ctx, tx, taskID)
+	if err != nil {
 		return err
 	}
 	by, _, err := lastUnblock(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
-	text := fmt.Sprintf("%s could not start: %s. Start it from its page.", taskKey, msg)
+	text := fmt.Sprintf("%s could not start: %s. Start it from its page.", t.Key, msg)
 	if by != "" {
 		text = by + " merged, but " + text
 	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
-		ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: taskID,
-		Payload: map[string]any{"about": "auto_start_failed", "text": text}})
+	return dudeEventTx(ctx, tx, org, t.ProjectID, taskID, EvChatNotice, map[string]any{"about": "auto_start_failed", "text": text})
+}
+
+// dudeEventTx records an event dude itself makes about a task.
+func dudeEventTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, typ string, payload map[string]any) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
+		ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: taskID, Payload: payload})
 	return err
 }
 
