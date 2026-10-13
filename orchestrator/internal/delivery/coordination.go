@@ -17,6 +17,16 @@ import (
 // addressed to a task and rides the steer's path: a directive on the Run
 // that speaks for the task now, read at its next step, never interrupting;
 // or, with none going, held for the task's next Run's briefing.
+//
+// Lock order: follower/syncer Run -> directives -> message/wait/read rows.
+// Replies take the sender Run NO KEY UPDATE, asker Run KEY SHARE, then the
+// asked message NO KEY UPDATE and its waits; wait tools take their Run KEY
+// SHARE before the message too. KEY SHARE is compatible with NO KEY UPDATE,
+// so reciprocal sends do not wait on each other's rate-limit locks. Notes
+// take epic -> note -> Run FKs -> new directives/read rows; followers never
+// lock the epic or note. Briefings lock held messages then KEY SHARE their
+// new Run, whose follower cannot start until submit. Directive receipts
+// update only the recipient's message, not the question a reply locks.
 
 // Ledger events of agents coordinating.
 const (
@@ -144,6 +154,9 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 	}
 	var thread struct{ From, To, FromRun string }
 	if in.ReplyTo != "" {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = (SELECT from_run_id FROM peer_messages WHERE id = $1) FOR KEY SHARE`, in.ReplyTo); err != nil {
+			return Sent{}, err
+		}
 		err := tx.QueryRow(ctx, `SELECT from_task_id, to_task_id, from_run_id FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE`, in.ReplyTo).
 			Scan(&thread.From, &thread.To, &thread.FromRun)
 		switch {
@@ -367,6 +380,9 @@ const parkSecs = `(SELECT COALESCE((p.delivery_policy->>'parkAfterMinutes')::flo
 // the same message is it; on another, refused.
 func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string) (Waiting, error) {
 	var w Waiting
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR KEY SHARE`, ref.RunID); err != nil {
+		return w, err
+	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE`, message); err != nil {
 		return w, err
 	}

@@ -103,6 +103,9 @@ type replyOut struct {
 
 func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut, error) {
 	id := strings.TrimSpace(in.Message)
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR KEY SHARE`, c.RunID); err != nil {
+		return waitOut{}, err
+	}
 	var fromRun, toTask, toKey string
 	err := tx.QueryRow(ctx, `SELECT m.from_run_id, m.to_task_id, p.key_prefix || '-' || t.number FROM peer_messages m
 		JOIN tasks t ON t.id = m.to_task_id JOIN projects p ON p.id = t.project_id WHERE m.id = $1 FOR NO KEY UPDATE OF m`, id).Scan(&fromRun, &toTask, &toKey)
