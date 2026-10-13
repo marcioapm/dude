@@ -69,6 +69,9 @@ class RelationsClient extends FixtureClient {
     this.rel = { ...this.rel, autoStart: { how, by: { id: YOU, name: "Márcio Martins" }, at: new Date().toISOString() } };
     return this.rel;
   }
+  override async cancelAutoStart(_id: string): Promise<void> {
+    this.rel = { ...this.rel, autoStart: null };
+  }
   override async addRelation(_id: string, side: RelationSide, key: string): Promise<TaskRelations> {
     if (this.refuseAdd) throw this.refuseAdd;
     this.added.push({ side, key });
@@ -291,30 +294,45 @@ describe("a Backlog card's start", () => {
     expect(client.starts).toEqual([{ how: "talk", start: { override: true } }]);
   });
 
-  test("a render of what holds the board, with new callbacks, redraws none of its cards", async () => {
-    const client = new RelationsClient(rels({}));
-    const renders = new Map<string, number>();
-    const marks = (card: BoardCard) => {
-      renders.set(card.task.key!, (renders.get(card.task.key!) ?? 0) + 1);
-      return null;
-    };
-    let rerender = () => {};
-    // As App holds it: new onStarted and onChanged closures on every render.
-    function Shell() {
-      const [n, setN] = useState(0);
-      rerender = () => setN((x) => x + 1);
-      const starts = useCardStarts(client, YOU, () => void n, () => void n);
-      const startCard = starts.start;
-      const cardStart = useCallback((card: BoardCard, focus: BoardCardStartFocus) => startCard(card.task, focus), [startCard]);
-      return <Board project={project} you={YOU} cardMarks={marks} cardStart={cardStart} />;
-    }
-    const { container, unmount } = await mount(<TooltipProvider><Shell /></TooltipProvider>);
-    mounted.push(unmount);
-    await until(() => container.querySelector("[data-testid=start-menu-CP-47]"), "CP-47's start");
-    renders.clear();
-    await act(async () => rerender());
-    expect(Object.fromEntries(renders)).toEqual({});
-  });
+  for (const action of ["Deliver", "Talk it through", "Cancel start when unblocked"]) {
+    test(`a render redraws no cards and ${action} uses the latest callback`, async () => {
+      const client = new RelationsClient(rels({}));
+      const started: Array<{ generation: number; id: string; how: string }> = [];
+      const changed: number[] = [];
+      const boardProject: NavProject = action.startsWith("Cancel") ? { ...project, tasks: project.tasks!.map((task) => task.id === "wi_47"
+        ? { ...task, blockedBy: [{ key: "CP-41", title: "Hourly usage meter", status: "review" as const }], autoStart: { how: "deliver", by: owner, at: new Date().toISOString() } } : task) } : project;
+      const renders = new Map<string, number>();
+      const marks = (card: BoardCard) => {
+        renders.set(card.task.key!, (renders.get(card.task.key!) ?? 0) + 1);
+        return null;
+      };
+      let rerender = () => {};
+      // As App holds it: new onStarted and onChanged closures on every render.
+      function Shell() {
+        const [n, setN] = useState(0);
+        rerender = () => setN((x) => x + 1);
+        const starts = useCardStarts(client, YOU, (id, how) => started.push({ generation: n, id, how }), () => changed.push(n));
+        const startCard = starts.start;
+        const cardStart = useCallback((card: BoardCard, focus: BoardCardStartFocus) => startCard(card.task, focus), [startCard]);
+        return <Board project={boardProject} you={YOU} cardMarks={marks} cardStart={cardStart} />;
+      }
+      const { container, unmount } = await mount(<TooltipProvider><Shell /></TooltipProvider>);
+      mounted.push(unmount);
+      await until(() => container.querySelector("[data-testid=start-menu-CP-47]"), "CP-47's start");
+      renders.clear();
+      await act(async () => rerender());
+      expect(Object.fromEntries(renders)).toEqual({});
+      await openMenu(container.querySelector<HTMLElement>("[data-testid=start-menu-CP-47]")!);
+      await click(await until(() => menuItem(action), action));
+      if (action.startsWith("Cancel")) {
+        await until(() => changed.length > 0 || null, "the latest changed callback");
+        expect(changed).toEqual([1]);
+      } else {
+        await until(() => started.length > 0 || null, "the latest started callback");
+        expect(started).toEqual([{ generation: 1, id: "wi_47", how: action === "Deliver" ? "deliver" : "talk" }]);
+      }
+    });
+  }
 });
 
 describe("an epic's order beside its board", () => {
