@@ -67,7 +67,8 @@ func TestTheConductorsToolsFromTheShell(t *testing.T) {
 }
 
 // The conductor's tools: the read ones every role has, ask_person,
-// create_task, the peer tools, and its own findings and pull_requests.
+// create_task, the peer tools, the machine tools, and its own findings and
+// pull_requests.
 func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	f := setup(t)
 	cs, err := f.connect(t, f.conductor(t))
