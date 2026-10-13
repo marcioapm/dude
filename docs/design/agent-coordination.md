@@ -901,15 +901,15 @@ those links as they are; they add nothing to them and order nothing.
 ## As built (part A: orchestrator, API, CLI)
 
 Built on `feat/agent-coordination`; migration
-`111_agent_coordination.sql`. Where the build chose differently from the
+`113_agent_coordination.sql`. Where the build chose differently from the
 sections above, or where they were silent:
 
-- **Peers are the epic only.** "Depends on" links are not built, so no
-  linked peer exists yet. The rule is the SQL function `task_peers(task)`
-  (migration 111), returning `(peer_id, via)`; every tool, briefing and the
+- **Peers are the epic only.** Task relations exist, but they do not make
+  peers yet. The rule is the SQL function `task_peers(task)`
+  (migration 113), returning `(peer_id, via)`; every tool, briefing and the
   API read it through `delivery.Peers` / `PeerByKey`
-  (`orchestrator/internal/delivery/peers.go`). Links join it as a `UNION`
-  there, with `via = 'depends_on'`.
+  (`orchestrator/internal/delivery/peers.go`). Direct `blocks` edges could
+  join it as a `UNION` there, with `via = 'depends_on'`.
 - **A message's bound is `SteerTextMax`** (the brief), not 8 KiB; past it:
   "say less, or pin a note".
 - **Who a message is queued on.** The Run that speaks for a task is its
@@ -971,7 +971,7 @@ sections above, or where they were silent:
 - **A peer's task ending releases its waiters** (part B). When a task's
   status becomes done, failed or aborted (`delivery.SetTaskStatusTx`, the
   one writer of a terminal task status), every open `peer_waits` on a
-  message to it closes with `closed_by = 'peer_ended'` (migration 112),
+  message to it closes with `closed_by = 'peer_ended'` (migration 114),
   `agent.peer.wait_ended {by: peer_ended, status}` is written on the
   sender's Run, and the sender gets the directive "ABS-2 ended without
   replying (status: done). Carry on with your assumption, or ask a

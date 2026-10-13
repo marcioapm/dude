@@ -1,12 +1,16 @@
 import { useEffect, useId, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import type { TaskStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
 import { Icon } from "../icons/index.tsx";
+import { statusSpec } from "../tokens/status.ts";
 import { firstName } from "../util/format.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { RefLead } from "./RefLead.tsx";
+import { StatusMark } from "./StatusMark.tsx";
 import styles from "./Brainstorm.module.css";
 
 /*
@@ -114,7 +118,14 @@ export function SessionTitle({ title, untitled = "New session", onRename, maxLen
 // The proposal card
 // ---------------------------------------------------------------------------
 
-export type ProposalKind = "epic" | "task" | "edit" | "comment" | "note";
+export type ProposalKind = "epic" | "task" | "edit" | "comment" | "note" | "relation";
+
+/** A relation an item proposes: to another item of the card by number, or to an existing task by key and status. */
+export interface ProposalRelation {
+  readonly kind: "blocked-by" | "blocks" | "related";
+  readonly item?: number | undefined;
+  readonly task?: { readonly key: string; readonly status: TaskStatus } | undefined;
+}
 
 export interface ProposalCardItem {
   readonly kind: ProposalKind;
@@ -148,6 +159,12 @@ export interface ProposalCardItem {
   readonly why?: string | undefined;
   /** Filed already: by whom, as what ("Ana filed BL-61"). */
   readonly filed?: { readonly by: string; readonly key: string } | undefined;
+  /** Its number on the card, shown when the card has relations. */
+  readonly n?: number | undefined;
+  /** What it waits on, holds up and relates to, under its goal. */
+  readonly relations?: ReadonlyArray<ProposalRelation> | undefined;
+  /** Ticked with these items (their numbers), which wait on it: "Ticked with 2 and 3: they wait on it." */
+  readonly tickedWith?: ReadonlyArray<number> | undefined;
 }
 
 export interface ProposalCardProps extends Omit<HTMLAttributes<HTMLElement>, "title" | "onChange" | "onToggle"> {
@@ -164,15 +181,17 @@ export interface ProposalCardProps extends Omit<HTMLAttributes<HTMLElement>, "ti
   readonly readOnly?: boolean | undefined;
   /** A folded card starts open: the initial state of its line's toggle. */
   readonly defaultOpen?: boolean | undefined;
+  /** The order the items' relations put them in, steps of item numbers: "Order 1 → 2 3". */
+  readonly order?: ReadonlyArray<ReadonlyArray<number>> | undefined;
 }
 
 const KIND_WORD: Record<ProposalKind, [string, string]> = {
-  epic: ["epic", "epics"], task: ["task", "tasks"], edit: ["edit", "edits"], comment: ["comment", "comments"], note: ["note", "notes"],
+  epic: ["epic", "epics"], task: ["task", "tasks"], edit: ["edit", "edits"], comment: ["comment", "comments"], note: ["note", "notes"], relation: ["relation", "relations"],
 };
 
 /** "2 tasks, 1 edit": what a set of items is, by kind, in the card's order. */
 export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
-  const order: ProposalKind[] = ["epic", "task", "edit", "comment", "note"];
+  const order: ProposalKind[] = ["epic", "task", "edit", "comment", "note", "relation"];
   return order
     .map((k) => [k, kinds.filter((x) => x === k).length] as const)
     .filter(([, n]) => n > 0)
@@ -234,7 +253,7 @@ export function ProposalCard(props: ProposalCardProps) {
   const { items, selected, onToggle, onFile, filingAs, busy, readOnly, defaultOpen, className, ...rest } = props;
   const [open, setOpen] = useState(Boolean(defaultOpen));
   if (!nothingLeftToFile(items, readOnly)) return <OpenCard {...props} />;
-  const words = [proposalSummary(items.map((i) => i.kind)), ...foldedWords(items, readOnly)].join(" · ");
+  const words = [cardSummary(items), ...foldedWords(items, readOnly)].join(" · ");
   return (
     <section className={cx(styles["folded"], open && styles["foldedOpen"], className)} aria-label="Proposed work"
       data-testid="proposal-card" data-folded="true" {...rest}>
@@ -250,10 +269,63 @@ export function ProposalCard(props: ProposalCardProps) {
   );
 }
 
-function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly, folded, defaultOpen: _, className, ...rest }: ProposalCardProps & { readonly folded?: boolean }) {
+/** "3 tasks, 4 relations": the kinds, then the relations the items propose (a relation item is one). */
+function cardSummary(items: ReadonlyArray<ProposalCardItem>): string {
+  const kinds = proposalSummary(items.map((i) => i.kind));
+  const n = relationCount(items);
+  return n > 0 && !items.some((i) => i.kind === "relation") ? `${kinds}, ${n} ${n === 1 ? "relation" : "relations"}` : kinds;
+}
+
+/** The edges the items propose, each once: an in-card edge named from both ends counts once. */
+function relationCount(items: ReadonlyArray<ProposalCardItem>): number {
+  const seen = new Set<string>();
+  items.forEach((item, i) => {
+    const me = `#${item.n ?? i + 1}`;
+    for (const r of item.relations ?? []) {
+      const other = r.item !== undefined ? `#${r.item}` : r.task?.key ?? "?";
+      seen.add(r.kind === "blocks" ? `${me}>${other}` : r.kind === "blocked-by" ? `${other}>${me}` : [me, other].sort().join("~"));
+    }
+  });
+  return seen.size;
+}
+
+const RELATION_WORD: Record<ProposalRelation["kind"], string> = { "blocked-by": "Blocked by", blocks: "Blocks", related: "Related" };
+const RELATION_GLYPH: Record<ProposalRelation["kind"], "lock" | "blocks" | "link"> = { "blocked-by": "lock", blocks: "blocks", related: "link" };
+
+/** An item's relations under its goal: in-card ones by number, existing tasks by status mark and key. */
+function ItemRelations({ relations }: { readonly relations: ReadonlyArray<ProposalRelation> }) {
+  return (
+    <span className={styles["itemRels"]} data-testid="item-relations">
+      {relations.map((r, i) => (
+        <span key={i} className={styles["itemRel"]}
+          aria-label={`${RELATION_WORD[r.kind]} ${r.item !== undefined ? `item ${r.item}` : r.task?.key ?? ""}${r.task ? `, ${statusSpec(r.task.status).label.toLowerCase()}` : ""}`}>
+          <Icon name={RELATION_GLYPH[r.kind]} size={12} />
+          <span>{RELATION_WORD[r.kind]}</span>
+          {r.item !== undefined ? <b>item {r.item}</b> : r.task ? <><RefLead type="task" taskKey={r.task.key} status={r.task.status} /><StatusMark status={r.task.status} size="sm" /></> : null}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** "Ticked with 2 and 3: they wait on it. Untick them to leave it out." */
+function tickedWords(ns: ReadonlyArray<number>): string {
+  const list = ns.length > 1 ? `${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}` : String(ns[0]);
+  return `Ticked with ${list}: ${ns.length === 1 ? "it waits" : "they wait"} on it. Untick ${ns.length === 1 ? "it" : "them"} to leave it out.`;
+}
+
+function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly, folded, order, defaultOpen: _, className, ...rest }: ProposalCardProps & { readonly folded?: boolean }) {
   const footId = useId();
-  const ticked = items.flatMap((item, i) => (selected.has(i) && item.canFile && !item.filed ? [item] : []));
+  // What is ticked, with what the ticked items wait on (filing files it with them).
+  const withBlockers = new Set<number>();
+  items.forEach((item, i) => {
+    if (!item.tickedWith?.length || item.filed || !item.canFile) return;
+    if (item.tickedWith.some((n) => selected.has(items.findIndex((x, j) => (x.n ?? j + 1) === n)))) withBlockers.add(i);
+  });
+  const isTicked = (i: number) => (selected.has(i) || withBlockers.has(i)) && items[i]!.canFile && !items[i]!.filed;
+  const ticked = items.flatMap((item, i) => (isTicked(i) ? [item] : []));
   const stays = items.filter((item) => !item.filed && !item.canFile && item.why);
+  const numbered = items.some((i) => i.n !== undefined);
   let foot: string | null;
   if (readOnly) {
     foot = "You can read this session: filing is for its owner and members who can chat.";
@@ -266,7 +338,10 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
     foot = "Tick what to file.";
   } else {
     const staying = stays.length > 0 ? ` · ${stays.length} stay${stays.length === 1 ? "s" : ""} for whoever can` : "";
-    foot = `Filing as ${filingAs}: ${proposalSummary(ticked.map((t) => t.kind))}${staying}. Nothing starts.`;
+    const first = withBlockers.size > 0 ? `, ${[...withBlockers].map((i) => items[i]!.n ?? i + 1).join(" and ")} first` : "";
+    const rels = relationCount(ticked);
+    const withRels = rels > 0 ? `, with their ${rels} ${rels === 1 ? "relation" : "relations"}` : "";
+    foot = `Filing as ${filingAs}: ${proposalSummary(ticked.map((t) => t.kind))}${first}${withRels}${staying}. Nothing starts.`;
   }
   return (
     <section className={cx(styles["card"], folded && styles["unfolded"], className)} aria-label="Proposed work"
@@ -275,24 +350,37 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
         <header className={styles["cardHead"]}>
           <Icon name="list-check" size={14} />
           <b>Proposed work</b>
-          <span className={styles["muted"]}>· {proposalSummary(items.map((i) => i.kind))}</span>
+          <span className={styles["muted"]}>· {cardSummary(items)}</span>
+          {order && order.length > 1 ? (
+            <span className={styles["order"]} data-testid="proposal-order"
+              aria-label={`Order: ${order.map((s) => (s.length > 1 ? `items ${s.join(" and ")}` : `item ${s[0]}`)).join(", then ")}`}>
+              Order {order.map((step, i) => (
+                <span key={i} className={styles["orderStep"]}>
+                  {i > 0 ? <Icon name="arrow-right" size={12} /> : null}
+                  {step.map((n) => <span key={n} className={styles["orderNo"]}>{n}</span>)}
+                </span>
+              ))}
+            </span>
+          ) : null}
         </header>
       )}
-      <ul className={styles["items"]}>
+      <ul className={cx(styles["items"], numbered && styles["numbered"])}>
         {items.map((item, i) => {
           const blocked = !item.canFile && !item.filed;
+          const tickedWith = withBlockers.has(i) ? item.tickedWith ?? [] : [];
           return (
             <li key={i} className={cx(styles["item"], item.child && styles["child"], blocked && styles["blocked"])}
-              data-kind={item.kind} data-filed={item.filed ? "true" : undefined}>
+              data-kind={item.kind} data-filed={item.filed ? "true" : undefined} data-item={item.n}>
               <span className={styles["tick"]}>
                 {item.filed ? (
                   <Icon name="check" size={14} aria-label="filed" />
                 ) : (
-                  <Checkbox aria-label={`File ${typeof item.title === "string" ? item.title : "this item"}`}
-                    checked={selected.has(i) && item.canFile} disabled={readOnly || !item.canFile || busy}
+                  <Checkbox aria-label={`File ${numbered ? `item ${item.n ?? i + 1}: ` : ""}${typeof item.title === "string" ? item.title : "this item"}`}
+                    checked={isTicked(i)} disabled={readOnly || !item.canFile || busy}
                     onCheckedChange={() => onToggle(i)} />
                 )}
               </span>
+              {numbered ? <span className={styles["itemNo"]} aria-hidden>{item.n ?? i + 1}</span> : null}
               <div className={styles["itemBody"]}>
                 <div className={styles["itemTitle"]}>
                   {item.kind === "epic" ? <span className={styles["kind"]}>Epic</span> : null}
@@ -302,6 +390,7 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                 </div>
                 {item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
                 {item.notes && item.notes.length > 0 ? <ProposedNotes notes={item.notes} /> : null}
+                {item.relations?.length ? <ItemRelations relations={item.relations} /> : null}
                 {item.before !== undefined || item.after !== undefined ? (
                   <div className={styles["beforeAfter"]}>
                     <div><div className="ds-label">Now</div>{item.before}</div>
@@ -312,6 +401,8 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                   <div className={styles["note"]}>{item.filed.by} filed {item.filed.key}</div>
                 ) : blocked && item.why ? (
                   <div className={styles["note"]} data-testid="cannot-file">{item.why}</div>
+                ) : tickedWith.length > 0 ? (
+                  <div className={styles["note"]} data-testid="ticked-with">{tickedWords(tickedWith)}</div>
                 ) : null}
               </div>
               <span className={styles["where"]}>

@@ -28,6 +28,25 @@ func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
 	}
 }
 
+// A brainstorm that may reach any host is told it can read the web and to
+// cite its sources, with or without tools and under an organisation's own
+// prompt; one that may not is told nothing about the web.
+func TestOnlyABrainstormThatMayReachAnyHostIsToldItCanReadTheWeb(t *testing.T) {
+	org := "Think with us."
+	for _, in := range []PromptInput{{}, {Tools: true}, {Tools: true, OrgPrompt: &org},
+		{ProjectPrompt: "Ours alone.", ProjectPromptMode: "replace"}} {
+		for _, anywhere := range []bool{false, true} {
+			in.Anywhere = anywhere
+			got := BrainstormPrompt("briefing", in)
+			told := strings.Contains(got, "You can read the web: search for and fetch public pages") &&
+				strings.Contains(got, "Say where each fact came from, with its URL.")
+			if told != anywhere || (!anywhere && strings.Contains(strings.ToLower(got), "web")) {
+				t.Errorf("anywhere %v, tools %v, org prompt %v: told of the web %v:\n%s", anywhere, in.Tools, in.OrgPrompt != nil, told, got)
+			}
+		}
+	}
+}
+
 // Every agent publishes with dude publish alone: no prompt names lux's
 // directory or lux-shim, which dude publish hides.
 func TestPromptsNameOnlyDudePublish(t *testing.T) {

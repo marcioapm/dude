@@ -51,8 +51,9 @@ def test_an_organisations_list_is_what_its_runs_may_reach(env, client: ApiClient
     _implementer_on(client, forge_project, "llm-impl")
     _, spec = _first_spec(env, client, forge_project, owner_dsn)
     rules = _rules(spec)
-    # The tools' address is the suite's own (127.0.0.1): always there too.
-    assert [r for r in rules if not r.startswith("127.")] == sorted(["*.github.com", "10.60.0.0/16", "github.com", LLM_HOST, "pypi.org"]), rules
+    # The tools' address is the suite's own (127.0.0.1): always there too. The
+    # Run is OpenCode's (the default harness), whose web search reaches Exa.
+    assert [r for r in rules if not r.startswith("127.")] == sorted(["*.github.com", "10.60.0.0/16", "github.com", LLM_HOST, "mcp.exa.ai", "pypi.org"]), rules
     assert not spec["network"].get("unrestricted")
 
 

@@ -159,7 +159,8 @@ type specInput struct {
 	// What it may reach besides the operator's floor (RunEgress).
 	Egress []string
 	// Any host, whatever Egress and the operator's floor say: a brainstorm
-	// of an organisation that lets them read the web (brainstorm_anywhere).
+	// whose network is unrestricted (Syncer.brainstormAnywhere), from
+	// brainstorm_anywhere or "*" in either list.
 	Anywhere bool
 }
 
@@ -410,12 +411,29 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 }
 
 // runNetwork is a Run's network: unrestricted when it may reach any host,
-// else its lists (egress).
+// else its lists with what its harness needs (egress). The scripted agent
+// (toolsOnly) runs no harness.
 func runNetwork(c AgentConfig, in specInput) *lux.Network {
 	if in.Anywhere {
 		return &lux.Network{Unrestricted: true}
 	}
-	return egress(c, in.Egress)
+	var harness []string
+	if !c.toolsOnly {
+		harness = harnessHosts(in.Harness)
+	}
+	return egress(c, in.Egress, harness)
+}
+
+// harnessHosts are the hosts a harness reaches from the container on its
+// own: OpenCode's websearch tool calls Exa's MCP server
+// (https://mcp.exa.ai/mcp). Claude Code's and Codex's search go through
+// the LLM proxy.
+func harnessHosts(harness string) []string {
+	switch harness {
+	case delivery.HarnessClaudeCode, delivery.HarnessCodex:
+		return nil
+	}
+	return []string{"mcp.exa.ai"}
 }
 
 // openCodeWorkload: the image's OpenCode config defines the two providers,
@@ -431,11 +449,9 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	}
 	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
 	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
-	// OpenCode's websearch tool exists only with Exa on, and reaches
-	// mcp.exa.ai: only a Run that may reach any host gets it.
-	if in.Anywhere {
-		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
-	}
+	// OpenCode's websearch tool exists only with Exa on; its host is on
+	// every OpenCode Run's list (harnessHosts).
+	spec.Env["OPENCODE_ENABLE_EXA"] = "1"
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
@@ -547,6 +563,12 @@ func anthropicBaseURL(llmURL string) string {
 // subcommand, these included. The file is read either way. A tier's args
 // go the same way (codexSettings): only its -c overrides, as lines of the
 // file, since any other argument before app-server is dropped too.
+//
+// Codex's web search is the Responses API's hosted web_search tool: OpenAI
+// runs the search, through the proxy, so egress never sees it. Codex 0.144
+// sends it by default ("cached", which full access promotes to live); dude
+// pins "live" on every Run so a later default cannot turn it off. A tier's
+// -c web_search replaces the pin, except on a Run that may reach any host.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
@@ -569,7 +591,8 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // string, number, boolean or array of those, or else a bare word, taken as
 // a string, as Codex takes an unparseable value. An override inside or
 // above a table dude sets (model_providers.dude.*) would rewrite it, and is
-// dropped, as is every other argument.
+// dropped, as is web_search on a Run that may reach any host (live there
+// whatever the tier says) and every other argument.
 func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
 		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
@@ -594,6 +617,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
+	settings = append(settings, "web_search="+tomlString("live"))
 	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""
@@ -615,7 +639,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 			k, _, _ := strings.Cut(s, "=")
 			return key == "model_providers.dude" || strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
 		})
-		if !ok || !codexKey.MatchString(key) || nested {
+		if !ok || !codexKey.MatchString(key) || nested || (in.Anywhere && key == "web_search") {
 			dropped = append(dropped, arg+" "+override)
 			continue
 		}
@@ -742,6 +766,11 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	}
 }
 
+// OpenCode v1.18.21's ACP bridge drops subagent permission asks, hanging the
+// parent's task call. Runs are unattended; the user "*" rule overrides
+// OpenCode's built-in asks so neither parent nor subagent waits for approval.
+var openCodePermissions = map[string]any{"*": "allow"}
+
 // openCodeConfig is a Run's model and its tier's settings as OpenCode
 // config.
 //
@@ -764,8 +793,9 @@ func openCodeConfig(model, effort string, options map[string]any, headers map[st
 		entry["headers"] = headers
 	}
 	config := map[string]any{
-		"model":    provider + "/" + model,
-		"provider": map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
+		"model":      provider + "/" + model,
+		"permission": openCodePermissions,
+		"provider":   map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
 	}
 	b, _ := json.Marshal(config)
 	return string(b)
@@ -786,14 +816,15 @@ var colourEnv = map[string]string{
 }
 
 // egress is a Run's network: the operator's floor (agent.egress), the
-// Run's own list (RunEgress), the LLM API's host and dude's tools, each
-// rule once, in that order. "*" in either list turns filtering off. With
-// nothing listed anywhere and no model's host, filtering is off rather than
-// leaving an agent that cannot reach its own model; the tools alone
+// Run's own list (RunEgress), the LLM API's host, the hosts its harness
+// needs (harnessHosts) and dude's tools, each rule once, in that order.
+// "*" in either list turns filtering off. With nothing listed anywhere and
+// no model's host, filtering is off rather than leaving an agent that
+// cannot reach its own model; the harness's hosts and the tools alone
 // restrict nothing. Every entry is one lux takes (LoadAgentConfig refuses
 // others in the operator's list, the API in the Run's own); were one not,
 // lux would refuse the Run rather than run it with less listed.
-func egress(c AgentConfig, own []string) *lux.Network {
+func egress(c AgentConfig, own, harness []string) *lux.Network {
 	n := &lux.Network{}
 	seen := map[lux.EgressRule]bool{}
 	add := func(entry string) {
@@ -814,6 +845,9 @@ func egress(c AgentConfig, own []string) *lux.Network {
 	}
 	if len(n.Egress) == 0 && !c.toolsOnly {
 		return &lux.Network{Unrestricted: true}
+	}
+	for _, h := range harness {
+		add(h)
 	}
 	if u, err := url.Parse(c.ToolsURL); err == nil && u.Hostname() != "" {
 		add(u.Hostname())

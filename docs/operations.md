@@ -198,7 +198,8 @@ submitted (`phases.RunEgress`, `egress` in `internal/phases/spec.go`):
 - the organisation's list (Organisation settings → **Network**), and the
   project's own (Project settings → **Network**) on top of it, or with
   **Only this project's list** the project's alone;
-- always the model's host (`llm.url`) and dude's tools.
+- always the model's host (`llm.url`) and dude's tools;
+- on OpenCode, `mcp.exa.ai` (its web search, below); no other harness gets it.
 
 `*` anywhere in the operator's or the organisation's list (the page's
 **Anywhere** switch) makes the Run unrestricted; a project on its own list
@@ -211,21 +212,40 @@ after it: lux cannot change a live Run's rules, and a Run keeps what it was
 submitted with (`runs.network`) through its resumes. A session's agent gets
 its organisation's list.
 
+**Web search** is on for every role on every harness, whatever the Run's
+network; per-role control comes with agent capabilities. Search is not
+fetch: a Run on a list still reaches only its list. Claude Code's WebSearch
+and Codex's hosted search tool run server-side, through the LLM proxy, so
+egress never sees them. Codex has `web_search = "live"` pinned on every
+Run, in `config.toml` and as `-c`; a tier's `-c web_search` replaces it,
+except on a brainstorm that may reach any host, where it stays live.
+OpenCode gets `OPENCODE_ENABLE_EXA=1`, and its websearch tool calls Exa's
+MCP server (`https://mcp.exa.ai/mcp`) from the container: Exa, a third
+party, sees every query. That is why `mcp.exa.ai` is on every OpenCode
+Run's list, recorded in `runs.network` with the rest.
+
 **Brainstorm sessions** (Organisation settings → Network, owners and
 admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
 on, a brainstorm Run of the organisation is submitted unrestricted,
-whatever its list or the operator's says, so it can read the web; on
-OpenCode it also gets `OPENCODE_ENABLE_EXA=1`, its websearch tool (which
-reaches `mcp.exa.ai`; off, it would be refused, so the variable is not
-set). Every other role keeps the lists. The settings API carries it as
+whatever its list or the operator's says, so it can read the web. It is
+also told, after its instructions and whatever the organisation's prompt
+says: "You can read the web: search for and fetch public pages when the
+conversation needs facts from outside the linked repositories. Say where
+each fact came from, with its URL." Off, it is told nothing about the web.
+A brainstorm made unrestricted by `*` in the operator's or the
+organisation's list, with the setting off, gets the same (any host, the web
+line and Codex's search forced live). Every other role keeps the lists. The
+settings API carries it as
 `network.brainstorm` (`{anywhere}` on read, a boolean in a patch, refused on
 a project's); `network.effective` stays what other roles get. What it
 risks: anything a page says can steer the agent, and a brainstorm holds
 read-only checkouts of its session's repositories and the model key, which
 a malicious page could talk it into sending out. Like the lists, a change
 reaches brainstorm Runs submitted after it, either way: a brainstorm already
-started, running or parked, keeps the network it had (any host and Exa, or
-the list) through its resumes until its session starts a new agent.
+started, running or parked, keeps the network it had (any host or the list,
+`runs.network`) through its resumes until its session starts a new agent;
+briefed again after a lost conversation, it is told what that network
+allows.
 
 lux reports every distinct name a Run looks up as a `dns` event. dude says
 each one lux refused once on the Run (`agent.network.refused`), and for a
@@ -552,7 +572,7 @@ does not refuse to start.
 | `embeddings.dimensions` | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | orchestrator | The index's size: only 768 is accepted, another is a migration. |
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `agent.timeout` | `DUDE_AGENT_TIMEOUT` | `4h` | orchestrator | The most running time lux gives a phase Run (its `timeout`, running time only: parked time does not count); past it lux stops it and it fails. The conductor gets none. |
-| `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | The operator's floor: hosts (addresses, CIDR ranges, lux wildcards `*.example.com`) every agent Run may reach, under each organisation's and project's own list, which people set on the Network settings page (see [Agent network](#agent-network)). `*` turns egress filtering off for every organisation. `llm.url`'s host and dude's tools are always added. With nothing listed here, by the organisation or by the project, and no `llm.url`, egress is unrestricted. |
+| `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | The operator's floor: hosts (addresses, CIDR ranges, lux wildcards `*.example.com`) every agent Run may reach, under each organisation's and project's own list, which people set on the Network settings page (see [Agent network](#agent-network)). `*` turns egress filtering off for every organisation. `llm.url`'s host and dude's tools are always added, and `mcp.exa.ai` on OpenCode. With nothing listed here, by the organisation or by the project, and no `llm.url`, egress is unrestricted. |
 | `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | The fallback image, `agent.image`, can run containers (rootless Podman or Docker inside the Run). Every Run on it, agents and branch previews alike, asks lux for `sandbox.nestedContainers`, so lux places it only on hosts whose runner offers nested containers: with none, it waits for one, and the Run page says why. The image must carry the engine, and its workload user's subordinate ids must lie within 0–65535 (see [Release archive](#release-archive)). A library image says this per version ("Can run containers", checked when it builds); an image typed by hand never can. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
 | `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |
@@ -750,7 +770,8 @@ from it), with the tier's headers as the provider's `http_headers`,
 container is the sandbox), `model_reasoning_summary = "auto"`,
 `model_supports_reasoning_summaries = true` (Codex does not know the
 proxy's model names, and otherwise sends no reasoning) and
-`model_reasoning_effort` unless the effort is `none` or unset. These are
+`model_reasoning_effort` unless the effort is `none` or unset, and
+`web_search = "live"` (see [Agent network](#agent-network)). These are
 both `-c` overrides on the command and a `$HOME/.codex/config.toml` file
 secret (`CODEX_CONFIG`): Codex 0.144 drops every `-c` given before
 `app-server` once one follows it, and lux's adapter adds its MCP servers
@@ -772,7 +793,8 @@ any other key is logged as ignored. What the args do differs:
   replacing dude's own line for that key or adding one. The value is JSON (a
   string, number, boolean or a list of those) or a bare word, taken as a
   string. Every other argument is dropped and logged, as is an override of a
-  key inside or above one dude sets as a table (`model_providers.dude`).
+  key inside or above one dude sets as a table (`model_providers.dude`), and
+  of `web_search` on a Run that may reach any host, where it stays live.
   They cannot go on the command: lux adds its MCP servers as `-c` after
   `app-server`, and Codex 0.144 then ignores everything given before the
   subcommand, `-m` included.

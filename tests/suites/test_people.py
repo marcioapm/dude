@@ -10,10 +10,73 @@ from __future__ import annotations
 import json
 import os
 import threading
+import subprocess
+import uuid
 
+import pytest
 import requests
 
+from env import REPO_ROOT, find_free_port
 from helpers import ApiClient, create_api_key, execute, query, sign_in, wait_until
+
+
+@pytest.fixture
+def presence_session(env):
+    """Suite-local injected person auth; no Cloudflare cryptographic claim."""
+    port = find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    designation = uuid.uuid4().hex
+    with env._log("presence-server") as log:
+        proc = subprocess.Popen(["bun", "run", "tests/presence-server.ts"], cwd=REPO_ROOT,
+            env={**os.environ, "DATABASE_URL": env.app_dsn, "PORT": str(port),
+                 "PRESENCE_TEST_DESIGNATION": designation,
+                 "DUDE_ORCHESTRATOR_URL": env.orchestrator_url,
+                 "DUDE_ORCHESTRATOR_TOKEN": env.orchestrator_token, **env.s3_env},
+            stdout=log, stderr=subprocess.STDOUT)
+        try:
+            wait_until(lambda: _healthy(base_url, proc), timeout=20, message="presence test server did not start")
+
+            class Session:
+                def acquire(self, who):
+                    session = requests.Session()
+                    resp = session.post(base_url + "/test/presence-session", timeout=10,
+                        headers={"authorization": f"Bearer {who.api_key}", "x-test-designation": designation})
+                    assert resp.status_code == 204, resp.text
+                    return session
+
+                def get(self, who, path, where=None):
+                    headers = {"x-dude-active": "1"}
+                    if where is not None:
+                        headers["x-dude-where"] = where
+                    with self.acquire(who) as session:
+                        return session.get(base_url + path, headers=headers, timeout=10)
+
+                def browser(self, page, who):
+                    with self.acquire(who) as session:
+                        page.context.add_cookies([{"name": "presence_test_session", "value": cookie.value,
+                            "url": base_url, "httpOnly": True, "sameSite": "Strict"}
+                            for cookie in session.cookies])
+                    page.add_init_script("localStorage.clear()")
+                    page.goto(base_url)
+                    expect(page.get_by_test_id("shell")).to_be_visible()
+
+            yield Session()
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
+def _healthy(url, proc):
+    if proc.poll() is not None:
+        raise RuntimeError(f"presence test server exited: {proc.returncode}")
+    try:
+        return requests.get(url + "/health", timeout=1).status_code == 200
+    except requests.RequestException:
+        return False
 
 
 def _invite(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
@@ -24,15 +87,25 @@ def _invite(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dic
     return body["person"], ApiClient(env.control_plane_url, body["key"])
 
 
+def _from_a_tab(who: ApiClient, path: str, where: str | None = None, active: str | None = "1") -> requests.Response:
+    """A request as the web app sends it from a tab someone is using: `x-dude-active: 1`."""
+    headers = {"authorization": f"Bearer {who.api_key}"}
+    if active is not None:
+        headers["x-dude-active"] = active
+    if where is not None:
+        headers["x-dude-where"] = where
+    return requests.get(f"{who.base_url}{path}", headers=headers, timeout=10)
+
+
 def test_you_are_a_person_of_your_organization(client: ApiClient, org: dict):
-    me = client.get("/v1/me").json()
+    me = _from_a_tab(client, "/v1/me").json()
     assert me["organization"]["id"] == org["id"]
     person = me["person"]
     assert person["id"].startswith("per_")
     assert person["name"] == "e2e user"
-    # The organization's first person is its admin, and here now.
+    # The organization's first person is its admin; key use is not presence.
     assert person["role"] == "admin"
-    assert person["online"] is True
+    assert person["online"] is False
     assert set(person) >= {"id", "name", "photoUrl", "online", "email", "role", "lastSeenAt"}
 
     listed = client.get("/v1/people").json()
@@ -211,7 +284,7 @@ def test_a_project_has_an_image_only_admins_set(client: ApiClient, env, project:
     assert env.s3().list_objects_v2(Bucket=env.s3_bucket, Prefix=f"{project['organizationId']}/projects/").get("KeyCount", 0) == 0
 
 
-def test_presence_says_who_is_online_and_is_pushed_live(client: ApiClient, env, owner_dsn: str):
+def test_presence_says_who_is_online_and_is_pushed_live(client: ApiClient, env, owner_dsn: str, presence_session):
     ana, ana_client = _invite(client, env, "Ana")
     # Invited, never seen.
     people = {p["name"]: p for p in client.get("/v1/people").json()["people"]}
@@ -234,8 +307,7 @@ def test_presence_says_who_is_online_and_is_pushed_live(client: ApiClient, env, 
     reader = threading.Thread(target=listen, daemon=True)
     reader.start()
     assert ready.wait(10)
-    requests.get(f"{env.control_plane_url}/v1/navigation", timeout=10,
-                 headers={"authorization": f"Bearer {ana_client.api_key}", "x-dude-where": "TEXT-14"})
+    presence_session.get(ana_client, "/v1/navigation", where="TEXT-14")
     reader.join(15)
     seen = next(f for f in frames if f["eventType"] == "person.seen")
     assert seen["payload"]["person"]["id"] == ana["id"]
@@ -247,6 +319,31 @@ def test_presence_says_who_is_online_and_is_pushed_live(client: ApiClient, env, 
     # Five minutes later, gone.
     execute(owner_dsn, "UPDATE people SET last_seen_at = now() - interval '6 minutes' WHERE id = %s", (ana["id"],))
     assert {p["name"]: p for p in client.get("/v1/people").json()["people"]}["Ana"]["online"] is False
+
+
+def test_the_cli_and_the_event_stream_are_not_someone_using_dude(client: ApiClient, env, presence_session):
+    """Only an active person session counts: API keys, even with the active
+    header, and an open event stream leave presence unchanged."""
+    ana, ana_client = _invite(client, env, "Ana")
+
+    def ana_now() -> dict:
+        return {p["name"]: p for p in client.get("/v1/people").json()["people"]}["Ana"]
+
+    assert ana_now()["lastSeenAt"] is None
+    for active in (None, "0", "true", "1"):
+        assert _from_a_tab(ana_client, "/v1/navigation", where="TEXT-14", active=active).status_code == 200
+    assert ana_client.get("/v1/me").status_code == 200
+    with requests.get(f"{env.control_plane_url}/v1/events/stream?live=1&key={ana_client.api_key}",
+                      stream=True, timeout=10) as stream:
+        assert stream.status_code == 200
+        next(stream.iter_lines())
+    now = ana_now()
+    assert now["online"] is False and now["lastSeenAt"] is None and now["lastSeenWhere"] is None
+
+    # From an active person session she is online at once, so nothing above was suppressed.
+    presence_session.get(ana_client, "/v1/navigation", where="TEXT-14")
+    now = ana_now()
+    assert now["online"] is True and now["lastSeenWhere"] == "TEXT-14"
 
 
 def test_a_task_has_people_the_owner_first(client: ApiClient, env, project: dict):
@@ -357,11 +454,11 @@ def test_waiting_on_you_is_split_by_whose_it_is(
 
 
 @pytest.mark.ui
-def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient, env, console_errors: list, presence_session):
     _invite(client, env, "Ana")
     ana_client = ApiClient(env.control_plane_url, client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}).json()["key"])
-    ana_client.get("/v1/me")  # Cy is here now.
-    _sign_in(page, web_url, client.api_key, board=False)
+    presence_session.get(ana_client, "/v1/me")  # Cy's designated person session is active.
+    presence_session.browser(page, client)
     online = page.get_by_test_id("online")
     # You and Cy; Ana was never seen.
     expect(online).to_have_attribute("aria-label", "Online: e2e user, Cy")
@@ -369,6 +466,70 @@ def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient
     expect(band).to_contain_text("e2e user")
     band.click()
     expect(page.get_by_test_id("my-settings")).to_be_visible()
+    assert console_errors == []
+
+
+_HIDE = """() => {
+  Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
+}"""
+
+# Shown again, in a window that does not have focus.
+_SHOW_UNFOCUSED = """() => {
+  document.hasFocus = () => false;
+  Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+  document.dispatchEvent(new Event("visibilitychange"));
+}"""
+
+
+@pytest.mark.ui
+def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, client: ApiClient, owner_dsn: str,
+                                                     console_errors: list, presence_session):
+    """A hidden tab does no background people polling and sends no
+    `x-dude-active`, so its person goes offline five minutes after the last
+    recorded active request, whatever the tab does."""
+    me = client.get("/v1/me").json()["person"]
+    people_reads: list[str | None] = []
+    sent: list[str | None] = []
+
+    def record(request):
+        if "/v1/" not in request.url or "/v1/events/stream" in request.url:
+            return
+        header = request.headers.get("x-dude-active")
+        sent.append(header)
+        if request.url.split("?")[0].endswith("/v1/people"):
+            people_reads.append(header)
+
+    page.clock.install()
+    page.on("request", record)
+    presence_session.browser(page, client)
+    expect(page.get_by_test_id("online")).to_have_attribute("aria-label", "Online: e2e user")
+    # Just opened is in use: the first read says so.
+    wait_until(lambda: people_reads, timeout=10, message="the people were never read")
+    assert people_reads[0] == "1"
+
+    page.evaluate(_HIDE)
+    people_reads.clear()
+    sent.clear()
+    # Past the people's minute and the five minutes of activity: hidden, nothing is read.
+    page.clock.run_for("06:00")
+    page.wait_for_timeout(500)
+    assert people_reads == []
+    assert sent == []
+
+    # The last time they used it was more than five minutes ago: offline.
+    execute(owner_dsn, "UPDATE people SET last_seen_at = now() - interval '6 minutes' WHERE id = %s", (me["id"],))
+    assert next(p for p in client.get("/v1/people").json()["people"] if p["id"] == me["id"])["online"] is False
+
+    # Shown again but not focused: it reads, and says nobody is using it.
+    page.evaluate(_SHOW_UNFOCUSED)
+    wait_until(lambda: people_reads, timeout=10, message="the people were not read when shown")
+    assert people_reads == [None]
+    # Nobody else is in the organisation, so the Online row goes.
+    expect(page.get_by_test_id("online")).to_have_count(0)
+    assert next(p for p in client.get("/v1/people").json()["people"] if p["id"] == me["id"])["online"] is False
     assert console_errors == []
 
 

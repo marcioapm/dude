@@ -421,12 +421,16 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		return record(tx, result)
 	})
 	var refused refusal
-	if errors.As(err, &refused) && refused.event != nil {
-		// The call's transaction rolled back: its refusal is recorded on
-		// its own, so the ledger shows what was refused and why.
+	if errors.As(err, &refused) {
 		if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
-			return err
+			if refused.event != nil {
+				_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+				return err
+			}
+			if refused.blocked != nil {
+				return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+			}
+			return nil
 		}); logged != nil {
 			s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
 		}
@@ -480,12 +484,11 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	return nil
 }
 
-// refusal is a tool declining a request, with the reason for the caller,
-// and the ledger event that records it when the refusal is itself worth
-// recording (a message over the rate, a note past the limit).
+// refusal is a tool declining a request, optionally recorded after rollback.
 type refusal struct {
-	msg   string
-	event *refusedEvent
+	msg     string
+	event   *refusedEvent
+	blocked *delivery.BlockedError
 }
 
 type refusedEvent struct {

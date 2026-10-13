@@ -63,7 +63,17 @@ export type { SidebarProps, SidebarLinkProps, SidebarProfileProps, SidebarRailIt
 export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WELCOME_FIRST_TIME, WELCOME_STARTERS, Welcome, WelcomeNote } from "./Welcome.tsx";
 export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessionsProps, Starter, StarterPillsProps, WelcomeProps } from "./Welcome.tsx";
 export { Board } from "./Board.tsx";
-export type { BoardProps } from "./Board.tsx";
+export type { BoardProps, BoardCardStartFocus } from "./Board.tsx";
+export {
+  AutoStartMark, DependencyStrip, HOW_LABEL, RelationChip, RelationList, RelationRow, StartGate, StartMenu,
+  blockedReason, relationWords, startsWhen, stateWord,
+} from "./Relations.tsx";
+export type {
+  AutoStartMarkProps, AutoStartView, DependencyCounts, DependencyStripProps, RelatedTask, RelationChipKind, RelationChipProps,
+  RelationGroupData, RelationGroupKind, RelationListProps, RelationRowData, RelationRowProps, StartGateProps, StartMenuProps, StripTask,
+} from "./Relations.tsx";
+export { AutoStartDialog, RelationPicker, StartAnywayDialog } from "./RelationDialogs.tsx";
+export type { AutoStartDialogProps, DialogBlocker, PickableTask, RelationPickerProps, RelationSide, StartAnywayDialogProps } from "./RelationDialogs.tsx";
 export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES, FINDING_STATUS_SPECS } from "./FindingRow.tsx";
 export type { FindingRowProps, FindingGroupProps, FindingLike, FindingCounts, FindingSeveritySpec, FindingStatusSpec } from "./FindingRow.tsx";
 export { Breadcrumb, elideMiddle } from "./Breadcrumb.tsx";
@@ -145,7 +155,7 @@ export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
 export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
-export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
+export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
 export {
   EpicNote, EpicNoteCount, EpicNoteHistory, EpicNoteNotice, EpicNoteRow, PeerList, PeerMessage, PeerThread, PeerWaitLine, PeerWaitMark,
   SinceDigest, TaskChip, noteLine, noteTitle, noteWordChange,

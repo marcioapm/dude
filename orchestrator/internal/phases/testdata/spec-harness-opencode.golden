@@ -62,8 +62,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -121,6 +122,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"
@@ -192,8 +196,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"effort\":\"high\",\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"effort\":\"high\",\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -251,6 +256,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"
@@ -322,8 +330,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"type\":\"disabled\"}}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-anthropic/claude-sonnet-5\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-anthropic\":{\"models\":{\"claude-sonnet-5\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"thinking\":{\"type\":\"disabled\"}}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -381,6 +390,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"
@@ -451,8 +463,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -510,6 +523,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"
@@ -581,8 +597,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningEffort\":\"high\",\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningEffort\":\"high\",\"reasoningSummary\":\"auto\"}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -640,6 +657,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"
@@ -711,8 +731,9 @@
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "color.ui",
       "GIT_CONFIG_VALUE_0": "always",
-      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm-openai/gpt-6-sol\",\"permission\":{\"*\":\"allow\"},\"provider\":{\"llm-openai\":{\"models\":{\"gpt-6-sol\":{\"headers\":{\"X-Team\":\"dude\",\"anthropic-beta\":\"context-1m\"},\"options\":{\"reasoningSummary\":\"auto\"}}}}}}",
       "OPENCODE_DISABLE_MODELS_FETCH": "1",
+      "OPENCODE_ENABLE_EXA": "1",
       "PY_COLORS": "1",
       "TERM": "xterm-256color"
     },
@@ -770,6 +791,9 @@
       "egress": [
         {
           "host": "llm.example"
+        },
+        {
+          "host": "mcp.exa.ai"
         },
         {
           "cidr": "10.9.8.7/32"

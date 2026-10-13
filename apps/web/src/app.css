@@ -1222,4 +1222,12 @@ body {
   .hideNarrow {
     display: none;
   }
+  /* A phone: the header's actions (a blocked task's refused ways among them) take their own line under the breadcrumb. */
+  .taskTop {
+    flex-wrap: wrap;
+  }
+  .taskTopActions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
 }

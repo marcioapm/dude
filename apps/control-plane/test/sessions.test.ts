@@ -24,7 +24,7 @@ import { EventTypes, type PersistedEvent } from "@dude/domain";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter, startServer } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
-import { createApiKey } from "../src/api/auth.ts";
+import { authenticate, createApiKey, personPrincipal } from "../src/api/auth.ts";
 import { Config, useConfig } from "../src/config.ts";
 import { listenForEvents } from "../src/events/listen.ts";
 import { SESSION_WHERE, whereFrom } from "../src/api/presence.ts";
@@ -106,7 +106,11 @@ beforeAll(async () => {
     return Response.json({ ok: true });
   } });
   useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
-  router = buildRouter("");
+  router = buildRouter("", async (credential, request) => {
+    const personId = request.headers.get("x-test-person");
+    if (credential === null && personId) return personPrincipal(ORG, personId);
+    return credential === null ? null : authenticate(credential);
+  });
   server = startServer(0, router);
   stopListening = await listenForEvents(databaseUrl("app", NAME));
 });
@@ -548,13 +552,15 @@ test("presence never carries a session's title: its where is a fixed word", asyn
   expect(whereFrom(`${TITLE}`, `/v1/brainstorms/${SESSION}`)).toBe(SESSION_WHERE);
   expect(whereFrom(`A session · ${TITLE}`, "/v1/navigation")).toBe(SESSION_WHERE);
   expect(whereFrom("TEXT-14 · Implement", "/v1/navigation")).toBe("TEXT-14 · Implement");
-  // Through a request by someone not seen yet this minute (its own person,
+  // Through a request from a tab in use by someone not seen yet this minute (its own person,
   // so no earlier test has touched them): the row everyone's Online list
   // reads says only that.
   const seen = await createApiKey({ organizationId: ORG, name: "Sam" });
   await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
     VALUES (${SESSION}, ${seen.personId}, ${ORG}, 'read', now())`;
-  const res = await call(seen, "GET", `/v1/brainstorms/${SESSION}`, undefined, { "x-dude-where": TITLE });
+  const res = await router.handle(new Request(`http://dude.test/v1/brainstorms/${SESSION}`, {
+    headers: { "x-test-person": seen.personId, "x-dude-where": TITLE, "x-dude-active": "1" },
+  }));
   expect(res.status).toBe(200);
   const [row] = await owner`SELECT last_seen_where FROM people WHERE id = ${seen.personId}` as Array<{ last_seen_where: string }>;
   expect(row!.last_seen_where).toBe(SESSION_WHERE);

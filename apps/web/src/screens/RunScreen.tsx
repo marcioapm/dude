@@ -58,6 +58,7 @@ import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
 import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
+import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { DraftedComposer } from "./DraftedComposer.tsx";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, formatTimestamp, Icon } from "@dude/design-system";
@@ -172,6 +173,8 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunLeaseAcquired,
 ]);
 
+const PREPARING_EVERY_MS = 4000;
+
 export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
@@ -231,13 +234,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   }, [client, runId, statusEventCount, reconnects]);
 
   // Preparing its image: the builder's progress is not on the Run's
-  // stream, so its state is read again every few seconds until it goes.
+  // stream, so its state is read again every few seconds until it goes,
+  // while the page is shown.
   const preparing = Boolean(run?.preparingImage);
-  useEffect(() => {
-    if (!preparing) return;
-    const t = setInterval(() => void client.getRun(runId).then(setRun, () => undefined), 4000);
-    return () => clearInterval(t);
-  }, [client, runId, preparing]);
+  useVisibleInterval(() => {
+    if (preparing) void client.getRun(runId).then(setRun, () => undefined);
+  }, PREPARING_EVERY_MS);
 
   // Who drives the task is read once per task, not on every status change,
   // and apart from the Run: failing to learn it only leaves the asks

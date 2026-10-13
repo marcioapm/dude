@@ -50,6 +50,25 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 	}
 }
 
+const permissions = `"permission":{"*":"allow"}`
+
+func TestAnOpenCodeRunAllowsEveryPermissionBeforeItIsAsked(t *testing.T) {
+	var got struct {
+		Permission map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(openCodeConfig("claude-opus-5-5", "", nil, nil)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Permission["*"] != "allow" {
+		t.Errorf("permission * = %q, want allow", got.Permission["*"])
+	}
+	for key, action := range got.Permission {
+		if action != "allow" {
+			t.Errorf("permission %q = %q: a rule that is not allow lets an ask through", key, action)
+		}
+	}
+}
+
 // A Run's OpenCode config names the model under the provider its name goes
 // through, and declares it there, so a model the image's file does not list
 // still resolves; the tier's effort is the model's options.
@@ -58,13 +77,13 @@ func TestTheModelAndEffortAreInlineOpenCodeConfig(t *testing.T) {
 		model, effort string
 		want          string
 	}{
-		{"claude-opus-5-5", "high", `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
+		{"claude-opus-5-5", "high", `{"model":"llm-anthropic/claude-opus-5-5",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
 		// Not in the image's opencode.json: declared all the same.
-		{"claude-nova-7", "low", `{"model":"llm-anthropic/claude-nova-7","provider":{"llm-anthropic":{"models":{"claude-nova-7":{"options":{"effort":"low","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
-		{"gpt-5.6-sol", "max", `{"model":"llm-openai/gpt-5.6-sol","provider":{"llm-openai":{"models":{"gpt-5.6-sol":{"options":{"reasoningEffort":"max","reasoningSummary":"auto"}}}}}}`},
-		{"gemini-3.8-pro", "", `{"model":"llm-openai/gemini-3.8-pro","provider":{"llm-openai":{"models":{"gemini-3.8-pro":{"options":{"reasoningSummary":"auto"}}}}}}`},
+		{"claude-nova-7", "low", `{"model":"llm-anthropic/claude-nova-7",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-nova-7":{"options":{"effort":"low","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
+		{"gpt-5.6-sol", "max", `{"model":"llm-openai/gpt-5.6-sol",` + permissions + `,"provider":{"llm-openai":{"models":{"gpt-5.6-sol":{"options":{"reasoningEffort":"max","reasoningSummary":"auto"}}}}}}`},
+		{"gemini-3.8-pro", "", `{"model":"llm-openai/gemini-3.8-pro",` + permissions + `,"provider":{"llm-openai":{"models":{"gemini-3.8-pro":{"options":{"reasoningSummary":"auto"}}}}}}`},
 		// Only a name starting claude- is Anthropic's.
-		{"my-claude-proxy", "", `{"model":"llm-openai/my-claude-proxy","provider":{"llm-openai":{"models":{"my-claude-proxy":{"options":{"reasoningSummary":"auto"}}}}}}`},
+		{"my-claude-proxy", "", `{"model":"llm-openai/my-claude-proxy",` + permissions + `,"provider":{"llm-openai":{"models":{"my-claude-proxy":{"options":{"reasoningSummary":"auto"}}}}}}`},
 	} {
 		spec := llmSpec(tc.model, tc.effort)
 		if got := spec.Env["OPENCODE_CONFIG_CONTENT"]; got != tc.want {
@@ -94,7 +113,7 @@ func TestATiersEffortIsItsProvidersModelOptions(t *testing.T) {
 		{"gpt-6-sol", "high", `{"reasoningEffort":"high","reasoningSummary":"auto"}`},
 		{"gpt-6-sol", "max", `{"reasoningEffort":"max","reasoningSummary":"auto"}`},
 	} {
-		want := `{"model":"` + llm.Provider(tc.model) + `/` + tc.model + `","provider":{"` + llm.Provider(tc.model) +
+		want := `{"model":"` + llm.Provider(tc.model) + `/` + tc.model + `",` + permissions + `,"provider":{"` + llm.Provider(tc.model) +
 			`":{"models":{"` + tc.model + `":{"options":` + tc.options + `}}}}}`
 		if got := openCodeConfig(tc.model, tc.effort, nil, nil); got != want {
 			t.Errorf("%s at %q:\n got %s\nwant %s", tc.model, tc.effort, got, want)
@@ -107,14 +126,14 @@ func TestATiersEffortIsItsProvidersModelOptions(t *testing.T) {
 func TestATiersOptionsWinAndItsHeadersAreTheModels(t *testing.T) {
 	options := map[string]any{"effort": "xhigh", "thinking": map[string]any{"display": "omitted"}, "sendReasoning": true}
 	got := openCodeConfig("claude-opus-5-5", "high", options, nil)
-	want := `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":` +
+	want := `{"model":"llm-anthropic/claude-opus-5-5",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":` +
 		`{"effort":"xhigh","sendReasoning":true,"thinking":{"display":"omitted","type":"adaptive"}}}}}}}`
 	if got != want {
 		t.Errorf("options over effort:\n got %s\nwant %s", got, want)
 	}
 	got = openCodeConfig("gpt-6-sol", "low", map[string]any{"reasoningSummary": "detailed"},
 		map[string]string{"X-Team": "dude", "anthropic-beta": "context-1m"})
-	want = `{"model":"llm-openai/gpt-6-sol","provider":{"llm-openai":{"models":{"gpt-6-sol":{` +
+	want = `{"model":"llm-openai/gpt-6-sol",` + permissions + `,"provider":{"llm-openai":{"models":{"gpt-6-sol":{` +
 		`"headers":{"X-Team":"dude","anthropic-beta":"context-1m"},"options":{"reasoningEffort":"low","reasoningSummary":"detailed"}}}}}}`
 	if got != want {
 		t.Errorf("headers:\n got %s\nwant %s", got, want)
@@ -205,19 +224,28 @@ func TestEgressAllowsTheLLMURLsHost(t *testing.T) {
 		slices.Sort(hs)
 		return hs
 	}
-	n := egress(AgentConfig{LLMURL: "https://llmproxy.example.com:8443/v1", ToolsURL: "http://10.0.0.5:3120/mcp"}, nil)
+	n := egress(AgentConfig{LLMURL: "https://llmproxy.example.com:8443/v1", ToolsURL: "http://10.0.0.5:3120/mcp"}, nil, nil)
 	if n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"10.0.0.5/32", "llmproxy.example.com"}) {
 		t.Errorf("egress = %+v, want the LLM host and the tools", n)
 	}
-	n = egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"pypi.org"}}, nil)
+	n = egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"pypi.org"}}, nil, nil)
 	if !reflect.DeepEqual(hosts(n), []string{"llm.example", "pypi.org"}) {
 		t.Errorf("egress = %+v", n)
 	}
-	if n := egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"*"}}, nil); !n.Unrestricted {
+	if n := egress(AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"*"}}, nil, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want * to turn filtering off", n)
 	}
-	if n := egress(AgentConfig{ToolsURL: "http://10.0.0.5:3120/mcp"}, nil); !n.Unrestricted {
+	if n := egress(AgentConfig{ToolsURL: "http://10.0.0.5:3120/mcp"}, nil, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want no filtering with nothing to restrict to", n)
+	}
+	// A harness's own hosts are listed with the rest, once, and restrict
+	// nothing on their own.
+	n = egress(AgentConfig{LLMURL: "https://llm.example/v1"}, []string{"mcp.exa.ai"}, []string{"mcp.exa.ai"})
+	if n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"llm.example", "mcp.exa.ai"}) {
+		t.Errorf("egress = %+v, want the LLM host and the harness's", n)
+	}
+	if n := egress(AgentConfig{}, nil, []string{"mcp.exa.ai"}); !n.Unrestricted {
+		t.Errorf("egress = %+v, want the harness's hosts alone to restrict nothing", n)
 	}
 }
 
@@ -233,17 +261,17 @@ func TestARunsEgressIsTheOperatorsFloorAndItsOwnList(t *testing.T) {
 		return hs
 	}
 	c := AgentConfig{LLMURL: "https://llm.example/v1", Egress: []string{"mirror.internal"}}
-	n := egress(c, []string{"*.github.com", "10.60.0.0/16", "10.0.0.5", "mirror.internal", "Registry.npmjs.org"})
+	n := egress(c, []string{"*.github.com", "10.60.0.0/16", "10.0.0.5", "mirror.internal", "Registry.npmjs.org"}, nil)
 	if want := []string{"*.github.com", "10.0.0.5/32", "10.60.0.0/16", "llm.example", "mirror.internal", "registry.npmjs.org"}; n.Unrestricted ||
 		!reflect.DeepEqual(hosts(n), want) {
 		t.Errorf("egress = %v, want %v", hosts(n), want)
 	}
-	if n := egress(c, []string{"pypi.org", "*"}); !n.Unrestricted {
+	if n := egress(c, []string{"pypi.org", "*"}, nil); !n.Unrestricted {
 		t.Errorf("egress = %+v, want the Run's * to turn filtering off", n)
 	}
 	// Without a model's host, a Run's own list is still something to
 	// restrict to: only nothing anywhere leaves it unrestricted.
-	if n := egress(AgentConfig{}, []string{"pypi.org"}); n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"pypi.org"}) {
+	if n := egress(AgentConfig{}, []string{"pypi.org"}, nil); n.Unrestricted || !reflect.DeepEqual(hosts(n), []string{"pypi.org"}) {
 		t.Errorf("egress = %+v, want the Run's list", n)
 	}
 }

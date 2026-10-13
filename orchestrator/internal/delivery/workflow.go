@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -81,6 +82,10 @@ type State struct {
 	// Fix attempts per finding a person granted beyond the policy's, by
 	// sending a stuck review back to try again.
 	ExtraFixAttempts int `json:"extraFixAttempts,omitempty"`
+
+	// A person started it past its open blockers (Start anyway): the
+	// implement step's and the conductor's start guards let it through.
+	Overridden bool `json:"overridden,omitempty"`
 
 	// Which attempt at the task this delivery is: each start over is a new
 	// one, on a branch of its own. Zero from before attempts were kept here
@@ -288,7 +293,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 		Owned:       []string{"decider", "handedBack", "gateAt"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
-		Latched: []string{"draft", "gateOpened"},
+		Latched: []string{"draft", "gateOpened", "overridden"},
 		Recheck: w.recheck,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
@@ -399,6 +404,18 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// The backstop for an edge added between the start and this step: a
+	// first implementer never starts on a blocked task. Parked, not failed.
+	if !st.Overridden && st.Retries == 0 {
+		parked, err := w.s.parkIfBlocked(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if parked {
+			return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
+				SleepUntil: time.Now().Add(blockedRecheck)}, nil
+		}
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err

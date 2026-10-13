@@ -1,0 +1,358 @@
+/*
+ * Layout the mockup's pages need beyond the design system's components:
+ * the board's card slot and highlight (which `Board` would own), the task
+ * page's frame (apps/web's task screen classes are reused from app.css),
+ * the editor and the proposal's relation lines. Tokens only.
+ */
+
+.boardHost {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* -- Proposed in Board.module.css: the card's relation slot and the highlight. -- */
+.cardMarks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+:global([data-board-key][data-dimmed]) {
+  opacity: 0.35;
+}
+:global([data-board-key][data-related="self"]) {
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+:global([data-board-key][data-related="yes"]) {
+  background: var(--ds-color-active-wash);
+}
+:global([data-board-key]) {
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+
+/* -- The task page's additions -- */
+/* On a phone the header's actions take a line of their own under the crumbs,
+   so a refused start, its reason and Start anyway never squeeze the path. */
+@media (max-width: 640px) {
+  .top {
+    flex-wrap: wrap;
+  }
+  .top > :first-child {
+    flex-basis: 100%;
+  }
+}
+.blockedNote b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.keyMono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.callLine {
+  margin: var(--ds-space-2) 0 0;
+  color: var(--ds-color-text-secondary);
+}
+.callAuto {
+  margin: var(--ds-space-6) 0 0;
+}
+
+/* -- The override dialog's list of blockers -- */
+.blockerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.blockerList li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+.blockerTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-strong);
+}
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.dialogBody p {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+.dialogBody .dialogNote {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.unmergedWord {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.stackedWord {
+  margin-left: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.laterTitle {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+
+/* -- The board card's start: a sibling of the card in its list item, never
+   inside it, drawn at the right end of the card's foot. -- */
+.cardStart {
+  position: absolute;
+  right: var(--ds-space-card-pad);
+  bottom: var(--ds-space-card-pad);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+}
+/* The foot's words stop short of the start, so neither covers the other. */
+:global([data-board-key][data-has-start] > span:last-child) {
+  padding-right: 76px;
+}
+.cardAuto {
+  display: flex;
+  min-width: 0;
+}
+
+/* -- The relation editor: kind, then the task, then its error; on the chrome shade, under the head. -- */
+.editor {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--ds-space-8) var(--ds-space-12);
+  align-items: end;
+  padding: var(--ds-space-12);
+  background: var(--ds-color-chrome);
+}
+@media (max-width: 640px) {
+  .editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.editorFull {
+  grid-column: 1 / -1;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  width: 100%;
+}
+.optionTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.optionProject {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.problem {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-danger-fg);
+}
+.cycle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-family: var(--ds-font-mono);
+  color: var(--ds-color-text-primary);
+}
+
+/* -- The session: its column of turns. -- */
+.session {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.sessionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: 60px;
+  padding: var(--ds-space-8) var(--ds-space-chat-pad-x);
+}
+.sessionTitle {
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.sessionMeta {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.turns {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: var(--ds-space-24);
+}
+.turnInset {
+  padding: 0 var(--ds-space-chat-pad-x) 0 calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+}
+
+/* -- Proposal card with relations (Brainstorm.module.css's anatomy) -- */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-raised);
+  border-radius: var(--ds-radius-float);
+  max-width: 860px;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+}
+.order {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.orderNo {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.item {
+  display: grid;
+  grid-template-columns: 20px 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+}
+.item:hover {
+  background: var(--ds-color-hover-wash);
+}
+.tick {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--ds-tone-success-fg);
+}
+.itemNo {
+  composes: orderNo;
+  margin-top: 2px;
+}
+.itemBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.itemTitle {
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-md);
+}
+.itemDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.blocked .itemTitle,
+.blocked .itemDetail {
+  color: var(--ds-color-text-muted);
+}
+.itemRels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.itemRel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.itemRel b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.note {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.cardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-12);
+}
+.footWords {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- History: the task's Chat head and its lines. -- */
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-32);
+  max-width: 980px;
+}
+.historyLabel {
+  margin: var(--ds-space-16) 0 0;
+}

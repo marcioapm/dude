@@ -48,8 +48,14 @@ var brainstormTools = []tool{
 		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task, "+
 		"and notes for an epic: a new epic's notes, or a note on an existing one. A note is a short working fact every "+
 		"agent on the epic must follow (a contract, a decision, where the docs are); you never pin one yourself. "+
+		"A task item may say what it waits on and holds up (blockedBy, blocks, related): an existing task as "+
+		"{\"key\": \"BL-41\"}, or another item of this proposal as {\"item\": 1}, numbered from 1 as the card numbers "+
+		"them. Work out the order: filing a task files what it waits on with it. "+
 		"You never create, edit or comment yourself. A new proposal replaces the card.",
 		brainstorms, propose).limit(createsPerRun),
+	define("relate", "Propose a relation between two existing tasks of linked projects, for a member to file: "+
+		"from blocks to (to can't start until from is merged), or related. You never write it yourself.",
+		brainstorms, relate).limit(createsPerRun),
 	define("ask_person", askDescription+" Then end your turn: the answers are your next message. With to (a member's "+
 		"name), only that member can answer; what others say meanwhile reaches you with the answer.", brainstorms, sessionAsk),
 	define("name_session", "Name this session: one line of plain words, at most 60 characters, once its subject is "+
@@ -131,7 +137,7 @@ func sessionListTasks(ctx context.Context, tx pgx.Tx, c Caller, in sessionListTa
 	if err != nil {
 		return listTasksOut{}, err
 	}
-	return projectTasks(ctx, tx, inProject(c, p.ID), in.Text)
+	return projectTasks(ctx, tx, inProject(c, p.ID), in.Text, false)
 }
 
 func sessionListEpics(ctx context.Context, tx pgx.Tx, c Caller, in projectIn) ([]epicOut, error) {
@@ -360,7 +366,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory
 }
 
 type proposeIn struct {
-	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description, notes?: [text]} (notes: working facts every agent on the epic must follow, pinned as its notes 1, 2, … when filed); {kind: task, project, epic?, title, goal, acceptanceCriteria}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}; {kind: note, project, epic, text, replaces?} (a note on an existing epic, or one proposed before it; replaces: the number of a current note it replaces)"`
+	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description, notes?: [text]} (notes pinned when filed); {kind: task, project, epic?, title, goal, acceptanceCriteria, blockedBy?, blocks?, related?}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}; {kind: note, project, epic, text, replaces?} (replaces: a current note's number)"`
 }
 
 type proposeOut struct {
@@ -500,8 +506,145 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		}
 		items[i] = item
 	}
+	if err := checkProposalRelations(ctx, tx, linkedIDs, items); err != nil {
+		return proposeOut{}, err
+	}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
 	return proposeOut{ProposalID: id, Next: "The card is in the session. A member files what they keep, as themselves; " +
+		"you are not told unless they say so."}, err
+}
+
+// checkProposalRelations holds a proposal's relations to what filing can
+// write: a task item's refs name an existing task of a linked project or
+// another task item of the proposal, never itself; and the proposal's own
+// blocks edges make no loop, so a card never shows one.
+func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, items []delivery.ProposalItem) error {
+	for i := range items {
+		it := &items[i]
+		n := i + 1
+		for _, side := range []struct {
+			name string
+			refs []delivery.ProposalRef
+		}{{"blockedBy", it.BlockedBy}, {"blocks", it.Blocks}, {"related", it.Related}} {
+			if len(side.refs) > 0 && it.Kind != "task" {
+				return refuse("item %d: only a task item has relations; relate existing tasks with relate", n)
+			}
+			for j, r := range side.refs {
+				switch {
+				case r.Item != 0 && r.Key != "":
+					return refuse("item %d: %s names a task by key or by item, not both", n, side.name)
+				case r.Item == n:
+					return refuse("item %d: %s names itself", n, side.name)
+				case r.Item != 0 && (r.Item < 0 || r.Item > len(items) || items[r.Item-1].Kind != "task"):
+					return refuse("item %d: %s names item %d, which is not a task of this proposal", n, side.name, r.Item)
+				case r.Item == 0:
+					id, _, err := delivery.TaskByKey(ctx, tx, linked, r.Key)
+					if err != nil {
+						return err
+					}
+					if id == "" {
+						return refuse("item %d: %s names %s, which is not a task of a linked project", n, side.name, r.Key)
+					}
+					k, _ := delivery.TaskKey(r.Key)
+					side.refs[j].Key = k
+				}
+			}
+		}
+	}
+	// A loop among the items: walk each item's in-proposal blockers.
+	state := make([]int, len(items)) // 0 unseen, 1 on the path, 2 done
+	var path []int
+	var visit func(i int) []int
+	visit = func(i int) []int {
+		state[i] = 1
+		path = append(path, i)
+		for _, b := range delivery.ItemBlockers(items, i) {
+			if state[b] == 1 {
+				start := slices.Index(path, b)
+				return append(slices.Clone(path[start:]), b)
+			}
+			if state[b] == 0 {
+				if loop := visit(b); loop != nil {
+					return loop
+				}
+			}
+		}
+		path = path[:len(path)-1]
+		state[i] = 2
+		return nil
+	}
+	for i := range items {
+		if state[i] != 0 {
+			continue
+		}
+		if loop := visit(i); loop != nil {
+			words := make([]string, len(loop))
+			for k, x := range loop {
+				words[k] = fmt.Sprintf("item %d", x+1)
+			}
+			return refuse("the items wait on each other in a loop: %s. Propose them in an order", strings.Join(words, " waits on "))
+		}
+	}
+	return nil
+}
+
+// ---- relate (brainstorm) ----------------------------------------------
+
+type relateIn struct {
+	From string `json:"from" jsonschema:"an existing task's key (BL-41) in a linked project"`
+	To   string `json:"to" jsonschema:"another existing task's key in a linked project"`
+	Kind string `json:"kind" jsonschema:"blocks (from can't let to start until from is merged) or related"`
+	Why  string `json:"why,omitempty" jsonschema:"why, for the member who files it and the tasks' history"`
+}
+
+// relate proposes a relation between existing tasks, as a card item a
+// member files: a brainstorm never writes one itself. Each call is a card
+// of its own, as propose's are.
+func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, error) {
+	projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
+	if err != nil {
+		return proposeOut{}, err
+	}
+	linked := make([]string, len(projects))
+	for i, p := range projects {
+		linked[i] = p.ID
+	}
+	kind := strings.TrimSpace(in.Kind)
+	if kind != "blocks" && kind != "related" {
+		return proposeOut{}, refuse("kind is blocks or related")
+	}
+	var keys [2]string
+	var taskIDs [2]string
+	for i, k := range []string{in.From, in.To} {
+		id, _, err := delivery.TaskByKey(ctx, tx, linked, k)
+		if err != nil {
+			return proposeOut{}, err
+		}
+		if id == "" {
+			return proposeOut{}, refuse("%s is not a task of a linked project", k)
+		}
+		keys[i], _ = delivery.TaskKey(k)
+		taskIDs[i] = id
+	}
+	if taskIDs[0] == taskIDs[1] {
+		return proposeOut{}, refuse("a task can't be related to itself")
+	}
+	if kind == "blocks" {
+		var loop []string
+		if err := tx.QueryRow(ctx, `SELECT task_relation_would_cycle($1, $2)`, taskIDs[0], taskIDs[1]).Scan(&loop); err != nil {
+			return proposeOut{}, err
+		}
+		if loop != nil {
+			return proposeOut{}, refuse("that would make a loop: %s. A task can't wait on itself", strings.Join(loop, " → "))
+		}
+	}
+	why := strings.TrimSpace(in.Why)
+	if len(why) > 2000 {
+		return proposeOut{}, refuse("why: at most 2000 characters")
+	}
+	item := delivery.ProposalItem{Kind: "relation", From: keys[0], To: keys[1], RelationKind: kind, Why: why}
+	id, err := delivery.RecordProposal(ctx, tx, c.run(), []delivery.ProposalItem{item})
+	return proposeOut{ProposalID: id, Next: "The relation is on a card in the session. A member files it, as themselves; " +
 		"you are not told unless they say so."}, err
 }
 

@@ -19,8 +19,8 @@
 
 import { peopleJson } from "./people.ts";
 import { escalationJson } from "./work.ts";
-import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, isConductor, runLabel } from "@dude/domain";
-import type { Escalation, PersonRef, RunStatus, SessionStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, isConductor, runLabel } from "@dude/domain";
+import type { Escalation, PersonRef, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -52,6 +52,7 @@ interface TaskRow {
   people: PersonRef[];
   statusSince: string;
   escalation: Escalation | null;
+  merged: boolean;
 }
 
 interface RunRow {
@@ -110,6 +111,61 @@ function sessionStatus(r: RunRow): SessionStatus {
   return SESSION_STATUS[r.status];
 }
 
+interface EdgeRow {
+  fromId: string;
+  toId: string;
+  kind: "blocks" | "related";
+  fromKey: string;
+  fromTitle: string;
+  fromStatus: TaskStatus;
+  fromProject: string;
+  fromProjectName: string;
+  fromMerged: boolean;
+  toKey: string;
+  toTitle: string;
+  toStatus: TaskStatus;
+  toProject: string;
+  toProjectName: string;
+}
+
+interface Related {
+  key: string;
+  title: string;
+  status: TaskStatus;
+  project?: string;
+  unmerged?: boolean;
+}
+
+/**
+ * Each task's relations, from both ends of every edge: its blockers (open
+ * unless merged), the tasks it blocks (open while they have not started),
+ * and the keys it is related to. A task of another project is named with
+ * its project; done with nothing merged is said.
+ */
+function relationsByTask(edges: EdgeRow[]) {
+  const out = new Map<string, { blockedBy: Array<{ task: Related; open: boolean }>; blocks: Array<{ task: Related; open: boolean }>; related: string[] }>();
+  const of = (id: string) => {
+    let r = out.get(id);
+    if (!r) out.set(id, (r = { blockedBy: [], blocks: [], related: [] }));
+    return r;
+  };
+  for (const e of edges) {
+    if (e.kind === "related") {
+      of(e.fromId).related.push(e.toKey);
+      of(e.toId).related.push(e.fromKey);
+      continue;
+    }
+    const from: Related = { key: e.fromKey, title: e.fromTitle, status: e.fromStatus,
+      ...(e.fromProject !== e.toProject ? { project: e.fromProjectName } : {}),
+      ...(e.fromStatus === "done" && !e.fromMerged ? { unmerged: true } : {}) };
+    const to: Related = { key: e.toKey, title: e.toTitle, status: e.toStatus,
+      ...(e.fromProject !== e.toProject ? { project: e.toProjectName } : {}) };
+    of(e.toId).blockedBy.push({ task: from, open: !e.fromMerged });
+    of(e.fromId).blocks.push({ task: to, open: NOT_STARTED_STATUSES.includes(e.toStatus) });
+  }
+  return out;
+}
+
 /** Group rows by a key, preserving the order the query returned them in. */
 function groupBy<T, K extends string | number | null>(rows: T[], key: (row: T) => K): Map<K, T[]> {
   const out = new Map<K, T[]>();
@@ -145,7 +201,10 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
                w.created_at
-             ) AS "statusSince"
+             ) AS "statusSince",
+             -- Merged: done, with a merged pull request (task_blocked_by's
+             -- rule). Per row, through pull_requests_task_idx.
+             w.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = w.id AND pr.state = 'merged') AS merged
       FROM tasks w JOIN projects p ON p.id = w.project_id
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
 
@@ -195,9 +254,29 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
       WHERE r.kind = 'agent' AND r.task_id IS NOT NULL
       GROUP BY r.task_id`) as Array<{ taskId: string; costUsd: number }>;
 
+    // Relations: every edge between the tasks read, with what each end is
+    // (merged: done with a merged pull request, the rule task_blocked_by
+    // reads), and the starts when unblocked set. One query each.
+    const edges = (await sql`
+      SELECT r.from_task_id AS "fromId", r.to_task_id AS "toId", r.kind,
+        fp.key_prefix || '-' || f.number AS "fromKey", f.title AS "fromTitle", f.status AS "fromStatus", f.project_id AS "fromProject",
+        fp.name AS "fromProjectName",
+        f.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = f.id AND pr.state = 'merged') AS "fromMerged",
+        tp.key_prefix || '-' || t.number AS "toKey", t.title AS "toTitle", t.status AS "toStatus", t.project_id AS "toProject",
+        tp.name AS "toProjectName"
+      FROM task_relations r
+      JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id
+      JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id
+      ORDER BY r.created_at`) as EdgeRow[];
+    const autoStarts = (await sql`
+      SELECT a.task_id AS "taskId", a.how, a.set_at AS at, person_ref(p) AS by
+      FROM task_auto_starts a JOIN people p ON p.id = a.set_by_person`) as Array<{ taskId: string; how: "deliver" | "talk"; at: string; by: PersonRef }>;
+
     // -- assemble ----------------------------------------------------------
 
     const costByTask = new Map(costs.map((c) => [c.taskId, c.costUsd]));
+    const relations = relationsByTask(edges);
+    const autoByTask = new Map(autoStarts.map((a) => [a.taskId, a]));
     const runsByTask = groupBy(runs, (r) => r.taskId);
     const tasksByEpic = groupBy(tasks, (w) => w.epicId);
     const tasksByProject = groupBy(
@@ -208,6 +287,12 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
 
     const buildTask = (w: TaskRow) => {
       const attempts = groupBy(runsByTask.get(w.id) ?? [], (r) => r.attempt);
+      const rel = relations.get(w.id);
+      const notStarted = NOT_STARTED_STATUSES.includes(w.status as TaskStatus);
+      // A chip is only for a task that hasn't started; a started one keeps its edges for the hover.
+      const blockedBy = notStarted ? (rel?.blockedBy ?? []).filter((b) => b.open).map((b) => b.task) : [];
+      const blocks = (rel?.blocks ?? []).filter((b) => b.open).map((b) => b.task);
+      const auto = autoByTask.get(w.id);
       return {
         id: w.id,
         key: w.key,
@@ -220,6 +305,16 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
         people: w.people,
         // Why delivery stopped for a person, so "Needs you" can say it.
         escalation: w.escalation,
+        merged: w.merged,
+        blockedBy,
+        // What it holds up: not-started dependants, while it has not merged.
+        blocks: w.merged ? [] : blocks,
+        edges: { blockedBy: (rel?.blockedBy ?? []).map((b) => b.task.key), blocks: (rel?.blocks ?? []).map((b) => b.task.key),
+          related: rel?.related ?? [] },
+        startable: notStarted && blockedBy.length === 0,
+        autoStart: notStarted && auto ? { how: auto.how, by: auto.by, at: auto.at } : null,
+        // Any member may start a task (the deliver and talk routes' callers).
+        canStart: notStarted,
         runs: [...attempts.entries()].map(([attempt, phaseRuns]) => ({
           // The attempt's id is its first Run's, so selecting the attempt
           // row can still land on a real Run.

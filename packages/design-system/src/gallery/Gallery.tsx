@@ -14,6 +14,7 @@ import { ChatSection } from "./sections/Chat.tsx";
 import { PeersSection } from "./sections/Peers.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
+import { RelationsSection } from "./sections/Relations.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
@@ -159,6 +160,24 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["board-swimlanes", "Group by epic"],
       ["board-composed", "Beside the sidebar"],
       ["board-states", "Board states"],
+    ],
+  ],
+  [
+    "Task relations",
+    [
+      ["rel-icons", "Icons: lock, blocks"],
+      ["rel-chip", "RelationChip"],
+      ["rel-board", "Board: marks, start, filter"],
+      ["rel-board-lit", "Board: lit relations"],
+      ["rel-board-filter", "Board: filter, readers"],
+      ["rel-startmenu", "StartMenu"],
+      ["rel-gate", "StartGate"],
+      ["rel-auto", "AutoStartMark"],
+      ["rel-dialogs", "Start anyway / AutoStartDialog"],
+      ["rel-list", "RelationList / RelationRow"],
+      ["rel-picker", "RelationPicker"],
+      ["rel-strip", "DependencyStrip"],
+      ["rel-proposal", "ProposalCard: relations"],
     ],
   ],
   [
@@ -314,6 +333,7 @@ function Shell() {
           <PeersSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
+          <RelationsSection mode={panes} />
           <SettingsGallerySection mode={panes} />
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />

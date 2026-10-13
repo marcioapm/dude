@@ -349,6 +349,9 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 		}
 		sections = append(sections, b.String())
 	}
+	if in.Anywhere {
+		sections = append(sections, brainstormWebNote)
+	}
 	if in.Tools {
 		sections = append(sections, brainstormToolsNote, brainstormNamingNote)
 	}
@@ -366,6 +369,13 @@ const brainstormToolsNote = "The dude tools read the linked projects: list_tasks
 	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
 	"and what others say meanwhile reaches you with the answer."
+
+// brainstormWebNote is said only to a brainstorm whose network is
+// unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
+// or "*" in either list. It is dude's, after the instructions, so an
+// organisation's own prompt does not drop it.
+const brainstormWebNote = "You can read the web: search for and fetch public pages when the conversation needs " +
+	"facts from outside the linked repositories. Say where each fact came from, with its URL."
 
 // brainstormNamingNote is when the agent names its session. The rule
 // that a person's name stays is name_session's own, not only these words.
@@ -559,7 +569,7 @@ func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string)
 // Proposal items (session_proposals.items), each one thing the card asks
 // a member to file.
 type ProposalItem struct {
-	// epic, task, edit, comment or note.
+	// epic, task, edit, comment, note or relation.
 	Kind string `json:"kind"`
 	// The project, by key (epic, task, note).
 	Project string `json:"project,omitempty"`
@@ -581,6 +591,54 @@ type ProposalItem struct {
 	Text string `json:"text,omitempty"`
 	// note: the number of the note it replaces on Epic.
 	Replaces int `json:"replaces,omitempty"`
+	// task: what it waits on, holds up, and relates to — an existing
+	// task's key, or another item of this proposal.
+	BlockedBy []ProposalRef `json:"blockedBy,omitempty"`
+	Blocks    []ProposalRef `json:"blocks,omitempty"`
+	Related   []ProposalRef `json:"related,omitempty"`
+	// relation: From (Kind) To, existing tasks by key; Why for the history.
+	From         string `json:"from,omitempty"`
+	To           string `json:"to,omitempty"`
+	RelationKind string `json:"relationKind,omitempty"`
+	Why          string `json:"why,omitempty"`
+}
+
+// ProposalRef names a task a proposed item relates to: an existing one by
+// key ("CP-41"), or an item of the same proposal by its number, 1-based
+// as the card numbers them ({"item": 1}).
+type ProposalRef struct {
+	Key  string `json:"key,omitempty"`
+	Item int    `json:"item,omitempty"`
+}
+
+// UnmarshalJSON takes a key as a bare string, or {"item": n}.
+func (r *ProposalRef) UnmarshalJSON(b []byte) error {
+	var key string
+	if json.Unmarshal(b, &key) == nil {
+		r.Key = key
+		return nil
+	}
+	type plain ProposalRef
+	return json.Unmarshal(b, (*plain)(r))
+}
+
+// ItemBlockers are the in-proposal items (0-based) that item waits on:
+// its own blockedBy items, and the items that say they block it.
+func ItemBlockers(items []ProposalItem, n int) []int {
+	var out []int
+	for _, r := range items[n].BlockedBy {
+		if r.Item > 0 {
+			out = append(out, r.Item-1)
+		}
+	}
+	for i, it := range items {
+		for _, r := range it.Blocks {
+			if r.Item == n+1 {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
 }
 
 // TaskText is a task's goal and criteria, either or both.

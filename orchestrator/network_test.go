@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -43,14 +44,15 @@ func rules(n lux.Network) (out []string) {
 }
 
 // A Run reaches its organisation's list and its project's additions, with
-// the operator's floor and its model, and records what it was given.
+// the operator's floor, its model and, on OpenCode, Exa's search, and
+// records what it was given.
 func TestARunReachesItsOrganisationsAndProjectsLists(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.Agent.Egress = []string{"mirror.internal"}
 	mustExec(t, w.owner, `UPDATE organizations SET agent_egress = '{github.com,*.github.com,10.60.0.0/16}' WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `UPDATE projects SET agent_egress = '{pypi.org,github.com}' WHERE id = $1`, w.project)
 	sent, recorded := w.submittedNetwork()
-	want := []string{"*.github.com", "10.60.0.0/16", "github.com", "llm.example", "mirror.internal", "pypi.org"}
+	want := []string{"*.github.com", "10.60.0.0/16", "github.com", "llm.example", "mcp.exa.ai", "mirror.internal", "pypi.org"}
 	if got := rules(sent); sent.Unrestricted || !slices.Equal(got, want) {
 		t.Errorf("egress = %v, want %v", got, want)
 	}
@@ -67,7 +69,7 @@ func TestAProjectOnItsOwnListLeavesItsOrganisationsOut(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE organizations SET agent_egress = '{github.com}' WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `UPDATE projects SET agent_egress = '{pypi.org}', agent_egress_mode = 'only' WHERE id = $1`, w.project)
 	sent, _ := w.submittedNetwork()
-	if got, want := rules(sent), []string{"llm.example", "mirror.internal", "pypi.org"}; !slices.Equal(got, want) {
+	if got, want := rules(sent), []string{"llm.example", "mcp.exa.ai", "mirror.internal", "pypi.org"}; !slices.Equal(got, want) {
 		t.Errorf("egress = %v, want %v", got, want)
 	}
 }
@@ -81,8 +83,8 @@ func TestAnOrganisationsAnywhereIsUnrestricted(t *testing.T) {
 	}
 }
 
-// A session's agent reaches its organisation's list and its model, and no
-// project's list: a session spans projects.
+// A session's agent reaches its organisation's list, its model and Exa's
+// search, and no project's list: a session spans projects.
 func TestASessionReachesItsOrganisationsList(t *testing.T) {
 	s := newSessionWorld(t)
 	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
@@ -100,24 +102,56 @@ func TestASessionReachesItsOrganisationsList(t *testing.T) {
 	if v.spec.Network == nil {
 		t.Fatal("no network")
 	}
-	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+	if got, want := rules(*v.spec.Network), []string{"llm.example", "mcp.exa.ai", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
 		t.Errorf("egress = %v, want %v", got, want)
 	}
-	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
-		t.Error("OPENCODE_ENABLE_EXA set on a brainstorm on its organisation's list: mcp.exa.ai would be refused")
+	if got := v.spec.Env["OPENCODE_ENABLE_EXA"]; got != "1" {
+		t.Errorf("OPENCODE_ENABLE_EXA = %q on a brainstorm on its organisation's list, want 1", got)
+	}
+}
+
+// Exa's host is OpenCode's alone: a session's agent on Claude Code or Codex
+// is submitted with, and records, its list and model only.
+func TestOnlyOpenCodeRunsReachExa(t *testing.T) {
+	for harness, model := range map[string]string{"claude-code": "claude-think", "codex": "gpt-6-sol"} {
+		t.Run(harness, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.lux.Decide = hang
+			mustExec(t, s.owner, `UPDATE model_tiers SET model = $2 WHERE organization_id = $1 AND name = 'Thinker'`, s.org, model)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}' WHERE id = $1`, s.org)
+			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "hello", "harness": harness})["id"].(string)
+			run, _, _, on := s.submitted(id)
+			v := s.luxRun(run)
+			if on != harness || v.spec.Network == nil {
+				t.Fatalf("submitted on %s with network %+v", on, v.spec.Network)
+			}
+			want := []string{"llm.example", "pypi.org"}
+			if got := rules(*v.spec.Network); v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+				t.Errorf("egress = %v, want %v", got, want)
+			}
+			var raw []byte
+			s.until("the network to be recorded", func() bool {
+				_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, run).Scan(&raw)
+				return raw != nil
+			})
+			var recorded lux.Network
+			if err := json.Unmarshal(raw, &recorded); err != nil || !slices.Equal(rules(recorded), want) {
+				t.Errorf("recorded = %s (%v), want %v", raw, err, want)
+			}
+		})
 	}
 }
 
 // An organisation that lets brainstorms read the web: its session's agent
-// reaches any host, whatever its list says, with OpenCode's websearch on,
-// and records that; a task's Run of the same organisation keeps the list.
+// reaches any host, whatever its list says, and records that; a task's Run
+// of the same organisation keeps the list.
 func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	s := newSessionWorld(t)
 	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
 	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
 
 	sent, recorded := s.submittedNetwork()
-	if got, want := rules(sent), []string{"llm.example", "pypi.org"}; sent.Unrestricted || !slices.Equal(got, want) || recorded.Unrestricted {
+	if got, want := rules(sent), []string{"llm.example", "mcp.exa.ai", "pypi.org"}; sent.Unrestricted || !slices.Equal(got, want) || recorded.Unrestricted {
 		t.Errorf("the implementer's network = %+v (recorded %+v), want %v", sent, recorded, want)
 	}
 
@@ -136,6 +170,9 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if got := v.spec.Env["OPENCODE_ENABLE_EXA"]; got != "1" {
 		t.Errorf("OPENCODE_ENABLE_EXA = %q, want 1", got)
 	}
+	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the brainstorm that may reach any host is not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
 	var raw []byte
 	s.until("the brainstorm's network to be recorded", func() bool {
 		_ = s.owner.QueryRow(context.Background(), `SELECT network FROM runs WHERE id = $1`, id).Scan(&raw)
@@ -146,7 +183,7 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 		t.Errorf("recorded = %s (%v), want unrestricted", raw, err)
 	}
 
-	// Turned off: the session's next agent keeps to the list, with no Exa.
+	// Turned off: the session's next agent keeps to the list.
 	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
 	mustExec(t, s.owner, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, id)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": "and their free tiers?"})
@@ -156,10 +193,49 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 		v = s.luxRun(next)
 		return next != id && v != nil
 	})
-	if got, want := rules(*v.spec.Network), []string{"llm.example", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
+	if got, want := rules(*v.spec.Network), []string{"llm.example", "mcp.exa.ai", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
 		t.Errorf("the next brainstorm's network = %+v, want %v", v.spec.Network, want)
 	}
-	if _, exa := v.spec.Env["OPENCODE_ENABLE_EXA"]; exa {
-		t.Error("OPENCODE_ENABLE_EXA set on the brainstorm started after the setting was turned off")
+	if strings.Contains(v.spec.Workload.Prompt, webNote) {
+		t.Errorf("the brainstorm started after the setting was turned off is told it can read the web:\n%s", v.spec.Workload.Prompt)
+	}
+}
+
+// webNote opens what a brainstorm that may reach any host is told.
+const webNote = "You can read the web: search for and fetch public pages"
+
+// "*" in the organisation's or the operator's list makes a brainstorm
+// unrestricted with the setting off, and that counts as reaching any host
+// from its first prompt: it is told it can read the web, and Codex is
+// pinned to search live over its tier's web_search=disabled.
+func TestABrainstormMadeUnrestrictedByAStarIsToldItCanReadTheWeb(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		org      []string
+		operator []string
+	}{
+		{"the organisation's list", []string{"pypi.org", "*"}, nil},
+		{"the operator's list", []string{"pypi.org"}, []string{"*"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSessionWorld(t)
+			s.syncer.Agent.Egress = c.operator
+			s.lux.Decide = hang
+			mustExec(t, s.owner, `UPDATE model_tiers SET model = 'gpt-6-sol', options = '{"args":["-c","web_search=disabled"]}'
+				WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+			mustExec(t, s.owner, `UPDATE organizations SET agent_egress = $2, brainstorm_anywhere = false WHERE id = $1`, s.org, c.org)
+			id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?", "harness": "codex"})["id"].(string)
+			run, _, _, harness := s.submitted(id)
+			v := s.luxRun(run)
+			if harness != "codex" || v.spec.Network == nil || !v.spec.Network.Unrestricted {
+				t.Fatalf("submitted on %s with network %+v, want codex unrestricted", harness, v.spec.Network)
+			}
+			if !strings.Contains(v.spec.Workload.Prompt, webNote) {
+				t.Errorf("not told it can read the web:\n%s", v.spec.Workload.Prompt)
+			}
+			if !codexSearchesLive(t, v.spec.Secrets) {
+				t.Error("Codex not pinned to search live")
+			}
+		})
 	}
 }

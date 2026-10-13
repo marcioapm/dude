@@ -15,8 +15,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
 import { Duration, ROLE_LABEL } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
-import { runLabel, type PersistedEvent } from "@dude/domain";
-import type { ApiClient, RecoverAction, RecoveryOptions, Run, TaskDetail } from "../api/client.ts";
+import { blockedRefusal, runLabel, type PersistedEvent } from "@dude/domain";
+import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail } from "../api/client.ts";
 import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
@@ -194,6 +194,8 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Start over refused as blocked: a person may start it over anyway.
+  const [refused, setRefused] = useState(false);
   useEffect(() => setAction(initial), [initial]);
   // Who it was — the implementer, the reviewer — not what it did: "Resume the implementer".
   const role = stop.run?.role ? ROLE_LABEL[stop.run.role].toLowerCase() : "agent";
@@ -210,14 +212,16 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
     { value: "retry", icon: "retry", label: `Try again with a new ${role}`, description: "Same branch, from what was pushed. Nothing it was thinking comes along.", disabledReason: reason("retry") },
     { value: "restart", icon: "git-branch", label: `Start over as attempt ${options.attempt + 1}`, description: "A new branch from the default branch, and the whole pipeline again.", disabledReason: reason("restart") },
   ];
-  const go = async () => {
+  const go = async (override = false) => {
     setBusy(true);
     setProblem(null);
     try {
-      await client.recover(task.id, action, note.trim());
+      await client.recover(task.id, action, note.trim(), override ? { override: true } : {});
       onDone(action);
     } catch (err) {
-      setProblem(errorText(err));
+      const blocked = refusedBlockers(err);
+      setRefused(blocked !== null && action === "restart");
+      setProblem(blocked && blocked.length > 0 ? blockedRefusal(task.key ?? "This task", blocked) : errorText(err));
     } finally {
       setBusy(false);
     }
@@ -229,6 +233,9 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
       footer={
         <>
           <Button variant="quiet" onClick={onClose}>Cancel</Button>
+          {refused && action === "restart" ? (
+            <Button variant="secondary" disabled={busy} onClick={() => void go(true)} data-testid="recover-anyway">Start over anyway</Button>
+          ) : null}
           <Button variant="primary" loading={busy} disabled={busy || !open.has(action)} onClick={() => void go()} data-testid="recover-confirm">
             {GO[action](role, options.attempt)}
           </Button>
