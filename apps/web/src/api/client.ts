@@ -159,6 +159,8 @@ export type ForgeConnection =
       /** A GitHub App's id, and its default installation (none: found per repository owner). */
       appId?: string | null;
       installationId?: string | null;
+      oauthClientId?: string | null;
+      oauthClientSecretConfigured?: boolean;
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;
@@ -204,6 +206,9 @@ export interface GithubAppInput {
   privateKey: string;
   appId: string;
   installationId?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  clearOauthClientSecret?: boolean;
 }
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
@@ -590,7 +595,20 @@ export class ApiClient {
   /** Store the organization's GitHub App: its webhook is the App's own, so nothing is registered. */
   connectGithubApp(app: GithubAppInput, apiBaseUrl?: string): Promise<unknown> {
     return this.#request("POST", "/v1/forge/credential", { auth: "github_app", secret: app.privateKey, appId: app.appId,
-      installationId: app.installationId || null, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+      installationId: app.installationId || null, oauthClientId: app.oauthClientId, oauthClientSecret: app.oauthClientSecret,
+      clearOauthClientSecret: app.clearOauthClientSecret, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+  }
+
+  githubAuthorization(): Promise<{ available: boolean; connection: { login: string; expiresAt: string; refreshExpiresAt: string; reconnectRequired: boolean } | null }> {
+    return this.#request("GET", "/v1/me/github");
+  }
+
+  connectGithub(): Promise<{ url: string }> {
+    return this.#request("POST", "/v1/me/github/connect", {});
+  }
+
+  disconnectGithub(): Promise<void> {
+    return this.#request("DELETE", "/v1/me/github");
   }
 
   githubSettings(): Promise<GithubSettings> {

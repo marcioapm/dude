@@ -953,9 +953,16 @@ everything else is revalidated.
 
 ### Stored in the database, not configured
 
-Organizations' GitHub credentials and webhook secrets (entered through the
-API, stored in plaintext today), people's API keys (hashed), and the VAPID
-keys when they are not configured.
+Organizations' GitHub credentials, GitHub App OAuth client secrets, people's
+GitHub App user access and refresh tokens, and webhook secrets (entered
+through the API, stored in plaintext today under row-level security), people's
+API keys (hashed), and the VAPID keys when they are not configured.
+
+For App pull requests as the task owner, register
+`<auth.public_url>/v1/me/github/callback` as the App callback, configure its
+Client ID and client secret, and enable expiring user authorization tokens.
+GitHub delivers `github_app_authorization` to the App automatically. The
+callback requires the same logged-in person who started the connection.
 
 ## Health
 

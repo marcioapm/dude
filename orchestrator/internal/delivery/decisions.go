@@ -181,6 +181,11 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	}
 	st.Decider = decider
 	if decider != DeciderConductor || res.Next != r.Next {
+		if res.Next == "openPullRequest" && !st.GateRequired {
+			if err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch); err != nil {
+				return res, false, err
+			}
+		}
 		return res, true, nil
 	}
 	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
@@ -353,6 +358,9 @@ type GateAt struct {
 // AuthorizeGateTx records the gate's authorization at st's heads, in the
 // row (gateAt is owned: a step's transition keeps the row's).
 func AuthorizeGateTx(ctx context.Context, tx pgx.Tx, wfID string, st *State, draft bool) error {
+	if err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch); err != nil {
+		return err
+	}
 	st.GateAt = &GateAt{Heads: nonNilMap(st.Heads), Draft: draft}
 	raw, err := json.Marshal(st.GateAt)
 	if err != nil {
