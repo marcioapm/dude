@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -256,7 +255,7 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if !ok {
 			return fail(409, "no_size", "no settings machine size is available")
 		}
-		var runID, live, status, control string
+		var runID, live, status string
 		var current *delivery.Machine
 		// A settings role's Runs: a phase's (fixer is phase fix, not every
 		// role='implementer' Run), else the conductor's or brainstorm's,
@@ -264,10 +263,10 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		// Only the newest live Run of the role is moved; any other (a second
 		// reviewer) takes the settings' size at its next resume.
 		phase := delivery.PhaseForPromptRole(body.Role)
-		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, control, machine FROM runs
+		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, machine FROM runs
 			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','scheduled','starting')
 				AND CASE WHEN $4 = '' THEN phase IS NULL AND role::text=$3 ELSE phase::text=$4 END
-			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, phase).Scan(&runID, &live, &status, &control, &current)
+			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, phase).Scan(&runID, &live, &status, &current)
 		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
@@ -303,33 +302,21 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 			// cleared, and the Run is left as it is.
 			active = plan != nil && plan.Send != nil
 		}
-		if active && status == "running" {
-			// A paused Run keeps its pause, person's or dude's: the move
-			// applies at whichever resume comes next.
-			if control != "none" {
-				return fail(409, "pending", "Run is no longer available for a machine move")
-			}
-			tag, err := tx.Exec(ctx, `UPDATE runs SET control='pause_graceful', control_requested_at=now(), control_reason='machine reset', dude_pause='machine' WHERE id=$1 AND status='running' AND control='none'`, runID)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() == 0 {
-				return fail(409, "pending", "Run is no longer available for a machine move")
-			}
-		}
-		id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
+		id := ids.New(ids.MachineMove)
 		from := sizes.ByID[raise.SizeID]
 		if current != nil {
 			from = *current
 		}
 		if active {
 			moved = true
-			if _, err := tx.Exec(ctx, `INSERT INTO machine_moves(id,organization_id,task_id,session_id,run_id,role,kind,from_size,to_size_id,apply,reason,by_person) VALUES($1,$2,$3,$4,$5,$6,'reset',$7,$8,'resize',$9,$10)`, id, org, db.Nullable(body.TaskID), db.Nullable(body.SessionID), runID, body.Role, from, target.SizeID, db.Nullable(body.Note), p.Person); err != nil {
-				// Another Reset of this paused Run won the race past the check.
-				var pgErr *pgconn.PgError
-				if errors.As(err, &pgErr) && pgErr.ConstraintName == "machine_moves_one_at_a_time" {
-					return fail(409, "pending", "a machine move is under way")
-				}
+			// A paused Run keeps its pause, person's or dude's: the move
+			// applies at whichever resume comes next.
+			err := delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: org, TaskID: body.TaskID, SessionID: body.SessionID, RunID: runID,
+				Role: body.Role, Kind: "reset", ToSizeID: target.SizeID, From: from, Reason: body.Note, ByPerson: p.Person}, status == "running")
+			if errors.Is(err, delivery.ErrMoveUnavailable) {
+				return fail(409, "pending", "%s", err)
+			}
+			if err != nil {
 				return err
 			}
 		}

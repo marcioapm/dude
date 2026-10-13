@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -108,6 +109,49 @@ const (
 // ErrPoolsUnread: lux's pool list could not be read, so a move's pool, and
 // whether lux would take it, are unknown; nothing is moved.
 var ErrPoolsUnread = errors.New("lux's pools could not be read")
+
+// ErrMoveUnavailable: the Run was paused, stopped or given another control
+// since it was read, or another move of it is unsettled.
+var ErrMoveUnavailable = errors.New("the Run is no longer available for a machine move")
+
+// MachineMove is a machine_moves row as a raise or a Reset writes it.
+type MachineMove struct {
+	ID, Org, TaskID, SessionID, RunID string
+	// Settings role, and "raise" or "reset".
+	Role, Kind, ToSizeID string
+	// runs.machine before the move; a raise's carries previousRaise.
+	From any
+	// The agent's reason, or a Reset's note; ByPerson is a Reset's.
+	Reason, ByPerson string
+}
+
+// StartMove records a move and, with park, parks its running Run for it
+// (dude_pause 'machine'), which only a Run running with no control pending
+// takes. A paused Run is not parked: it moves at its next resume.
+func StartMove(ctx context.Context, tx pgx.Tx, m MachineMove, park bool) error {
+	if park {
+		reason := "machine move"
+		if m.Kind == "reset" {
+			reason = "machine reset"
+		}
+		tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2, dude_pause = 'machine'
+			WHERE id = $1 AND status = 'running' AND control = 'none'`, m.RunID, reason)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrMoveUnavailable
+		}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO machine_moves (id, organization_id, task_id, session_id, run_id, role, kind, from_size, to_size_id, apply, reason, by_person)
+		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, $6, $7, $8, $9, 'resize', NULLIF($10, ''), NULLIF($11, ''))`,
+		m.ID, m.Org, m.TaskID, m.SessionID, m.RunID, m.Role, m.Kind, m.From, m.ToSizeID, m.Reason, m.ByPerson)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "machine_moves_one_at_a_time" {
+		return ErrMoveUnavailable
+	}
+	return err
+}
 
 // PoolNames are lux's pool names by id, and its default pool's name for a
 // size naming no pool.

@@ -182,11 +182,13 @@ func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *Resiz
 	return err
 }
 
-// ResumeSized resumes with the plan's resources. lux refusing them — a Run
-// already resuming with others (409 not_resumable: lux's docs make a resume
-// without resources the retry), a lux from before lux#51 that does not know
-// them (400), or lux refusing these resources (422) — is answered by the
-// same resume without them.
+// ResumeSized resumes with the plan's resources and placement. lux refusing
+// them — a Run already resuming with others (409 not_resumable: lux's docs
+// make a resume without resources the retry), a lux from before lux#51 that
+// does not know them (400), or lux refusing these resources (422) — is
+// answered by the same resume without resources or placement. The input is
+// rewritten for a pending machine move: told it moved when lux is asked for
+// the size, told what lux kept and why after a 400 or 422; otherwise kept.
 func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeInput, plan *ResizePlan) (lux.Run, error) {
 	if plan == nil || plan.Send == nil || plan.refused != nil {
 		in.Resources, in.Placement = nil, nil

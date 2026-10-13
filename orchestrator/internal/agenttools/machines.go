@@ -14,14 +14,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-var machineRoles = []string{"implementer", "fixer", "simplifier", "qa_browser", "reviewer", "conductor", "brainstorm", "investigator"}
+// Every role with a machine of its own may move; its permission key is
+// runs.role (a fixer is an implementer), which PromptRoles covers.
+var machineRoles = delivery.PromptRoles
 
 const machineMovesPerRun = 3
 
@@ -113,7 +114,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if pending > 0 {
-		return out, refuse("you are being moved to %s now; ask again once you are there, if it is still too small", cmpOr(pendingTo, "another size"))
+		return out, refuse("you are being moved to %s now; ask again once you are there, if it is still too small", cmp.Or(pendingTo, "another size"))
 	}
 	if used >= machineMovesPerRun {
 		on := "your machine"
@@ -173,7 +174,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		}
 		return out, err
 	}
-	id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
+	id := ids.New(ids.MachineMove)
 	raise := delivery.Raise{SizeID: target.SizeID, MoveID: id, AskedBy: c.RunID, Role: role, Reason: reason, At: time.Now().UTC()}
 	var previous *delivery.Raise
 	if c.SessionID != "" {
@@ -189,16 +190,12 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	encoded, _ := json.Marshal(current)
 	_ = json.Unmarshal(encoded, &fromFields)
 	fromFields["previousRaise"] = previous
-	from, _ := json.Marshal(fromFields)
 	layer, _ := json.Marshal(raise)
-	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = 'machine move', dude_pause = 'machine' WHERE id = $1 AND status = 'running' AND control = 'none'`, c.RunID)
-	if err != nil {
-		return out, err
-	}
-	if tag.RowsAffected() == 0 {
+	err = delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: c.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.RunID,
+		Role: role, Kind: "raise", ToSizeID: target.SizeID, From: fromFields, Reason: reason}, true)
+	if errors.Is(err, delivery.ErrMoveUnavailable) {
 		return out, refuse("this Run is no longer available for a machine move")
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO machine_moves (id, organization_id, task_id, session_id, run_id, role, kind, from_size, to_size_id, apply, reason) VALUES ($1, $2, $3, $4, $5, $6, 'raise', $7, $8, 'resize', $9)`, id, c.Org, db.Nullable(c.TaskID), db.Nullable(c.SessionID), c.RunID, role, from, target.SizeID, reason)
 	if err != nil {
 		return out, err
 	}
@@ -246,11 +243,4 @@ func movedAnswer(session bool, role string, choices delivery.MachineChoices, tar
 		"committed or not, with everything else on /workspace and your home. Running processes and /tmp are not: start "+
 		"your servers and watchers again. %s End your turn now; you are resumed on %s.",
 		target.Name, target.Spec(), where, later, target.Name)
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }

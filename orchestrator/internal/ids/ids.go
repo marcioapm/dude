@@ -31,6 +31,7 @@ const (
 	Epic        = "epc"
 	RepoRequest = "rrq"
 	Memory      = "mem"
+	MachineMove = "mmv"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.
