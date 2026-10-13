@@ -75,6 +75,13 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
       'left', runs.stall_left_at IS NOT NULL)
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
   replaced_by AS "replacedBy",
+  -- Where its start is (run.stage, the ledger's; no column holds it), while
+  -- it is live and lux has not reported it running. Its twin over runs r is
+  -- the orchestrator's phases.StartStageJSON (stage.go): change both.
+  (SELECT json_build_object('stage', e.payload->>'stage', 'since', e.payload->>'since', 'epoch', (e.payload->>'epoch')::int)
+   FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
+     AND runs.status IN ('scheduled', 'starting', 'running') AND COALESCE(runs.lux_state, '') <> 'running'
+   ORDER BY e.cursor DESC LIMIT 1) AS "startStage",
   can_run_containers AS "canRunContainers"`;
 
 const SESSION_SELECT = `
@@ -219,6 +226,11 @@ async function chatTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, chatInput);
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/chat`,
     JSON.stringify(input), ctx.principal);
+}
+
+/** Try again on a conductor that failed: a fresh one takes what it never read. */
+async function retryConductor(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/retry`, "{}", ctx.principal);
 }
 
 /**
@@ -489,6 +501,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/done", markTaskDone);
   router.post("/v1/tasks/:id/decide", decideTask);
   router.post("/v1/tasks/:id/chat", chatTask);
+  router.post("/v1/tasks/:id/retry", retryConductor);
   router.post("/v1/tasks/:id/talk", talkTask);
   router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);

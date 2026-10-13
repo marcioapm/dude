@@ -145,7 +145,7 @@ describe("a branch preview on the Servers tab", () => {
       }
       const page = await taskPage(new TimedPreview("e"), { tab: "servers" });
       const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
-      expect(progress.textContent).toContain("Restoring volumes");
+      expect(progress.textContent).toContain("Restoring its workspace");
       expect(progress.textContent).not.toContain("Cloning");
       const active = progress.querySelector('[aria-current="step"]')!;
       expect(active.textContent).not.toContain("34m");

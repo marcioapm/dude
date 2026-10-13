@@ -45,11 +45,15 @@ type Writer struct {
 // conductor, from the task's head in each repository (the default branch
 // where nothing was published), briefed by dude with the message.
 func StartConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string) (string, error) {
-	return startConductor(ctx, tx, org, projectID, taskID, w, message, false)
+	return startConductor(ctx, tx, org, projectID, taskID, w, message, false, "", "")
 }
 
-// With woken, the message is dude's wake note, not a person's.
-func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool) (string, error) {
+// With woken, the message is dude's wake note, not a person's. With
+// retries, the new Run is Try again on that failed one: its run.created
+// names it. With supersedes, the message is that directive of an ended
+// conductor handed on: its chat.message names it, so Chat shows it as that
+// directive's turn.
+func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer, message string, woken bool, retries, supersedes string) (string, error) {
 	id := ids.New(ids.Run)
 	var person string
 	if w.Person != "" {
@@ -77,9 +81,13 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		id, org, projectID, taskID, baseRefs, briefing, w.Person); err != nil {
 		return "", err
 	}
+	created := map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs}
+	if retries != "" {
+		created["retries"] = retries
+	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunCreated, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, RunID: id, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator,
-		CorrelationID: taskID, Payload: map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs}})
+		CorrelationID: taskID, Payload: created})
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +96,11 @@ func startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	// wake's note is recorded by the wake (WakeConductorTx).
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
 	if !woken {
-		if err := ChatEvent(ctx, tx, ref, w, map[string]any{"text": message}); err != nil {
+		msg := map[string]any{"text": message}
+		if supersedes != "" {
+			msg["supersedes"] = supersedes
+		}
+		if err := ChatEvent(ctx, tx, ref, w, msg); err != nil {
 			return "", err
 		}
 	}
@@ -197,6 +209,83 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 	return err
 }
 
+// RetryConductor is Try again on a task whose latest conductor failed. One
+// that never ran gets a fresh conductor with the briefing it was given (a
+// person's message is read by the new one, once; a wake note's reasons are
+// carried by it), its run.created naming the Run it retries; one that ran
+// hands what it never read on, to a fresh conductor that names it too. Either way messages queued for the failed
+// one go to the new one (HandOver), each settled on the failed Run as it
+// is passed on. ErrRetryTaken when a newer conductor already has them. The
+// caller holds the task's Chat lock; returns the new Run.
+func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, w Writer) (string, error) {
+	var latest, status, briefing string
+	var ran bool
+	var baseRefs map[string]string
+	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, r.prompt, r.started_at IS NOT NULL, r.base_refs FROM runs r
+		WHERE r.task_id = $1 AND r.role = 'conductor' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
+		taskID).Scan(&latest, &status, &briefing, &ran, &baseRefs)
+	if db.IsNotFound(err) {
+		return "", ErrNothingToRetry
+	}
+	if err != nil {
+		return "", err
+	}
+	if status != "failed" {
+		return "", retryRefused(ctx, tx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND role = 'conductor' AND status = 'failed')`, taskID)
+	}
+	failed := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: latest}
+	if ran {
+		next, err := handOver(ctx, tx, failed, true, latest)
+		if err == nil && next == "" {
+			err = ErrNothingToRetry
+		}
+		return next, err
+	}
+	// A conductor dude woke whose wake note the syncer already put back
+	// (BriefingUnheardTx): its reasons wake the next conductor, which a
+	// copy of the note here would tell them twice.
+	var requeued bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM conductor_wake_attempts
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND failed_at IS NOT NULL)`, latest).Scan(&requeued); err != nil {
+		return "", err
+	}
+	if requeued {
+		return "", ErrRetryTaken
+	}
+	// No other live conductor can exist: runs_live_conductor_idx refuses a
+	// second, which the API answers 409.
+	id := ids.New(ids.Run)
+	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role,
+			base_refs, prompt, started_by)
+		VALUES ($1, $2, $3, $4, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = $4), 1), 'pending', 'agent',
+			'conductor', $5, $6, NULLIF($7, ''))`,
+		id, org, projectID, taskID, baseRefs, briefing, w.Person); err != nil {
+		return "", err
+	}
+	// A wake note the failed one never heard is in the briefing it passes
+	// on: its reasons are the new one's to hear, not handed over again.
+	if _, err := tx.Exec(ctx, `UPDATE conductor_wake_attempts SET conductor_run_id = $2
+		WHERE conductor_run_id = $1 AND directive_id IS NULL AND heard_at IS NULL AND failed_at IS NULL`, latest, id); err != nil {
+		return "", err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunCreated, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: id, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs, "retries": latest}})
+	if err != nil {
+		return "", err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvConductorBriefed, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"text": briefing}})
+	if err != nil {
+		return "", err
+	}
+	if _, err := HandOver(ctx, tx, failed, true); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // Unheard (SQL, a FROM source yielding r with id, organization_id,
 // project_id, task_id, status and ended_at): an ended conductor holding
 // input it never read, or a wake note it was started with and never heard,
@@ -224,6 +313,12 @@ const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL
 // that has them, "" for none. The caller holds the task's Chat lock, and
 // the Run has ended.
 func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string, error) {
+	return handOver(ctx, tx, ref, replace, "")
+}
+
+// handOver is HandOver; a new conductor it starts names retries in its
+// run.created (startConductor).
+func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries string) (string, error) {
 	// The wake note it was started with and never heard is told again.
 	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
 		return "", err
@@ -258,7 +353,7 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 			if d.Interrupt {
 				continue
 			}
-			to, err := handTo(ctx, tx, ref, next, d.ID, Writer{ActorType: d.ActorType, ActorID: d.ActorID}, d.Text)
+			to, err := handTo(ctx, tx, ref, next, d.ID, Writer{ActorType: d.ActorType, ActorID: d.ActorID}, d.Text, retries)
 			if err != nil {
 				return "", err
 			}
@@ -305,8 +400,9 @@ const evDirectiveFailed = "run.directive.failed"
 // to, once an earlier message reached it; else the task's live conductor;
 // else a new one it starts, briefed with the message. Queued, the message
 // takes its images with it. Returns the conductor, or "" when the message
-// has images and would have to be a new conductor's briefing.
-func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Writer, text string) (string, error) {
+// has images and would have to be a new conductor's briefing. A new one
+// names retries in its run.created, when given.
+func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Writer, text, retries string) (string, error) {
 	if w.ActorType == "" {
 		w.ActorType = ledger.ActorSystem
 	}
@@ -327,7 +423,7 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 			(SELECT person_id FROM api_keys WHERE id = $1), '')`, w.ActorID).Scan(&w.Person); err != nil {
 			return "", err
 		}
-		return StartConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text)
+		return startConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text, false, retries, from)
 	}
 	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: to}
 	// Superseding from with the same words, the copy resolves from's images
@@ -343,7 +439,7 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 	if err := RequestResumeForMessage(ctx, tx, to, "a message handed on from the conductor before"); err != nil {
 		return "", err
 	}
-	payload := map[string]any{"text": text, "directiveId": id}
+	payload := map[string]any{"text": text, "directiveId": id, "supersedes": from}
 	if len(images) > 0 {
 		payload["attachments"] = images
 	}

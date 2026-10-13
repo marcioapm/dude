@@ -116,6 +116,8 @@ export { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersPanel, Se
 export type { AutostartMarkProps, ServerListProps, ServerLogs, ServerRecipeRowProps, ServerRowProps, ServersPanelProps, ServersRecipesPreviewProps, ServersRunLineProps, ServersTabTipProps } from "./ServerRow.tsx";
 export { PreviewAlsoRunning, PreviewStages, ServersMoved, PREVIEW_STAGES } from "./PreviewStages.tsx";
 export type { PreviewAlsoRunningProps, PreviewStagesProps, ServersMovedProps } from "./PreviewStages.tsx";
+export { StartChip, StartProgress, startSteps, startVerb } from "./StartProgress.tsx";
+export type { StartChipProps, StartKind, StartProgressProps, StartStep, StartStepState, StartStepsInput } from "./StartProgress.tsx";
 export { ServersSummary, ServersSummaryRow } from "./ServersSummary.tsx";
 export type { ServersSummaryProps, ServersSummaryRowProps } from "./ServersSummary.tsx";
 export { ServerRecipeDialog, ServerRecipeTable, EnvVarRows, ServerUrlPreview } from "./ServerRecipe.tsx";

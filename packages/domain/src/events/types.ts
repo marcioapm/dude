@@ -88,7 +88,7 @@ export const EventTypes = {
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
   BrainstormFiled: "session.filed",
-  /** dude briefed the session's agent. Payload: `{ text }`. */
+  /** dude briefed the session's agent. Payload: `{ text, supersedes? }`, `supersedes` the ended agent's directive the briefing hands on. */
   BrainstormBriefed: "session.briefed",
   /** dude told the session's agent something (who owns it now). Payload: `{ text, directiveId }`. */
   BrainstormTold: "session.told",
@@ -220,13 +220,25 @@ export const EventTypes = {
    * `firstOutput`. A phase whose end is unknown is absent, never zero.
    */
   RunResumeTimed: "run.resume.timed",
+  /**
+   * Where an agent's Run is while it starts, as lux announced it, once per
+   * change (about six per start). Payload: `{ stage, since, epoch,
+   * reason? }`: `stage` is lux's (`waiting`, `image`, `volumes`,
+   * `repositories`, `container`, `running` while lux's state is not yet
+   * running), or `park` for a move's stop (a drain, a preemption, a
+   * migrate); `since` lux's `stageSince` in UTC. Written only while the Run
+   * starts. A start that fails says its stage in `run.failed`.
+   */
+  RunStage: "run.stage",
 
   // Run lifecycle
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
   /**
-   * The Run failed. Payload: `{ status, error, kept?, failedTurns? }`.
+   * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
+   * reason? }`. `stage`: a start that failed before the agent ran, the
+   * `run.stage` it was in, with `reason` lux's own (its `stateReason`).
    * `kept`: only a conductor's or session agent's turn failed, and the Run
    * goes on (parked, or stopped by a control already pending), so it reads
    * as the turn's failure, not the Run's; `failedTurns`, how many turns in
@@ -377,9 +389,11 @@ export const EventTypes = {
   QuestionClosed: "question.closed",
   /**
    * A message in a task's Chat, on its conductor's Run. Payload:
-   * `{ text, directiveId?, github?, by? }`. A person's: the first has no
+   * `{ text, directiveId?, supersedes?, github?, by? }`. A person's: the first has no
    * `directiveId` (it is the conductor's briefing, with dude's note before
-   * it); each later one is delivered as the directive named. One from a
+   * it); each later one is delivered as the directive named. A message an
+   * ended agent never read, handed on to the next, names that agent's
+   * directive as `supersedes`. One from a
    * pull request comment addressed to dude (actor `integration`,
    * `github:<login>`) carries `github: { login, repo, number, feedbackId,
    * kind, url?, path? }`. The conductor's reply on a pull request is `by:
