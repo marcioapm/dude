@@ -59,8 +59,10 @@ function Root() {
   }
   const signedIn = fixtures ?? (auth.kind === "authenticated" ? { client: auth.client, me: auth.me } : null);
   if (!signedIn) return <div className="keyPrompt" role="status">Checking session…</div>;
-  const signOut = () => {
-    void session.signOut(turnPushOff, (url) => location.assign(url), flushSync);
+  // From inside an organisation, push is removed through its client: the session's names none,
+  // which the API refuses for someone in several organisations.
+  const signOut = (mounted?: ApiClient) => {
+    void session.signOut((root) => turnPushOff(mounted ?? root), (url) => location.assign(url), flushSync);
   };
 
   return (
@@ -68,10 +70,10 @@ function Root() {
       <ToastProvider>
         <AuthRefusal.Provider value={session.refused}>
           <Gatekeeper client={signedIn.client} me={signedIn.me} authMethod={fixtures ? "api_key" : auth.kind === "authenticated" ? auth.authMethod : "api_key"}
-            reread={() => (fixtures ? Promise.resolve(fixtures.me) : session.reread())} onSignOut={signOut}>
+            reread={() => (fixtures ? Promise.resolve(fixtures.me) : session.reread())} onSignOut={() => signOut()}>
             {(client) => (
               <PeopleProvider client={client}>
-                <App client={client} onKeyRefused={session.refused} onSignOut={signOut} />
+                <App client={client} onKeyRefused={session.refused} onSignOut={() => signOut(client)} />
               </PeopleProvider>
             )}
           </Gatekeeper>

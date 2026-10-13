@@ -184,10 +184,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     return () => window.removeEventListener("hashchange", follow);
   }, []);
 
-  // Notifications: the service worker, and a clicked one opening its place.
+  // Notifications: the service worker, and a clicked one opening its place. Someone in several
+  // organisations over Access keeps the subscription where Notify me in this browser put it.
+  const pushOrgId = account?.current.id;
+  const pushOrgName = account?.current.name;
+  const reclaimPush = !(account && account.authMethod === "cloudflare_access" && account.memberships.length > 1);
   useEffect(() => startPush(client, (hash) => {
     window.location.hash = hash;
-  }), [client]);
+  }, { reclaim: reclaimPush, organization: pushOrgId && pushOrgName ? { id: pushOrgId, name: pushOrgName } : null }),
+  [client, reclaimPush, pushOrgId, pushOrgName]);
 
   // Bumped on each reload: what reads its own data (an epic's metrics)
   // re-reads with the tree rather than on a stream of its own.
@@ -615,7 +620,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     <OrgSwitcher variant={variant} you={you} current={orgOf(account.current)}
       memberships={switcherMemberships(account.memberships)} invitations={switcherInvitations(account.invitations)}
       superAdmin={account.superAdmin} onSwitch={(o) => account.switchTo(o.id)} onJoin={(i) => account.join(i.code)}
-      onSettings={() => go({ view: "mySettings" })} onAdmin={account.admin} onSignOut={onSignOut}
+      onSettings={() => go({ view: "mySettings" })} onAdmin={account.admin} adminNote="Super-admin: this dude's organisations" onSignOut={onSignOut}
       signOutNote={account.authMethod === "cloudflare_access" ? "Of Cloudflare Access, on this browser" : "Forget this browser's key"}
       data-testid={variant === "rail" ? "rail-switcher" : "switcher"} />
   ) : null;

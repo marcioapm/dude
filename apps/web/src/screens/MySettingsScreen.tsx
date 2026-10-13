@@ -11,9 +11,9 @@ import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Pa
 import type { ApiClient, Me, Member } from "../api/client.ts";
 import { KeysSection, ProfileSection, type KeyGroup } from "./YouSections.tsx";
 import { useAccount } from "../accounts/context.tsx";
-import { untilWords } from "../accounts/words.ts";
+import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
-import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
+import { pushOrganization, pushState, showTestNotification, turnPushOff, turnPushOn, type PushOrganization, type PushState } from "../push.ts";
 
 const PUSH_TEXT: Record<PushState, string> = {
   on: "On in this browser: a question or a request from an agent shows as a notification, even with dude closed.",
@@ -30,21 +30,35 @@ export function MySettingsScreen({ client, me, onChanged }: {
 }) {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
+  const [pushFor, setPushFor] = useState<PushOrganization | null>(null);
   const { busy, problem, save } = useSave();
   // Who you are on GitHub is only on your own /v1/me, not the people list.
   const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
   const [read, setRead] = useState(0);
+  const account = useAccount();
+  const here: PushOrganization | null = account ? { id: account.current.id, name: account.current.name } : null;
 
   useEffect(() => {
-    void pushState().then(setPush);
+    void Promise.all([pushState(), pushOrganization()]).then(([state, owner]) => {
+      setPush(state);
+      setPushFor(owner);
+    });
   }, []);
   useEffect(() => {
     void client.me().then((r) => setGithub({ githubLogin: r.person.githubLogin ?? null, commitEmail: r.person.commitEmail ?? null }),
       () => setGithub({ githubLogin: null, commitEmail: null }));
   }, [client, read]);
 
-  const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
-  const account = useAccount();
+  const change = (to: () => Promise<PushState>, owner: PushOrganization | null) => save(async () => {
+    const state = await to();
+    setPush(state);
+    setPushFor(state === "on" ? owner : null);
+  });
+  const pushText = push === "on" && pushFor
+    ? `On in this browser, for ${pushFor.name}: a question or a request from an agent there shows as a notification, even with dude closed.`
+    : push ? PUSH_TEXT[push] : "";
+  // The one subscription is another organisation's: claiming it here moves it.
+  const elsewhere = push === "on" && pushFor && here && pushFor.id !== here.id;
   // Keys across your organisations: read with the credential that names none.
   const keysClient = account?.base ?? client;
   const groups: KeyGroup[] = account
@@ -63,7 +77,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
           organizations={account?.memberships.map((m) => m.name)} accessEmail={account?.authMethod === "cloudflare_access"}
           onChanged={() => { setRead((n) => n + 1); onChanged(); account?.refresh(); }} />
       ) : null}
-      {groups.length ? <KeysSection client={keysClient} groups={groups} you={me?.name ?? ""} /> : null}
+      {groups.length ? <KeysSection client={keysClient} groups={groups} /> : null}
       {account && account.memberships.length + account.invitations.length > 1 ? (
         <Card data-testid="my-organisations">
           <CardHeader title="Organisations" />
@@ -71,7 +85,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
             <ul className="plainRows" role="list">
               {account.memberships.map((m) => (
                 <li key={m.id} className="plainRow">
-                  <EntityLine lead={<OrgFace org={m} size={24} aria-hidden />} name={m.name} detail={`${m.role === "admin" ? "Admin" : "Member"} · ${window.location.host}/#/o/${m.slug}`} />
+                  <EntityLine lead={<OrgFace org={m} size={24} aria-hidden />} name={m.name} detail={`${roleWord(m.role)} · ${window.location.host}/#/o/${m.slug}`} />
                   {m.id === account.current.id ? <span className="muted">This tab</span>
                     : <Button size="sm" variant="quiet" onClick={() => account.switchTo(m.id)}>Open</Button>}
                 </li>
@@ -118,20 +132,25 @@ export function MySettingsScreen({ client, me, onChanged }: {
         <CardBody>
           {push === null ? null : (
             <FormStack>
-              <p className="muted" data-testid="push-state" data-state={push}>{PUSH_TEXT[push]}</p>
+              <p className="muted" data-testid="push-state" data-state={push}>{pushText}</p>
               {problem ? <Callout tone="danger">{problem}</Callout> : null}
               <FormActions>
                 {push === "off" ? (
-                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client))} data-testid="push-on">
+                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-on">
                     Notify me in this browser
                   </Button>
                 ) : null}
                 {push === "on" ? (
                   <>
+                    {elsewhere ? (
+                      <Button variant="secondary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-here">
+                        Notify me for {here.name} instead
+                      </Button>
+                    ) : null}
                     <Button variant="secondary" disabled={busy} onClick={() => void showTestNotification()}>
                       Send a test notification
                     </Button>
-                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
+                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client), null)} data-testid="push-off">
                       Turn off
                     </Button>
                   </>
