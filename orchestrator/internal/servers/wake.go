@@ -125,18 +125,24 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 				OR (ps.idle > 0 AND (ps.idle = ps.live OR ps.idle_at > r.park_checked_at
 					OR r.park_checked_at < now() - make_interval(secs => $2)))) AS park_due,
 			-- A live server whose wake timeout in lux (as dude last set it)
-			-- is not the one the settings say now: the first-wake one until
-			-- the preview has served, then the later one. A wake due
-			-- reconciles its servers itself.
-			r.status IN ('scheduled', 'starting', 'running', 'paused') AND r.wake_wanted_at IS NULL AND ps.live > 0
+			-- is not the one the settings say now (ps.timeouts_off). A wake
+			-- due reconciles its servers itself.
+			r.status IN ('scheduled', 'starting', 'running', 'paused') AND r.wake_wanted_at IS NULL AND ps.timeouts_off > 0
 				AND (r.wake_timeouts_checked_at IS NULL OR r.wake_timeouts_checked_at < now() - make_interval(secs => $6))
-				AND EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL
-					AND s.wake_timeout_s IS DISTINCT FROM (SELECT (preview_settings(pr)->>(CASE WHEN r.preview_ready_at IS NULL
-						THEN 'firstWakeTimeoutMinutes' ELSE 'wakeTimeoutMinutes' END))::int * 60 FROM projects pr WHERE pr.id = r.project_id))
 				AS timeouts_due
 		FROM runs r JOIN tasks t ON t.id = r.task_id
+		-- Each project's two wake timeouts in seconds, read once per
+		-- project: the first-wake one until the preview has served, then
+		-- the later one.
+		LEFT JOIN (SELECT p.id, (s->>'firstWakeTimeoutMinutes')::int * 60 AS first_s, (s->>'wakeTimeoutMinutes')::int * 60 AS later_s
+			FROM projects p CROSS JOIN LATERAL preview_settings(p) s
+			WHERE p.id IN (SELECT project_id FROM runs WHERE kind = 'preview' AND wakeable
+				AND (status IN ('pending', 'scheduled', 'starting', 'running', 'paused') OR lux_stop_reason IS DISTINCT FROM 'cancel'))) want
+			ON want.id = r.project_id
 		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE s.deleted_at IS NULL) AS live,
 				count(*) FILTER (WHERE s.deleted_at IS NULL AND s.idle_at IS NOT NULL) AS idle,
+				count(*) FILTER (WHERE s.deleted_at IS NULL AND s.wake_timeout_s IS DISTINCT FROM
+					CASE WHEN r.preview_ready_at IS NULL THEN want.first_s ELSE want.later_s END) AS timeouts_off,
 				max(s.last_woken_at) AS woken, max(s.idle_at) FILTER (WHERE s.deleted_at IS NULL) AS idle_at
 			FROM preview_servers s WHERE s.run_id = r.id) ps
 		WHERE r.kind = 'preview' AND r.wakeable
