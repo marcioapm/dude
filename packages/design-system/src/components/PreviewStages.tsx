@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import type { PreviewStage } from "@dude/domain";
+import { START_STAGE_WORDS, type PreviewStage } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -20,9 +20,10 @@ export interface PreviewStagesProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const STAGE_WORDS: Record<PreviewStage, string> = {
-  image: "Preparing image",
-  volumes: "Restoring volumes",
-  container: "Starting container",
+  // lux's infrastructure stages read as an agent's do (START_STAGE_WORDS): one vocabulary.
+  image: START_STAGE_WORDS.image.now,
+  volumes: START_STAGE_WORDS.volumes.now,
+  container: START_STAGE_WORDS.container.now,
   stopping: "Stopping",
   scheduling: "Scheduling",
   cloning: "Cloning",
@@ -36,8 +37,9 @@ const INFRA_STAGES: ReadonlySet<PreviewStage> = new Set(["image", "volumes", "co
 
 /**
  * A branch preview coming up, as a small step strip: Scheduling › Cloning
- * › Setup › Starting servers › Ready. While the preview is at Preparing
- * image, Restoring volumes or Starting container, that step takes the
+ * › Setup › Starting servers › Ready. While the preview is getting its
+ * image ready, restoring its workspace or starting the container (an
+ * agent's words for the same lux stages), that step takes the
  * Cloning slot. Stopping is a single step alone, not a completed startup.
  * Done steps are checked, the current one spins with how long it has
  * taken, the rest are hollow.

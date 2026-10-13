@@ -372,8 +372,15 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
 		if lux.Terminal(state) {
-			return t.ended(ctx, tx, s, state, str("reason"))
+			// A start that failed names the stage it failed in.
+			stage, err := t.failedStage(ctx, tx, f.Epoch, was)
+			if err != nil {
+				return err
+			}
+			return t.ended(ctx, tx, s, state, str("reason"), stage)
 		}
+	case "stage":
+		return t.stage(ctx, tx, s, f)
 	case "git.clone":
 		if err := s.event(ctx, tx, t.run, "git.clone", ledger.ActorSystem, d); err != nil {
 			return err
@@ -493,8 +500,10 @@ const maxRefusedNames = 100
 // timed out, or its host died. A phase whose turn was already done is
 // finished by the sweep, and one dude stopped is dude's business; any other
 // has failed. One lux stopped at its time limit is not kept: its running
-// time is spent, so a resume would be stopped again at once.
-func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
+// time is spent, so a resume would be stopped again at once. A start that
+// failed before the agent ran says the stage it was in (stage, "" when
+// unknown) and lux's own reason.
+func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason, stage string) error {
 	// A conductor or session agent lux can resume, with a session to
 	// reload, is parked by the sweep (betweenTurns), not failed.
 	if t.run.talker() && !lux.Terminated(state) && t.sessionEpoch > 0 {
@@ -514,6 +523,9 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		t.run.ID, why, reason != luxTimeout)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
+	}
+	if stage != "" {
+		return s.failedTxWith(ctx, tx, t.run, event, map[string]any{"stage": stage, "reason": reason})
 	}
 	return s.failedTx(ctx, tx, t.run, event)
 }

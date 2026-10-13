@@ -2483,10 +2483,19 @@ func (s *Syncer) failUnread(ctx context.Context, tx pgx.Tx, r phaseRun, why stri
 // failedTx records Run r, marked failed in tx, as failed with reason: its
 // unread directives (failUnread), then run.failed.
 func (s *Syncer) failedTx(ctx context.Context, tx pgx.Tx, r phaseRun, reason string) error {
+	return s.failedTxWith(ctx, tx, r, reason, nil)
+}
+
+// failedTxWith is failedTx with more said in run.failed (a failed start's stage).
+func (s *Syncer) failedTxWith(ctx context.Context, tx pgx.Tx, r phaseRun, reason string, more map[string]any) error {
 	if err := s.failUnread(ctx, tx, r, UnreadRunFailed); err != nil {
 		return err
 	}
-	return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+	payload := map[string]any{"status": "failed", "error": reason}
+	for k, v := range more {
+		payload[k] = v
+	}
+	return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, payload)
 }
 
 // at is the time the syncer's events say, zero for now.

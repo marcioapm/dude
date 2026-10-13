@@ -84,6 +84,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/agent-machines/reset", s.auth(s.resetMachine))
 	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
 	mux.Handle("POST /internal/tasks/{id}/chat", s.auth(s.chat))
+	mux.Handle("POST /internal/tasks/{id}/retry", s.auth(s.retryConductor))
 	mux.Handle("POST /internal/tasks/{id}/talk", s.auth(s.talk))
 	mux.Handle("POST /internal/tasks/{id}/decider", s.auth(s.handBack))
 	mux.Handle("POST /internal/runs/{id}/steer", s.auth(s.steer))

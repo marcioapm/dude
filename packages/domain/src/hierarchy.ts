@@ -608,6 +608,12 @@ export const runSchema = z.object({
     .default(null),
   /** The Run that replaced it when it was restarted; null for none. */
   replacedBy: z.string().nullable().default(null),
+  /**
+   * Where its start is while it starts, from its latest `run.stage`: lux's
+   * stage, since when, and the placement's epoch. Null once lux reports it
+   * running, when it is not live, or from a lux that reports no stages.
+   */
+  startStage: z.object({ stage: z.string(), since: z.string().nullable(), epoch: z.number().nullable() }).nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
 

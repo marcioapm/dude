@@ -22,7 +22,8 @@ import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harnes
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, readWhen, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
 import { DraftedComposer } from "./DraftedComposer.tsx";
@@ -33,6 +34,8 @@ import { usePeople, type People } from "../people.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { SessionMachineBlock } from "./actions.tsx";
+import { sessionRaisedMachine } from "../machines.ts";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
@@ -46,6 +49,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
+  "machine.requested", "machine.raised", "machine.refused", "machine.reset",
   EventTypes.BrainstormModelApplied,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
@@ -144,6 +148,27 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
       return false;
     }
   }, [client, sessionId]);
+
+  // Try again on an agent that failed to start or to resume: a fresh one takes what it never read.
+  const [retrying, setRetrying] = useState(false);
+  // The failed turn whose Try again was refused because a newer agent already took its messages: not offered again.
+  const [retryTaken, setRetryTaken] = useState<string | null>(null);
+  const retryStart = useCallback(async (turnId: string) => {
+    setProblem(null);
+    setRetrying(true);
+    try {
+      await client.retrySessionAgent(sessionId);
+      void load();
+    } catch (err) {
+      const refused = retryRefusal(err, errorText);
+      if (refused.taken) {
+        setRetryTaken(turnId);
+        void load();
+      } else setProblem(refused.text);
+    } finally {
+      setRetrying(false);
+    }
+  }, [client, sessionId, load]);
 
   // The agent's question answered through its form: the whole ask at once.
   const answer = useCallback(async (turn: QuestionTurn, s: QuestionSubmission) => {
@@ -261,11 +286,16 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
   const dude = dudeName(sessionId);
   const steer: SteerActions | undefined = live ? {
-    wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands),
+    wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands, conversation.start),
     resend: () => undefined,
   } : undefined;
-  const render = (turn: Turn) => renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
-    undefined, undefined, live && !reader ? { answer } : undefined);
+  const render = (turn: Turn) => turn.kind === "ended" && turn.start
+    ? <StartRow key={turn.id} start={turn.start} role="brainstorm" taken={turn.taken || retryTaken === turn.id}
+        onRetry={reader || turn.retried || retrying ? undefined : () => void retryStart(turn.id)} />
+    : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
+      undefined, undefined, live && !reader ? { answer } : undefined);
+  const starting = conversation.start;
+  const startHint = readWhen(starting);
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
@@ -284,6 +314,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
+          {starting ? <StartHeaderChip start={starting} /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
@@ -326,6 +357,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   onSubmit={({ text }) => send(text, yours !== null)}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
+                  toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
                   data-testid="session-composer"
                 />
               }
@@ -335,6 +367,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 : Array.isArray(item.group)
                   ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
                   : render(item.group))}
+              {starting ? <StartRow start={starting} role="brainstorm" /> : null}
               {conversation.activity ? (
                 <ChatMessage role="brainstorm" activity={conversation.activity}
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
@@ -381,6 +414,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
               </SessionRailBlock>
+              {sessionRaisedMachine(detail) ? <SessionMachineBlock client={client} id={sessionId} machine={sessionRaisedMachine(detail)!}
+                by={firstName(people.names.get(you.id) ?? "you")} canReset={!reader} onChanged={() => void load()} /> : null}
               <SessionRailBlock label="Cost">
                 <SessionFacts facts={[{ label: "Session", value: <CostDisplay usd={session.costUsd} /> }]} />
               </SessionRailBlock>

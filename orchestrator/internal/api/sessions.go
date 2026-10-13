@@ -17,6 +17,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // Brainstorm sessions (delivery/session.go). Every route acts for the
@@ -31,6 +32,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /internal/sessions/{id}", s.auth(s.getSession))
 	mux.Handle("POST /internal/sessions/{id}/title", s.auth(s.renameSession))
 	mux.Handle("POST /internal/sessions/{id}/chat", s.auth(s.sessionChat))
+	mux.Handle("POST /internal/sessions/{id}/retry", s.auth(s.retrySessionAgent))
 	mux.Handle("POST /internal/sessions/{id}/questions/{question}/answer", s.auth(s.sessionAnswer))
 	mux.Handle("POST /internal/sessions/{id}/link", s.auth(s.linkSession))
 	mux.Handle("POST /internal/sessions/{id}/people", s.auth(s.inviteToSession))
@@ -396,7 +398,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 					FROM session_people sp JOIN people pp ON pp.id = sp.person_id WHERE sp.session_id = s.id),
 				'projects', `+sessionProjectsJSON+`,
 				'run', (SELECT json_build_object('id', r.id, 'status', r.status, 'dudePause', r.dude_pause, 'model', r.model,
-					'modelTier', r.model_tier, 'harness', r.harness, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL)
+					'modelTier', r.model_tier, 'harness', r.harness, 'machine', r.machine->>'name', 'waiting', r.waiting_since IS NOT NULL,
+					'stage', `+phases.StartStageJSON+`)
 					FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1),
 				'runs', (SELECT COALESCE(json_agg(r.id ORDER BY r.created_at), '[]') FROM runs r WHERE r.session_id = s.id),
 				'costUsd', (SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.session_id = s.id),
@@ -970,6 +973,51 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	}
 	write(w, status, out)
 	return nil
+}
+
+// retrySessionAgent is Try again on a session whose agent failed, to start
+// or to resume: a fresh agent takes what it never read
+// (delivery.RetryBrainstorm). 409 retry_taken when a newer agent already
+// took it; 409 conflict when there is nothing to retry.
+func (s *Server) retrySessionAgent(w http.ResponseWriter, r *http.Request, org string) error {
+	p, err := sessionPrincipal(r)
+	if err != nil {
+		return err
+	}
+	id := r.PathValue("id")
+	var runID string
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "start the agent again"); err != nil {
+			return err
+		}
+		runID, err = delivery.RetryBrainstorm(r.Context(), tx, org, id, p.writer())
+		return err
+	})
+	if err := retryError(err, "runs_live_brainstorm_idx"); err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusCreated, map[string]any{"runId": runID, "created": true})
+	return nil
+}
+
+// retryError is how Try again's refusals read: retry_taken when a newer
+// agent took what the failed one left, or one was started meanwhile
+// (live, the unique index of one live agent); conflict with nothing to
+// retry.
+func retryError(err error, live string) error {
+	var pgErr *pgconn.PgError
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, delivery.ErrRetryTaken):
+		return fail(http.StatusConflict, "retry_taken", "%s", err.Error())
+	case errors.As(err, &pgErr) && pgErr.ConstraintName == live:
+		return fail(http.StatusConflict, "retry_taken", "%s", delivery.ErrRetryTaken.Error())
+	case errors.Is(err, delivery.ErrNothingToRetry):
+		return fail(http.StatusConflict, "conflict", "%s", err.Error())
+	}
+	return err
 }
 
 // checkChatText refuses a message the session's agent would not be given:

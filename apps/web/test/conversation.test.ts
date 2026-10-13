@@ -17,6 +17,7 @@ import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn } from "../src/api/conversation.ts";
+import { stepsOf, startVerbOf } from "../src/startCue.tsx";
 import { modelCostShown } from "../src/api/client.ts";
 
 let cursor = 0;
@@ -42,6 +43,29 @@ function ev(eventType: string, payload: Record<string, unknown> = {}): Persisted
     occurredAt: new Date(Date.UTC(2026, 0, 1, 0, 0, cursor)).toISOString(),
   } as unknown as PersistedEvent;
 }
+
+describe("machine moves", () => {
+  for (const role of ["implementer", "fixer", "reviewer", "simplifier", "qa_browser", "conductor", "brainstorm", "investigator"]) {
+    test(`${role} preserves the named move through tool completion and park, using shared stages`, () => {
+      const events = [ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "move", input: { size: "XL", reason: "OOM" } }),
+        ev("machine.requested", { moveId: "m1", role, from: { name: "Standard" }, to: { name: "XL" }, reason: "OOM", pool: "highmem" }),
+        ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "move", output: { head: JSON.stringify({ answer: "End your turn now; your work is kept." }) } }),
+        ev("run.parked", { reason: "machine" }), ev(EventTypes.RunStage, { stage: "waiting" })];
+      const c = project(events, "running");
+      expect(startVerbOf(c.start!)).toBe("Moving to XL");
+      const steps = stepsOf(c.start!);
+      expect(steps.map((s) => s.id)).toEqual(["park", "waiting", "image", "volumes", "repositories", "container", "running"]);
+      expect(steps[1]!.label).toBe("Waiting for a machine in highmem");
+      expect(steps[1]!.doneLabel).toBe("Machine found");
+      const tool = c.turns.find((t) => t.kind === "tool");
+      expect(tool?.kind === "tool" && tool.machine?.answer).toBe("End your turn now; your work is kept.");
+      expect(c.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.notice)).toEqual(["notice"]);
+      const refused = project([...events, ev("machine.refused", { moveId: "m1", role, message: "XL requires arm64; this image only supports amd64." })], "running");
+      expect(refused.start).toBeNull();
+      expect(refused.turns.at(-1)?.kind === "notice" && refused.turns.at(-1)?.text).toBe("XL requires arm64; this image only supports amd64.");
+    });
+  }
+});
 
 describe("git event labels", () => {
   test("clone and checkout render truthful outcomes and checkout coordinates", () => {
@@ -882,7 +906,7 @@ describe("how long a resume took", () => {
     const notices = turns.filter((t) => t.kind === "notice");
     expect(notices.map((t) => t.text)).toEqual([expect.stringContaining("Parked"), "Taken back up in 6.4s."]);
     expect(notices[1]!.title).toBe([
-      "dude asked lux 120ms", "lux placed it 300ms", "image ready 1.0s", "restored 1.2s", "started 800ms",
+      "dude asked lux 120ms", "Machine found 300ms", "Image ready 1.0s", "Workspace restored 1.2s", "Container started 800ms",
       "agent reloaded 2.1s", "took its input 400ms", "first words 1.6s",
     ].join("\n"));
   });

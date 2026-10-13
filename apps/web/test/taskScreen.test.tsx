@@ -8,6 +8,8 @@ import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
+import { ResetMachineConfirm } from "../src/screens/actions.tsx";
+import { ApiError } from "../src/api/client.ts";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -26,6 +28,38 @@ export async function taskPage(client: FixtureClient, props: Partial<Parameters<
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
   return container;
 }
+
+describe("machine reset confirmation", () => {
+  test("keeps the note on exact refusal, prevents duplicates and closes only after success", async () => {
+    let closed = 0;
+    const notes: string[] = [];
+    let resolve: (() => void) | undefined;
+    const m = await mount(<ResetMachineConfirm label="implementer" from="Large" to="Standard" by="Márcio"
+      onClose={() => closed++} onConfirm={async (note) => {
+        notes.push(note);
+        if (notes.length === 1) throw new ApiError(409, "moving", "The implementer is being moved to Large now.");
+        await new Promise<void>((r) => { resolve = r; });
+      }} />);
+    mounted.push(m.unmount);
+    const field = document.querySelector<HTMLTextAreaElement>("[data-testid=reset-note]")!;
+    expect(field.maxLength).toBe(2000);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Keep two workers.");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const button = document.querySelector<HTMLButtonElement>("[data-testid=confirm-reset]")!;
+    await click(button);
+    expect(document.querySelector("[data-testid=reset-error]")?.textContent).toBe("The implementer is being moved to Large now.");
+    expect(field.value).toBe("Keep two workers.");
+    expect(closed).toBe(0);
+    await click(button);
+    expect(button.disabled).toBe(true);
+    await click(button);
+    expect(notes).toEqual(["Keep two workers.", "Keep two workers."]);
+    await act(async () => resolve!());
+    expect(closed).toBe(1);
+  });
+});
 
 const selectedTab = (page: HTMLElement) => page.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
@@ -145,7 +179,7 @@ describe("a branch preview on the Servers tab", () => {
       }
       const page = await taskPage(new TimedPreview("e"), { tab: "servers" });
       const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
-      expect(progress.textContent).toContain("Restoring volumes");
+      expect(progress.textContent).toContain("Restoring its workspace");
       expect(progress.textContent).not.toContain("Cloning");
       const active = progress.querySelector('[aria-current="step"]')!;
       expect(active.textContent).not.toContain("34m");

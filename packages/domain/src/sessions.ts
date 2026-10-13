@@ -135,7 +135,9 @@ export interface SessionDetail {
     run: { id: string; status: string; dudePause: string | null; model: string | null; modelTier: string | null;
       /** The harness it was submitted on (runs.harness): "scripted" for the scripted agent; absent from an older orchestrator. */
       harness?: string | null;
-      machine: string | null; waiting: boolean } | null;
+      machine: string | null; waiting: boolean;
+      /** Where its start is while it starts (its latest `run.stage`); null once running; absent from an older orchestrator. */
+      stage?: { stage: string; since: string | null; epoch: number | null } | null } | null;
     runs: string[];
     costUsd: number;
     messages: number;

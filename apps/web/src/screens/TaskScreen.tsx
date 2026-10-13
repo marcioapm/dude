@@ -69,6 +69,8 @@ import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
+import { TaskMachineRaises } from "./actions.tsx";
+import { taskRaisedMachines } from "../machines.ts";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
@@ -616,8 +618,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 live={!earlier && item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 || showServers ? (
-              <aside className="taskAside" aria-label="Pull requests and servers">
+            {prs.length > 0 || showServers || Object.keys(taskRaisedMachines(item)).length > 0 ? (
+              <aside className="taskAside" aria-label="Pull requests, machines and servers">
+                <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}

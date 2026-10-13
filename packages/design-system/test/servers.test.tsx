@@ -252,7 +252,7 @@ describe("ServerRow", () => {
 });
 
 describe("PreviewStages", () => {
-  for (const [stage, words] of [["image", "Preparing image"], ["volumes", "Restoring volumes"], ["container", "Starting container"], ["stopping", "Stopping"]] as const) {
+  for (const [stage, words] of [["image", "Getting the image ready"], ["volumes", "Restoring its workspace"], ["container", "Starting the container"], ["stopping", "Stopping"]] as const) {
     test(`${stage} is honest and has one accessible active step`, () => {
       const h = html(<PreviewStages stage={stage} branch="feature/x" />);
       expect(text(h)).toContain(words);

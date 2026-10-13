@@ -117,6 +117,8 @@ export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms/:id", getBrainstorm);
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
+  // Try again on an agent that did not start: a fresh one with the message it was started for.
+  router.post("/v1/brainstorms/:id/retry", forward("POST", at("/retry")));
   router.post("/v1/brainstorms/:id/questions/:question/answer",
     forward("POST", (ctx) => `${at()(ctx)}/questions/${encodeURIComponent(ctx.params.question!)}/answer`, answers));
   router.post("/v1/brainstorms/:id/link", forward("POST", at("/link"), links));
