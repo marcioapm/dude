@@ -62,6 +62,14 @@ export function MySettingsScreen({ client, me, onChanged }: {
       {authorization?.available ? <Card data-testid="github-authorization">
         <CardHeader title="GitHub authorization" />
         <CardBody>
+          {new URLSearchParams(window.location.search).get("github") ? <Callout tone="neutral">{
+            ({ connected: "GitHub connected.", authorization_denied: "GitHub authorization was denied. Connect again when ready.",
+              invalid_or_expired: "This GitHub connection request expired or was already used. Connect again.",
+              enable_expiring_tokens: "Ask an administrator to enable expiring user authorization tokens in the GitHub App.",
+              identity_failed: "GitHub could not verify your account. Connect again.",
+              app_changed: "The GitHub App changed. Connect again." } as Record<string, string>)[new URLSearchParams(window.location.search).get("github")!]
+              ?? "GitHub authorization failed. Connect again."
+          }</Callout> : null}
           <p data-testid="github-authorization-status">{authorization.connection ? `Connected as ${authorization.connection.login}` : "Not connected"}</p>
           {authorization.connection ? <p className="muted">Access expires {authorization.connection.expiresAt}.
             {authorization.connection.reconnectRequired || new Date(authorization.connection.refreshExpiresAt).getTime() <= Date.now()
