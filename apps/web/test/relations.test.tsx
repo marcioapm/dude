@@ -21,8 +21,9 @@ import { taskHistory } from "../src/taskHistory.ts";
 import { ApiError, type ChatSent, type StartAnyway, type TaskDetail } from "../src/api/client.ts";
 import { proposalOrder } from "../src/screens/SessionScreen.tsx";
 import { LitEpicOrder, pickableTasks, useCardStarts, useLitCard } from "../src/screens/Relations.tsx";
-import { Board } from "@dude/design-system/components";
-import type { NavProject } from "@dude/design-system";
+import { Board, type BoardCardStartFocus } from "@dude/design-system/components";
+import type { BoardCard, NavProject } from "@dude/design-system";
+import { useCallback, useState } from "react";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -288,6 +289,31 @@ describe("a Backlog card's start", () => {
     await click(byTestId("confirm-start-anyway")!);
     await until(() => client.starts.length > 0 || null, "the start");
     expect(client.starts).toEqual([{ how: "talk", start: { override: true } }]);
+  });
+
+  test("a render of what holds the board, with new callbacks, redraws none of its cards", async () => {
+    const client = new RelationsClient(rels({}));
+    const renders = new Map<string, number>();
+    const marks = (card: BoardCard) => {
+      renders.set(card.task.key!, (renders.get(card.task.key!) ?? 0) + 1);
+      return null;
+    };
+    let rerender = () => {};
+    // As App holds it: new onStarted and onChanged closures on every render.
+    function Shell() {
+      const [n, setN] = useState(0);
+      rerender = () => setN((x) => x + 1);
+      const starts = useCardStarts(client, YOU, () => void n, () => void n);
+      const startCard = starts.start;
+      const cardStart = useCallback((card: BoardCard, focus: BoardCardStartFocus) => startCard(card.task, focus), [startCard]);
+      return <Board project={project} you={YOU} cardMarks={marks} cardStart={cardStart} />;
+    }
+    const { container, unmount } = await mount(<TooltipProvider><Shell /></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=start-menu-CP-47]"), "CP-47's start");
+    renders.clear();
+    await act(async () => rerender());
+    expect(Object.fromEntries(renders)).toEqual({});
   });
 });
 

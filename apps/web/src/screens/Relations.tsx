@@ -6,7 +6,7 @@
  * navigation tree.
  */
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AutoStartDialog, AutoStartMark, DependencyStrip, RelationList, RelationPicker, StartAnywayDialog, StartGate, StartMenu,
   type DialogBlocker, type PickableTask, type RelatedTask, type RelationGroupData, type RelationGroupKind, type RelationSide, type StripTask,
@@ -256,6 +256,8 @@ interface CardTask {
 /**
  * The board's card starts and the one pair of dialogs they share. The
  * board draws `start(card, focus)`; its dialogs render once, in `dialogs`.
+ * `start` is stable while `client` and `you` are: the board's cards are
+ * memoised on it, and the callbacks are read when a card acts.
  */
 export function useCardStarts(client: ApiClient, you: string | null, onStarted: (taskId: string, how: AutoStartHow) => void, onChanged: () => void): {
   start: (task: NavTask, focus: { tabIndex: 0 | -1 }) => ReactNode;
@@ -266,7 +268,7 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [boardProblem, setBoardProblem] = useState<string | null>(null);
-  const run = async (what: () => Promise<unknown>, after: () => void, report: (s: string) => void) => {
+  const run = useCallback(async (what: () => Promise<unknown>, after: () => void, report: (s: string) => void) => {
     setBusy(true);
     try {
       await what();
@@ -276,28 +278,30 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
     } finally {
       setBusy(false);
     }
-  };
-  const startNow = (task: NavTask, how: AutoStartHow) => {
-    setBoardProblem(null);
-    void run(() => (how === "deliver" ? client.deliver(task.id) : client.talk(task.id)), () => onStarted(task.id, how), (s) => setBoardProblem(s));
-  };
-  const start = (task: NavTask, focus: { tabIndex: 0 | -1 }): ReactNode => {
+  }, []);
+  const latest = useRef({ onStarted, onChanged });
+  latest.current = { onStarted, onChanged };
+  const start = useCallback((task: NavTask, focus: { tabIndex: 0 | -1 }): ReactNode => {
     if (!task.canStart || !task.key) return null;
     const blockers = task.blockedBy ?? [];
     const owner = task.people?.[0];
     const mine = !owner || owner.id === you;
     const ct: CardTask = { id: task.id, key: task.key, blockers };
     const auto = task.autoStart;
+    const startNow = (how: AutoStartHow) => {
+      setBoardProblem(null);
+      void run(() => (how === "deliver" ? client.deliver(task.id) : client.talk(task.id)), () => latest.current.onStarted(task.id, how), setBoardProblem);
+    };
     return (
       <StartMenu taskKey={task.key} blockers={blockers} ownerName={owner ? firstName(owner.name) : "its owner"} tabIndex={focus.tabIndex}
-        onStart={(how) => startNow(task, how)}
+        onStart={startNow}
         onStartAnyway={blockers.length > 0 ? () => setDialog({ kind: "anyway", task: ct }) : undefined}
         onStartWhenUnblocked={mine ? () => setDialog({ kind: "auto", task: ct }) : undefined}
         startWhenUnblockedRefused={neverMerges(blockers)}
         auto={auto ? { how: auto.how, by: auto.by.id === you ? "You" : firstName(auto.by.name), ago: ago(auto.at),
-          onCancel: mine ? () => void run(() => client.cancelAutoStart(task.id), onChanged, setBoardProblem) : undefined } : undefined} />
+          onCancel: mine ? () => void run(() => client.cancelAutoStart(task.id), () => latest.current.onChanged(), setBoardProblem) : undefined } : undefined} />
     );
-  };
+  }, [client, you, run]);
   const close = (open: boolean) => {
     if (!open) {
       setDialog(null);

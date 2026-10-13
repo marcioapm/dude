@@ -13,8 +13,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
-import { boardScope, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { boardScope, type BoardCard, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
+import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
@@ -301,6 +301,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
     if (how === "talk") go(inTree({ kind: "task", id: taskId }, "chat"));
   }, () => void load());
+  // Stable, as the board's memoised cards need: an App render redraws none.
+  const startCard = cardStarts.start;
+  const cardStart = useCallback((card: BoardCard, focus: BoardCardStartFocus) => startCard(card.task, focus), [startCard]);
 
   // The tab says where you are: "TEXT-14 · Implement — dude"; teammates
   // see the same beside your face.
@@ -460,7 +463,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         filter={boardFilter}
         onFilterChange={setBoardFilter}
         onHighlightChange={litCard.set}
-        cardStart={(card, focus) => cardStarts.start(card.task, focus)}
+        cardStart={cardStart}
         groupBy={groupByEpic ? "epic" : null}
         laneMenu={(lane) => {
           if (!lane.epic) return null;
