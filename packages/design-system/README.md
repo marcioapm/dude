@@ -1111,7 +1111,8 @@ here.
   completed dude actions, which the rail says under the list when it has any
   completed dude action. The names share
   one column, as wide as the longest up to 60% of the rail, so the bars
-  start together), and the files it has
+  start together; a longer name wraps, never truncated, so "(called)" and
+  "(completed)" stay readable), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
   the diff's own list does. When the agent session is narrower than about

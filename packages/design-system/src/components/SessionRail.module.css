@@ -45,13 +45,13 @@
 .bar {
   display: contents;
 }
+/* A long name wraps rather than truncating: "dude update task (called)" and
+   "(completed)" differ only at their end. */
 .barName {
   min-width: 64px;
   min-height: 22px;
   line-height: 22px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .bar i {
   display: block;
