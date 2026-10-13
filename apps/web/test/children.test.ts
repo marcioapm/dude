@@ -52,6 +52,29 @@ describe("agent.child.started", () => {
     expect(only(call.children).id).toBe("ses_kid");
   });
 
+  test("that call's own event, arriving later, fills in the same turn, the child still under it", () => {
+    const state = apply(emptyProjection(), [started()]);
+    const made = only(state.turns) as ToolTurn;
+    const called = parentCall();
+    apply(state, [called, ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })]);
+    const call = only(snapshot(state).turns) as ToolTurn;
+    expect(call).toBe(made);
+    expect(call).toMatchObject({ id: "c1", tool: "task", args: { description: "Inspect test capture setup", subagent_type: "explore" },
+      startedAt: called.occurredAt, status: "completed" });
+    expect(only(call.children).id).toBe("ses_kid");
+  });
+
+  test("a grandchild's call heard after the grandchild fills in the same turn", () => {
+    const state = apply(emptyProjection(), [parentCall(), started(),
+      ev(EventTypes.ChildStarted, { childId: "ses_grand", callId: "k2", parentChildId: "ses_kid", kind: "task", title: "Deeper" })]);
+    const made = only(childOf(state.turns).turns) as ToolTurn;
+    apply(state, [ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k2", tool: "task", input: { description: "Deeper" } })]);
+    const call = only(childOf(snapshot(state).turns).turns) as ToolTurn;
+    expect(call).toBe(made);
+    expect(call).toMatchObject({ tool: "task", args: { description: "Deeper" } });
+    expect(only(call.children).id).toBe("ses_grand");
+  });
+
   test("several children of one turn each hang under their own call", () => {
     const { turns } = project([
       ev(EventTypes.ToolCalled, { tool: "task", callId: "s1" }), ev(EventTypes.ToolCalled, { tool: "task", callId: "s2" }),

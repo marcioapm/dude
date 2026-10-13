@@ -474,6 +474,11 @@ export interface Projection {
   /** Child sessions by their id, and each child's tool calls by theirs. */
   childrenById: Map<string, ChildTurn>;
   childToolsByCall: Map<string, ToolTurn>;
+  /**
+   * Calls made for a child whose parent's call was not heard yet: that
+   * call's own event fills one in rather than adding a second turn.
+   */
+  placeholderCalls: Set<ToolTurn>;
   /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
   questionsById: Map<string, QuestionTurn>;
@@ -534,6 +539,7 @@ export function emptyProjection(): Projection {
     toolsByCall: new Map(),
     childrenById: new Map(),
     childToolsByCall: new Map(),
+    placeholderCalls: new Set(),
     steersByDirective: new Map(),
     questionsById: new Map(),
     repoRequestsById: new Map(),
@@ -627,9 +633,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ToolCalled: {
         state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const callId = String(payload.callId ?? event.eventId);
-        const turn = toolTurn(callId, tool, payload, event.occurredAt);
-        toolsByCall.set(callId, turn);
-        addToolTurn(state, turn, ask);
+        const placeholder = toolsByCall.get(callId);
+        if (placeholder && state.placeholderCalls.has(placeholder)) {
+          fillPlaceholder(state, placeholder, tool, payload, event.occurredAt);
+        } else {
+          const turn = toolTurn(callId, tool, payload, event.occurredAt);
+          toolsByCall.set(callId, turn);
+          addToolTurn(state, turn, ask);
+        }
 
         state.activity = "tool";
         state.activeTool = { name: tool, since: event.occurredAt };
@@ -674,6 +685,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           turn = toolTurn(callId, childTool, payload, event.occurredAt);
           state.childToolsByCall.set(`${child.id}/${callId}`, turn);
           child.turns.push(turn);
+        } else if (event.eventType === EventTypes.ChildToolCalled && state.placeholderCalls.has(turn)) {
+          fillPlaceholder(state, turn, childTool, payload, event.occurredAt);
         }
         if (event.eventType === EventTypes.ChildToolCompleted) endTool(turn, payload, event.occurredAt);
         break;
@@ -1239,6 +1252,17 @@ function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): 
 }
 
 /**
+ * A call made for a child before its own call event, filled in by that
+ * event in place: the same object keeps its id, its place and its children.
+ */
+function fillPlaceholder(state: Projection, turn: ToolTurn, tool: string, payload: Record<string, unknown>, at: string): void {
+  state.placeholderCalls.delete(turn);
+  turn.tool = tool;
+  turn.args = payload.input ?? null;
+  turn.startedAt = at;
+}
+
+/**
  * The child an `agent.child.*` event is about, made from it when it is the
  * first heard of the child, and hung under the parent's call. A child of a
  * child hangs under its parent child's call; one whose call is unknown (a
@@ -1271,6 +1295,7 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
   let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
   if (!call) {
     call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
+    state.placeholderCalls.add(call);
     if (parentChild) {
       state.childToolsByCall.set(`${parentChild.id}/${call.id}`, call);
       parentChild.turns.push(call);

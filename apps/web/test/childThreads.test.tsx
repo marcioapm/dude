@@ -100,6 +100,23 @@ test("two children of one turn are two threads, each under its own call", async 
   expect([...el.querySelectorAll("[data-testid='child-thread']")].map((t) => t.getAttribute("data-child"))).toEqual(["a", "b"]);
 });
 
+test("a child heard before its parent's call is drawn once, under that call's one card", async () => {
+  const errors: unknown[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  try {
+    // Built in this order so the child's cursor precedes its call's.
+    const child = ev(EventTypes.ChildStarted, { ...kid, kind: "task", title: "Inspect test capture setup" }, 120);
+    const call = ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Inspect test capture setup" } }, 120);
+    const el = await render([child, call]);
+    expect(el.querySelectorAll("[data-testid='child-thread']")).toHaveLength(1);
+    expect(el.querySelectorAll("[data-tool]")).toHaveLength(1);
+    expect(errors.filter((e) => String(e).includes("same key"))).toEqual([]);
+  } finally {
+    console.error = original;
+  }
+});
+
 test("a child watched while it works folds when it ends", async () => {
   const before = [...start(), ev(EventTypes.ChildMessage, { ...kid, text: "Reading." }, 3)];
   const el = await render(before);
