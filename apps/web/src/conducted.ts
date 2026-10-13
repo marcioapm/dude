@@ -33,7 +33,7 @@ export type ConductorSteer = Pick<HumanTurn, "text" | "at" | "lands" | "delivere
 export function conductedLines(task: { decider: string; runs: readonly Run[] }, events: readonly PersistedEvent[]): ConductedLine[] {
   const steers = conductorSteers(events);
   const lined = task.runs.filter((r) => r.conductorRunId || steers.has(r.id));
-  if (task.decider !== "conductor" && lined.length === 0) return [];
+  if (task.decider !== "conductor" && lined.length === 0) return relationNotices(events);
   const out: ConductedLine[] = lined.map((run) => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }));
   for (const e of events) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
@@ -83,6 +83,21 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
 
 function pr(p: Record<string, unknown>): string {
   return typeof p.number === "number" ? `Pull request #${p.number}` : "The pull request";
+}
+
+/** What dude's notices about a task's relations are about: they show in Chat whoever decides, conductor or not. */
+const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set"]);
+
+/** dude's notices about what the task waits on — unblocked, started when unblocked, or not — oldest first. */
+export function relationNotices(events: readonly PersistedEvent[]): ConductedLine[] {
+  const out: ConductedLine[] = [];
+  for (const e of events) {
+    const p = (e.payload ?? {}) as Record<string, unknown>;
+    if (e.eventType === EventTypes.ChatNotice && typeof p.about === "string" && RELATION_NOTICES.has(p.about) && typeof p.text === "string" && p.text) {
+      out.push({ kind: "notice", id: e.eventId, at: e.occurredAt, text: p.text });
+    }
+  }
+  return out.sort(byInstant((l) => l.at));
 }
 
 /**

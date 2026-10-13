@@ -344,6 +344,9 @@ var builtinInstructions = map[string][]string{
 			"question (decide ask_person) only when dude wakes you at the decision before the pull request, saying " +
 			"what ran and what was not verified. Open it (decide open_pull_request) only when the person answered Open " +
 			"or Draft to that question, at the code it will open. Past the policy's bounds, or for what only a person may decide, ask.",
+		"A task blocked by another starts only once that one is merged; if a start is refused as blocked, tell the person " +
+			"what it waits on and stop. When you learn the task needs other work merged first, relate them (update_task " +
+			"addRelations, blocked_by), saying why.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
 			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +

@@ -172,16 +172,22 @@ func (r *Runtime) Start(ctx context.Context, o StartOptions) (id string, dedupli
 // StartTx is Start in the caller's transaction, for a start that must
 // commit with something else: a task taken up again and its new delivery.
 func (r *Runtime) StartTx(ctx context.Context, tx pgx.Tx, o StartOptions) (string, error) {
+	id, _, err := r.StartInTx(ctx, tx, o)
+	return id, err
+}
+
+// StartInTx is StartTx saying, as Start does, whether the run already
+// existed for the key.
+func (r *Runtime) StartInTx(ctx context.Context, tx pgx.Tx, o StartOptions) (string, bool, error) {
 	def := r.definition(o.Type)
 	if def == nil {
-		return "", fmt.Errorf("unknown workflow type: %s", o.Type)
+		return "", false, fmt.Errorf("unknown workflow type: %s", o.Type)
 	}
 	input, err := json.Marshal(o.Input)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	id, _, err := r.start(ctx, tx, def, o, input)
-	return id, err
+	return r.start(ctx, tx, def, o, input)
 }
 
 func (r *Runtime) start(ctx context.Context, tx pgx.Tx, def *Definition, o StartOptions, input []byte) (id string, deduplicated bool, err error) {

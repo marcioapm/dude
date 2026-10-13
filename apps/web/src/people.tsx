@@ -3,15 +3,18 @@
  * (`me`: the profile band, your settings, whose asks are yours), a name
  * and face for every id the ledger records as an actor, and who is online.
  *
- * Read once for the shell, again each minute — `online` lapses by the
- * clock, five minutes after someone's last request — and on a live
- * `person.seen`, which the shell's event stream hands to `seen`.
+ * Read once for the shell, again each minute while the page is shown and
+ * at once when it is shown again — `online` lapses by the clock — and on a
+ * live `person.seen`, which the shell's event stream hands to `seen`. The
+ * minute read is also presence's heartbeat (docs/CONTRIBUTING.md, "Online
+ * and last seen").
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatDuration } from "@dude/design-system";
 import { EventTypes, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Member } from "./api/client.ts";
+import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 
 /** A person as the screens draw them: `/v1/people`'s. */
 export type Someone = Member;
@@ -78,10 +81,13 @@ export function PeopleProvider({ client, children }: { client: ApiClient; childr
     return fresh ? build(fresh, refresh, seen) : EMPTY;
   }, [read, seen]);
 
+  useVisibleInterval(() => void read(), EVERY_MS);
+  // Another client (signed in again) reads at once, not at the next minute.
+  const readBy = useRef(read);
   useEffect(() => {
-    void read();
-    const timer = setInterval(() => void read(), EVERY_MS);
-    return () => clearInterval(timer);
+    if (readBy.current === read) return;
+    readBy.current = read;
+    if (!document.hidden) void read();
   }, [read]);
 
   const value = useMemo<People>(() => (listed ? build(listed, refresh, seen) : { ...EMPTY, refresh, seen }), [listed, refresh, seen]);

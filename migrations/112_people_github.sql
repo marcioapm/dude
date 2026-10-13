@@ -1,4 +1,4 @@
--- 111_people_github.sql — who a person is on GitHub, for the
+-- 112_people_github.sql — who a person is on GitHub, for the
 -- Co-authored-by trailers on the commits an agent makes for their task.
 --
 -- github_login and github_user_id together make GitHub's noreply address

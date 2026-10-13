@@ -9,6 +9,7 @@
 
 import type { NavProject, NavTask } from "@dude/design-system";
 import { escalationWords } from "../escalation.ts";
+import { isActive } from "../activity.ts";
 // One question's answer as the form sends it: the choices picked, by index, and the person's own words.
 export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
@@ -77,6 +78,10 @@ import type {
   SearchOutcome,
   AttachmentInfo,
   PreviewSecret,
+  AutoStartHow,
+  RelationSide,
+  TaskRelations,
+  TaskStatus,
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
@@ -302,6 +307,20 @@ export interface RunDetail extends Run {
 }
 
 export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";
+export type { AutoStartHow, RelationSide, TaskRelations, TaskRelationView } from "@dude/domain";
+
+/** A start of a blocked task anyway: a person's, with the note recorded on it. */
+export interface StartAnyway {
+  override?: true;
+  note?: string;
+}
+
+/** The open blockers a start refused as `blocked` names (its details). */
+export function refusedBlockers(e: unknown): Array<{ key: string; status: TaskStatus }> | null {
+  if (!(e instanceof ApiError) || e.code !== "blocked") return null;
+  const d = e.details as { blockers?: Array<{ key: string; status: TaskStatus }> } | undefined;
+  return d?.blockers ?? [];
+}
 
 /** What the API returns when something goes wrong. */
 export class ApiError extends Error {
@@ -416,6 +435,8 @@ export class ApiClient {
         ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
         "content-type": raw ? body.type : "application/json",
         ...(this.#where ? { "x-dude-where": this.#where } : {}),
+        // Only a request from a tab someone is using says they are here.
+        ...(isActive(Date.now()) ? { "x-dude-active": "1" } : {}),
       },
       ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }),
     });
@@ -938,8 +959,31 @@ export class ApiClient {
    * Start the delivery workflow: implement, review, fix, simplify, then a
    * pull request. Idempotent — a second call joins the delivery in flight.
    */
-  deliver(taskId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, {});
+  deliver(taskId: string, start: StartAnyway = {}): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, start);
+  }
+
+  /** A task's relations, what holds it up and what it holds up, and its start when unblocked. */
+  relations(taskId: string): Promise<TaskRelations> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/relations`);
+  }
+
+  /** Relate a task to another, named by key or id; refused as `cycle` (details.loop), `duplicate` or `self`. */
+  addRelation(taskId: string, kind: RelationSide, other: string, why?: string): Promise<TaskRelations> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/relations`, { kind, task: other, ...(why ? { why } : {}) });
+  }
+
+  removeRelation(taskId: string, kind: RelationSide, other: string): Promise<void> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(taskId)}/relations/${kind}/${encodeURIComponent(other)}`);
+  }
+
+  /** Start the task with `how` once its last blocker merges: its owner only. */
+  setAutoStart(taskId: string, how: AutoStartHow): Promise<TaskRelations> {
+    return this.#request("PUT", `/v1/tasks/${encodeURIComponent(taskId)}/auto-start`, { how });
+  }
+
+  cancelAutoStart(taskId: string): Promise<void> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(taskId)}/auto-start`);
   }
 
   /** Approve or decline an agent's request for a repository. */
@@ -982,8 +1026,8 @@ export class ApiClient {
   }
 
   /** Pick a stopped task back up — the task's owner does — with a note for the agents. */
-  recover(taskId: string, action: RecoverAction, note: string): Promise<{ action: RecoverAction }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note });
+  recover(taskId: string, action: RecoverAction, note: string, start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note, ...start });
   }
 
   /** How delivery goes on after it stopped for a person: the task's owner decides. */
@@ -1070,8 +1114,8 @@ export class ApiClient {
    * Talk it through: a task not started gets its conductor, which plans it
    * with the person; nothing is built until it decides to.
    */
-  talk(taskId: string): Promise<ChatSent> {
-    return this.#request("POST", `/v1/tasks/${taskId}/talk`, {});
+  talk(taskId: string, start: StartAnyway = {}): Promise<ChatSent> {
+    return this.#request("POST", `/v1/tasks/${taskId}/talk`, start);
   }
 
   // -- brainstorm sessions --------------------------------------------------

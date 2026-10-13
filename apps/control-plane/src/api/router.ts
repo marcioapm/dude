@@ -135,7 +135,9 @@ export class Router {
           if (principal?.credentialKind === "person" && expiresAt !== undefined) principal.expiresAt = expiresAt;
         }
         if (!principal) throw unauthorized();
-        await touch(principal, request.headers.get("x-dude-where"), url.pathname);
+        // Only person sessions from a tab in use establish presence; API keys never do.
+        const using = principal.credentialKind === "person" && request.headers.get("x-dude-active") === "1";
+        if (using) await touch(principal, request.headers.get("x-dude-where"), url.pathname);
 
         return await (route.handler as Handler)({ request, url, params, principal });
       }
