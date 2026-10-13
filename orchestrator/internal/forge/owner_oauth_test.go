@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -88,6 +89,54 @@ func TestOwnerRefreshRotatesOnceAcrossConcurrentCallers(t *testing.T) {
 	}
 	if _, err := OwnerToken(ctx, database, "org_oauth", "per_oauth"); err == nil {
 		t.Fatal("replacement retained authorization")
+	}
+}
+
+func TestOwnerRefreshFailureKindsArePersisted(t *testing.T) {
+	database, owner := dbtest.Open(t)
+	ctx := context.Background()
+	_, err := owner.Exec(ctx, `INSERT INTO organizations (id,name,slug) VALUES ('org_fail','Fail','fail');
+		INSERT INTO people (id,organization_id,name,email) VALUES ('per_fail','org_fail','Owner','fail@example.com');
+		INSERT INTO forge_credentials (id,organization_id,forge,auth,secret,app_id,oauth_client_id,oauth_client_secret)
+		VALUES ('fc_fail','org_fail','github','github_app','pem','1','client','secret');
+		INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,
+			github_login,access_token,refresh_token,expires_at,refresh_expires_at)
+		VALUES ('org_fail','per_fail','fc_fail',1,1,'owner','still-valid','refresh',now()+interval '30 seconds',now()+interval '1 day')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := http.StatusBadGateway
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status != 200 {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"error":"bad_refresh_token"}`))
+	}))
+	defer server.Close()
+	previous := http.DefaultTransport
+	http.DefaultTransport = oauthTransport{server.URL, previous}
+	defer func() { http.DefaultTransport = previous }()
+	token, err := OwnerToken(ctx, database, "org_fail", "per_fail")
+	if err != nil || token != "still-valid" {
+		t.Fatalf("transient refresh token=%q err=%v", token, err)
+	}
+	var required bool
+	_ = owner.QueryRow(ctx, `SELECT reconnect_required FROM github_user_authorizations`).Scan(&required)
+	if required {
+		t.Fatal("transient failure required reconnect")
+	}
+	status = 200
+	if _, err := owner.Exec(ctx, `UPDATE github_user_authorizations SET expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OwnerToken(ctx, database, "org_fail", "per_fail"); err == nil || err.Error() == "" || strings.Contains(err.Error(), "bad_refresh_token") {
+		t.Fatalf("invalid grant error %v", err)
+	}
+	_ = owner.QueryRow(ctx, `SELECT reconnect_required FROM github_user_authorizations`).Scan(&required)
+	if !required {
+		t.Fatal("invalid grant did not require reconnect")
 	}
 }
 

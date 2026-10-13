@@ -76,6 +76,7 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
 		}
 		rotated, exchangeErr := refreshUserToken(ctx, clientID, clientSecret, refresh)
 		invalid := exchangeErr == reconnectGrant
+		retry := false
 		persistErr := database.InOrg(ctx, org, func(tx pgx.Tx) error {
 			if exchangeErr != nil {
 				_, err := tx.Exec(ctx, `UPDATE github_user_authorizations SET reconnect_required = $1,
@@ -89,12 +90,15 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
        AND reconnect_required = false`, rotated.Access, rotated.Refresh, rotated.Expires, rotated.RefreshExpires,
 				person, credential, version, claim)
 			if err == nil && tag.RowsAffected() == 0 {
-				return reconnect
+				retry = true
 			}
 			return err
 		})
 		if persistErr != nil {
 			return "", persistErr
+		}
+		if retry {
+			continue
 		}
 		if invalid {
 			return "", reconnect

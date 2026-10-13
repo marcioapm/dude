@@ -58,7 +58,13 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
     return json({ url: url.toString() });
   });
   router.get(callbackPath, async (ctx) => {
-    const { organizationId, personId } = session(ctx);
+    let principal: RequestContext["principal"];
+    try {
+      principal = session(ctx);
+    } catch {
+      return landing("authorization_failed");
+    }
+    const { organizationId, personId } = principal;
     const state = ctx.url.searchParams.get("state") ?? "";
     const transaction = await withOrg(organizationId, async ({ sql }) => {
       const [row] = await sql`DELETE FROM github_oauth_transactions WHERE state_hash = ${hash(state)}
