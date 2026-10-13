@@ -130,9 +130,14 @@ export function CalmerSection({ mode }: { readonly mode: PaneMode }) {
               ["an agent", <><AgentAvatar role="implementer" size="lg" live /><AgentAvatar role="reviewer" size="md" /></>],
               ["stack, owner first", <PersonAvatarStack people={[ANA, CY]} size={28} agents={new Map([["per_ana", { role: "implementer", live: true }]])} />],
               ["stack past max", <PersonAvatarStack people={[ANA, BO, CY, DEE, ELI]} size={24} max={4} />],
+              ["initials at 16", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={16} data-testid="stack-initials-16" />],
+              ["at 16, past max", <PersonAvatarStack people={[BO, DEE, ELI, ...GUESTS]} size={16} max={2} data-testid="stack-initials-16" />],
               ["initials at 20, as the sidebar's", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={20} data-testid="stack-initials-20" />],
               ["at 20, past max", <PersonAvatarStack people={[BO, DEE, ELI, ...GUESTS]} size={20} max={2} data-testid="stack-initials-20" />],
-              ["initials at 16", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={16} data-testid="stack-initials-16" />],
+              ["initials at 24", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={24} data-testid="stack-initials-24" />],
+              ["at 24, past max", <PersonAvatarStack people={[BO, DEE, ELI, ...GUESTS]} size={24} max={2} data-testid="stack-initials-24" />],
+              ["initials at 28", <PersonAvatarStack people={[BO, DEE, ELI, WALT]} size={28} data-testid="stack-initials-28" />],
+              ["at 28, past max", <PersonAvatarStack people={[BO, DEE, ELI, ...GUESTS]} size={28} max={2} data-testid="stack-initials-28" />],
               ["projects", <>
                 {[16, 20, 32, 56].map((s) => <ProjectAvatar key={s} project={{ id: "prj_dash", name: "Dashboard" }} size={s} />)}
                 <ProjectAvatar project={{ name: "Billing API", imageUrl: PROJECT_IMAGE }} size={56} />

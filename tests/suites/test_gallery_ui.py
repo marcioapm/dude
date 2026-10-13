@@ -493,16 +493,16 @@ def test_a_needs_you_card_at_1440_keeps_its_epic_readable_beside_the_mark(galler
     assert console_errors == []
 
 
-def test_a_stack_of_initials_at_16_and_20px_keeps_every_letter_on_its_face(gallery_page: Page, console_errors: list):
-    """The sidebar's small stacks: each covered face's initials' ink sits right of the face on top of it
-    and that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the online
-    ring around it), and left of its own right edge. Ink bounds come from canvas metrics taken at 40x
-    the font size and scaled down, since at 6px they round to whole pixels."""
+def test_a_stack_keeps_every_letter_on_its_face(gallery_page: Page, console_errors: list):
+    """At 16, 20, 24 and 28: each covered face's initials' ink sits right of the face on top of it and
+    that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the online ring
+    around it), and left of its own right edge. Ink bounds come from canvas metrics taken at 40x the
+    font size and scaled down, since at 6px they round to whole pixels."""
     gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
-    measured = []
-    for test_id in ("stack-initials-16", "stack-initials-20"):
-        stacks = gallery_page.get_by_test_id(test_id).all()
-        assert stacks, test_id
+    cut, behind_online = [], {}
+    for size in (16, 20, 24, 28):
+        stacks = gallery_page.get_by_test_id(f"stack-initials-{size}").all()
+        assert stacks, size
         for stack in stacks:
             faces = stack.evaluate("""s => {
                 const ring = (el) => Math.max(0, ...getComputedStyle(el).boxShadow.replace(/[a-z]+\\([^)]*\\)/gi, '')
@@ -521,14 +521,14 @@ def test_a_stack_of_initials_at_16_and_20px_keeps_every_letter_on_its_face(galle
                             spill: inkRight - f.getBoundingClientRect().right};
                 });
             }""")
-            measured += [(f["text"], f["ring"]) for f in faces]
+            behind_online.setdefault(size, []).extend(f["text"] for f in faces if f["ring"] > 1.5)
             # 0.2x16 = 3.2px is not a whole number of 1/64px layout units, so allow that rounding.
-            cut = [f for f in faces if f["covered"] > 0.02 or f["spill"] > 0.02]
-            assert cut == [], (test_id, faces)
-    # The fixtures put an online face on top of "WW" and of a "+N" chip, so the wider ring is measured
-    # against the widest initials and against the chip.
-    behind_online = [t for t, r in measured if r > 1.5]
-    assert "WW" in behind_online and any(t.startswith("+") for t in behind_online), measured
+            cut += [(size, f) for f in faces if f["covered"] > 0.02 or f["spill"] > 0.02]
+    assert cut == [], cut
+    # At every size the fixtures put an online face on top of "WW" and of a two-digit "+N" chip, so the
+    # wider ring is measured against the widest initials and against the chip.
+    for size, texts in behind_online.items():
+        assert "WW" in texts and any(t.startswith("+") and len(t) == 3 for t in texts), (size, texts)
     assert console_errors == []
 
 

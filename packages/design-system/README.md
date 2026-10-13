@@ -1370,10 +1370,9 @@ here.
 - `PersonAvatarStack` overlaps by a fifth and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
   requester). A covered face's initials clear the face on top and its ring
-  (the online ring too) and centre in the part of the face that shows. At
-  16 and 20 every face in the stack sets its initials smaller, so two wide
-  capitals ("WW") fit in that part behind an online face; from 24 up, wider
-  initials start at its edge and can run past the face's right. An agent
+  (the online ring too) and centre in the part of the face that shows. In
+  a stack, initials are set at 0.29×size so two wide capitals ("WW") fit
+  behind an online face and its ring; alone, 0.38×size. An agent
   tile on the face on top can still cover the next face's initials. Past
   `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
