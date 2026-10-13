@@ -112,14 +112,18 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
             expires_at = EXCLUDED.expires_at, refresh_expires_at = EXCLUDED.refresh_expires_at,
             reconnect_required = false, refresh_claim = NULL, refresh_claim_until = NULL`;
         await sql`UPDATE people SET github_login = ${user.login!}, github_user_id = ${user.id!} WHERE id = ${personId}`;
-        // The workflow signal mirrors workflow.SignalTx: only deliveries frozen to this person are woken.
-        const parked = await sql`SELECT DISTINCT r.id FROM workflow_runs r JOIN pr_publications p ON p.task_id = r.task_id AND p.branch = r.state->>'branch'
-          WHERE p.owner_person_id = ${personId} AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'`;
-        for (const { id } of parked) {
+        // Mirrors workflow.SignalTx: the signal is stored even when a publication step that saw the missing
+        // authorization has not committed its park yet; only the wake depends on the run already waiting.
+        // Recipients are deliveries whose current branch is frozen to this person.
+        const recipients = await sql`SELECT DISTINCT r.id FROM workflow_runs r JOIN pr_publications p ON p.task_id = r.task_id AND p.branch = r.state->>'branch'
+          WHERE p.owner_person_id = ${personId} AND (
+            (r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized')
+            OR (r.status = 'running' AND r.step IN ('openPullRequest', 'awaitPRFix')))`;
+        for (const { id } of recipients) {
           await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
             VALUES (${newId("workflowSignal")}, ${organizationId}, ${id}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
           await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${id}
-            AND status = 'waiting' AND awaiting_signals ? 'github.authorized'`;
+            AND status = 'waiting' AND awaiting_signals ? 'github.authorized' AND (wait_until IS NULL OR wait_until <= now())`;
         }
         return "connected";
       });

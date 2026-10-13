@@ -5,8 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +21,55 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+// connectThroughCallback completes Connect GitHub for person through the
+// control plane's real /connect and /callback routes over this test's
+// database (testdata/connect-github.ts), GitHub's answers faked there. It
+// may run on a workflow goroutine, so a failure is reported, not fatal.
+func (w *world) connectThroughCallback(person, token string, githubID int) {
+	_, file, _, _ := runtime.Caller(0)
+	c := w.owner.Config()
+	cmd := exec.Command("bun", "run", "orchestrator/testdata/connect-github.ts", w.org, person, token, strconv.Itoa(githubID))
+	cmd.Dir = filepath.Join(filepath.Dir(file), "..")
+	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
+	out, err := cmd.Output()
+	if err != nil || string(out) != "/?github=connected#/me/settings" {
+		w.t.Errorf("Connect GitHub callback: %v %s", err, out)
+	}
+}
+
+// Connect completes while the publication step that found no authorization
+// is still committing its park: the stored signal resumes it, once, as the
+// frozen owner, without spending the workflow's retry budget.
+func TestAConnectBeforeThePublicationParksResumesIt(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	var parking atomic.Bool
+	attemptAtPark := -1
+	armed := w.gated(func(step, next string) {
+		if step == "openPullRequest" && next == "openPullRequest" && w.taskStatus(task) == "awaiting_input" && parking.CompareAndSwap(false, true) {
+			attemptAtPark = w.attempts(task)
+			w.connectThroughCallback(ana, "ana-token", 1)
+		}
+	})
+	armed.Store(true)
+	w.deliver(task)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if !parking.Load() || attemptAtPark != 0 {
+		t.Fatalf("parked %v at attempt %d", parking.Load(), attemptAtPark)
+	}
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
+		t.Fatalf("creation auth %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized); n != 1 {
+		t.Fatalf("%d consumed authorization signals", n)
+	}
+}
 
 // "Let Deliver finish it" with openPullRequest confirmed authorizes the
 // gate; the author is frozen then, not when the step later executes.
