@@ -57,6 +57,7 @@ type stallRow struct {
 	ID, Org, ProjectID, TaskID, Phase, Role, Category, Tier, LuxRunID string
 	RunningSecs, WindowSecs, SilentSecs                               int64
 	OpenCalls                                                         map[string]time.Time
+	Children                                                          map[string]childEntry
 	FilesChangedAt, ReportedAt                                        *time.Time
 	Fingerprint                                                       string
 	Usage                                                             []byte
@@ -73,7 +74,7 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 				COALESCE(r.role::text, ''), COALESCE(r.category, ''), COALESCE(r.model_tier, ''), COALESCE(r.lux_run_id, ''),
 				extract(epoch FROM now() - COALESCE(r.started_at, r.created_at))::bigint, `+stallWindow+`::bigint,
 				COALESCE(extract(epoch FROM now() - `+silentSince+`)::bigint, 0),
-				r.open_tool_calls_at, r.files_changed_at, r.stall_reported_at, `+stallFacts+`, r.stall_usage,
+				r.open_tool_calls_at, r.children, r.files_changed_at, r.stall_reported_at, `+stallFacts+`, r.stall_usage,
 				`+stalledCall+`, `+stalledFiles+`, `+stalledSilent+`, lc.conducted,
 				COALESCE((SELECT (w.state->>'iteration')::int FROM workflow_runs w WHERE w.task_id = r.task_id
 					ORDER BY w.created_at DESC LIMIT 1), 0),
@@ -188,8 +189,22 @@ func openCalls(ctx context.Context, tx pgx.Tx, r stallRow, s *delivery.Stall) er
 		}
 		s.Calls = append(s.Calls, delivery.OpenCall{Tool: cmp.Or(tool, "tool"), Input: callInput(input),
 			OpenSecs: int64(r.Now.Sub(r.OpenCalls[id]).Seconds()), Command: commandTools[strings.ToLower(tool)]})
+		if c, ok := r.Children[id]; ok {
+			s.Children = append(s.Children, delivery.ChildFact{CallID: id, Tool: cmp.Or(tool, "tool"), Title: c.Title, Kind: c.Kind,
+				ChildID: c.ChildID, LastEvent: c.LastEvent, LastEventSecs: int64(r.Now.Sub(c.LastEventAt).Seconds()), WaitingOn: c.WaitingOn})
+		}
 	}
 	return nil
+}
+
+// childEntry is one call's line in runs.children (childFact, stamped).
+type childEntry struct {
+	ChildID     string              `json:"childId"`
+	Kind        string              `json:"kind"`
+	Title       string              `json:"title"`
+	LastEvent   string              `json:"lastEvent"`
+	LastEventAt time.Time           `json:"lastEventAt"`
+	WaitingOn   *delivery.WaitingOn `json:"waitingOn"`
 }
 
 // callInput is a call's input as the agent sent it, on one line, cut: a

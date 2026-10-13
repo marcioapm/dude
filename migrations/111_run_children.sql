@@ -10,3 +10,15 @@
 -- Adding a column with a constant default rewrites nothing (Postgres 11+);
 -- it takes ACCESS EXCLUSIVE on runs only for the catalogue change.
 ALTER TABLE runs ADD COLUMN children jsonb NOT NULL DEFAULT '{}';
+
+-- run_stalled (from 090): a Run reported for an open call is no longer
+-- stalled once the call's child did something after the report, as
+-- phases.callSince measures it.
+CREATE OR REPLACE FUNCTION run_stalled(r runs) RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT r.status = 'running' AND r.stall_reported_at IS NOT NULL AND (
+    ('call' = ANY (r.stall_reasons) AND EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
+      WHERE GREATEST(oc.value::timestamptz, (r.children->oc.key->>'lastEventAt')::timestamptz) <= r.stall_reported_at))
+    OR ('files' = ANY (r.stall_reasons) AND r.files_changed_at <= r.stall_reported_at)
+    OR ('silent' = ANY (r.stall_reasons)
+      AND COALESCE(r.agent_active_at, r.files_changed_at, r.started_at) <= r.stall_reported_at))
+$$;

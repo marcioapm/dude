@@ -344,7 +344,8 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// the running time before it and drops its wait. The clocks: no
 		// change in files (files_changed_at), the agent's last activity
 		// (agent_active_at), and the last report (stall_reported_at, so
-		// run_stalled still compares like with like), and each open call.
+		// run_stalled still compares like with like), and each open call
+		// and its child's last event.
 		// A first start, never away, dates its files now.
 		// A silent report's facts end in its silence's start (stallFacts):
 		// when that is the silence the clocks move on, it moves with them,
@@ -369,6 +370,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			open_tool_calls_at = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
 				THEN COALESCE((SELECT jsonb_object_agg(key, to_jsonb(`+backFromAway("value::timestamptz")+`))
 					FROM jsonb_each_text(open_tool_calls_at)), '{}') ELSE open_tool_calls_at END,
+			children = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
+				THEN COALESCE((SELECT jsonb_object_agg(key, value || jsonb_build_object('lastEventAt',
+					`+backFromAway("(value->>'lastEventAt')::timestamptz")+`)) FROM jsonb_each(children)), '{}') ELSE children END,
 			left_running_at = CASE WHEN $2 = 'running' THEN NULL
 				WHEN lux_state = 'running' THEN now() ELSE left_running_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END

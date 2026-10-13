@@ -428,3 +428,34 @@ func TestTheFakeLuxsChildIsTheSameOnEveryHarness(t *testing.T) {
 		})
 	}
 }
+
+// A child working while its parent's call waits is the agent working: the
+// Run's last activity is the child's.
+func TestAChildsActivityIsTheAgents(t *testing.T) {
+	oc := func(typ string, data map[string]any) map[string]any {
+		return map[string]any{"type": "opencode." + typ, "data": data}
+	}
+	w := newHarnessWorld(t)
+	w.feed(map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "ses_run"}},
+		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "kind": "think",
+			"title": "Look", "rawInput": map[string]any{"subagent_type": "explore", "description": "Look"}}},
+		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid", "status": "running"}))
+	mustExecH(t, w, `UPDATE runs SET agent_active_at = now() - interval '40 minutes' WHERE id = $1`)
+	w.feed(oc("part", map[string]any{"sessionID": "ses_kid", "callID": "k1", "tool": "read", "status": "running",
+		"input": map[string]any{"filePath": "/w/a.go"}}))
+	var since time.Duration
+	if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM now() - agent_active_at)::float8 * interval '1 second'
+		FROM runs WHERE id = $1`, w.run.ID).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+	if since > time.Minute {
+		t.Errorf("the Run's last activity is %v ago after its child's call", since)
+	}
+}
+
+func mustExecH(t *testing.T, w *harnessWorld, sql string) {
+	t.Helper()
+	if _, err := w.owner.Exec(context.Background(), sql, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+}
