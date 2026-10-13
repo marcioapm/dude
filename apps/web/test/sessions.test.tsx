@@ -1629,6 +1629,41 @@ describe("a session's agent starting", () => {
     expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
   });
 
+  test("Try again's fresh agent, briefed with the same words: one full briefing card, then one line that opens it; the message read once", async () => {
+    const BRIEF = "Brainstorm, you are working with Márcio on billing.\n\n## The first message\n\nMárcio: plan the epic";
+    const failedThenRetried = () => [
+      ...starting(() => [
+        ev("session.briefed", { text: BRIEF }),
+        ev("run.failed", { status: "failed", error: "x", stage: "repositories", reason: "clone failed" }),
+      ]),
+      { ...ev("run.created", { role: "brainstorm", retries: RUN }), runId: "run_brainstorm2" },
+      { ...ev("session.briefed", { text: BRIEF }), runId: "run_brainstorm2" },
+      { ...ev("agent.session.started", { role: "brainstorm" }), runId: "run_brainstorm2" },
+    ];
+    const c = project(failedThenRetried(), "running");
+    const briefings = c.turns.filter((t) => t.kind === "prompt");
+    expect(briefings.map((t) => t.kind === "prompt" && [t.briefing, t.again ?? false])).toEqual([[true, false], [true, true]]);
+    expect(c.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && [t.text, t.deliveredAt !== null, t.failed]))
+      .toEqual([["plan the epic", true, null]]);
+
+    const page = await sessionPage(new SessionClient(detail("owner"), failedThenRetried()));
+    await until(() => page.querySelector("[data-testid=chat-briefed-again]"), "the line");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(1);
+    expect(page.querySelectorAll("[data-testid=human-turn]").length).toBe(1);
+    const toggle = page.querySelector<HTMLButtonElement>("[data-testid=briefed-again-toggle]")!;
+    expect(toggle.textContent).toBe("Briefed again with the same message");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(2);
+  });
+
+  test("a later Run that is not Try again's keeps its briefing in full, even with the same words", () => {
+    const BRIEF = "Brainstorm, you are working with Márcio.";
+    const c = project([ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF }),
+      ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF })], "running");
+    expect(c.turns.filter((t) => t.kind === "prompt").map((t) => t.kind === "prompt" && (t.again ?? false))).toEqual([false, false]);
+  });
+
   // A parked agent whose resume lux ended while it waited for a host: its message queued, never read.
   function failedResume() {
     const at = (ms: number) => ago(60_000 - ms);

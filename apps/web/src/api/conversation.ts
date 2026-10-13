@@ -100,6 +100,8 @@ export interface PromptTurn {
   at: string;
   /** dude's briefing of a task's conductor, not a phase's task. */
   briefing?: true;
+  /** A briefing Try again repeated, word for word, to the fresh agent: shown folded, the first one already says it. */
+  again?: true;
   /** Images a person gave with the task. */
   attachments: AttachmentInfo[];
 }
@@ -547,6 +549,9 @@ export interface Projection {
   pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
+  /** The last briefing shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
+  lastBriefing: PromptTurn | null;
+  retryRun: boolean;
   /** Where the current Run's agent is while it starts; null once it runs. */
   start: StartState | null;
   /** The current start has had a `run.stage`: a lux that reports stages, so its end gets a summary line. */
@@ -592,6 +597,8 @@ export function emptyProjection(): Projection {
     heldUnpark: null,
     pendingAsk: null,
     briefed: false,
+    lastBriefing: null,
+    retryRun: false,
     start: null,
     startStaged: false,
     ran: false,
@@ -650,6 +657,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startStaged = false;
         state.startWoken = false;
         state.heldUnpark = null;
+        state.retryRun = typeof payload.retries === "string";
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
         state.retrying = new Set();
@@ -843,7 +851,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = typeof payload.text === "string" ? payload.text : "";
         state.briefed = true;
         if (!text.trim()) break;
-        turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] });
+        const briefing: PromptTurn = { kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] };
+        // Try again briefs the fresh agent with the failed one's briefing: the same words, said once in full.
+        if (state.retryRun && state.lastBriefing?.text === briefing.text) briefing.again = true;
+        else state.lastBriefing = briefing;
+        turns.push(briefing);
         break;
       }
 

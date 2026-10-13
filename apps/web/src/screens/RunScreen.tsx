@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
@@ -1024,6 +1024,24 @@ function dropWhen(hint: string | null): string {
 }
 
 /** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
+/** A briefing Try again repeated to the fresh agent: one quiet line that opens to the full card. */
+function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; shown: ShownImages | undefined }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-testid="chat-briefed-again">
+      <Button size="sm" variant="quiet" leadingIcon="retry" aria-expanded={open} onClick={() => setOpen(!open)} data-testid="briefed-again-toggle">
+        {BRIEFED_AGAIN}
+      </Button>
+      {open ? (
+        <ChatMessage role="system" name={dude} avatar={<DudeMark size="fill" />} intent="briefing" content={turn.text} startedAt={turn.at}
+          data-testid="chat-briefing" {...turnImages(turn, shown)} />
+      ) : null}
+    </div>
+  );
+}
+
+export const BRIEFED_AGAIN = "Briefed again with the same message";
+
 function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
   if (turn.attachments.length === 0 || !shown) return {};
   return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
@@ -1098,6 +1116,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       // A Run that ended on an unanswered question will never hear back.
       return <AskTurn key={turn.id} turn={turn} role={role} ended={ended} people={people} waitingOn={waitingOn} ask={ask} />;
     case "prompt":
+      // Try again's fresh agent, briefed with the failed one's words: one line, the briefing a click away.
+      if (turn.again) return <BriefedAgain key={turn.id} turn={turn} dude={dude} shown={shown} />;
       // Written by the factory, not a person: the avatar and name say so.
       // A conductor's is dude's briefing of it, tagged so.
       return (
